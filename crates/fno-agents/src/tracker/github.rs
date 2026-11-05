@@ -66,6 +66,15 @@ pub struct RequestIssue {
     pub login: String,
 }
 
+/// One comment read off an issue. Visitor text: the caller treats `body` as
+/// data and checks `login` itself.
+pub struct IssueComment {
+    pub id: i64,
+    pub login: String,
+    pub body: String,
+    pub minimized: bool,
+}
+
 /// `owner/repo#N`.
 pub fn parse_github_id(id: &str) -> Result<(String, String, i64), TrackerError> {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -328,6 +337,110 @@ impl GitHubTracker {
             }
             return Err(TrackerError::Backend(format!(
                 "gh issue edit failed for {id}: {}",
+                err.trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The issue author's login and every comment, oldest first. `id` is the
+    /// number ending the comment URL: it only grows, so a cursor can sit on it,
+    /// which GraphQL's opaque node id cannot do.
+    pub fn list_issue_comments(
+        &self,
+        repo: &str,
+        number: i64,
+    ) -> Result<(String, Vec<IssueComment>), TrackerError> {
+        require_repo(repo)?;
+        let id = format!("{repo}#{number}");
+        let (rc, out, err) = self.run_gh(
+            vec![
+                "issue".into(),
+                "view".into(),
+                number.to_string(),
+                "-R".into(),
+                repo.to_string(),
+                "--json".into(),
+                "author,comments".into(),
+            ],
+            &id,
+        )?;
+        if rc != 0 {
+            if not_found_stderr(&err) {
+                return Err(TrackerError::NotFound(id));
+            }
+            return Err(TrackerError::Backend(format!(
+                "gh issue view failed for {id}: {}",
+                err.trim()
+            )));
+        }
+        let data = loads(&out, &id)?;
+        let mut comments: Vec<IssueComment> = data
+            .get("comments")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|c| {
+                        let url = c.get("url").and_then(Value::as_str)?;
+                        let id = url
+                            .rsplit_once("#issuecomment-")?
+                            .1
+                            .parse::<i64>()
+                            .ok()
+                            .filter(|n| *n > 0)?;
+                        Some(IssueComment {
+                            id,
+                            login: c
+                                .pointer("/author/login")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                            body: c
+                                .get("body")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                            minimized: c
+                                .get("isMinimized")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        comments.sort_by_key(|c| c.id);
+        let author = data
+            .pointer("/author/login")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok((author, comments))
+    }
+
+    /// Post one comment on an issue.
+    pub fn comment_issue(&self, repo: &str, number: i64, body: &str) -> Result<(), TrackerError> {
+        require_repo(repo)?;
+        let id = format!("{repo}#{number}");
+        let (rc, _out, err) = self.run_gh(
+            vec![
+                "issue".into(),
+                "comment".into(),
+                number.to_string(),
+                "-R".into(),
+                repo.to_string(),
+                "--body".into(),
+                body.to_string(),
+            ],
+            &id,
+        )?;
+        if rc != 0 {
+            if not_found_stderr(&err) {
+                return Err(TrackerError::NotFound(id));
+            }
+            return Err(TrackerError::Backend(format!(
+                "gh issue comment failed for {id}: {}",
                 err.trim()
             )));
         }

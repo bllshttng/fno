@@ -21,7 +21,9 @@ pub(crate) const DEFAULT_APPROVED_LABEL: &str = "fno-approved";
 const DEFAULT_LIMIT: usize = 100;
 const DEFAULT_MAX_NEW: usize = 20;
 const DEFAULT_MAX_OPEN: usize = 50;
-const DEFAULT_MAX_PER_AUTHOR: usize = 3;
+/// One login's open requests or claims. The `/claim` door on a shared epic
+/// issue holds the same cap.
+pub(crate) const DEFAULT_MAX_PER_AUTHOR: usize = 3;
 const TITLE_PREFIX: &str = "Request: ";
 const TITLE_MAX_CHARS: usize = 120;
 const BODY_MAX_CHARS: usize = 4000;
@@ -386,23 +388,23 @@ fn names_whole_word(haystack: &str, needle: &str) -> bool {
 /// issue it came from, so a later run can tell when that issue has left the
 /// open, approved list.
 #[derive(Clone)]
-struct Held {
-    holder: String,
-    take: Option<(String, i64)>,
+pub(crate) struct Held {
+    pub(crate) holder: String,
+    pub(crate) take: Option<(String, i64)>,
 }
 
-type HeldClaims = BTreeMap<String, Held>;
+pub(crate) type HeldClaims = BTreeMap<String, Held>;
 
 /// The issue one take came from, and who opened it.
-struct TakeIssue<'a> {
-    repo: &'a str,
-    number: i64,
-    holder: &'a str,
+pub(crate) struct TakeIssue<'a> {
+    pub(crate) repo: &'a str,
+    pub(crate) number: i64,
+    pub(crate) holder: &'a str,
 }
 
 /// A claim write the import decided on. The decision is pure over the rows
 /// and the held claims; `run` performs it after the graph write lands.
-enum ClaimOp {
+pub(crate) enum ClaimOp {
     Grant {
         node: String,
         holder: String,
@@ -700,6 +702,16 @@ fn held_node_claims() -> Result<HeldClaims, String> {
 /// that ran the import, and the claim would read stale the moment that
 /// session ended. Running the import again renews a grant.
 fn write_claims(ops: &[ClaimOp], events_dir: Option<&Path>) -> Vec<String> {
+    write_claims_as(ops, events_dir, "take")
+}
+
+/// `marker` names the metadata key a grant carries. The import frees only
+/// `take` grants, so a `/claim` grant writes `epic_claim` and is never freed.
+pub(crate) fn write_claims_as(
+    ops: &[ClaimOp],
+    events_dir: Option<&Path>,
+    marker: &str,
+) -> Vec<String> {
     ops.iter()
         .map(|op| match op {
             ClaimOp::Grant {
@@ -709,7 +721,7 @@ fn write_claims(ops: &[ClaimOp], events_dir: Option<&Path>) -> Vec<String> {
                 issue,
             } => {
                 let mut meta = Map::new();
-                meta.insert("take".into(), Value::Bool(true));
+                meta.insert(marker.into(), Value::Bool(true));
                 meta.insert("repo".into(), json!(repo));
                 meta.insert("issue".into(), json!(issue));
                 let opts = crate::claims::AcquireOpts {
@@ -766,7 +778,7 @@ fn open_public_row<'a>(
 /// One take, when the named card is an open public row nobody else holds and
 /// the login is under its ceiling. A repeat by the same holder renews. `held`
 /// takes the grant too, so two takes in one run cannot both win a node.
-fn record_take(
+pub(crate) fn record_take(
     rows: &[Value],
     target: &str,
     project: &str,
@@ -1433,6 +1445,13 @@ mod tests {
             issue: 7,
         };
         let lines = write_claims(&[grant], Some(root.path()));
+        let epic_grant = ClaimOp::Grant {
+            node: "c-cd34".to_string(),
+            holder: "github:visitor-2".to_string(),
+            repo: "o/r".to_string(),
+            issue: 9,
+        };
+        let epic_lines = write_claims_as(&[epic_grant], Some(root.path()), "epic_claim");
         let ids = crate::backlog::next::live_claimed_node_ids();
         let held = held_node_claims();
         let (_, record) = crate::claims::status("node:c-ab12", None);
@@ -1452,6 +1471,9 @@ mod tests {
             ids.unwrap().contains("c-ab12"),
             "selection must see the take"
         );
+        // An epic /claim grant is not a take, so the import never frees it.
+        assert_eq!(epic_lines, ["claimed c-cd34 for github:visitor-2"]);
+        assert!(held.as_ref().unwrap()["c-cd34"].take.is_none());
         let held = held.unwrap();
         let (repo, issue) = held["c-ab12"]
             .take
