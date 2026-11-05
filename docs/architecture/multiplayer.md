@@ -230,6 +230,18 @@ When the GitHub App is set, the edit shows the fnodotdev bot. Set `github.app_id
 
 When the node's parent epic has an `epic_issue`, `fno do pr create` adds one line to the body file. The line is `Refs #<n>`. When no other published child of the epic is still open, the line is `Closes #<n>`, and the merge closes the issue. A body that already names the issue gets no second line. A `public: false` child never counts as open, because the issue never shows it.
 
+### Claim a line by comment
+
+Anyone can reserve a piece of the epic with a comment on the issue. The comment needs no write access and no fno. Put `/claim <title>` on the first line of the comment. A comment that starts any other way is ignored, and so is a `/claim` on an issue that is not a shared epic issue. The heal pass reads the new comments on each tick. It stores the last comment it read on the epic as `epic_claim_cursor`, so each comment counts once. The first pass opens the issue, so claims work from the second pass.
+
+A title that matches an owner child, ignoring case and punctuation, takes that node. The holder is `github:<login>`, the line shows the login, and the fleet stops getting that node. Any other title adds a line with that login and no node, because nodes stay in each person's own store. The epic row keeps both kinds in `epic_claims`. The checklist is drawn from graph rows, so a line with no row would vanish without that list.
+
+Before the pass adds a line, it compares the title with every line. The exact match runs first. A small model runs second (haiku, no tools). It reads the new title and the lines as untrusted text and returns one line number or none. On a match the pass adds no line. It posts one reply that names the matching line and its holder. A model that fails or refuses never blocks a claim, and the line is added. Each reply ends with a hidden `<!-- fno-claim-reply:<comment id> -->` line, so a comment gets one answer.
+
+One login holds at most 3 open claims on an issue, the same limit as claim issues. The fourth `/claim` gets one reply and no line. `/release` on the first line of a comment frees every claim of that login on the issue. `/release <title>` frees one.
+
+A claim has a 7 day clock (`STALE_AFTER_DAYS` in `epic_issue.rs`). The claim is stale when it is 7 days old and its login has no open PR with `Refs #<n>` or `Closes #<n>` on a line of its own. A stale line reads `· stale`, and the pass releases its node claim. A new `/claim` on a stale line moves it to the new login. A PR from the holder adds `#<PR>` to the line and keeps the claim. The claim store caps a node claim at 24 hours, so the pass renews each live `/claim` node claim on every tick. The stale rule covers `/claim` holds only. A claim from a claim issue keeps its own rules.
+
 ## Failure: the primary is unreachable
 
 A claim command refuses. The error names the URL and the key, and says nothing was written locally. It also names each address it tried, as `resolve <host>` or `connect <ip:port>`, so a broken name reads apart from a down primary. A hotspot that breaks MagicDNS is the first case: set `store.remote_addrs` to the primary's Tailscale IP. A request that timed out can still have reached the primary, so a retry by the same holder is the safe next step. A 4xx reply, such as a bad token, is named as a refusal and never read as an outage. `fno backlog next` refuses selection. `fno do target init` writes a cancel signal with `store_unreachable` and owns no node. A running worker finishes its turn: at its stop, loop-check reads the unreachable renewal and allows the stop, so the worker holds. The machine claims no new work until the network returns. To work alone, unset the key.
