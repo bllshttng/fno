@@ -645,8 +645,8 @@ pub(super) fn build_section_menu(
         actions.push(MenuAction::Rename);
         rows.push(PopupRow::Entry {
             glyph: "▣".into(),
-            label: "Link a folder".into(),
-            hint: "rows join by it".into(),
+            label: "Group sessions from a folder".into(),
+            hint: "grants no access".into(),
             enabled: true,
         });
         actions.push(MenuAction::AddFolder);

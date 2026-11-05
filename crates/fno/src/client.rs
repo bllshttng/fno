@@ -4655,23 +4655,26 @@ impl View {
             "_"
         };
         let rows = [
-            format!("name    {name}{caret}"),
-            format!("folder  {}", self.create_folder_row(name)),
+            ("name", format!("{name}{caret}")),
+            ("folder", self.create_folder_row(name)),
         ];
-        // A long name or path keeps its tail, where the caret is, so the row
-        // never pushes the border off the frame.
-        let fit = |t: String| {
-            let limit = body_w.saturating_sub(4).max(2);
-            let n = t.chars().count();
-            let t = if n > limit {
-                let tail: String = t.chars().skip(n - (limit - 1)).collect();
+        // The label is bold and the typed value plain, so the eye finds where
+        // the typing goes. A long value keeps its tail, where the caret is, so
+        // the row never pushes the border off the frame.
+        let label_w = 8;
+        let lines = rows.map(|(label, value)| {
+            let limit = body_w.saturating_sub(4 + label_w).max(2);
+            let n = value.chars().count();
+            let value = if n > limit {
+                let tail: String = value.chars().skip(n - (limit - 1)).collect();
                 format!("…{tail}")
             } else {
-                t
+                value
             };
-            format!("{t:<body_w$}")
-        };
-        let lines = rows.map(|t| TLine::line(TextStyle::Item, fit(t)));
+            let value = format!("{value:<w$}", w = body_w.saturating_sub(label_w));
+            let label = format!("{label:<label_w$}");
+            TLine::parts(&[(&label, TextStyle::Title), (&value, TextStyle::Item)])
+        });
         layout_lines_overlay(origin, dims, &chrome, &lines, None, OverlayAnchor::Center)
     }
 
