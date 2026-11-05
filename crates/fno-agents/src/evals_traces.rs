@@ -343,7 +343,99 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
+    let dir = state.join("evals/traces");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let seed = dir.join("seed-s2.log");
+    if !seed.exists() {
+        let text = match std::fs::read_to_string(log) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("seed source {}: {e}", log.display())),
+        };
+        let frozen = text
+            .lines()
+            .filter(|l| l.splitn(5, " | ").nth(1) == Some("S2"))
+            .map(|l| format!("{l}\n"))
+            .collect::<String>();
+        create_once(&seed, frozen.as_bytes())?;
+    }
+    let text = std::fs::read_to_string(&seed).map_err(|e| e.to_string())?;
+    let pattern = regex::Regex::new(r#"^- "(.+)" \(x\d+, ([0-9a-f]+), signal=(\w+)"#)
+        .expect("seed row pattern");
+    let resolver = crate::context_run::SessionTranscripts::default();
+    let mut count = 0;
+    for (index, line) in text.lines().enumerate() {
+        let fields: Vec<_> = line.splitn(5, " | ").collect();
+        let [stamp, "S2", _, _, body] = fields.as_slice() else {
+            return Err(format!("invalid frozen S2 row {}", index + 1));
+        };
+        let Some(caps) = pattern.captures(body.trim()) else {
+            return Err(format!("unparseable frozen S2 row {}", index + 1));
+        };
+        let prefix = &caps[2];
+        let found = seed_transcript(prefix);
+        let mut data = json!({"quote":&caps[1],"logged_at":stamp,"session_id":prefix});
+        if let Some((sid, path)) = found {
+            data["session_id"] = json!(sid);
+            data["harness"] = json!("claude");
+            if let Ok(rows) = read_rows(&path) {
+                let flat = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+                let quote = flat(&caps[1]);
+                let matching: Vec<_> = rows
+                    .iter()
+                    .filter(|row| {
+                        row["type"] == "user"
+                            && flat(&crate::lead_hygiene::message_text(
+                                &row["message"]["content"],
+                            )) == quote
+                    })
+                    .collect();
+                if let [row] = matching.as_slice() {
+                    data["turn"] = row["uuid"].clone();
+                    data["ts_turn"] = row["timestamp"].clone();
+                }
+            }
+            data["source_file"] = json!(path);
+        }
+        let key = format!("seed:{index}:{}", blake3::hash(line.as_bytes()));
+        write_trace(state, "seed_correction", &key, &data, &resolver)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+fn seed_transcript(prefix: &str) -> Option<(String, PathBuf)> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let mut matches = Vec::new();
+    for project in std::fs::read_dir(home.join(".claude/projects"))
+        .ok()?
+        .flatten()
+    {
+        for entry in std::fs::read_dir(project.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            let Some(sid) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if path.extension().is_some_and(|s| s == "jsonl") && sid.starts_with(prefix) {
+                matches.push((sid.to_string(), path));
+            }
+        }
+    }
+    matches.sort();
+    matches.dedup();
+    (matches.len() == 1).then(|| matches.remove(0))
+}
+
 fn daily(state: &Path) -> Result<Value, String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let source = crate::finalize::corrections_log_path(home.as_deref())
+        .unwrap_or_else(|| state.join("logs/corrections.log"));
+    let seeded = import_seed(state, &source)?;
     let repo = crate::evals::canonical_repo_root();
     let journal = state.join("events.jsonl");
     let local = pass(state, &journal, &repo, &[])?;
@@ -361,7 +453,9 @@ fn daily(state: &Path) -> Result<Value, String> {
     let prs: Vec<Value> =
         serde_json::from_slice(&out.stdout).map_err(|e| format!("closed PR list: {e}"))?;
     let remote = pass(state, &journal, &repo, &prs)?;
-    Ok(json!({"new":local["new"].as_u64().unwrap_or(0)+remote["new"].as_u64().unwrap_or(0)}))
+    Ok(
+        json!({"new":local["new"].as_u64().unwrap_or(0)+remote["new"].as_u64().unwrap_or(0),"seed":seeded}),
+    )
 }
 
 #[derive(Default)]
@@ -552,5 +646,30 @@ mod tests {
             pass(tmp.path(), &journal, tmp.path(), &prs).unwrap()["new"],
             0
         );
+    }
+    #[test]
+    fn evals_traces_seed_freezes_only_s2_rows_and_finishes_after_an_interrupted_import() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("corrections.log");
+        let text = "2026-11-01T00:00:00Z | S1 | postmortem | a.md | pointer\n2026-11-01T00:00:00Z | S2 | insights-tag | r.md:1 | - \"no, prove it\" (x1, 01a0, signal=correction)\n2026-11-01T00:00:00Z | S2 | insights-tag | r.md:2 | - \"use the other branch\" (x1, 01b0, signal=repeated_correction)\n";
+        std::fs::write(&log, text).unwrap();
+        assert_eq!(import_seed(tmp.path(), &log).unwrap(), 2);
+        assert_eq!(traces(tmp.path()).len(), 2);
+        let seed = tmp.path().join("evals/traces/seed-s2.log");
+        let frozen = std::fs::read(&seed).unwrap();
+        assert_eq!(
+            String::from_utf8(frozen.clone()).unwrap().lines().count(),
+            2
+        );
+        let trace = std::fs::read_dir(seed.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "json"))
+            .unwrap();
+        std::fs::remove_file(trace).unwrap();
+        std::fs::remove_file(log).unwrap();
+        assert_eq!(import_seed(tmp.path(), Path::new("gone")).unwrap(), 2);
+        assert_eq!(std::fs::read(seed).unwrap(), frozen);
+        assert_eq!(traces(tmp.path()).len(), 2);
     }
 }
