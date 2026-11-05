@@ -43,7 +43,17 @@ The half target (1,366 collected) is not reached and cannot be reached by honest
 
 ## Verification
 
-`cargo check --all-targets` ran once over the crate after the cut, per the G1 discipline. Local test runs stay barred by the fleet hold. The keeper spot-check is pending the first CI run of this PR. When the first CI run lands, the ledger records the keeper mutations.
+`cargo check --all-targets` ran once over the crate after the cut, per the G1 discipline. The preservation spot-check ran under the lead-granted test:priority claim (fleet all-clear fmail-b5af6cee11ab lifted the fleet hold mid-run). Five kept contracts, one mutation each, every keeper went red, every mutation reverted byte-for-byte before the next:
+
+| Keeper | Mutation | Result |
+|---|---|---|
+| parse_tab_sel_reads_ordinals_and_explicit_forms | deleted the `"new"` arm of parse_tab_sel | red |
+| pane_help_names_the_two_pane_reference_forms | removed every `--raw` byte from the composed pane help (PANE_SEND_RAW_HELP, then PANE_REFERENCE_USAGE) | red |
+| mux_pane_send_error_exit_rows | TARGET_DND mapped to EXIT_ERROR | red |
+| session_check_verdict_rows | squad_store_verdict's prune arm flipped Warn to Ok | red |
+| control_send_gives_up_honestly_when_nothing_ever_arrives | the give-up message dropped its UNKNOWN byte | red |
+
+Post-revert, the five keepers ran green and the production tree was byte-identical to HEAD. CI owns the collected-case count.
 
 ## Files
 
