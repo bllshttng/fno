@@ -1371,7 +1371,13 @@ fn spawn_detached(argv: &[String], cwd: &Path, log: &Path) -> Result<u32, String
         .stdout(out)
         .stderr(err);
     crate::evals_arm::setsid_hook(&mut cmd);
-    cmd.spawn().map(|c| c.id()).map_err(|e| e.to_string())
+    cmd.spawn()
+        .map(|c| {
+            let pid = c.id();
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// One pass of both legs. The daemon's tick calls this first, and it never
