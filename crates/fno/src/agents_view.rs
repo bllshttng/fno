@@ -3327,22 +3327,10 @@ tokens = []"#,
         assert!(candidates[0] != candidates[1]);
     }
 
-    /// AC2-ERR: the merged row the PYTHON reader resolves must equal
-    /// the merged row this reader resolves, under the same staged config.
-    /// Driven by cli/tests/agents/test_harness_capability_parity.py, which
-    /// stages the config chain, writes the Python answer to
-    /// FNO_CAPABILITY_PARITY_JSON, and runs this test with
-    /// FNO_CAPABILITY_PARITY_DIR pointing at the stage. Ignored by default:
-    /// it needs that harness and a built dependency tree. The merge logic is
-    /// the one dual the ruling kept (both readers stand), so this is
-    /// the guard that pins them together.
-
     /// AC1/AC2, Rust half: the config chain merges WHOLE rows - a
     /// nested table corrects one strategy, a scalar flips, a lane alias lands
     /// on its nested form, an unknown key is refused with the bundled row
-    /// kept and named, and a name outside the roster is refused by name. The
-    /// Python reader answers the same stage for the accepted class; the
-    /// cross-check lives in cli/tests/agents/test_harness_capability_parity.py.
+    /// kept and named, and a name outside the roster is refused by name.
     #[test]
     fn the_config_chain_merges_whole_rows_by_the_shared_rules() {
         let stage = std::env::temp_dir().join(format!("fno-x244c-{}", std::process::id()));

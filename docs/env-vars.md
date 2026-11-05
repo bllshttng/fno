@@ -78,8 +78,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |
 | `FNO_CALLER_KIND` | rs | The surface that shelled this fno-agents command; `mux` stamps `caller_kind` on its events. |
-| `FNO_CAPABILITY_PARITY_DIR` | rs | unclear: crates/fno/src/agents_view.rs:3316 |
-| `FNO_CAPABILITY_PARITY_JSON` | rs | unclear: crates/fno/src/agents_view.rs:3318 |
 | `FNO_CARGO_CLASS` | rs | The lane an agent cargo asks for at the cargo admission doors: `repair` for a red PR or a main repair, `prepush` for the compile a push waits on. Unset is the normal lane. Both lanes queue ahead of normal, and a normal try-lock never takes a slot they wait for. |
 | `FNO_CARGO_FREE_BYTES` | rs | Overrides the free-space read the `cargo_build_dirs` cap lane defends against; test escape hatch. |
 | `FNO_CARGO_MAX_HOLD_SECS` | rs | The longest time in seconds that an agent cargo can hold an admission claim. After this time, the next cargo frees the claim and stops the holder. The default is 3600. A whole-suite run is exempt. |
