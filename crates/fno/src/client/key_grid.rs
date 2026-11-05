@@ -90,6 +90,10 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
     }
 }
 
+/// The grid never grows past this many rows; a narrow pane drops the last
+/// view keys before it drops the `* all keys` cell.
+const MAX_ROWS: usize = 4;
+
 /// The columns that fit `w`: four where each cell reads whole, fewer on a
 /// narrow pane so a label never clips mid-word on a wide-enough terminal.
 fn columns(w: usize) -> usize {
@@ -105,9 +109,10 @@ fn columns(w: usize) -> usize {
 /// `* all keys`. Every row is padded to the same column width, and a cell
 /// wider than its column is cut at the column edge.
 pub(crate) fn grid_rows(view: KeyView, w: usize) -> Vec<TLine> {
-    let mut cells: Vec<KeyHint> = hints(view).to_vec();
-    cells.push(("*", "all keys"));
     let cols = columns(w);
+    let mut cells: Vec<KeyHint> = hints(view).to_vec();
+    cells.truncate(cols * MAX_ROWS - 1);
+    cells.push(("*", "all keys"));
     let col_w = (w / cols).max(1);
     cells
         .chunks(cols)
@@ -243,7 +248,10 @@ mod tests {
             KeyView::Org,
         ] {
             for w in [20usize, 40, 80] {
-                for row in grid_rows(view, w) {
+                let rows = grid_rows(view, w);
+                assert!(rows.len() <= MAX_ROWS, "{view:?} at {w}");
+                assert!(rows.last().unwrap().text.ends_with("* all keys"));
+                for row in rows {
                     let used: usize = row.text.chars().map(crate::text_style::char_w).sum();
                     assert!(used <= w, "{view:?} at {w}: {:?}", row.text);
                 }

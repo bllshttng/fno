@@ -695,9 +695,7 @@ pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<TLi
         } else {
             super::key_grid::KeyView::Backlog
         };
-        let mut rows = super::key_grid::grid_rows(view, w);
-        rows.truncate(4);
-        return rows;
+        return super::key_grid::grid_rows(view, w);
     }
     let text = if detail_focus {
         format!(
