@@ -45,14 +45,33 @@ pub(crate) fn channel_of(exe: &Path, bin: &Path) -> InstallChannel {
     if std::fs::canonicalize(bin).is_ok_and(|b| b == parent) {
         return InstallChannel::Binary;
     }
+    let index = |root: &Path| {
+        std::fs::read_to_string(root.join("uv-receipt.toml"))
+            .ok()
+            .and_then(|r| receipt_is_index(&r))
+            == Some(true)
+    };
     match parent.parent() {
-        Some(root) if parent.ends_with("bin") && root.join("uv-receipt.toml").is_file() => {
-            InstallChannel::Wheel {
-                tool_root: root.to_path_buf(),
-            }
-        }
+        Some(root) if parent.ends_with("bin") && index(root) => InstallChannel::Wheel {
+            tool_root: root.to_path_buf(),
+        },
         _ => InstallChannel::Other,
     }
+}
+
+/// `Some(true)` when the uv receipt installed fno from an index (a release
+/// wheel), `Some(false)` for a directory, path, git, url or editable source,
+/// `None` when the receipt has no fno entry. Only a release wheel moves.
+pub(crate) fn receipt_is_index(receipt: &str) -> Option<bool> {
+    let value: toml::Value = toml::from_str(receipt).ok()?;
+    let reqs = value.get("tool")?.get("requirements")?.as_array()?;
+    let fno = reqs
+        .iter()
+        .find(|r| r.get("name").and_then(|n| n.as_str()) == Some("fno"))?;
+    let local = ["directory", "path", "git", "url", "editable"]
+        .iter()
+        .any(|k| fno.get(k).is_some());
+    Some(!local)
 }
 
 pub(crate) fn current_channel() -> InstallChannel {
@@ -401,9 +420,13 @@ mod tests {
         std::fs::write(bin.join("fno"), b"").unwrap();
         std::fs::write(venv.join("fno"), b"").unwrap();
         assert_eq!(channel_of(&bin.join("fno"), &bin), InstallChannel::Binary);
-        // A venv without a receipt is a pip or source venv, never the uv tool.
+        // A venv without a receipt is a pip or source venv, never the uv tool,
+        // and a uv tool built from a directory is a source install.
         assert_eq!(channel_of(&venv.join("fno"), &bin), InstallChannel::Other);
-        let receipt = "[tool]\nentrypoints = [\n  { name = \"fno\", install-path = \"/u/bin/fno\", from = \"fno\" },\n  { name = \"fno-py\", install-path = \"/u/bin/fno-py\", from = \"fno\" },\n]\n";
+        let source = "[tool]\nrequirements = [{ name = \"fno\", directory = \"/x/cli\" }]\n";
+        std::fs::write(home.path().join("tools/fno/uv-receipt.toml"), source).unwrap();
+        assert_eq!(channel_of(&venv.join("fno"), &bin), InstallChannel::Other);
+        let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\nentrypoints = [\n  { name = \"fno\", install-path = \"/u/bin/fno\", from = \"fno\" },\n  { name = \"fno-py\", install-path = \"/u/bin/fno-py\", from = \"fno\" },\n]\n";
         std::fs::write(home.path().join("tools/fno/uv-receipt.toml"), receipt).unwrap();
         let root = std::fs::canonicalize(home.path().join("tools/fno")).unwrap();
         assert_eq!(

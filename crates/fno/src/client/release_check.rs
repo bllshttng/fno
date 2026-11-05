@@ -19,7 +19,7 @@ pub(crate) enum Channel {
 impl Channel {
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Channel::Uv => "uv",
+            Channel::Uv => "uv wheel; fno update moves it to ~/.fno/bin",
             Channel::Binary => "binary",
             Channel::Brew => "brew",
         }
@@ -71,21 +71,6 @@ const NOTES_TIMEOUT: Duration = Duration::from_secs(10);
 /// bullets win, mirroring the readiness payload's ten-subject window.
 const NOTES_MAX_BULLETS: usize = 10;
 const NOTES_MAX_SECTIONS: usize = 6;
-
-/// `Some(true)` when the uv receipt installed fno from an index (a release
-/// wheel `fno update` can move), `Some(false)` for a directory, path, git,
-/// url or editable source, `None` when the receipt has no fno entry.
-pub(crate) fn receipt_is_index(receipt: &str) -> Option<bool> {
-    let value: toml::Value = toml::from_str(receipt).ok()?;
-    let reqs = value.get("tool")?.get("requirements")?.as_array()?;
-    let fno = reqs
-        .iter()
-        .find(|r| r.get("name").and_then(|n| n.as_str()) == Some("fno"))?;
-    let local = ["directory", "path", "git", "url", "editable"]
-        .iter()
-        .any(|k| fno.get(k).is_some());
-    Some(!local)
-}
 
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -165,6 +150,14 @@ where
             ReleaseOutcome::Degraded(format!("GitHub latest release: tag {tag} names no version"))
         }
         Some(latest) if version_key(&latest) > version_key(installed) => ReleaseOutcome::Newer {
+            channel,
+            installed: installed.to_string(),
+            latest,
+            notes: Vec::new(),
+        },
+        // A wheel always owes the move to the binary install, so it never
+        // reads current: the modal keeps offering `fno update` for the hop.
+        Some(latest) if channel == Channel::Uv => ReleaseOutcome::Newer {
             channel,
             installed: installed.to_string(),
             latest,
@@ -347,12 +340,7 @@ pub(crate) async fn probe_release() -> ReleaseOutcome {
     }
     use crate::release_install::InstallChannel;
     let channel = tokio::task::spawn_blocking(|| match crate::release_install::current_channel() {
-        InstallChannel::Wheel { tool_root } => {
-            std::fs::read_to_string(tool_root.join("uv-receipt.toml"))
-                .ok()
-                .and_then(|r| receipt_is_index(&r))
-                .and_then(|index| index.then_some(Channel::Uv))
-        }
+        InstallChannel::Wheel { .. } => Some(Channel::Uv),
         InstallChannel::Binary => Some(Channel::Binary),
         InstallChannel::Other => None,
     })
@@ -415,7 +403,10 @@ mod tests {
     #[tokio::test]
     async fn a_newer_github_release_reads_newer_and_an_equal_one_current() {
         let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\n";
-        assert_eq!(receipt_is_index(receipt), Some(true));
+        assert_eq!(
+            crate::release_install::receipt_is_index(receipt),
+            Some(true)
+        );
         let outcome = github_outcome(Some(Channel::Uv), "0.4.5", || async {
             Ok("v0.4.6".to_string())
         })
@@ -439,13 +430,27 @@ mod tests {
                 channel: Channel::Binary
             }
         );
+        let wheel = github_outcome(Some(Channel::Uv), "0.4.6", || async {
+            Ok("v0.4.6".to_string())
+        })
+        .await;
+        assert!(
+            matches!(wheel, ReleaseOutcome::Newer { .. }),
+            "a wheel at the latest version still owes the move: {wheel:?}"
+        );
     }
 
     #[tokio::test]
     async fn a_source_install_is_not_applicable_and_never_reads_github() {
         let receipt = "[tool]\nrequirements = [{ name = \"fno\", directory = \"/x/cli\" }]\n";
-        assert_eq!(receipt_is_index(receipt), Some(false));
-        assert_eq!(receipt_is_index("[tool]\nrequirements = []\n"), None);
+        assert_eq!(
+            crate::release_install::receipt_is_index(receipt),
+            Some(false)
+        );
+        assert_eq!(
+            crate::release_install::receipt_is_index("[tool]\nrequirements = []\n"),
+            None
+        );
         let outcome = github_outcome(None, "0.4.5", || async {
             panic!("the GitHub read must not run for a source install")
         })

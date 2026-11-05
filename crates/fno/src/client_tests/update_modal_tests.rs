@@ -1077,7 +1077,9 @@ fn release_newer_renders_release_body_notes() {
             _ => None,
         })
         .collect();
-    assert!(headers.contains(&"release 0.4.0 -> 0.4.1 (uv)"));
+    assert!(
+        headers.contains(&"release 0.4.0 -> 0.4.1 (uv wheel; fno update moves it to ~/.fno/bin)")
+    );
     assert!(row_labels(&modal).contains(&"- 42 merged pull requests since v0.4.0.".to_string()));
     assert!(headers.contains(&"mux"));
     assert!(row_labels(&modal).contains(&"- Portals open operator-owned windows".to_string()));
