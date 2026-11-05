@@ -248,7 +248,14 @@ fn capacity_segment(state: Option<&serde_json::Value>) -> String {
         format!("cap {effective}")
     };
     let mut line = match state.get("workers_live").and_then(|v| v.as_u64()) {
-        Some(workers) => format!(" · this machine {workers} live of {cap}"),
+        Some(workers) => {
+            let leads = state
+                .get("leads_live")
+                .and_then(|v| v.as_u64())
+                .map(|n| format!(", {n} leads"))
+                .unwrap_or_default();
+            format!(" · this machine {workers} workers{leads} of {cap}")
+        }
         None => format!(" · this machine {cap}"),
     };
     if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
@@ -400,7 +407,8 @@ mod tests {
             "ceiling": 23,
             "effective": 14,
             "reason": "CPU-bound",
-            "workers_live": 15,
+            "workers_live": 10,
+            "leads_live": 5,
             "accounts": [
                 {"provider": "zai", "show": true, "limit_tokens": 64000, "windows": [
                     {"window": "5h", "used_tokens": 40000},
@@ -413,7 +421,7 @@ mod tests {
         });
         let line = capacity_segment(Some(&state));
         assert!(
-            line.contains("this machine 15 live of cap 14 (ceiling 23), CPU-bound"),
+            line.contains("this machine 10 workers, 5 leads of cap 14 (ceiling 23), CPU-bound"),
             "{line}"
         );
         assert!(line.contains("zai 5h 62%, wk 1.1M tok"), "{line}");

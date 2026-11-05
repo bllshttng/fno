@@ -178,6 +178,9 @@ pub struct CapacityState {
     /// registry with a second reader.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers_live: Option<u64>,
+    /// Lead rows from the same registry read; `workers_live` excludes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leads_live: Option<u64>,
     pub updated_epoch: i64,
 }
 
@@ -435,7 +438,8 @@ pub fn feed(
     // The file the mux meter reads agrees with the reader within one tick.
     state.effective = state.effective.max(thresholds.floor.min(ceiling));
     state.memory = memory_figure(sample);
-    state.workers_live = sample.live_rows;
+    state.workers_live = sample.workers;
+    state.leads_live = sample.leads;
     state.accounts = fold_accounts(cwd, home, ledger_rows(cwd, home), now_epoch);
     state.updated_epoch = now_epoch;
     write_state(home, &state)?;
@@ -455,6 +459,7 @@ fn seed(ceiling: u32, now_epoch: i64) -> CapacityState {
         memory: None,
         accounts: Vec::new(),
         workers_live: None,
+        leads_live: None,
         updated_epoch: now_epoch,
     }
 }
@@ -932,6 +937,7 @@ mod tests {
             memory: None,
             accounts: Vec::new(),
             workers_live: None,
+            leads_live: None,
             updated_epoch: now - 300,
         };
         write_state(&home, &state).unwrap();
@@ -975,6 +981,7 @@ mod tests {
             memory: None,
             accounts: Vec::new(),
             workers_live: None,
+            leads_live: None,
             updated_epoch: now - 300,
         };
         write_state(&home, &state).unwrap();
@@ -1010,6 +1017,7 @@ mod tests {
             memory: None,
             accounts: Vec::new(),
             workers_live: None,
+            leads_live: None,
             updated_epoch: now - 300,
         };
         let home = tmp_home("floor");
