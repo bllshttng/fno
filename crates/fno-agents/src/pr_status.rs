@@ -12,7 +12,7 @@ use crate::org_board::prs::classify_check;
 use crate::pr_status_facts::{failure_cause, zero_job_scan, GhProbe};
 use regex::Regex;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -87,7 +87,8 @@ pub(crate) fn has_settled_marker(check: &Value) -> bool {
 
 /// Drop the projections that are not generic CI (review coverage, the evals
 /// gate) before classifying. The evals gate is a commit status like coverage,
-/// so the same shape drops it.
+/// so the same shape drops it. An `advisory` row (a GitHub-native workflow no
+/// retry can reach) never reads red and never cancels a sibling run.
 pub(crate) fn generic_ci_rollup(rollup: &[Value]) -> Vec<Value> {
     rollup
         .iter()
@@ -97,7 +98,8 @@ pub(crate) fn generic_ci_rollup(rollup: &[Value]) -> Vec<Value> {
             let excluded = |value: &str| {
                 COVERAGE_STATUS_CONTEXTS.contains(&value) || value == EVALS_GATE_CONTEXT
             };
-            !excluded(context) && !excluded(name)
+            let advisory = check.get("advisory").and_then(Value::as_bool) == Some(true);
+            !excluded(context) && !excluded(name) && !advisory
         })
         .cloned()
         .collect()
@@ -450,12 +452,16 @@ pub(crate) fn read_pr<P: GhProbe>(
     let scan =
         zero_job_scan(probe, cwd, slug, &sha, &check_runs).map_err(|e| RestReason::new(e, ""))?;
     let mut run_names: BTreeMap<String, String> = BTreeMap::new();
+    let mut dynamic_runs: BTreeSet<String> = BTreeSet::new();
     for run in &scan.listing {
         if let (Some(id), Some(name)) = (
             run.get("id").and_then(Value::as_i64),
             run.get("name").and_then(Value::as_str),
         ) {
             run_names.insert(id.to_string(), name.to_string());
+            if is_dynamic_workflow_path(s_str(run, "path")) {
+                dynamic_runs.insert(id.to_string());
+            }
         }
     }
     let actions_run_re = actions_run_re();
@@ -464,10 +470,13 @@ pub(crate) fn read_pr<P: GhProbe>(
         .iter()
         .map(|cr| {
             let details_url = s_str(cr, "details_url");
-            let workflow = actions_run_re
+            let run_id = actions_run_re
                 .captures(details_url)
                 .and_then(|c| c.get(1))
-                .and_then(|m| run_names.get(m.as_str()))
+                .map(|m| m.as_str().to_string());
+            let workflow = run_id
+                .as_ref()
+                .and_then(|id| run_names.get(id))
                 .cloned()
                 .unwrap_or_default();
             let mut row = json!({
@@ -480,6 +489,9 @@ pub(crate) fn read_pr<P: GhProbe>(
             });
             if let Some(timeout) = cr.get("timeout") {
                 row["timeout"] = timeout.clone();
+            }
+            if run_id.is_some_and(|id| dynamic_runs.contains(&id)) {
+                row["advisory"] = json!(true);
             }
             row
         })
@@ -551,6 +563,13 @@ pub(crate) fn read_pr<P: GhProbe>(
         // The raw listing rerun recovery and the workflow mapping share.
         "workflowRuns": scan.listing,
     }))
+}
+
+/// A GitHub-native workflow (CodeQL default setup) has no file in the repo:
+/// its run path starts `dynamic/`. GitHub refuses a rerun of a cancelled one,
+/// so a cancel there would pin the PR red for good.
+fn is_dynamic_workflow_path(path: &str) -> bool {
+    path.starts_with("dynamic/")
 }
 
 fn actions_run_re() -> &'static Regex {

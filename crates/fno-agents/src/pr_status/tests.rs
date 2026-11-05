@@ -207,6 +207,24 @@ fn red_fixture_collects_the_golden_failures() {
     );
 }
 
+/// A cancelled run of a GitHub-native (`dynamic/`) workflow cannot be rerun,
+/// so its row is advisory: the verdict stays green and cancels nothing.
+#[test]
+fn cancelled_dynamic_workflow_row_is_advisory() {
+    assert!(is_dynamic_workflow_path(
+        "dynamic/github-code-scanning/codeql"
+    ));
+    assert!(!is_dynamic_workflow_path(".github/workflows/ci.yml"));
+    let rollup = vec![
+        json!({"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}),
+        json!({"name": "Analyze (rust)", "status": "COMPLETED", "conclusion": "CANCELLED", "advisory": true}),
+    ];
+    let generic = generic_ci_rollup(&rollup);
+    assert_eq!(generic.len(), 1);
+    let (verdict, code, _) = verdict_for(&generic);
+    assert_eq!((verdict.as_str(), code), ("green", 0));
+}
+
 /// A red evals/gate status is an eval fact, not a CI failure: the generic
 /// rollup drops it, so the verdict stays green over green check runs, and
 /// the fact extractor reads the newest row for the context.
