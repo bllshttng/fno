@@ -1182,7 +1182,7 @@ fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
         && approving_pages(root, pr)
             .iter()
-            .any(|(_, text)| text.contains(head))
+            .any(|(_, text)| text_names_head(text, head))
 }
 
 /// Every ANSWERED question page that picks the approve option and names the
@@ -1354,15 +1354,22 @@ fn decisions_payload<P: Probes>(probes: &P, cwd: &Path, args: &[&str]) -> Option
     serde_json::from_slice::<Value>(&out).ok()
 }
 
-/// The text names the head: the full sha, or a hex token of at least ten
-/// characters that begins it. A question card abbreviates the head it asks
+/// Does `token` name `head`: the full sha, or a hex prefix of at least seven
+/// characters, in any case. A question card abbreviates the head it asks
 /// about, and the user's answer on the board inherits that spelling.
+pub(crate) fn sha_names_head(token: &str, head: &str) -> bool {
+    token.len() >= 7
+        && token.len() <= head.len()
+        && token.bytes().all(|b| b.is_ascii_hexdigit())
+        && head.as_bytes()[..token.len()].eq_ignore_ascii_case(token.as_bytes())
+}
+
+/// The text names the head: the full sha, or a hex token that prefixes it.
 fn text_names_head(text: &str, head: &str) -> bool {
     !head.is_empty()
-        && (text.contains(head)
-            || text
-                .split(|c: char| !c.is_ascii_hexdigit())
-                .any(|t| t.len() >= 10 && head.starts_with(t)))
+        && text
+            .split(|c: char| !c.is_ascii_hexdigit())
+            .any(|t| sha_names_head(t, head))
 }
 
 /// A board answer recorded as a decision: the user answered a question the
@@ -1521,7 +1528,7 @@ fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String>
 
 /// True when a live law row that approves this PR (chat-attested, or the
 /// question board's own operator-law row for the user's board answer) names
-/// the head sha, full or as a ten-character prefix. Head-scoped like the
+/// the head sha, full or as a prefix of seven or more hex characters. Head-scoped like the
 /// role row: a push voids it.
 pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
@@ -1683,6 +1690,17 @@ mod tests {
         assert!(!page_names_pr("the PR is 3036", 3036));
         assert!(!page_names_pr("PR 30365", 3036));
         assert!(!page_names_pr("plain 3036", 3036));
+    }
+
+    #[test]
+    fn an_approval_names_a_head_by_any_unique_hex_prefix_of_seven_or_more() {
+        let head = "52caec1527aabbccddeeff00112233445566778";
+        assert!(text_names_head("Approve PR 4444 at 52caec1527", head));
+        assert!(text_names_head("at 52CAEC1 please", head));
+        assert!(text_names_head(&format!("full {head}"), head));
+        assert!(!text_names_head("at 52caec", head), "six is too short");
+        assert!(!text_names_head("at 52caec9", head), "a diverging prefix");
+        assert!(!text_names_head("", ""));
     }
 
     #[test]

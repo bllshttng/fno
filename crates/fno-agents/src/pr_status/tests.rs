@@ -603,6 +603,21 @@ fn the_pinned_read_refuses_any_answer_about_another_head() {
     assert!(matched.is_none(), "a match is a pass");
     assert_eq!(open["settled"], json!(true), "a match mutates nothing");
 
+    // A pin spelled as a 7+ hex prefix of the head matches; shorter or
+    // diverging prefixes still mismatch.
+    for pin in ["37deafc", "37DEAFC2A"] {
+        let mut o = open.clone();
+        assert!(
+            crate::pr_status::compose::apply_expect_head(o.as_object_mut().unwrap(), pin).is_none(),
+            "{pin} names the head"
+        );
+    }
+    for pin in ["37deaf", "37deafd", ""] {
+        let mut o = open.clone();
+        crate::pr_status::compose::apply_expect_head(o.as_object_mut().unwrap(), pin);
+        assert_eq!(o["settled"], json!(false), "{pin:?} does not name the head");
+    }
+
     // An unreadable head (a degraded serve) cannot verify the pin: refused.
     let mut degraded = json!({"pr": "9", "head": Value::Null, "settled": false});
     let note = crate::pr_status::compose::apply_expect_head(
