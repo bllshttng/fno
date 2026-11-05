@@ -389,8 +389,12 @@ mod tests {
             failures.iter().any(|f| f.contains("test-run env")),
             "{failures:?}"
         );
-        // A stale hidden row refuses: the op became refusal-named.
-        let stale = hidden_rows("claim acquire\tnow listed\n").unwrap();
+        // A stale hidden row refuses: the op became refusal-named. The map
+        // also records the fixture's one hidden command (`claim`), so the
+        // stale row is the only NEW failure relative to the always-on set
+        // (dead registered spelling, dead refusal op, lost seam).
+        let stale =
+            hidden_rows("claim\tcore command surface\nclaim acquire\tnow listed\n").unwrap();
         let failures = surface.drift(&stale);
         assert!(
             failures
@@ -398,7 +402,7 @@ mod tests {
                 .any(|f| f.contains("stale") && f.contains("claim acquire")),
             "{failures:?}"
         );
-        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures.len(), 4, "{failures:?}");
     }
 
     #[test]
