@@ -179,7 +179,19 @@ async fn run_built(
         );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    (true, last_line(&stdout).unwrap_or_else(|| "updated".into()))
+    let id = serde_json::from_str::<serde_json::Value>(&stdout)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_owned)
+        });
+    (
+        true,
+        id.or_else(|| last_line(&stdout))
+            .unwrap_or_else(|| "updated".into()),
+    )
 }
 
 /// The last non-blank line of a command's output.

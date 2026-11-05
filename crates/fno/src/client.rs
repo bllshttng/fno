@@ -63,6 +63,7 @@ mod health;
 mod launch;
 mod panic_log;
 mod placement_pickers;
+mod report;
 pub mod snapshot;
 
 use self::placement_pickers::{
@@ -676,6 +677,7 @@ pub(crate) struct View {
     layout: LayoutView,
     frames: HashMap<u64, Frame>,
     health: health::Health,
+    report: Option<report::Report>,
     /// Manual sideline toggle; narrow terminals override it (auto-hide).
     /// Orthogonal to [`View::density`]: this is visibility, that is how much
     /// each visible row shows. `Slim` is a narrow rail, NOT a hidden panel.
@@ -1828,6 +1830,7 @@ impl View {
         let sideline_width = stored_width.unwrap_or_else(|| canonical_width(density));
         View {
             health: health::Health::new(Instant::now()),
+            report: None,
             term,
             session,
             layout,
@@ -2470,6 +2473,7 @@ impl View {
     fn menu_usurping_open(&self) -> bool {
         self.launcher.is_some()
             || self.keys_modal.is_some()
+            || self.report.is_some()
             || self.row_menu.is_some()
             || self.aux.is_some()
             || self.connections.is_some()
@@ -4407,7 +4411,9 @@ impl View {
         file_viewer::draw(self, &mut cells, rows, cols);
         bell::draw(self, &mut cells, rows, cols);
         let (overlay_origin, overlay_dims) = self.overlay_viewport();
-        if let Some(m) = &self.feed_detail {
+        if self.report.is_some() {
+            report::draw(self, &mut cells, rows, cols);
+        } else if let Some(m) = &self.feed_detail {
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if questions::draw_detail(
             self,
@@ -6916,9 +6922,11 @@ async fn attach_and_run(
                 meter_tx.clone(),
             );
         }
-        let health_deadline = view.health.deadline();
+        let health_deadline = report::deadline(&view);
         tokio::select! {
-            _ = health::wait(health_deadline) => view.health.record(),
+            _ = health::wait(health_deadline) => {
+                if let Err(error) = report::tick(&mut view, &mut compositor) { break Err(error); }
+            },
             msg = srv_rx.recv() => match msg.unwrap_or(Err(ProtoError::Closed)) {
                 Ok(ServerMsg::Frame { pane_id, frame }) => {
                     if !frame.geometry_ok() {
@@ -7958,6 +7966,10 @@ async fn dispatch_event(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<DispatchFlow, String> {
     match event {
+        Event::Report => {
+            report::open(view);
+            return Ok(DispatchFlow::Break);
+        }
         Event::Forward(chunk) => {
             // Reliable channel: awaited send, input is NEVER dropped.
             write_msg(sock_w, &ClientMsg::Input(chunk))
