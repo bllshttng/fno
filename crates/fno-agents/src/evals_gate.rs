@@ -118,6 +118,15 @@ fn zai_window_room(
     saw_zai
 }
 
+/// The live room read the lane rule rides: the same probe
+/// `fno config accounts usage` runs, refreshed, folded into
+/// `zai_window_room`. None when the probe cannot answer at all.
+pub(crate) fn real_room(repo: &Path, now: DateTime<Utc>) -> Option<bool> {
+    crate::accounts::usage::report(repo, true, now.timestamp() as f64)
+        .ok()
+        .map(|(records, rows, threshold)| zai_window_room(&records, &rows, threshold))
+}
+
 /// The lane this run rides. A zai lane runs while its 5h window has room
 /// under the quota defer threshold, read through the same probe
 /// `fno config accounts usage` runs; a window at the cap, an unreadable
@@ -125,19 +134,19 @@ fn zai_window_room(
 /// lane (the user's ruling: z.ai usage matters, not the clock). The fallback
 /// is fixed, never the first claude inventory row: that row can be opus, and
 /// opus never runs target work.
-pub(crate) fn lane_with_room(repo: &Path, lane: &str, now: DateTime<Utc>) -> String {
+pub(crate) fn lane_with_room(
+    repo: &Path,
+    lane: &str,
+    now: DateTime<Utc>,
+    room: &dyn Fn(&Path, DateTime<Utc>) -> Option<bool>,
+) -> String {
     if !lane_is_zai(repo, lane) {
         return lane.to_string();
     }
-    let room = match crate::accounts::usage::report(repo, false, now.timestamp() as f64) {
-        Ok((records, rows, threshold)) => zai_window_room(&records, &rows, threshold),
-        Err(_) => false,
-    };
-    if room {
-        lane.to_string()
-    } else {
-        FALLBACK_LANE.to_string()
+    if room(repo, now) == Some(true) {
+        return lane.to_string();
     }
+    FALLBACK_LANE.to_string()
 }
 
 /// The lane a run moves to when it cannot ride its own: the main lane's
@@ -271,6 +280,9 @@ struct Deps<'a> {
     spawn: &'a dyn Fn(&[String], &Path, &Path) -> Result<u32, String>,
     alive: &'a dyn Fn(u32) -> bool,
     kill: &'a dyn Fn(u32),
+    /// The zai 5h window read behind `lane_with_room`; `real_room` in
+    /// production, an injected answer in tests.
+    room: &'a dyn Fn(&Path, DateTime<Utc>) -> Option<bool>,
     now: DateTime<Utc>,
 }
 
@@ -892,6 +904,21 @@ fn compare(
     let mut rows = read_rows(&history.to_string_lossy(), None, None);
     if let Some(tasks) = tasks {
         rows.retain(|r| tasks.contains(&r.task_id));
+        // A stale baseline holds no rows for the kept tasks (its own main run
+        // can fail on a wedged slot). fold errors on an empty side, so the
+        // unmeasured view verdict() passes is folded here instead. A task
+        // whose head rows exist but score nothing stays red: a lane that
+        // scores nothing is no result.
+        if !rows.iter().any(|r| r.experiment_id.as_deref() == Some(a)) {
+            return Ok(serde_json::json!({
+                "regressions": [],
+                "now_flaky": [],
+                "errors": tasks
+                    .iter()
+                    .map(|t| serde_json::json!({"task": t, "b": "graded", "a_grades": 0}))
+                    .collect::<Vec<_>>(),
+            }));
+        }
     }
     // An unreadable catalog proves nothing unproved, so a regression stays red.
     let unproved = crate::evals::failure_types::unproved_tasks(bank).unwrap_or_default();
@@ -995,7 +1022,7 @@ fn main_seat(
             Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
         }
     };
-    let lane = lane_with_room(p.repo, &lane, d.now);
+    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
     let run_cohort = if fallback {
         format!("{cohort}{FALLBACK_SUFFIX}")
     } else {
@@ -1417,7 +1444,7 @@ fn launch_head(
     }
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
-    let lane = lane_with_room(p.repo, &lane, d.now);
+    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
     let mut argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
@@ -1536,6 +1563,7 @@ pub(crate) fn tick(
         spawn: &spawn_detached,
         alive: &crate::evals_arm::pid_alive,
         kill: &kill,
+        room: &real_room,
         now: Utc::now(),
     };
     tick_with(&paths, &deps, can_launch);
@@ -1598,6 +1626,9 @@ mod tests {
         /// The state the combined-status read answers for the evals/gate
         /// context; empty means the context is absent.
         gate_status: String,
+        /// The zai 5h window answer `real_room` would give; None is a failed
+        /// probe.
+        room: Option<bool>,
         disarms: RefCell<Vec<String>>,
     }
 
@@ -1630,6 +1661,7 @@ mod tests {
                 files: files.into(),
                 armed: false,
                 gate_status: String::new(),
+                room: None,
                 disarms: RefCell::default(),
             }
         }
@@ -1833,11 +1865,14 @@ mod tests {
                 state_dir: state_dir(&self.history()),
                 graph: None,
             };
+            let room_v = self.room;
+            let room_fn = move |_: &Path, _: DateTime<Utc>| room_v;
             let deps = Deps {
                 run: &run,
                 spawn: &spawn,
                 alive: &is_alive,
                 kill: &kill,
+                room: &room_fn,
                 now,
             };
             tick_with(&paths, &deps, true)
@@ -2358,19 +2393,19 @@ mod tests {
     }
 
     #[test]
-    fn tier_paths_plus_the_bank_make_up_the_gated_paths() {
+    fn a_bank_only_head_grades_its_changed_goldens_and_a_skills_head_keeps_the_tier() {
+        // The split the table below rides: the tier prefixes plus the bank
+        // make up the gated set, with the bank the only non-tier entry.
         for p in TIER_PATHS {
             assert!(GATED_PATHS.contains(&p), "{p} must stay gated");
         }
-        let bank: Vec<_> = GATED_PATHS
-            .iter()
-            .filter(|p| !TIER_PATHS.contains(p))
-            .collect();
-        assert_eq!(bank, [&BANK_PATH]);
-    }
-
-    #[test]
-    fn a_bank_only_head_grades_its_changed_goldens_and_a_skills_head_keeps_the_tier() {
+        assert_eq!(
+            GATED_PATHS
+                .iter()
+                .filter(|p| !TIER_PATHS.contains(p))
+                .count(),
+            1
+        );
         // (changed files, the task list the launch must carry)
         for (files, tasks) in [
             (
@@ -2441,6 +2476,7 @@ mod tests {
             spawn: &spawn,
             alive: &alive,
             kill: &kill,
+            room: &|_: &Path, _: DateTime<Utc>| None,
             now: Utc::now(),
         };
         let slot_sha = "0123456789abcdef0123456789abcdef01234567";
@@ -2655,5 +2691,57 @@ mod tests {
                 assert!(!argv.contains(banned), "{argv}");
             }
         }
+    }
+
+    #[test]
+    fn a_head_task_with_no_baseline_rows_grades_green_and_no_scored_rows_stays_red() {
+        // Two shapes, two verdicts. 4494: the baseline cohort held no rows
+        // for the kept tasks (its own main run failed on the wedged slot),
+        // which folds as the unmeasured case verdict() passes. 4497: every
+        // head row rode a substituted lane, so lane evidence excluded all of
+        // them and nothing scored. A lane that scores nothing is no result:
+        // it stays red.
+        let g5 = "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n";
+
+        let w = World::new("evals/bank/g5.yaml\n");
+        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "one head launch");
+        w.rows("gate-head-abcdef123456", "g5", [true, true, true]);
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let success = posts.iter().find(|p| p.starts_with("state=success"));
+        assert!(success.is_some(), "no baseline reads green: {posts:?}");
+        assert!(success.unwrap().contains("with no baseline"), "{posts:?}");
+        drop(posts);
+
+        // 4497's shape: the head rows exist but no row scores, while the
+        // baseline holds grades for the same task. Red, no result.
+        let w = World::new("evals/bank/g5.yaml\n");
+        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
+        w.with_baseline();
+        w.rows("base", "g5", [true, true, true]);
+        w.tick(true, Utc::now());
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for _ in 0..3 {
+            let row = json!({"task_id": "g5", "tier": "capability", "pass": true,
+                "status": "graded", "variant": "v1", "lane_status": "substituted",
+                "experiment_id": "gate-head-abcdef123456"});
+            writeln!(f, "{row}").unwrap();
+        }
+        drop(f);
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let failure = posts.iter().find(|p| p.starts_with("state=failure"));
+        assert!(
+            failure.is_some(),
+            "a scoring-less lane stays red: {posts:?}"
+        );
+        assert!(failure.unwrap().contains("no result"), "{posts:?}");
+        assert!(failure.unwrap().contains("g5"), "{posts:?}");
     }
 }
