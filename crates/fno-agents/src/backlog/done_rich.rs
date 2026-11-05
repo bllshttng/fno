@@ -45,7 +45,7 @@ Completion flags:
       --force-overwrite   Overwrite rollup fields instead of filling empty ones.
   -h, --help              Print help.
 
-The close flags and the completion flags are separate paths.
+The close flags pair with --note only; the other completion flags are a separate path.
 Reverse a close with `fno backlog reopen <id> --reason ...`.
 Exit codes: 2 usage, 3 refused, 4 outage, 5 awaiting merge, 6 promise unmet.
 ";
@@ -531,7 +531,7 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
             );
             return 2;
         };
-        return done_via_seam(id, false, false, None);
+        return done_via_seam(id, false, false, None, None);
     }
     let entries = match live_rows(&graph) {
         Ok(rows) => rows,
@@ -849,6 +849,7 @@ pub(super) fn done_via_seam(
     skip_stamp: bool,
     force: bool,
     reason: Option<&str>,
+    note: Option<&str>,
 ) -> i32 {
     let (tnode, mut sc) = match read_external(task_id) {
         Ok(Some(pair)) => pair,
@@ -899,6 +900,9 @@ pub(super) fn done_via_seam(
         }
         if evidence.is_some() && obj.get("pr_url").is_none_or(Value::is_null) {
             obj.insert("pr_url".into(), json!(evidence));
+        }
+        if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+            obj.insert("completion_note".into(), json!(note));
         }
         obj.remove("id");
     }
