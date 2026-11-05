@@ -187,6 +187,14 @@ async fn run_built(
                 .and_then(|id| id.as_str())
                 .map(str::to_owned)
         });
+    if matches!(args, [command, action, ..] if command == "backlog" && action == "idea")
+        && id.is_none()
+    {
+        return (
+            false,
+            "The command returned no node ID. Check the backlog before retrying.".into(),
+        );
+    }
     (
         true,
         id.or_else(|| last_line(&stdout))

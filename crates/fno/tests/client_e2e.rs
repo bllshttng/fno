@@ -381,7 +381,7 @@ fn a_lone_esc_closes_the_row_selector() {
 }
 
 #[test]
-fn mux_report_files_context_and_keeps_text_after_a_refusal() {
+fn mux_report_submits_context_and_keeps_text_after_a_refusal() {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("report");
@@ -393,6 +393,7 @@ if [ "$1 $2" != 'backlog idea' ]; then exit 0; fi
 printf '%s\n' "$@" > "$RECORD_DIR/argv"
 cat > "$RECORD_DIR/body"
 echo call >> "$RECORD_DIR/calls"
+if [ -e "$RECORD_DIR/no-id" ]; then echo help-without-a-node; exit 0; fi
 if [ -e "$RECORD_DIR/delay" ]; then exec sleep 30; fi
 if [ ! -e "$RECORD_DIR/allow" ]; then echo 'report: graph is busy' >&2; exit 3; fi
 printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
@@ -529,12 +530,32 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     }
     h.type_bytes(b"\x02!");
     h.wait_screen(5, |s| s.contains("report a problem"));
+    let cursor_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        h.screen();
+        if !h.pane.frame().cursor_visible {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < cursor_deadline,
+            "the pane cursor must hide behind the report form"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     h.type_bytes(b"portal stopped\r");
     h.wait_screen(15, |s| s.contains("report: graph is busy"));
     assert!(
         h.screen().contains("portal stopped"),
         "a refusal keeps the draft"
     );
+    std::fs::write(scratch.0.join("no-id"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(5, |s| s.contains("returned no node ID"));
+    assert!(
+        h.screen().contains("portal stopped"),
+        "a missing receipt keeps the draft"
+    );
+    std::fs::remove_file(scratch.0.join("no-id")).unwrap();
     std::fs::write(scratch.0.join("delay"), "").unwrap();
     h.type_bytes(b"\r");
     h.wait_screen(15, |s| s.contains("timed out after 10s"));
@@ -581,6 +602,6 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
             .unwrap()
             .lines()
             .count(),
-        3
+        4
     );
 }
