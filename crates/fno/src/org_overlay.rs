@@ -564,20 +564,25 @@ impl Panel {
         }
     }
 
-    /// The sideline glance: `N working · M leads`, cpu, memory. The full
-    /// block lives in the modal (`expanded_lines`).
-    pub fn minimized_lines(&self, _agents: &[AgentRow], text_w: usize) -> Vec<String> {
+    /// `N working · M leads`: the one headline the sideline, the modal and
+    /// the bottom bar all read from the capacity state.
+    fn working_line(&self) -> String {
         let count = |key: &str| {
             self.capacity
                 .as_ref()
                 .and_then(|state| state.get(key))
                 .and_then(|v| v.as_u64())
         };
-        let people = match (count("workers_live"), count("leads_live")) {
+        match (count("workers_live"), count("leads_live")) {
             (Some(workers), Some(leads)) => format!("  {workers} working · {leads} leads"),
             (Some(workers), None) => format!("  {workers} working"),
             _ => "  working unknown - no capacity reading".to_string(),
-        };
+        }
+    }
+
+    /// The sideline glance: `N working · M leads`, cpu, memory. The full
+    /// block lives in the modal (`expanded_lines`).
+    pub fn minimized_lines(&self, _agents: &[AgentRow], text_w: usize) -> Vec<String> {
         let cpu = match self
             .fold
             .as_ref()
@@ -607,7 +612,7 @@ impl Panel {
                 None => "  memory    unknown".to_string(),
             },
         };
-        [people, cpu, memory]
+        [self.working_line(), cpu, memory]
             .into_iter()
             .map(|line| line.chars().take(text_w).collect())
             .collect()
@@ -682,7 +687,7 @@ impl Panel {
         max_lines: usize,
     ) -> Vec<String> {
         let ages: Vec<Option<u64>> = agents.iter().map(|a| a.last_activity_age_s).collect();
-        let mut lines = Vec::new();
+        let mut lines = vec![self.working_line()];
         let org = match self.fold.as_ref() {
             None => {
                 lines.push(if self.degraded {
@@ -1575,20 +1580,21 @@ mod tests {
 
         let lines = panel.expanded_lines(&[], 200, 40);
 
-        // Three lines: the machine fold's degrade, the team section's honest
-        // unknown - the probe failed with it - and the read line, which
-        // always shows the fold's age and names the failed refresh.
-        assert_eq!(lines.len(), 3, "{lines:?}");
-        assert!(lines[0].contains("fold failed"), "{lines:?}");
-        assert!(lines[0].contains("10s"), "{lines:?}");
+        // Four lines: the working headline, the machine fold's degrade, the
+        // team section's honest unknown - the probe failed with it - and the
+        // read line, which always shows the fold's age and names the failed
+        // refresh.
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines[1].contains("fold failed"), "{lines:?}");
+        assert!(lines[1].contains("10s"), "{lines:?}");
         assert!(
-            lines[1].contains("team") && lines[1].contains("unknown"),
+            lines[2].contains("team") && lines[2].contains("unknown"),
             "{lines:?}"
         );
         assert!(
-            lines[2].contains("read")
-                && lines[2].contains("age unknown")
-                && lines[2].contains("last refresh failed"),
+            lines[3].contains("read")
+                && lines[3].contains("age unknown")
+                && lines[3].contains("last refresh failed"),
             "{lines:?}"
         );
 

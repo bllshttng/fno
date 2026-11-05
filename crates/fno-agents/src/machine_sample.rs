@@ -383,7 +383,9 @@ pub fn read(
     sample.leads = Some(live.iter().filter(|row| row.role_level.is_some()).count() as u64);
     let worker_rows: Vec<&crate::state::RegistryEntry> =
         live.iter().filter(|row| row.role_level.is_none()).collect();
-    sample.workers = Some(working_count(&worker_rows, &transcript_age_any));
+    sample.workers = Some(working_count(&worker_rows, &|row| {
+        session_age_s(&live, row)
+    }));
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = std::process::Command::new("vm_stat").output() {
@@ -841,39 +843,45 @@ pub(crate) fn maybe_capture_process_snapshot(
 /// the same ten minutes the mux census reads (`org_overlay::working_max_s`).
 const WORKING_WINDOW_S: i64 = 600;
 
-/// Seconds since a claude transcript was written, in any account dir.
-fn transcript_age_any(session: &str) -> Option<i64> {
-    let mut bases = vec![crate::claude_drive::claude_projects_dir()];
-    bases.extend(
-        crate::claude_roster::isolated_account_dirs()
-            .into_iter()
-            .map(|(_, dir)| dir.join("projects")),
+/// Seconds since a session's transcript last moved, for any harness: the
+/// served truth the mux rows carry as `last_activity_age_s`, so the bar, the
+/// glance and the census read one answer.
+fn session_age_s(
+    rows: &[crate::state::RegistryEntry],
+    row: &crate::state::RegistryEntry,
+) -> Option<i64> {
+    let handle = row
+        .harness_session_id
+        .as_deref()
+        .unwrap_or(row.name.as_str());
+    let now_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs_f64();
+    let stores = crate::session_truth::Stores::ambient();
+    let payload = crate::session_truth::resolve_payload(
+        Some(rows),
+        handle,
+        now_s,
+        &stores,
+        crate::session_truth::cursor::global(),
     );
-    let path = bases
-        .iter()
-        .find_map(|base| crate::claude_drive::find_transcript_in(base, session))?;
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    let age = SystemTime::now().duration_since(modified).ok()?;
-    Some(age.as_secs() as i64)
+    payload.get("last_activity_age_s")?.as_i64()
 }
 
-/// Working rows, each session once. Claude needs a recent transcript; codex
-/// and opencode have no transcript seam yet, so a live row counts.
+/// Working rows, each session once: transcript written inside the window.
+/// A session with no readable transcript is not counted.
 pub(crate) fn working_count(
     rows: &[&crate::state::RegistryEntry],
-    age: &dyn Fn(&str) -> Option<i64>,
+    age: &dyn Fn(&crate::state::RegistryEntry) -> Option<i64>,
 ) -> u64 {
     let mut seen = std::collections::HashSet::new();
     let working = |row: &&&crate::state::RegistryEntry| {
-        let session = row.harness_session_id.as_deref();
-        if !seen.insert(session.unwrap_or(row.name.as_str()).to_string()) {
-            return false;
-        }
-        match (row.harness_name(), session) {
-            ("claude", Some(id)) => age(id).is_some_and(|secs| secs < WORKING_WINDOW_S),
-            ("claude", None) => false,
-            _ => true,
-        }
+        let key = row
+            .harness_session_id
+            .as_deref()
+            .unwrap_or(row.name.as_str());
+        seen.insert(key.to_string()) && age(row).is_some_and(|secs| secs < WORKING_WINDOW_S)
     };
     rows.iter().filter(working).count() as u64
 }
@@ -1006,12 +1014,12 @@ mod tests {
             row("claude", "fresh"),
             row("claude", "fresh"),
             row("claude", "quiet"),
-            row("claude", "none"),
-            row("codex", "c-1"),
+            row("codex", "c-fresh"),
+            row("opencode", "o-none"),
         ];
         let refs: Vec<_> = rows.iter().collect();
-        let age = |id: &str| match id {
-            "fresh" => Some(30),
+        let age = |row: &crate::state::RegistryEntry| match row.name.as_str() {
+            "fresh" | "c-fresh" => Some(30),
             "quiet" => Some(WORKING_WINDOW_S),
             _ => None,
         };

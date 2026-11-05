@@ -375,7 +375,13 @@ pub fn fleet_segments(team: &Team, gate: &GateReading) -> Vec<String> {
     if !team.tests_known {
         segs.push("testing unknown".to_string());
     }
-    segs.extend(team.counts.segments());
+    // The headline above the team block owns the fleet's working count.
+    segs.extend(
+        team.counts
+            .segments()
+            .into_iter()
+            .filter(|seg| !seg.ends_with(" working")),
+    );
     if team.reserved > 0 {
         segs.push(format!("{} reserved", team.reserved));
     }
