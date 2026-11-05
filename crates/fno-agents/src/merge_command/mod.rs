@@ -360,19 +360,20 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     // selects through (`org_board::prs::pr_binding_keys`). The door used to
     // match url and number only, so a PR whose branch names a held node read
     // clear here and refused at the gate.
-    let ctx = match command_call(
-        "pr-closure-context",
-        &json!({"pr": pr, "repo": Value::Null, "cwd": cwd.to_string_lossy()}),
-        Duration::from_secs(60),
-    ) {
+    let ctx = match retry_read(HOLD_READ_ATTEMPTS, || {
+        command_call(
+            "pr-closure-context",
+            &json!({"pr": pr, "repo": Value::Null, "cwd": cwd.to_string_lossy()}),
+            Duration::from_secs(60),
+        )
+    }) {
         Ok(v) => v,
         Err(e) => {
-            hold_refusal(
+            hold_unknown(
                 &mut flow,
                 pr,
-                &base,
                 &format!(
-                    "dispatch-hold-invalid: hold lookup unavailable: gh call failed before \
+                    "dispatch-hold-unknown: hold lookup unavailable: gh call failed before \
                      PR content was read: {}; retry the hold lookup; do not edit the PR body",
                     e.message
                 ),
@@ -414,17 +415,26 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     }
     let graph_path = hold_graph_path(&base);
     for id in &candidates {
-        let receipt = match command_call(
-            "authorized-merge",
-            &json!({"op": "hold-verdict", "node": id, "graph": graph_path.to_string_lossy()}),
-            Duration::from_secs(15),
-        ) {
+        let receipt = match retry_read(HOLD_READ_ATTEMPTS, || {
+            command_call(
+                "authorized-merge",
+                &json!({"op": "hold-verdict", "node": id, "graph": graph_path.to_string_lossy()}),
+                Duration::from_secs(15),
+            )
+        }) {
             Ok(v) => v,
-            Err(e) => json!({
-                "outcome": "invalid",
-                "owner": id,
-                "detail": format!("hold verdict read failed: {}", e.message),
-            }),
+            Err(e) => {
+                hold_unknown(
+                    &mut flow,
+                    pr,
+                    &format!(
+                        "dispatch-hold-unknown:{id}: hold verdict read failed after \
+                         {HOLD_READ_ATTEMPTS} attempts: {}",
+                        e.message
+                    ),
+                );
+                return flow;
+            }
         };
         let outcome = receipt.get("outcome").and_then(Value::as_str).unwrap_or("");
         if outcome == "absent" {
@@ -480,6 +490,33 @@ fn hold_clear(flow: &mut FlowResult, pr: i64) {
     flow.lines
         .push((false, format!("PR {pr}: no plan dispatch hold\n")));
     flow.exit_code = 0;
+}
+
+/// Reads of the hold verdict that failed in transport (a timeout under load,
+/// a spawn error) answered nothing. They are retried this many times.
+const HOLD_READ_ATTEMPTS: u32 = 3;
+
+/// Run `read` until it answers or `attempts` are spent; the last error wins.
+fn retry_read<T, E>(attempts: u32, mut read: impl FnMut() -> Result<T, E>) -> Result<T, E> {
+    let mut result = read();
+    for _ in 1..attempts {
+        if result.is_ok() {
+            break;
+        }
+        result = read();
+    }
+    result
+}
+
+/// A hold read that never answered: refuse this attempt (exit 3) but leave an
+/// armed auto-merge alone. No verdict was read, so nothing justifies turning
+/// off a merge a green PR already earned; the next gate read decides.
+fn hold_unknown(flow: &mut FlowResult, pr: i64, why: &str) {
+    flow.lines.push((
+        true,
+        format!("{why}; PR {pr} stays armed, retry the hold read\n"),
+    ));
+    flow.exit_code = 3;
 }
 
 /// One fail-closed hold refusal: disarm any queued auto-merge, name the
@@ -1822,6 +1859,47 @@ mod hold_candidates_tests {
         );
         assert!(candidates.is_empty());
         assert!(ambiguous.is_none());
+    }
+}
+
+#[cfg(test)]
+mod retry_read_tests {
+    use super::*;
+
+    #[test]
+    fn a_timeout_then_an_answer_reads_the_answer() {
+        let mut calls = 0;
+        let got = retry_read(3, || {
+            calls += 1;
+            if calls < 3 {
+                Err("timed out")
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(got, Ok(3));
+    }
+
+    #[test]
+    fn spent_attempts_return_the_last_error() {
+        let mut calls = 0;
+        let got: Result<(), String> = retry_read(3, || {
+            calls += 1;
+            Err(format!("timeout {calls}"))
+        });
+        assert_eq!(got, Err("timeout 3".to_string()));
+    }
+
+    #[test]
+    fn an_unknown_read_refuses_without_disarming() {
+        let mut flow = FlowResult::new();
+        hold_unknown(&mut flow, 7, "dispatch-hold-unknown:x-1: read failed");
+        assert_eq!(flow.exit_code, 3);
+        assert!(flow
+            .lines
+            .iter()
+            .all(|(_, l)| !l.contains("disabled an armed")));
+        assert!(flow.lines[0].1.contains("stays armed"));
     }
 }
 
