@@ -177,7 +177,7 @@ pub fn reference_markdown() -> String {
     let mut out = String::from(
         "# Mux key reference\n\n\
          Generated from `default_bindings` and `preset_rows` in `crates/fno/src/keys.rs`. \
-         Do not edit by hand: run `FNO_REGEN_KEY_DOCS=1 cargo test -p fno key_reference` to rewrite it.\n\n\
+         Do not edit by hand: run `cargo test -p fno --lib regenerate_key_reference -- --ignored` to rewrite it.\n\n\
          Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key string to rebind it. \
          The file is one flat object, and `\"preset\"` is its one reserved key. \
          The keys below come after the prefix.\n\n\
@@ -314,18 +314,23 @@ mod tests {
         assert_eq!(origin_under(None, "detach", b'Q'), Origin::Yours);
     }
 
+    fn reference_page() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/mux-key-reference.md")
+    }
+
     #[test]
     fn key_reference_matches_the_checked_in_page() {
-        let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/mux-key-reference.md");
-        let want = reference_markdown();
-        if std::env::var_os("FNO_REGEN_KEY_DOCS").is_some() {
-            std::fs::write(&page, &want).unwrap();
-        }
-        let have = std::fs::read_to_string(&page).unwrap_or_default();
+        let have = std::fs::read_to_string(reference_page()).unwrap_or_default();
         assert_eq!(
-            have, want,
-            "docs/mux-key-reference.md is stale: run `FNO_REGEN_KEY_DOCS=1 cargo test -p fno key_reference`"
+            have,
+            reference_markdown(),
+            "docs/mux-key-reference.md is stale: run `cargo test -p fno --lib regenerate_key_reference -- --ignored`"
         );
+    }
+
+    #[test]
+    #[ignore = "rewrites docs/mux-key-reference.md; run on purpose"]
+    fn regenerate_key_reference() {
+        std::fs::write(reference_page(), reference_markdown()).unwrap();
     }
 }

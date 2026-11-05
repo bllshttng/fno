@@ -1,6 +1,6 @@
 # Mux key reference
 
-Generated from `default_bindings` and `preset_rows` in `crates/fno/src/keys.rs`. Do not edit by hand: run `FNO_REGEN_KEY_DOCS=1 cargo test -p fno key_reference` to rewrite it.
+Generated from `default_bindings` and `preset_rows` in `crates/fno/src/keys.rs`. Do not edit by hand: run `cargo test -p fno --lib regenerate_key_reference -- --ignored` to rewrite it.
 
 Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key string to rebind it. The file is one flat object, and `"preset"` is its one reserved key. The keys below come after the prefix.
 
