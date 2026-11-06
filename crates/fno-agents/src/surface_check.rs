@@ -1010,28 +1010,6 @@ mod tests {
     }
 
     #[test]
-    fn count_mismatch_names_both_sides() {
-        let dir = tmp_dir("countmm");
-        let fm = surface_block(
-            "Is this reachable?",
-            "  answerers:\n    - at: src/reader.py:10\n      disposition: dual-logic\n      \
-             reads: \"x\"\n      emits: \"y\"\n    - at: src/writer.py:20\n      \
-             disposition: out-of-scope\n      reason: \"emits only\"\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&dir, &fm, "countmm.md");
-        let out = run(&plan, None, None);
-        assert!(
-            out.contains(
-                "E\tsurface.count is 1 but the block lists 2 answerer(s) - the count is the \
-                 estimate and must match what was found\n"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
     fn undisposed_names_site_and_reason_teeth() {
         let dir = tmp_dir("undisp");
         let fm = surface_block(

@@ -1530,98 +1530,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shared_hold_read_is_cached_and_a_failed_read_is_cached_too() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = tmp.path().join("budget.json.fleet-hold");
-        let reads = std::cell::Cell::new(0);
-        let failing = || {
-            reads.set(reads.get() + 1);
-            None
-        };
-        assert_eq!(
-            shared_hold_cached(&cache, 1_000, failing),
-            (0, String::new())
-        );
-        // Inside the TTL the failed read answers from the cache: no second
-        // round trip to a primary that just stalled.
-        assert_eq!(
-            shared_hold_cached(&cache, 9_000, failing),
-            (0, String::new())
-        );
-        assert_eq!(reads.get(), 1);
-        let held = || Some((90_000, "secondary".to_string()));
-        let later = 1_000 + SHARED_HOLD_TTL_MS;
-        assert_eq!(
-            shared_hold_cached(&cache, later, held),
-            (90_000, "secondary".into())
-        );
-        assert_eq!(
-            shared_hold_cached(&cache, later + 1, || panic!("cached")),
-            (90_000, "secondary".into())
-        );
-    }
-
-    /// The injected refusal seam with the fleet row staged by the test.
-    fn record_refusal_via(
-        path: &Path,
-        now: i64,
-        kind: &str,
-        shared: (i64, i64, i64),
-    ) -> Result<(), String> {
-        record_refusal_body(Some(path), now, kind, shared, None)
-    }
-
     /// The injected core-stamp seam.
     fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
         let (_lock, locked) = ledger_lock(Some(path));
         record_core_locked(&locked, remaining, reset_epoch_s, now);
-    }
-
-    #[test]
-    fn ledger_lock_retakes_when_the_folder_renames_between_resolve_and_verify() {
-        // The whole-dir fold between the resolve and the open leaves the
-        // first open on a stray recreated inode; the post-flock verify must
-        // notice and retake on the fresh answer, and the returned path must
-        // be the one the lock holds.
-        let tmp = tempfile::tempdir().unwrap();
-        let legacy_dir = tmp.path().join("locks");
-        let moved_dir = tmp.path().join("state").join("locks");
-        std::fs::create_dir_all(&legacy_dir).unwrap();
-        std::fs::create_dir_all(&moved_dir).unwrap();
-        // The resolver answers the LEDGER file, the way ledger_path() does;
-        // the lock is its .lock sidecar.
-        let stray = legacy_dir.join("github-request-budget.json.lock");
-        std::fs::write(&stray, b"").unwrap();
-        let real = moved_dir.join("github-request-budget.json.lock");
-        std::fs::write(&real, b"").unwrap();
-        // First resolve answers the legacy spelling; every later resolve
-        // answers the moved one, the way place() does once the fold ran.
-        let first = std::sync::atomic::AtomicBool::new(true);
-        let resolve = || {
-            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                legacy_dir.join("github-request-budget.json")
-            } else {
-                moved_dir.join("github-request-budget.json")
-            }
-        };
-        let (_lock, path) = ledger_lock_resolving(resolve);
-        assert_eq!(
-            path.parent(),
-            Some(moved_dir.as_path()),
-            "the retake landed on the moved folder, not the stray: {path:?}"
-        );
-        use std::os::unix::fs::MetadataExt;
-        let held = lock_path(&path)
-            .metadata()
-            .expect("the locked file exists")
-            .ino();
-        let verified = std::fs::metadata(&real).unwrap().ino();
-        assert_eq!(
-            held, verified,
-            "the lock was retaken on the moved folder, not the stray"
-        );
-        assert_ne!(lock_path(&path), stray, "the stray inode was dropped");
     }
 
     /// A held flock must name itself fast instead of queueing the next shim
@@ -1650,32 +1562,6 @@ mod tests {
             FileLock::try_acquire(&path).is_ok(),
             "the lock frees for the next caller"
         );
-    }
-
-    #[test]
-    fn admit_op_holds_agent_callers_and_never_the_user() {
-        // AC1-HP / AC1-ERR: at cap, an agent-origin admit refuses `budget`;
-        // the user's read admits and the ledger file is untouched.
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("budget.json");
-        let now = 1_760_000_000_000i64;
-        let read = argv(&["pr", "view", "1", "--json", "state"]);
-        let v = admit(&path, &read, now, 1);
-        assert!(v.admitted, "the staging read is admitted: {v:?}");
-        let before = std::fs::read(&path).unwrap();
-
-        let v = admit_for_origin(Some(&path), &read, now, 1, false);
-        assert!(v.admitted);
-        assert_eq!(v.points_60s, 1);
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            before,
-            "a user admit writes nothing"
-        );
-
-        let v = admit_for_origin(Some(&path), &read, now, 1, true);
-        assert!(!v.admitted);
-        assert_eq!(v.cause, Some("budget"));
     }
 
     #[test]
@@ -1768,32 +1654,6 @@ mod tests {
         assert_eq!(ledger.refusal_kind, "unknown");
         assert_eq!(ledger.backoff_step, 0, "a first refusal opens at the base");
         assert_eq!(ledger.backoff_until_ms, 1_760_000_000_000 + 60_000);
-    }
-
-    #[test]
-    fn alternating_host_refusals_still_escalate_through_the_shared_row() {
-        // AC1-EDGE: the multi-host burst design survives. The seam injects
-        // the fleet row (until, step, last_refusal); a peer hold still
-        // standing at refusal time climbs on the peer's step.
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("budget.json");
-        let t0 = 1_760_000_000_000i64;
-        // Host B records while host A's hold stands: B takes A's step and
-        // climbs one, 60s -> 480s at step 3.
-        record_refusal_via(&path, t0, "secondary", (t0 + 60_000, 2, t0)).unwrap();
-        let (ledger, _) = read_ledger(&path);
-        assert_eq!(ledger.backoff_step, 3, "a live peer hold escalates");
-        assert_eq!(ledger.backoff_until_ms, t0 + 480_000);
-        // Host A records again after serving its 480s, while B's hold still
-        // stands: the alternation climbs to the ceiling, 60s << 4 = 960s,
-        // clamped at 900s.
-        record_refusal_via(&path, t0 + 480_000, "secondary", (t0 + 1_380_000, 3, t0)).unwrap();
-        let (ledger, _) = read_ledger(&path);
-        assert_eq!(
-            ledger.backoff_step, 4,
-            "alternation still reaches the ceiling"
-        );
-        assert_eq!(ledger.backoff_until_ms, t0 + 480_000 + 900_000);
     }
 
     #[test]

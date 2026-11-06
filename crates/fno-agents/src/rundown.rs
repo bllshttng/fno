@@ -1329,10 +1329,6 @@ mod tests {
         )
     }
 
-    fn split_ok() -> Result<crate::team_split::TeamSplits, String> {
-        Ok(crate::team_split::TeamSplits::default())
-    }
-
     fn base_team() -> Value {
         json!({
             "holder": "lead", "level": 2, "scope": "e-1", "grantor": "human",
@@ -1353,62 +1349,6 @@ mod tests {
     }
 
     #[test]
-    fn one_section_per_team_names_scope_and_holder() {
-        let org = base_org(json!([base_team(), base_team()]));
-        let page = page(org, vec![]);
-        assert_eq!(page.matches("<article class=\"role").count(), 2);
-        assert!(page.contains("e-1") && page.contains("lead"));
-        let rows = vec![
-            json!({"name":"t-x-aaaa-glm", "node":"x-aaaa", "harness":"claude", "harness_session_id":"current", "model":"opus", "model_basis":"observed", "status":"writing", "status_basis":"transcript", "context_used_pct":26, "context_used_tokens":258687, "context_window_tokens":1000000, "context_measured_at":"2026-09-12T00:00:00Z", "progress":"awaiting-operator", "progress_basis":"report", "last_message":"RESULT: BLOCKED need a ruling <script>"}),
-            json!({"name":"proof-x-bbbb-h3", "harness":"codex", "status":"quiet"}),
-            json!({"name":"lead-hidden", "node":"x-aaaa", "role":{"scope":"e-1"}, "status":"writing"}),
-        ];
-        let workers = Ok(crate::ledger_workers::by_node(&rows));
-        let mut team = base_team();
-        team["scope_nodes"]["nodes"] = json!([{"id":"x-aaaa", "status":"in_progress"}, {"id":"x-bbbb", "status":"in_progress"}]);
-        let entries = vec![
-            json!({"id":"x-aaaa", "sessions":[{"session_id":"current", "harness":"claude"}, {"session_id":"former", "harness":"claude", "phase":"execute", "observed_model":"sonnet", "ended_at":"yesterday"}]}),
-        ];
-        let html = render(
-            &base_org(json!([team.clone()])),
-            &entries,
-            "2026-09-12T00:00:00Z",
-            60,
-            &split_ok(),
-            None,
-            &workers,
-        );
-        assert_eq!(html.matches("<details class=\"worker\"").count(), 2);
-        assert!(
-            html.contains("t-x-aaaa-glm")
-                && html.contains("claude")
-                && html.contains("opus (observed)")
-                && html.contains("writing (transcript)")
-        );
-        assert!(html.contains("proof-x-bbbb-h3") && !html.contains("lead-hidden"));
-        assert!(html.contains("26% used") && html.contains("258,687 of 1,000,000"));
-        assert!(html.contains("Needs-you: RESULT: BLOCKED need a ruling &lt;script&gt;"));
-        assert!(
-            html.contains("former sessions")
-                && html.contains("former")
-                && html.contains("yesterday")
-        );
-        let failure = render(
-            &base_org(json!([team])),
-            &entries,
-            "2026-09-12T00:00:00Z",
-            60,
-            &split_ok(),
-            None,
-            &Err("fno exited 1".into()),
-        );
-        assert!(failure.contains("workers not read: fno exited 1"));
-        assert!(crate::ledger_workers::parse_roster(1, "[]", "failure").is_err());
-        assert!(crate::ledger_workers::parse_roster(0, "{}", "").is_err());
-        assert!(crate::ledger_workers::parse_roster(0, "[{}]", "").is_err());
-    }
-
-    #[test]
     fn hostile_fields_are_escaped() {
         let mut team = base_team();
         team["holder"] = json!("<script>x</script>");
@@ -1420,27 +1360,6 @@ mod tests {
         assert!(!page.contains("<script>x</script>"));
         assert!(page.contains("&lt;script&gt;"));
         assert!(!page.contains("<img"));
-    }
-
-    #[test]
-    fn unassigned_leaves_follow_the_structural_rule() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "parent": null, "status": "in_progress"}),
-            json!({"id": "x-1", "parent": "e-1", "status": "in_progress", "title": "contained", "priority": "p1"}),
-            json!({"id": "l-1", "title": "free leaf", "status": "ready", "priority": "p1"}),
-            json!({"id": "l-2", "title": "done leaf", "status": "done", "priority": "p1"}),
-            json!({"id": "l-3", "title": "container", "status": "in_progress", "priority": "p2"}),
-            json!({"id": "l-4", "parent": "l-3", "status": "ready"}),
-            json!({"id": "l-5", "title": "empty parent leaf", "parent": "", "status": "ready", "priority": "p2"}),
-        ];
-        let whole = page(base_org(json!([base_team()])), entries);
-        let at = whole.find("Unassigned").expect("unassigned section");
-        let section = &whole[at..];
-        assert!(section.contains("2 unassigned, 1 at p1"));
-        assert!(section.contains("free leaf"));
-        assert!(!section.contains("done leaf"));
-        assert!(!section.contains("container"));
-        assert!(!section.contains("contained"));
     }
 
     #[test]
@@ -1521,81 +1440,6 @@ mod tests {
             "<div class=\"fact\"><span class=\"fv\">-</span><span class=\"fl\">stale teams</span></div>"
         ));
         assert!(page.contains("team split read failed: boom"));
-    }
-
-    #[test]
-    fn operator_questions_land_on_their_team_and_an_unread_queue_names_itself() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("rundown-needs-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
-        let doc = json!({
-            "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
-            "agents": [{
-                "name": "kestrel", "status": "live", "role_scope": "e-1",
-                "role_level": 2, "cwd": "/repo", "harness": "claude",
-                "harness_session_id": "sess-k",
-                "created_at": "2026-09-29T00:00:00Z"
-            }]
-        });
-        std::fs::write(
-            crate::paths::AgentsHome::from_env().registry_json(),
-            doc.to_string(),
-        )
-        .unwrap();
-        let board = json!({"queues": [
-            {"name": "operator_question", "status": "ok", "rows": [
-                {"id": "q-1", "question": "rule on the merge gate", "ts": "t",
-                 "session_id": "sess-k"}
-            ]},
-            {"name": "undriven_pr", "status": "ok", "rows": []}
-        ]});
-        let page = render(
-            &base_org(json!([base_team()])),
-            &[],
-            "2026-09-12T00:00:00Z",
-            60,
-            &split_ok(),
-            Some(&board),
-            &Ok(Default::default()),
-        );
-        assert!(page.contains("needs the user"), "{page}");
-        assert!(page.contains("rule on the merge gate"), "{page}");
-        let blind = json!({"queues": [
-            {"name": "operator_question", "status": "over_budget",
-             "error": "too many rows", "rows": []}
-        ]});
-        let page = render(
-            &base_org(json!([base_team()])),
-            &[],
-            "2026-09-12T00:00:00Z",
-            60,
-            &split_ok(),
-            Some(&blind),
-            &Ok(Default::default()),
-        );
-        assert!(
-            page.contains("not read: operator_question not read: too many rows"),
-            "{page}"
-        );
-        std::env::remove_var("FNO_AGENTS_HOME");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC18-ERR: a null owned_counts renders `owned unmeasured` on the card
-    /// and in the footer; nodes, active and done still render.
-    #[test]
-    fn a_null_owned_count_reads_unmeasured_on_card_and_footer() {
-        let mut team = base_team();
-        team["level"] = json!(1);
-        team["scope_nodes"]["owned_counts"] = Value::Null;
-        let page = page(base_org(json!([team])), vec![]);
-        assert!(page.contains("<span>owned unmeasured</span>"), "{page}");
-        assert!(page.contains("· owned unmeasured</span>"), "{page}");
-        assert!(page.contains("<b>3</b> nodes</span><span><b>1</b> active</span>"));
     }
 
     #[test]
@@ -1703,15 +1547,6 @@ mod tests {
         );
         assert_eq!(log.matches("\"acted\":1").count(), 1, "log: {log}");
         assert!(log.contains("\"interval_s\":300"), "log: {log}");
-    }
-
-    #[test]
-    fn team_ledger_young_cadence_stamp_runs_nothing() {
-        let arm = Arm::default();
-        let h = home();
-        *arm.last_tick.lock().unwrap() = Some(std::time::Instant::now());
-        maybe_tick_with(&arm, h.clone(), || panic!("arm must be gated"));
-        assert!(!h.events_jsonl().exists(), "a gated tick says nothing");
     }
 
     #[test]

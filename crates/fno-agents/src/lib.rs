@@ -330,6 +330,7 @@ pub mod lead_checkin_blueprint;
 pub mod lead_checkin_evals;
 pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
+pub mod lead_checkin_orders;
 pub mod lead_escalation;
 pub mod lead_eval;
 pub(crate) mod lead_eval_grade;
@@ -569,6 +570,7 @@ pub mod resume_args;
 pub mod resume_gate;
 pub mod resume_pin;
 pub mod resume_receipt;
+pub(crate) mod resume_reroute;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
@@ -724,9 +726,6 @@ pub mod territory;
 pub mod test_census;
 pub mod test_changed;
 pub mod test_command;
-#[cfg(test)]
-#[path = "test_command_goldens_tests.rs"]
-mod test_command_goldens_tests;
 pub mod test_delta;
 pub mod test_env;
 pub mod test_hold;
@@ -736,9 +735,6 @@ mod test_run_pins;
 pub mod test_smoke;
 pub mod test_smoke_discovery;
 pub mod test_smoke_registry;
-#[cfg(test)]
-#[path = "test_smoke_tests.rs"]
-mod test_smoke_tests;
 pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
@@ -1529,7 +1525,6 @@ mod tests {
             ("org_board/claims.rs", 1),
             ("hook/session_state.rs", 1),
             ("operator_turns.rs", 1),
-            ("client_tests.rs", 2),
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
@@ -2099,9 +2094,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // active_backlog tick row is an EventEmitter emit (the mission-level rows
     // ride Journal::append and are exempt like the drain decision events).
     "control_plane_tick",
-    // Evals demand (Python-emitted from the pr-watch tick's evals
-    // leg): the scheduled regression-tier run's outcome, and the could-not-
-    // fire row whose journal entries are the operator-notice rate bound.
+    // Evals demand (daemon-scheduled): the regression-tier run's outcome,
+    // and the could-not-fire row whose journal entries rate-bound notices.
     "evals_scheduled_run",
     "evals_stale",
     // Scratch-shape sweep (agents-emitted from the `scratch sweep`

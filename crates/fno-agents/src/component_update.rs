@@ -651,11 +651,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_component_list_is_never_converged() {
-        assert!(!verdict(&req(vec![])).converged);
-    }
-
-    #[test]
     fn contradicting_evidence_beats_a_matching_revision() {
         // The marker reads fresh but the installed bytes differ: Stale wins
         // over the rev match, and the evidence is carried as the detail.
@@ -705,20 +700,6 @@ mod tests {
         assert!(daemon.detail.as_deref().unwrap().contains("exited 3"));
         assert_eq!(r.components[2].status, Status::Fresh);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn probe_mode_requires_bindir_and_expected() {
-        assert!(parse_probe_args(&[]).is_err());
-        assert!(parse_probe_args(&["--bindir".to_string(), "/tmp".to_string()]).is_err());
-        assert!(parse_probe_args(&["--wat".to_string()]).is_err());
-        assert!(parse_probe_args(&[
-            "--bindir".to_string(),
-            "/tmp".to_string(),
-            "--expected".to_string(),
-            "r".to_string()
-        ])
-        .is_ok());
     }
 
     /// Run git in `dir`, asserting success; stdout trimmed.

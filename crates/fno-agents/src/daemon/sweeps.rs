@@ -25,6 +25,9 @@ pub(crate) const PARK_SWEEP_INTERVAL_SECS: i64 = 600;
 /// so the minute floor spends nothing while the gate sits idle.
 pub(crate) const EVALS_SETTLE_INTERVAL_SECS: i64 = 60;
 
+/// How often the daemon asks evals-arm to launch any due gate or bank work.
+pub(crate) const EVALS_ARM_INTERVAL_SECS: i64 = 60;
+
 /// One fleet's stale-sweep reading, parsed from the command's JSON line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleSweepReport {
@@ -233,6 +236,65 @@ pub fn evals_settle_sweep(
     }
     let _ = std::fs::write(&stamp, now.to_string());
     usize::from(waited)
+}
+
+/// Run the existing evals scheduler on its own minute clock and leave the
+/// same arm receipt lead-checkin reads. The caller owns the one-in-flight
+/// gate; this stamp bounds repeated attempts across daemon ticks.
+pub fn evals_arm_sweep(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    now: i64,
+    run: &dyn Fn() -> Option<String>,
+) -> usize {
+    let stamp = home.root().join("evals-arm.stamp");
+    let last = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    if now.saturating_sub(last) < EVALS_ARM_INTERVAL_SECS {
+        return 0;
+    }
+    let receipt = run()
+        .and_then(|line| {
+            line.lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .map(str::to_string)
+        })
+        .and_then(|line| serde_json::from_str::<Value>(&line).ok());
+    let (acted, skip_reason, detail) = match receipt {
+        Some(value) => (
+            value.get("acted").and_then(Value::as_u64).unwrap_or(0),
+            value
+                .get("skip_reason")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            value
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(4000)
+                .collect::<String>(),
+        ),
+        None => (
+            0,
+            Some("arm_failed".to_string()),
+            "evals-arm returned no readable receipt".to_string(),
+        ),
+    };
+    let data = crate::tick_ledger::tick_data(
+        "evals",
+        crate::tick_ledger::SCHED_DAEMON,
+        acted,
+        skip_reason.as_deref(),
+        Some(&detail),
+        EVALS_ARM_INTERVAL_SECS as u64,
+    );
+    let _ = emitter.emit(crate::tick_ledger::EVENT_TYPE, &data);
+    let _ = std::fs::write(&stamp, now.to_string());
+    1
 }
 
 /// How long between trust-answer passes. A codex pane parked on the

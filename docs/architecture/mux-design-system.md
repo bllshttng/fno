@@ -106,7 +106,7 @@ Group related lines by blank rows before adding a border or a rule. Use zero, on
 
 ### Text never touches a border
 
-Body text keeps one cell of air from the left border and two from the right. A hint that runs into the edge breaks this rule. Code: `BODY_RIGHT_GAP_COLS` (2) and the leading space of each row format in `Popup::render`, both in `crates/fno/src/popup.rs`. Source: stageshow `references/craft.md` (nested shapes pad evenly).
+When a framed row carries text (body, subtitle, tab strip, footer), it keeps the shared two-cell side pad from its border on both sides. The pad shrinks only on a row too narrow to carry it. A text cell beside a border glyph with no space between is a high finding on a shot. In code, `frame` asserts the same rule via `chrome::pad_violations` (`crates/fno/src/chrome.rs`), and the overlay-pad demo test (`crates/fno/src/client/tests/overlay_pad_tests.rs`) walks it. Popups add their own leading space in `Popup::render` (`crates/fno/src/popup.rs`), which stacks on the shared pad. Source: stageshow `references/craft.md` (nested shapes pad evenly).
 
 ### Popups cap at 60 columns
 

@@ -329,6 +329,7 @@ crates/fno/src/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
+crates/fno-agents/src/resume_reroute.rs
 crates/fno-agents/src/accounts/binding.rs
 crates/fno-agents/src/accounts/credentials.rs
 crates/fno-agents/src/accounts/env.rs

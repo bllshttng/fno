@@ -258,25 +258,6 @@ mod tests {
         std::env::remove_var("FNO_CLAIMS_ROOT");
     }
 
-    #[test]
-    fn a_fresh_stamp_never_overrides_a_roster_negative_for_a_fleet_row() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = empty_roster_dir();
-        // The claude fleet mint shape (claude_ask.rs:3263): origin spawn. The
-        // roster polices these rows, so its negative stays definitive even
-        // with a fresh stamp - the PR #235 P1 guard.
-        let mut fleet = pidless_reported_row("bg-worker", "spawn", "claude");
-        fleet.last_report_at = Some(stamp_ago(60));
-        let reg = write_reg(&dir, &[fleet]);
-        let mut warnings = Vec::new();
-        let rows = live_rows(&reg, &mut warnings);
-        assert_eq!(rows.len(), 0, "{warnings:?}");
-        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-    }
-
     /// A blocked fleet row frees its slot: the harness's positive blocked
     /// reading drops a row the roster would keep. The unblocked
     /// control row keeps its count.

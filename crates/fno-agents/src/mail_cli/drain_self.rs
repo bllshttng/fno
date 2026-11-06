@@ -54,15 +54,26 @@ pub fn run_drain_self(args: &[String]) -> i32 {
     };
 
     let handle = crate::identity::canonical_handle(&sid);
-    // Drain every address form this session owns: the canonical first-eight
-    // (new mail), the full id (the collision-escape send path), and the legacy
-    // last-eight (pre-flip mail still on the bus). Each address has its own
-    // cursor; a message has one `to`, so it matches exactly one form.
-    let forms = dedupe_keep_order(vec![
-        handle.clone(),
-        crate::spawn_context::session_identity_key(&sid),
-        crate::identity::legacy_suffix_handle(&sid),
-    ]);
+    // Drain every address form this session owns: the canonical first-eight,
+    // the full id, and the legacy last-eight. A short form a second stored
+    // session also answers to is refused (two same-window codex ids share the
+    // first-eight head; reading it delivers the sibling's mail); the full-id
+    // form never refuses. An unreadable registry refuses nothing.
+    let stored: Vec<String> = crate::state::load_registry(&AgentsHome::from_env().registry_json())
+        .map(|registry| {
+            registry
+                .entries
+                .iter()
+                .filter_map(|e| e.harness_session_id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let (forms, refused_forms) = crate::identity::bus_drain_forms(&sid, &stored);
+    for form in &refused_forms {
+        eprintln!(
+            "note: not draining short form {form}: more than one stored session answers to it; mail addressed to the full session id still drains"
+        );
+    }
 
     let bus = crate::mail_paths::state_bus_dir(&home);
     let msgs = read_bus(&bus);
@@ -378,15 +389,4 @@ fn str_field(m: &Value, key: &str, blank: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(blank)
         .to_string()
-}
-
-fn dedupe_keep_order(items: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for item in items {
-        if seen.insert(item.clone()) {
-            out.push(item);
-        }
-    }
-    out
 }

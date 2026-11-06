@@ -63,13 +63,9 @@ pub fn effective_state(e: &RegistryEntry, now_secs: u64) -> (EffState, &'static 
     if matches!(e.status, AgentStatus::Exited | AgentStatus::PermanentDead) {
         return (EffState::Done, "exit");
     }
-    // Hook (inside_leg) is senior and TTL-gated. A lapsed hook row does NOT
-    // fall through to screen_state wholesale -- one merge applies (mirrors
-    // derive_rows/blocked_rung): a harness whose wiring names no blocked
-    // producer (`blocked = "none"`, codex) can never state blocked through
-    // the hook, so a FRESH screen `blocked` verdict outranks the leg's last
-    // working/done word. A harness that wires a blocked event keeps the old
-    // whole-row rule: liveness-only, never a screen verdict.
+    // Hooks own working/done. A declared screen backstop (or no blocked
+    // producer) admits a fresh blocked screen over the last hook report.
+    // Other screen states never override a hook, even when its TTL lapses.
     if let Some(leg) = &e.inside_leg {
         let live = leg.is_live_at(now_secs);
         let no_producer =
@@ -424,21 +420,20 @@ mod tests {
         assert_eq!(effective_state(&e, NOW), (EffState::Idle, "liveness"));
     }
 
-    // The no-blocked-producer merge (mirrors derive_rows/blocked_rung): a
-    // codex row (wiring `blocked = "none"`) whose hook lane last said
-    // working reads Blocked from a FRESH screen verdict - the pane sitting
-    // at a permission prompt the hook lane can never state.
+    // The daemon exposes the same parked-screen override as the mux.
     #[test]
-    fn no_blocked_producer_row_merges_a_fresh_screen_blocked_over_the_leg() {
-        let e = entry(json!({
-            // `harness`, not `provider`: harness_name() reads harness then
-            // legacy_provider, and from_value skips the load-time backfill.
-            "harness": "codex",
-            "inside_leg": live_leg("working"),
-            "screen_state": {"state": "blocked", "rule": "question_prompt",
-                             "seq": 1, "at": "2026-01-01T00:00:00Z"},
-        }));
-        assert_eq!(effective_state(&e, NOW), (EffState::Blocked, "screen"));
+    fn parked_prompts_override_working_hook_reports() {
+        for harness in ["claude", "opencode", "codex", "agy", "pi"] {
+            let e = entry(json!({
+                // `harness`, not `provider`: harness_name() reads harness then
+                // legacy_provider, and from_value skips the load-time backfill.
+                "harness": harness,
+                "inside_leg": live_leg("working"),
+                "screen_state": {"state": "blocked", "rule": "question_prompt",
+                                 "seq": 1, "at": "2026-01-01T00:00:00Z"},
+            }));
+            assert_eq!(effective_state(&e, NOW), (EffState::Blocked, "screen"));
+        }
     }
 
     #[test]

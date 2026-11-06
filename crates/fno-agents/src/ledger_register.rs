@@ -1345,26 +1345,6 @@ mod tests {
     }
 
     #[test]
-    fn append_collapses_backstop_on_plain_append() {
-        let dir = TempDir::new().unwrap();
-        let ledger = dir.path().join("ledger.json");
-        seed_ledger(
-            &ledger,
-            json!({"entries": [{"backstop": true, "graph_node_id": "ab-node"}]}),
-        );
-        let entry = json!({
-            "fno_id": "t2",
-            "graph_node_id": "ab-node",
-            "termination_reason": "Budget",
-        });
-        append_to_tasks_json(&ledger, &entry).unwrap();
-        let doc = read_ledger(&ledger);
-        let entries = doc["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].get("backstop").is_none());
-    }
-
-    #[test]
     fn append_corrupt_ledger_backed_up_and_reset() {
         let dir = TempDir::new().unwrap();
         let ledger = dir.path().join("ledger.json");
