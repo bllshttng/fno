@@ -39,7 +39,7 @@ The setting needs a container recreate. It is not live until the container's env
 
 ## The abort: compaction cannot swap the wallog
 
-A second sqld defect aborts the primary at log compaction. When the wallog passes its size cap, sqld writes an empty replacement log in `to_compact/` and swaps the two names with `renameat2(RENAME_EXCHANGE)`. A filesystem that does not implement that flag answers EINVAL, and sqld unwraps the error, so the process aborts and the container manager restarts it within seconds. Each restart fails every claim write in flight and resets the unchanged-container-start window. The upstream site is `libsql-server/src/replication/primary/logger.rs` line 398 at tag `libsql-server-v0.24.33`, with the flag call at lines 472 to 490. Upstream main still carries both. The upstream report is [libsql issue 1902](https://github.com/tursodatabase/libsql/issues/1902), open.
+A second sqld defect aborts the primary at log compaction. When the wallog passes its size cap, sqld writes an empty replacement log in `to_compact/` and swaps the two names with `renameat2(RENAME_EXCHANGE)`. A filesystem that does not implement that flag answers EINVAL. sqld unwraps the error, so the process aborts. The container manager restarts it within seconds. Each restart fails every claim write in flight and resets the unchanged-container-start window. The upstream site is `libsql-server/src/replication/primary/logger.rs` line 398 at tag `libsql-server-v0.24.33`, with the flag call at lines 472 to 490. Upstream main still carries both. The upstream report is [libsql issue 1902](https://github.com/tursodatabase/libsql/issues/1902), open.
 
 The signature on r2d2:
 
