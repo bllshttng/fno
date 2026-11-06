@@ -19,7 +19,7 @@ Under the standing freeze on local test runs, no cargo check or test ran locally
 | Collected, G3 integration shards, per-binary union (same two runs) | 592 | 567 |
 | Rust job minutes (unit suite seconds, then cli-ci wall minutes) | 175.5 and 21.6 | 176.3 and 25.0 |
 
-The unit slice reports collected equal to declarations: libtest collects one case per `#[test]`. The integration shards report per-binary collected from the four shard logs. The shard union misses ignored and separately-scheduled binaries, so the G3 integration figure 592 is the measured floor of the shard lane, not the file count.
+The unit slice reports collected equal to declarations: libtest collects one case per `#[test]`. The integration shards report per-binary collected from the four shard logs. The shard union misses ignored and separately-scheduled binaries. The G3 integration figure is the measured floor of the shard lane, not the file count.
 
 ## Files
 
