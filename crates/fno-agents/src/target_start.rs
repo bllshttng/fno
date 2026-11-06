@@ -48,7 +48,7 @@ const SETUP_HOOK_TIMEOUT_S: u64 = 120;
 const CODEX_NATIVE_HANDOFF_EXIT: i32 = 75;
 
 const USAGE: &str = "usage: fno do target start <node|text> [--plan-path <path>] \
-[--size S|M|L] [--model <m>] [--harness <h>] [--beastmode|--beast] [--no-merge] \
+[--size S|M|L] [--model <m>] [--harness <h>] [--beastmode|--beast] [--no-merge] [--advisory] \
 [--deliverables <n>] [--steps]\n";
 
 /// A refusal: the message prints on stderr and the run exits with `code`.
@@ -80,6 +80,7 @@ struct Args {
     harness: Option<String>,
     beastmode: bool,
     no_merge: bool,
+    advisory: bool,
     deliverables: Option<i64>,
     steps: bool,
 }
@@ -92,6 +93,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
     let mut harness = None;
     let mut beastmode = false;
     let mut no_merge = false;
+    let mut advisory = false;
     let mut deliverables = None;
     let mut steps = false;
     let mut it = rest.iter();
@@ -102,7 +104,8 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
                 print!(
                     "\nCold-start a worktree-isolated target session in ONE command.\n\n\
                      --steps  run this target one instructed step at a time; the\n\
-                     \x20        flag forwards to init, which stamps turn_mode.\n"
+                     \x20        flag forwards to init, which stamps turn_mode.\n\
+                     --advisory  forward the no-PR intent to target init.\n"
                 );
                 return Err(Fail {
                     message: String::new(),
@@ -128,6 +131,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             }
             "--beastmode" | "--beast" => beastmode = true,
             "--no-merge" => no_merge = true,
+            "--advisory" => advisory = true,
             "--deliverables" => {
                 let raw = next_value(&mut it, tok)?;
                 let parsed: i64 = raw.trim().parse().map_err(|_| {
@@ -167,6 +171,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
         harness,
         beastmode,
         no_merge,
+        advisory,
         deliverables,
         steps,
     })
@@ -2096,6 +2101,9 @@ fn start_codex_native(
     if args.no_merge {
         init_args.push("--no-merge".into());
     }
+    if args.advisory {
+        init_args.push("--advisory".into());
+    }
     if let Some(n) = args.deliverables {
         init_args.extend(["--deliverables".into(), n.to_string()]);
     }
@@ -2456,6 +2464,9 @@ fn init_from_worktree(
     if args.no_merge {
         init_args.push("--no-merge".into());
     }
+    if args.advisory {
+        init_args.push("--advisory".into());
+    }
     if let Some(p) = plan_path {
         init_args.extend(["--plan-path".into(), p.to_string()]);
     }
@@ -2619,5 +2630,17 @@ mod start_progress_tests {
             out.contains("target_claim_blocked_reason:"),
             "the blocked line is history, not poison, here: it rides untouched"
         );
+    }
+}
+
+#[cfg(test)]
+mod advisory_flag_tests {
+    use super::*;
+
+    #[test]
+    fn advisory_flag_parses_for_target_start() {
+        let args = parse_args(&["x-1".into(), "--advisory".into()])
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(args.advisory);
     }
 }

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const USAGE: &str = "usage: fno do target init [--input <text|ab-id>] [--plan-path <path>] \
-[--size S|M|L] [--model <m>] [--harness <h>] [--beastmode|--beast] [--no-merge] \
+[--size S|M|L] [--model <m>] [--harness <h>] [--beastmode|--beast] [--no-merge] [--advisory] \
 [--deliverables <n>] [--steps]\n";
 
 /// A refusal: the message prints on stderr and the run exits with `code`.
@@ -48,6 +48,7 @@ struct Args {
     harness: Option<String>,
     beastmode: bool,
     no_merge: bool,
+    advisory: bool,
     deliverables: Option<i64>,
     steps: bool,
 }
@@ -63,6 +64,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
         harness: None,
         beastmode: false,
         no_merge: false,
+        advisory: false,
         deliverables: None,
         steps: false,
     };
@@ -94,6 +96,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             }
             "--beastmode" | "--beast" => args.beastmode = true,
             "--no-merge" => args.no_merge = true,
+            "--advisory" => args.advisory = true,
             "--deliverables" => {
                 let raw = next_value(&mut it, tok)?;
                 let parsed: i64 = raw
@@ -142,6 +145,7 @@ fn print_help() {
          --steps  run this target one instructed step at a time; the stop gate\n\
          \x20        lets every stop through.\n"
     );
+    print!("--advisory  mark this run as owing no PR; a promise ends as DoneAdvisory.\n");
 }
 
 /// The public entry: the door hands the argv after `do target init`.
@@ -622,6 +626,9 @@ fn run_helper(
     // mergeable.
     if args.no_merge {
         cmd.env("TARGET_NO_MERGE", "1");
+    }
+    if args.advisory {
+        cmd.env("TARGET_ADVISORY", "1");
     }
     // The real --steps flag: the stop gate's steps mode, stamped for the
     // helper process. No environment variable ahead of it.
@@ -1199,6 +1206,21 @@ mod plan_carry_miss_tests {
             "{}",
             fail.message
         );
+    }
+}
+
+#[cfg(test)]
+mod advisory_flag_tests {
+    use super::*;
+
+    #[test]
+    fn advisory_flag_parses_as_explicit_no_pr_intent() {
+        let args = parse_args(&["--input".into(), "x-1".into(), "--advisory".into()])
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(args.advisory);
+        let default_args = parse_args(&["--input".into(), "x-1".into()])
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(!default_args.advisory);
     }
 }
 
