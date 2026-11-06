@@ -259,15 +259,15 @@ impl Report {
                 rows,
                 "review GitHub issue",
                 if self.pending.is_some() {
-                    "   filing…"
+                    " filing…"
                 } else if self.auth == Some(true) {
                     if self.issue.is_some() || self.node.is_some() {
-                        "   ↑↓ scroll · Enter retry · Esc close"
+                        " ↑↓ scroll · Enter retry · Esc close"
                     } else {
-                        "   ↑↓ scroll · Enter send · Esc edit"
+                        " ↑↓ scroll · Enter send · Esc edit"
                     }
                 } else {
-                    "   ↑↓ scroll · Enter backlog only · Esc edit"
+                    " ↑↓ scroll · Enter backlog only · Esc edit"
                 },
             )
         } else {
@@ -283,7 +283,7 @@ impl Report {
             (
                 rows,
                 "report a problem",
-                "   Tab type · Enter review · Esc cancel",
+                " Tab type · Enter review · Esc cancel",
             )
         };
         let mut popup = Popup::new(rows, Anchor::Center)
