@@ -71,6 +71,14 @@ impl MachineTree {
         }
     }
 
+    pub(super) fn destinations(&self) -> Vec<String> {
+        self.bands
+            .iter()
+            .filter(|b| !b.local)
+            .map(|b| b.host.clone())
+            .collect()
+    }
+
     /// Remote rows reading blocked. Zero while the toggle is off.
     pub(super) fn blocked_remote(&self) -> usize {
         if !self.on {
@@ -155,6 +163,9 @@ pub(super) fn apply(view: &mut View, read: Result<Value, String>) {
                 })
             });
             view.machine_tree.bands = fold(&map);
+            if let Some(l) = view.launcher.as_mut() {
+                l.machines = view.machine_tree.destinations();
+            }
             view.reanchor_selector(held);
             if let Some(hr) = view.hover_row {
                 let now_at = view.display_rows().get(hr).and_then(|r| match r {

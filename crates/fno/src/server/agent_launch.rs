@@ -99,9 +99,8 @@ pub(crate) struct LaunchDesk {
     /// request ids are client-minted and per-client, so the client id is
     /// what makes one attempt's key distinct from another client's.
     pending: HashSet<(u64, u64)>,
-    /// The placement a thread launch carries: the spawn argv rides none of
-    /// it, and the composer's portal opens server-side on the Launched
-    /// receipt through the requesting client's own reach.
+    /// The client's portal placement, retained until a thread or remote
+    /// pane launch returns its receipt.
     placements: HashMap<(u64, u64), ComposerPlacement>,
     /// Terminal updates, insertion-ordered for eviction.
     finished: HashMap<(u64, u64), AgentLaunchUpdate>,
@@ -203,11 +202,21 @@ fn validate_launch_request(req: &AgentLaunchRequest) -> Result<(), String> {
             return Err(format!("unsupported split direction {dir:?}"));
         }
     }
+    if let Some(host) = &req.host {
+        if host.is_empty()
+            || host.starts_with('-')
+            || !host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        {
+            return Err("invalid remote machine".into());
+        }
+    }
     let cwd = std::path::Path::new(&req.cwd);
     if !cwd.is_absolute() {
         return Err(format!("project path {:?} is not absolute", req.cwd));
     }
-    if !cwd.is_dir() {
+    if req.host.is_none() && !cwd.is_dir() {
         return Err(format!("project path {:?} does not exist", req.cwd));
     }
     // A board prefill's node id becomes an argv element; refuse anything
@@ -314,9 +323,25 @@ async fn resolve_launch_workdir(req: &mut AgentLaunchRequest) -> Result<(), Stri
     let bin = crate::digest_overlay::fno_agents_bin()
         .to_string_lossy()
         .into_owned();
-    let argv = [bin.as_str(), "launch-workdir"];
+    let argv = if let Some(host) = &req.host {
+        vec![
+            "ssh".into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=5".into(),
+            host.clone(),
+            "--".into(),
+            "sh".into(),
+            "-lc".into(),
+            crate::gh_proxy::shell_quote("exec fno-agents launch-workdir"),
+        ]
+    } else {
+        vec![bin, "launch-workdir".into()]
+    };
+    let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
     match crate::dispatch_launch::run_fno_captured_with_stdin(
-        &argv,
+        &borrowed,
         payload.to_string().as_bytes(),
         WORKDIR_TIMEOUT,
         tokio::time::Instant::now() + WORKDIR_TIMEOUT,
@@ -472,9 +497,9 @@ impl super::Core {
         self.launch_desk.mark_started(
             id,
             req.request_id,
-            // A thread launch's placement rides the desk, not the spawn
-            // argv; a pane launch keeps its flags in the argv.
-            (req.substrate != "pane").then(|| ComposerPlacement {
+            // Remote pane ids belong to the other mux; open a local portal
+            // for those receipts as well as for threads.
+            (req.substrate != "pane" || req.host.is_some()).then(|| ComposerPlacement {
                 portal: req.portal,
                 tab: req.placement.clone(),
                 split: req.split.clone(),
@@ -492,7 +517,6 @@ impl super::Core {
         let request_id = req.request_id;
         tokio::spawn(async move {
             let timeout = launch_timeout();
-            let deadline = tokio::time::Instant::now() + timeout;
             // A worktree launch resolves its directory FIRST: a `workdir`
             // answer replaces req.cwd before the argv is built, a `hold` is
             // a definitive no-birth refusal, and a transport failure refuses
@@ -515,6 +539,7 @@ impl super::Core {
                     return;
                 }
             }
+            let deadline = tokio::time::Instant::now() + timeout;
             let fno = super::fno_bin().display().to_string();
             let argv = launch_spawn_argv(&fno, &req, &session);
             let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -532,6 +557,9 @@ impl super::Core {
                 // running, so a follow-up registry read settles whether a
                 // worker was born during the window. A clean read with no
                 // birth says so; an unreadable registry stays unresolved.
+                None if req.host.is_some() => LaunchState::Unknown {
+                    reason: "remote launch timed out; check the target machine before retrying".into(),
+                },
                 None => match registry_birth_since(&cwd, attempt_started).await {
                     BirthCheck::Yes(name) => LaunchState::Launched {
                         name,
@@ -547,6 +575,9 @@ impl super::Core {
                             .to_string(),
                     },
                 },
+                Some((_, _, err, 255)) if req.host.is_some() => LaunchState::Unknown {
+                    reason: format!("remote connection failed; check the target machine before retrying: {}", err.trim()),
+                },
                 Some((ok, out, err, code)) => {
                     crate::dispatch_launch::note_spawn_refused(&borrowed, code, &out, &err);
                     match decode_launch_outcome(ok, &out, &err) {
@@ -555,8 +586,8 @@ impl super::Core {
                             pane,
                             seed_delivered,
                         } => LaunchState::Launched {
-                            name,
-                            pane,
+                            name: req.host.as_ref().map_or_else(|| name.clone(), |host| format!("{name}@{host}")),
+                            pane: if req.host.is_some() { None } else { pane },
                             seed_delivered,
                         },
                         LaunchOutcome::Refused(reason) => LaunchState::Refused { reason },
@@ -677,7 +708,17 @@ impl super::Core {
             },
         };
         eff.portal = explicit.then_some(portal_idx);
-        let key = super::portal_reach::ReachKey::Row(name);
+        let remote = name
+            .rsplit_once('@')
+            .map(|(key, host)| crate::proto::RemoteRow {
+                key: key.into(),
+                host: host.into(),
+                name: name.into(),
+            });
+        let key = match remote.as_ref() {
+            Some(remote) => super::portal_reach::ReachKey::Remote(remote),
+            None => super::portal_reach::ReachKey::Row(name),
+        };
         self.reach_portal(client_id, view, vp, portal_idx, key, &eff, explicit);
     }
 }
@@ -692,6 +733,7 @@ mod tests {
             revision: 1,
             cwd: "/tmp".to_string(),
             harness: "claude".to_string(),
+            host: None,
             substrate: "pane".to_string(),
             model: None,
             provider: None,
@@ -722,6 +764,18 @@ mod tests {
         let mut r = req(3);
         r.cwd = "/definitely/not/a/dir/".into();
         assert!(validate_launch_request(&r).is_err());
+        r.host = Some("remote-box".into());
+        assert!(
+            validate_launch_request(&r).is_ok(),
+            "remote cwd is checked by the target host"
+        );
+        for host in ["", "-oProxyCommand=bad", "host;bad", "host with spaces"] {
+            r.host = Some(host.into());
+            assert!(
+                validate_launch_request(&r).is_err(),
+                "invalid host {host:?}"
+            );
+        }
         // Only the canonical substrates pass; the door owns the rest.
         let mut r = req(4);
         r.substrate = "headless".into();

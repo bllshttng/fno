@@ -9,6 +9,7 @@ fn launch_req(id: u64, cwd: &str, harness: &str) -> crate::proto::AgentLaunchReq
         revision: 1,
         cwd: cwd.to_string(),
         harness: harness.to_string(),
+        host: None,
         substrate: "pane".to_string(),
         model: None,
         provider: None,

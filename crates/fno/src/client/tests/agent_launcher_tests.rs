@@ -887,6 +887,162 @@ fn pill_view(_guard: &std::sync::MutexGuard<'static, ()>) -> (View, WireVersionF
     (v, _wire_fixture)
 }
 
+fn launch_argv(v: &mut View, keys: &[u8]) -> Vec<String> {
+    let mut sock: Vec<u8> = Vec::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let _ = super::agent_launcher::launcher_keys(v, keys, &mut sock).await;
+    });
+    if sock.is_empty() {
+        panic!("no launch went to the wire for {keys:?}");
+    }
+    let mut wire = std::io::Cursor::new(sock);
+    match crate::proto::read_msg_sync(&mut wire).unwrap() {
+        crate::proto::ClientMsg::AgentLaunch(request) => request.extra_flags,
+        other => panic!("composer wrote a different client message: {other:?}"),
+    }
+}
+
+#[test]
+fn pill_rows() {
+    // AC11-HP: `--foo bar` typed and committed launches --foo and bar as
+    // argv, and the message excludes them.
+    let (mut v, _lock, _fx) = pill_harness_view();
+    // The picker opens on the second dash and filters "foo"; Space in the
+    // picker commits the word verbatim; value capture takes "bar".
+    let argv = launch_argv(&mut v, b"--foo bar\r");
+    assert_eq!(argv, vec!["--foo", "bar"]);
+    let draft = &v.launcher.as_ref().unwrap().draft;
+    assert!(
+        !draft.message.contains("--foo"),
+        "the message excludes the flag"
+    );
+
+    for prefix in ["--", "—", "+"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        let argv = launch_argv(&mut v, format!("explain {prefix}foo bar\r").as_bytes());
+        assert_eq!(
+            argv,
+            vec!["--foo", "bar"],
+            "{prefix} forwards a canonical flag"
+        );
+        assert_eq!(v.launcher.as_ref().unwrap().draft.message, "explain ");
+    }
+    for prefix in ["—", "+", "--"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        let l = v.launcher.as_mut().unwrap();
+        l.draft.message = "do later".into();
+        l.draft.cursor_chars = 3;
+        let argv = launch_argv(&mut v, format!("{prefix}ag\rvalue\r").as_bytes());
+        assert_eq!(argv, vec!["--agent", "value"]);
+        assert_eq!(v.launcher.as_ref().unwrap().draft.message, "do later");
+    }
+    for text in ["well—being", "C++"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        assert!(launch_argv(&mut v, format!("{text}\r").as_bytes()).is_empty());
+        assert_eq!(v.launcher.as_ref().unwrap().draft.message, text);
+    }
+
+    // AC10-EDGE: `--model x` committed reads the model chip x and stores no
+    // pill; the argv carries no --model element.
+    let (mut v, _fx) = pill_view(&_lock);
+    let argv = launch_argv(&mut v, b"--model x\r");
+    assert!(
+        argv.is_empty(),
+        "no --model element rides the argv: {argv:?}"
+    );
+    let l = v.launcher.as_ref().unwrap();
+    assert_eq!(l.draft.model, "x", "the model chip reads the pinned value");
+    assert!(
+        l.draft.pills.is_empty(),
+        "no pill stores for a chip-owned flag"
+    );
+
+    let (mut v, _fx) = pill_view(&_lock);
+    let argv = launch_argv(&mut v, b"--permission-mode default\r");
+    assert!(
+        argv.is_empty(),
+        "permission pins its chip rather than an extra flag: {argv:?}"
+    );
+    assert_eq!(v.launcher.as_ref().unwrap().draft.permission, "default");
+
+    let (mut v, _fx) = pill_view(&_lock);
+    v.launcher.as_mut().unwrap().draft.pill_value_capture = false;
+    v.launcher
+        .as_mut()
+        .unwrap()
+        .draft
+        .pills
+        .push(("--verbose".to_string(), None));
+    let mut sock: Vec<u8> = Vec::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        // Backspace with an empty message removes the pill, not message text.
+        let _ = super::agent_launcher::launcher_keys(&mut v, b"\x7f", &mut sock).await;
+    });
+    let l = v.launcher.as_ref().unwrap();
+    assert!(l.draft.pills.is_empty(), "the pill is gone");
+
+    let (mut v, _fx) = pill_view(&_lock);
+    // `--` opens the picker; "ag" narrows to --agent; Enter picks it; the
+    // trailing Space ends the empty value capture; Enter launches. The flag
+    // takes a value and nothing follows: it stores valueless.
+    let argv = launch_argv(&mut v, b"--ag\r \r");
+    assert_eq!(argv, vec!["--agent"]);
+    let draft = &v.launcher.as_ref().unwrap().draft;
+    assert!(
+        !draft.message.contains("--"),
+        "the typed dashes left the message"
+    );
+    assert_eq!(draft.pills.len(), 1, "the pill stores");
+}
+
+#[test]
+fn the_flags_picker_lists_the_harness_launch_flags() {
+    // AC10-HP: `--` at a word start opens the picker over the harness's
+    // launch_flags; its rows carry AddPill with the parsed value arity.
+    let (_seed, _lock, _seed_fx) = pill_harness_view();
+    for prefix in ["--", "—", "+"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        let mut sock: Vec<u8> = Vec::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let _ =
+                super::agent_launcher::launcher_keys(&mut v, prefix.as_bytes(), &mut sock).await;
+        });
+        let l = v.launcher.as_ref().unwrap();
+        let picker = l.picker.as_ref().expect("the flags picker opened");
+        assert_eq!(picker.field, super::agent_launcher::Focus::Plus);
+        let (rows, actions) = super::agent_launcher::picker_rows(
+            l,
+            super::agent_launcher::Focus::Plus,
+            &v.launcher_catalog,
+            &v.backlog,
+        );
+        let labels: Vec<String> = rows
+            .iter()
+            .filter_map(|r| match r {
+                crate::popup::PopupRow::Entry { label, .. } => Some(label.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "--agent <agent>"),
+            "the captured flags list: {labels:?}"
+        );
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                Some(super::agent_launcher::PickerAction::AddPill {
+                    flag,
+                    picks_value
+                }) if flag == "--agent" && *picks_value
+            )),
+            "the flag row commits AddPill"
+        );
+    }
+}
+
 #[test]
 fn a_chip_owned_typed_flag_still_refuses_at_submit() {
     // AC11-ERR: `--cwd /x` committed verbatim refuses at submit, naming the
@@ -914,6 +1070,106 @@ fn a_chip_owned_typed_flag_still_refuses_at_submit() {
         other => panic!("expected the chip refusal, got {other:?}"),
     }
 }
+
+#[test]
+fn where_picker_lists_local_and_the_placement_rows() {
+    // AC4-HP: the Where picker lists Local (checked) under `Run on`, then
+    // known fleet hosts, then the four placement rows under `Open as`.
+    let mut v = plain_view();
+    super::machine_tree::set_on(&mut v, true);
+    super::machine_tree::apply(
+        &mut v,
+        Ok(serde_json::json!({"machines": [
+            {"host": "remote-box", "local": false, "fresh": true, "age_s": 1, "sessions": []}
+        ]})),
+    );
+    open(&mut v);
+    v.launcher_catalog = catalog(&[("claude", true, true)]);
+    sync_catalog(&mut v);
+    let l = v.launcher.as_ref().unwrap();
+    let (rows, actions) =
+        super::agent_launcher::picker_rows(&l, Focus::Where, &v.launcher_catalog, &v.backlog);
+    let labels: Vec<String> = rows
+        .iter()
+        .filter_map(|r| match r {
+            crate::popup::PopupRow::Header(h) => Some(format!("[{h}]")),
+            crate::popup::PopupRow::Entry { label, .. } => Some(label.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            "[Run on]",
+            "Local",
+            "remote-box",
+            "[Open as]",
+            "thread",
+            "thread split beside",
+            "thread new tab",
+            "pane: active tab",
+        ],
+        "the Where picker's rows: {labels:?}"
+    );
+    // The Local row carries the check and no action (there is nothing to
+    // switch to).
+    let local_action = actions[1].clone();
+    assert_eq!(
+        local_action,
+        Some(super::agent_launcher::PickerAction::RunOn(None))
+    );
+    // Committing split beside records the placement; request() turns it
+    // into --substrate thread --portal N --split right.
+    let mut l = v.launcher.take().unwrap();
+    super::agent_launcher::apply_picker_action(
+        &mut l,
+        &v.launcher_catalog,
+        super::agent_launcher::PickerAction::Place(
+            super::agent_launcher::Placement::ThreadSplitBeside,
+        ),
+        2,
+        Focus::Where,
+    );
+    v.launcher = Some(l.clone());
+    let l = v.launcher.as_ref().unwrap();
+    assert_eq!(l.draft.placement_portal, 2);
+    assert!(
+        l.chip_label(Focus::Where, &v.launcher_catalog)
+            .contains("split beside"),
+        "the Where chip shows the picked view: {:?}",
+        l.chip_label(Focus::Where, &v.launcher_catalog)
+    );
+    let mut l = v.launcher.take().unwrap();
+    super::agent_launcher::apply_picker_action(
+        &mut l,
+        &v.launcher_catalog,
+        super::agent_launcher::PickerAction::RunOn(Some("remote-box".into())),
+        2,
+        Focus::Where,
+    );
+    assert_eq!(l.draft.request(1).host.as_deref(), Some("remote-box"));
+    assert!(l
+        .chip_label(Focus::Where, &v.launcher_catalog)
+        .starts_with("remote-box"));
+    let (session, _version) = wire_fixture_at(121);
+    v.session = session;
+    l.draft.worktree = Some(false);
+    v.launcher = Some(l);
+    let mut sock = Vec::new();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        super::agent_launcher::launcher_keys(&mut v, b"\r", &mut sock)
+            .await
+            .unwrap();
+    });
+    assert!(
+        sock.is_empty(),
+        "an older server must never receive a remote launch"
+    );
+    assert!(
+        matches!(&v.launcher.as_ref().unwrap().phase, Phase::Refused { reason, .. } if reason.contains("does not support remote launches"))
+    );
+}
+
 #[test]
 fn shell_mode_keys_glyph_and_placeholders() {
     // The composer's bang mode: `!` on an empty input is the mode switch
@@ -926,7 +1182,7 @@ fn shell_mode_keys_glyph_and_placeholders() {
     v.launcher_catalog = catalog(&[("claude", true, true)]);
     sync_catalog(&mut v);
     assert_eq!(v.launcher.as_ref().unwrap().focus, Focus::Message);
-    assert_painted(&v, '\u{276f}', "prompt \u{b7} -- flags");
+    assert_painted(&v, '\u{276f}', "prompt \u{b7} +flag");
 
     // AC1: the `!` is consumed as the mode switch.
     type_message(&mut v, "!");
@@ -966,7 +1222,7 @@ fn shell_mode_keys_glyph_and_placeholders() {
         assert!(!l.shell, "the empty-line Backspace left shell mode");
         assert!(l.draft.message.is_empty());
     }
-    assert_painted(&v, '\u{276f}', "prompt \u{b7} -- flags");
+    assert_painted(&v, '\u{276f}', "prompt \u{b7} +flag");
 
     // Folded from the retired newline test: ^j inserts a newline in the
     // message and Enter never fires from inside it.

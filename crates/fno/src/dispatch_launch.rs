@@ -154,10 +154,10 @@ pub(crate) async fn run_fno_captured_full(
 /// journaled server-side).
 pub(crate) fn launch_spawn_argv(fno: &str, req: &AgentLaunchRequest, session: &str) -> Vec<String> {
     let mut argv: Vec<String> = vec![fno.to_string(), "agents".to_string(), "spawn".to_string()];
-    // The harness axis is retired: the door infers the workspace's own
-    // harness, and the request's harness/model/provider pins are vestigial
-    // (the picker still fills them; the door reads none).
     argv.extend(["--cwd".to_string(), req.cwd.clone()]);
+    if let Some(host) = &req.host {
+        argv.extend(["--name".to_string(), format!("@{host}")]);
+    }
     // A board prefill binds the launch to its node: the roster row joins
     // it, the card reads live, and the door's dispatch guard judges it.
     // No prefill, no flag: the argv stays byte-identical to the plain
@@ -165,11 +165,16 @@ pub(crate) fn launch_spawn_argv(fno: &str, req: &AgentLaunchRequest, session: &s
     if let Some(id) = &req.node {
         argv.extend(["--node".to_string(), id.clone()]);
     }
+    if !req.model_names_harness {
+        argv.extend(["--harness".to_string(), req.harness.clone()]);
+    }
     // A pane only comes from an explicit --as pane; the mux session anchors
     // its placement. A thread launch (the default) sends neither.
     if req.substrate == "pane" {
         argv.extend(["--as".to_string(), "pane".to_string()]);
-        argv.extend(["--mux-session".to_string(), session.to_string()]);
+        if req.host.is_none() {
+            argv.extend(["--mux-session".to_string(), session.to_string()]);
+        }
     }
     argv.extend([
         // Fail immediately on a full spawn gate rather than queueing: a
@@ -181,23 +186,37 @@ pub(crate) fn launch_spawn_argv(fno: &str, req: &AgentLaunchRequest, session: &s
     }
     // A routing-row pick rides the row's route alone: a route owns the
     // model, so the model+vendor pair (a route AND a model) never forms.
-    if let Some(r) = &req.route {
-        argv.extend(["--route".to_string(), r.clone()]);
+    let route = req.route.clone().or_else(|| {
+        req.provider
+            .as_ref()
+            .zip(req.model.as_ref())
+            .map(|(provider, model)| format!("{provider}/{model}"))
+    });
+    if let Some(route) = route {
+        argv.extend(["--route".to_string(), route]);
+    } else if let Some(model) = &req.model {
+        argv.extend(["--model".to_string(), model.clone()]);
     }
-    // The request's model/provider/effort/permission pins are vestigial
-    // (the popup still fills them); their flags are retired at the door.
-    // Explicit placement rides ANY substrate: an explicit flag creates a
-    // portal, human or agent, so the door forwards what the caller named
-    // and the spawn CLI opens it after the receipt. A bare launch names
-    // none (the fields are Option) and stays a paneless thread.
-    if let Some(t) = &req.placement {
-        argv.extend(["--tab".to_string(), t.clone()]);
+    for (flag, value) in [
+        ("--effort", &req.effort),
+        ("--permission-mode", &req.permission_mode),
+    ] {
+        if let Some(value) = value {
+            argv.extend([flag.to_string(), value.clone()]);
+        }
     }
-    if let Some(p) = &req.portal {
-        argv.extend(["--portal".to_string(), p.to_string()]);
-    }
-    if let Some(s) = &req.split {
-        argv.extend(["--split".to_string(), s.clone()]);
+    // A remote thread's placement belongs to this mux's portal, not the
+    // target mux. Remote panes keep their target-host placement.
+    if req.host.is_none() || req.substrate == "pane" {
+        if let Some(t) = &req.placement {
+            argv.extend(["--tab".to_string(), t.clone()]);
+        }
+        if let Some(p) = &req.portal {
+            argv.extend(["--portal".to_string(), p.to_string()]);
+        }
+        if let Some(s) = &req.split {
+            argv.extend(["--split".to_string(), s.clone()]);
+        }
     }
     argv.extend(req.extra_flags.iter().cloned());
     // The seed rides stdin even when empty: an empty stdin is the honest
@@ -217,6 +236,14 @@ pub(crate) fn validate_extra_flags(flags: &[String]) -> Result<(), String> {
         "--as",
         "--cwd",
         "--route",
+        "--harness",
+        "-H",
+        "--model",
+        "-m",
+        "--provider",
+        "-P",
+        "--effort",
+        "--permission-mode",
         "--tab",
         "--portal",
         "--split",
@@ -829,6 +856,391 @@ mod tests {
             Some(("x-2".to_string(), Some("e1".to_string())))
         );
     }
+
+    #[test]
+    fn launch_spawn_argv_is_pinned() {
+        // Full-featured request: every optional pin rides as its own argv
+        // element; the message NEVER does (it rides stdin at the shell-out).
+        let req = AgentLaunchRequest {
+            request_id: 1,
+            revision: 1,
+            cwd: "/tmp/proj".into(),
+            harness: "codex".into(),
+            host: None,
+            substrate: "pane".into(),
+            model: Some("gpt-5.6-luna".into()),
+            provider: None,
+            route: None,
+            model_names_harness: false,
+            effort: Some("high".into()),
+            permission_mode: Some("workspace-write:on-request".into()),
+            placement: Some("name:work".into()),
+            portal: None,
+            split: None,
+            node: None,
+            message: "line one\nline \"two\" $ ` \u{1f600}".into(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        assert_eq!(
+            launch_spawn_argv("fno", &req, "work"),
+            vec![
+                "fno",
+                "agents",
+                "spawn",
+                "--cwd",
+                "/tmp/proj",
+                "--harness",
+                "codex",
+                "--as",
+                "pane",
+                "--mux-session",
+                "work",
+                "--no-wait",
+                "--model",
+                "gpt-5.6-luna",
+                "--effort",
+                "high",
+                "--permission-mode",
+                "workspace-write:on-request",
+                "--tab",
+                "name:work",
+                "--prompt-file",
+                "-",
+            ]
+        );
+        // Force rides only when the user pressed it, and always as its own
+        // argv element (the door's own flag).
+        let mut forced = req.clone();
+        forced.force = true;
+        let argv = launch_spawn_argv("fno", &forced, "work");
+        assert!(
+            argv.iter().any(|a| a == "--force"),
+            "a forced request carries --force: {argv:?}"
+        );
+        let without: Vec<String> = argv
+            .iter()
+            .filter(|a| a.as_str() != "--force")
+            .cloned()
+            .collect();
+        assert_eq!(
+            launch_spawn_argv("fno", &req, "work"),
+            without,
+            "force adds nothing else"
+        );
+        let configured_route = AgentLaunchRequest {
+            request_id: 6,
+            revision: 1,
+            cwd: "/tmp/open-models".into(),
+            harness: "opencode".into(),
+            host: None,
+            substrate: String::new(),
+            model: Some("openrouter/qwen/qwen3-coder".into()),
+            provider: None,
+            route: None,
+            model_names_harness: false,
+            effort: None,
+            permission_mode: None,
+            placement: None,
+            portal: None,
+            split: None,
+            node: None,
+            message: String::new(),
+            extra_flags: vec!["--agent".into(), "abc".into(), "--name".into(), "x".into()],
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        assert_eq!(
+            launch_spawn_argv("fno", &configured_route, "work"),
+            vec![
+                "fno",
+                "agents",
+                "spawn",
+                "--cwd",
+                "/tmp/open-models",
+                "--harness",
+                "opencode",
+                "--no-wait",
+                "--model",
+                "openrouter/qwen/qwen3-coder",
+                "--agent",
+                "abc",
+                "--name",
+                "x",
+                "--prompt-file",
+                "-",
+            ]
+        );
+        // Empty substrate omits the flag so the door's default decides.
+        // Explicit placement rides anyway: the flag is the ask, any
+        // substrate, and the spawn CLI opens the portal after the receipt.
+        let thread = AgentLaunchRequest {
+            request_id: 2,
+            revision: 1,
+            cwd: "/tmp/p2".into(),
+            harness: "claude".into(),
+            host: None,
+            substrate: String::new(),
+            model: None,
+            provider: None,
+            route: None,
+            model_names_harness: false,
+            effort: None,
+            permission_mode: None,
+            placement: None,
+            portal: Some(1),
+            split: Some("right".into()),
+            node: None,
+            message: String::new(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        assert_eq!(
+            launch_spawn_argv("fno", &thread, "s"),
+            vec![
+                "fno",
+                "agents",
+                "spawn",
+                "--cwd",
+                "/tmp/p2",
+                "--harness",
+                "claude",
+                "--no-wait",
+                "--portal",
+                "1",
+                "--split",
+                "right",
+                "--prompt-file",
+                "-",
+            ]
+        );
+        // A PANE launch keeps the tab/split spellings: that lane honors
+        // them, and --portal is not a pane flag.
+        let pane = AgentLaunchRequest {
+            request_id: 6,
+            revision: 1,
+            cwd: "/tmp/p6".into(),
+            harness: "claude".into(),
+            host: None,
+            substrate: "pane".into(),
+            model: None,
+            provider: None,
+            route: None,
+            model_names_harness: false,
+            effort: None,
+            permission_mode: None,
+            placement: Some("3".into()),
+            portal: None,
+            split: Some("down".into()),
+            node: None,
+            message: String::new(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        assert_eq!(
+            launch_spawn_argv("fno", &pane, "s"),
+            vec![
+                "fno",
+                "agents",
+                "spawn",
+                "--cwd",
+                "/tmp/p6",
+                "--harness",
+                "claude",
+                "--as",
+                "pane",
+                "--mux-session",
+                "s",
+                "--no-wait",
+                "--tab",
+                "3",
+                "--split",
+                "down",
+                "--prompt-file",
+                "-",
+            ]
+        );
+        // AC5-HP: a routing-row pick omits --harness, so the door resolves
+        // the row's harness, route, account and effort from the model alone.
+        let row_pinned = AgentLaunchRequest {
+            request_id: 3,
+            revision: 1,
+            cwd: "/tmp/p3".into(),
+            harness: "claude".into(),
+            host: None,
+            substrate: String::new(),
+            model: Some("glm-5.3-flash[1m]".into()),
+            provider: None,
+            route: None,
+            model_names_harness: true,
+            effort: None,
+            permission_mode: None,
+            placement: None,
+            portal: None,
+            split: None,
+            node: None,
+            message: String::new(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        let argv = launch_spawn_argv("fno", &row_pinned, "s");
+        assert!(
+            argv.windows(2)
+                .any(|args| args == ["--model", "glm-5.3-flash[1m]"]),
+            "the model pin reaches spawn: {argv:?}"
+        );
+        // The composer's routing-row pick rides the ROW'S ROUTE alone: a
+        // route owns the model, so --model and --provider never join it,
+        // and a thread launch carries no --mux-session.
+        let route_pinned = AgentLaunchRequest {
+            request_id: 7,
+            revision: 1,
+            cwd: "/tmp/p7".into(),
+            harness: "claude".into(),
+            host: None,
+            substrate: String::new(),
+            model: None,
+            provider: None,
+            route: Some("zai/glm-5.3-flash[1m]".into()),
+            model_names_harness: false,
+            effort: Some("high".into()),
+            permission_mode: None,
+            placement: None,
+            portal: None,
+            split: None,
+            node: None,
+            message: String::new(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        let argv = launch_spawn_argv("fno", &route_pinned, "s");
+        assert!(
+            argv.contains(&"--route".to_string())
+                && argv.contains(&"zai/glm-5.3-flash[1m]".to_string()),
+            "the route rides: {argv:?}"
+        );
+        assert!(
+            !argv.contains(&"--model".to_string())
+                && !argv.contains(&"--provider".to_string())
+                && !argv.contains(&"--mux-session".to_string()),
+            "a route never joins model or provider, and a thread carries no mux session: {argv:?}"
+        );
+        let mut remote = thread.clone();
+        remote.host = Some("remote-box".into());
+        let argv = launch_spawn_argv("fno", &remote, "s");
+        assert!(argv
+            .windows(2)
+            .any(|args| args == ["--name", "@remote-box"]));
+        for flag in ["--portal", "--split", "--tab", "--mux-session"] {
+            assert!(
+                !argv.iter().any(|arg| arg == flag),
+                "local placement stays on this mux: {argv:?}"
+            );
+        }
+        // Thread new tab: the explicit ask rides the argv like any
+        // substrate; the spawn CLI opens the portal after the receipt.
+        let new_tab = AgentLaunchRequest {
+            request_id: 4,
+            revision: 1,
+            cwd: "/tmp/p4".into(),
+            harness: "claude".into(),
+            host: None,
+            substrate: "thread".into(),
+            model: None,
+            provider: None,
+            route: None,
+            model_names_harness: false,
+            effort: None,
+            permission_mode: None,
+            placement: Some("new".into()),
+            portal: Some(2),
+            split: None,
+            node: None,
+            message: String::new(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        assert_eq!(
+            launch_spawn_argv("fno", &new_tab, "s"),
+            vec![
+                "fno",
+                "agents",
+                "spawn",
+                "--cwd",
+                "/tmp/p4",
+                "--harness",
+                "claude",
+                "--no-wait",
+                "--tab",
+                "new",
+                "--portal",
+                "2",
+                "--prompt-file",
+                "-",
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_spawn_argv_carries_the_node_after_the_cwd() {
+        // AC1-HP: a board prefill binds the launch to its node; --node
+        // rides right after the --cwd pair and the message never rides
+        // argv (it reaches the door on stdin).
+        let req = AgentLaunchRequest {
+            request_id: 5,
+            revision: 1,
+            cwd: "/tmp/proj".into(),
+            harness: "claude".into(),
+            host: None,
+            substrate: String::new(),
+            model: None,
+            provider: None,
+            route: None,
+            model_names_harness: false,
+            effort: None,
+            permission_mode: None,
+            placement: None,
+            portal: None,
+            split: None,
+            node: Some("x-1".into()),
+            message: String::new(),
+            extra_flags: Vec::new(),
+            worktree: false,
+            branch: None,
+            force: false,
+        };
+        assert_eq!(
+            launch_spawn_argv("fno", &req, "s"),
+            vec![
+                "fno",
+                "agents",
+                "spawn",
+                "--cwd",
+                "/tmp/proj",
+                "--node",
+                "x-1",
+                "--harness",
+                "claude",
+                "--no-wait",
+                "--prompt-file",
+                "-",
+            ]
+        );
+    }
+
     #[test]
     fn decode_launch_outcome_separates_birth_from_acknowledgment() {
         // Pane receipt with a delivered seed: a verified birth.
