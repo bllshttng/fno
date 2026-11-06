@@ -149,19 +149,31 @@ fn daemon_version_command() -> Option<String> {
     daemon_version_command_from(codex_cli_path()?.as_os_str(), 5)
 }
 
-fn daemon_version_command_from(bin: &std::ffi::OsStr, _secs: u64) -> Option<String> {
-    let out = std::process::Command::new(bin)
-        .args(["app-server", "daemon", "version"])
-        .output()
-        .ok()?;
+/// The vendor version read under a wall-clock bound. Same parse and bound as
+/// [`installed_cli_version`]: a wedged `codex app-server daemon version`
+/// must not hold the caller (and any lock it keeps) past the budget.
+fn daemon_version_command_from(bin: &std::ffi::OsStr, secs: u64) -> Option<String> {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["app-server", "daemon", "version"])
+        .stdin(std::process::Stdio::null());
+    let out = crate::bounded_cmd::output_with_timeout(cmd, secs)?;
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout);
-    daemon_version_output_version(&text)
+    daemon_version_output_version(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The version inside `codex app-server daemon version` stdout. Since codex
+/// 0.167.0 that stdout is a compact JSON object, so the old last-whitespace-
+/// token read returned the whole blob; JSON input reads `appServerVersion`,
+/// anything else keeps the bare last-token shape.
 fn daemon_version_output_version(stdout: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+        return value
+            .get("appServerVersion")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
     stdout.split_whitespace().last().map(str::to_string)
 }
 

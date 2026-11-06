@@ -199,7 +199,9 @@ fn codex_bin() -> Result<PathBuf, String> {
         .ok_or_else(|| "codex CLI not found on PATH (set FNO_CODEX_BIN to override)".to_string())
 }
 
-/// The transaction entry. Lock, re-read, snapshot, restart, verify.
+/// The transaction entry. Probe unlocked, then lock only for mutation:
+/// readiness reads never mutate, and a slow or wedged probe must not hold
+/// the provider lock every spawn queues on.
 pub async fn codex_daemon_upgrade_transaction() -> UpgradeOutcome {
     // No codex CLI on this machine: there is no shared daemon it could
     // own, and a held line for a daemon that cannot exist is noise. Skipped,
@@ -207,19 +209,6 @@ pub async fn codex_daemon_upgrade_transaction() -> UpgradeOutcome {
     if crate::codex_daemon_readiness::codex_cli_path().is_none() {
         return UpgradeOutcome::Absent;
     }
-    let adapter = CodexDaemonAdapter::from_environment();
-    let _lock = match crate::harness_daemon::try_acquire_lock(&adapter.lock_path()) {
-        Some(lock) => lock,
-        None => {
-            return UpgradeOutcome::Held {
-                kind: HoldKind::LockBusy,
-                reason: "provider-daemon lock busy; another caller is mid-transaction".to_string(),
-                installed: None,
-                live: None,
-                pid: None,
-            }
-        }
-    };
     let before = codex_daemon_readiness();
     if matches!(before.verdict, VersionVerdict::Current) {
         return UpgradeOutcome::ReusedCurrent {
@@ -236,7 +225,28 @@ pub async fn codex_daemon_upgrade_transaction() -> UpgradeOutcome {
             pid: before.pid,
         };
     }
-    let _ = &_lock;
+    let adapter = CodexDaemonAdapter::from_environment();
+    let _lock = match crate::harness_daemon::try_acquire_lock(&adapter.lock_path()) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            return UpgradeOutcome::Held {
+                kind: HoldKind::LockBusy,
+                reason: "provider-daemon lock busy; another caller is mid-transaction".to_string(),
+                installed: None,
+                live: None,
+                pid: None,
+            }
+        }
+        Err(error) => {
+            return UpgradeOutcome::Held {
+                kind: HoldKind::LockBusy,
+                reason: format!("provider-daemon lock file unreadable: {error}"),
+                installed: None,
+                live: None,
+                pid: None,
+            }
+        }
+    };
     snapshot_and_swap(&adapter, before).await
 }
 
