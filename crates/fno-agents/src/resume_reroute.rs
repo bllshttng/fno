@@ -82,6 +82,21 @@ pub(crate) fn apply(
         return Err(line);
     }
 
+    // The restamp writes by session id, so a row must be in the registry
+    // before anything stops: a vanish at the write would leave a stopped
+    // session behind a refusal.
+    let registry = crate::state::load_registry(&home.registry_json())
+        .map_err(|e| format!("resume --route: registry read failed: {e}"))?;
+    if !registry
+        .entries
+        .iter()
+        .any(|e| crate::route_recovery::row_matches_session(e, &session_id))
+    {
+        return Err(format!(
+            "resume --route: no registry row answers session {session_id}; adopt it first (fno agents adopt)"
+        ));
+    }
+
     stop_live_session(home, entry, &session_id)?;
 
     crate::route_recovery::persist_overwrite(
