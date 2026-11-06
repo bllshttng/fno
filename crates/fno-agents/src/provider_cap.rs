@@ -2421,25 +2421,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// AC4-HP: a config record's route-provider zone resolves the capped
-    /// member's vendor stamp into the lane's reset, opening the lane.
-
-    // Codex rollout fixtures copied from the measured rollout
-    // (usage_limit_exceeded at 2026-09-18T19:38:21.593Z, shortened to one
-    // text block for the assistant row; free-text identifiers sanitized).
-    const CODEX_CAPPED_LINE: &str = r#"{"timestamp":"2026-09-18T19:38:21.593Z","ordinal":5915,"type":"event_msg","payload":{"type":"task_complete","turn_id":"01a0b606-d9d4-7f20-a7fe-0693b1dd0526","last_agent_message":null,"error":{"message":"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 19th, 2026 9:34 AM.","codex_error_info":"usage_limit_exceeded"},"started_at":1789760297,"completed_at":1789760301,"duration_ms":4132}}"#;
-    const CODEX_THREAD: &str = "01a0c80c-1234-5678-9abc-cdef01234567";
-
-    /// One codex registry row naming its rollout thread (log_path optional).
-    fn codex_row(name: &str, thread: &str, log_path: Option<&str>) -> String {
-        let log = log_path
-            .map(|p| format!(r#","log_path":"{p}""#))
-            .unwrap_or_default();
-        format!(
-            r#"{{"name":"{name}","harness":"codex","provider":"openai","launch_account":"default","state":"working","harness_session_id":"{thread}"{log}}}"#
-        )
-    }
-
     /// A thread row whose sessions-dir record is missing still reads held
     /// while compacting: the bridge-resolved transcript's stem names the full
     /// uuid, so the compaction stamp is probed by the right key.

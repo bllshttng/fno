@@ -1530,16 +1530,6 @@ mod tests {
         }
     }
 
-    /// The injected refusal seam with the fleet row staged by the test.
-    fn record_refusal_via(
-        path: &Path,
-        now: i64,
-        kind: &str,
-        shared: (i64, i64, i64),
-    ) -> Result<(), String> {
-        record_refusal_body(Some(path), now, kind, shared, None)
-    }
-
     /// The injected core-stamp seam.
     fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
         let (_lock, locked) = ledger_lock(Some(path));

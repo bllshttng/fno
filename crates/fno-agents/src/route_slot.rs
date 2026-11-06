@@ -3461,16 +3461,6 @@ mod tests {
             .unwrap_or(0.0)
     }
 
-    pub(super) fn age_token(line: &str) -> String {
-        line.split(" age=")
-            .nth(1)
-            .unwrap_or("")
-            .split(' ')
-            .next()
-            .unwrap_or("")
-            .to_string()
-    }
-
     #[test]
     fn lane_config_rows() {
         let out = resolve_slot_payload(&payload(json!({})));

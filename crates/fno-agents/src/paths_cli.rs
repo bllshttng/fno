@@ -1178,30 +1178,6 @@ mod tests {
         )
     }
 
-    /// Seeds one registry row so a `--scope` lookup resolves its project
-    /// root. The scope-project resolution reads `<home>/.fno/agents/`
-    /// registry.json through `AgentsHome::ambient_from`.
-    fn seed_scope_row(home: &Path, scope: &str, project_root: &Path) {
-        let dir = home.join(".fno").join("agents");
-        std::fs::create_dir_all(&dir).unwrap();
-        let doc = serde_json::json!({
-            "schema_version": 4,
-            "agents": [{
-                "name": format!("row-{scope}"),
-                "session_id": format!("sess-{scope}"),
-                "role_scope": scope,
-                "project_root": project_root.display().to_string(),
-                "cwd": project_root.display().to_string(),
-                "created_at": "2026-10-24T00:00:00Z",
-            }]
-        });
-        std::fs::write(
-            dir.join("registry.json"),
-            serde_json::to_string(&doc).unwrap(),
-        )
-        .unwrap();
-    }
-
     use crate::claims::EnvVarGuard;
 
     #[test]
@@ -1374,10 +1350,6 @@ mod tests {
             let config = base.join("config.toml");
             fs::write(&config, body).unwrap();
             LiveFx { base, config, root }
-        }
-
-        fn body(&self, text: &str) {
-            fs::write(&self.config, text).unwrap();
         }
 
         fn pins(&self) -> Vec<(&'static str, String)> {

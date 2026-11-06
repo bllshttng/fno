@@ -1444,23 +1444,6 @@ mod done_probe_tests {
         assert!(matches!(eval(&plan), ProbeGate::Absent));
     }
 
-    // ── project-level done_probes ────────────────────────────────
-    //
-    // A repo-wide guardrail must apply to every plan in the repo, and no plan
-    // doc may switch it off - a guard on one of two reachable paths is
-    // decorative.
-
-    fn project(cmds: &[&str]) -> Result<Vec<String>, String> {
-        Ok(cmds.iter().map(|c| c.to_string()).collect())
-    }
-
-    /// A plan doc that declares no probes of its own.
-    fn bare_plan(dir: &Path) -> std::path::PathBuf {
-        let plan = dir.join("plan.md");
-        std::fs::write(&plan, fm("title: p")).unwrap();
-        plan
-    }
-
     // AC3-INV (a plan declaring `done_probes: []` cannot silence the project's
     // gate) is covered end to end by
     // done_probes_ac3_inv_a_plan_cannot_silence_the_project_gate in

@@ -1610,28 +1610,6 @@ mod tests {
         assert!(err.contains("claude-only"), "{err}");
     }
 
-    fn paned_plan(listed: &[&str]) -> ReentryPlan {
-        let mut e = row("paned");
-        e.harness_session_id = Some("9a1b2c3d-eeee-ffff-0000-111122223333".into());
-        e.short_id = "9a1b2c3d".into();
-        e.launch_account = Some("default".into());
-        e.mux = Some(MuxRef {
-            session: "main".into(),
-            pane_id: 0,
-        });
-        let (_tmp, home) = staged_home(listed);
-        resolve_reentry_with(
-            &reg(vec![e]),
-            "paned",
-            ReentryTransition::Resume,
-            None,
-            &binding_ok,
-            &home,
-            None,
-        )
-        .unwrap()
-    }
-
     fn revive_with(listing: ClaudeAgentsSnapshot) -> Result<ReentryPlan, String> {
         revive_with_row(listing, |_| {})
     }

@@ -1784,8 +1784,7 @@ mod tests {
         }
     }
 
-    const FNO_PY: &str = "/Users/x/.local/share/uv/tools/fno/bin/python3 \
-/Users/x/.local/share/uv/tools/fno/bin/fno-py agents stale-escalate --json";
+    
 
     /// The argv clause matches a TOKEN, not a substring, in both reparable
     /// families: the fno-py entrypoint by basename, and stdio MCP servers by

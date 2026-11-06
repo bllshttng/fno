@@ -837,11 +837,6 @@ mod tests {
     const SID: &str = "11111111-2222-3333-4444-555555555555";
     const WK: &str = "wk-pi";
 
-    fn goldens() -> serde_json::Value {
-        serde_json::from_str(include_str!("../tests/golden/keeper_spawn/python_leg.json"))
-            .expect("the captured Python-leg goldens parse")
-    }
-
     fn home() -> (tempfile::TempDir, crate::paths::AgentsHome) {
         let dir = tempfile::tempdir().unwrap();
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));

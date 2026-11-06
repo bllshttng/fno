@@ -1958,10 +1958,4 @@ fn sweep_target(cwd: &Path, since: i64, repo: Option<String>, json_out: bool) ->
 mod parity_tests {
     use super::*;
 
-    fn golden() -> Value {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/golden/observer/fold_golden.json");
-        serde_json::from_str(&std::fs::read_to_string(path).expect("the frozen goldens exist"))
-            .expect("the goldens parse")
-    }
 }

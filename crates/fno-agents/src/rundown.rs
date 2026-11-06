@@ -1329,10 +1329,6 @@ mod tests {
         )
     }
 
-    fn split_ok() -> Result<crate::team_split::TeamSplits, String> {
-        Ok(crate::team_split::TeamSplits::default())
-    }
-
     fn base_team() -> Value {
         json!({
             "holder": "lead", "level": 2, "scope": "e-1", "grantor": "human",

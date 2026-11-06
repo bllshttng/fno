@@ -1475,15 +1475,6 @@ max_concurrent = 0
         }
     }
 
-    fn reaped_pid() -> u32 {
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        child.wait().unwrap();
-        pid
-    }
 }
 
 #[cfg(test)]

@@ -1170,37 +1170,4 @@ mod tests {
         assert_eq!(a.path, Some(clone_cli));
     }
 
-    /// Clean-ancestry main checkout with a started-but-uncommitted merge:
-    /// HEAD still equals the remote-default ref, so WITHOUT the mid-operation
-    /// gate this classify run would answer eligible.
-    fn main_checkout_mid_merge(base: &std::path::Path) -> String {
-        let (clone, _wt) = clone_with_worktree(base);
-        let root = std::path::PathBuf::from(clone.clone());
-        git_in(&root, &["checkout", "-q", "-b", "other"]);
-        fs::write(root.join("g.txt"), "other\n").unwrap();
-        git_in(&root, &["add", "-A"]);
-        git_in(&root, &["commit", "-q", "-m", "other"]);
-        git_in(&root, &["checkout", "-q", "main"]);
-        let out = Command::new("git")
-            .args([
-                "-C",
-                root.to_str().unwrap(),
-                "merge",
-                "--no-ff",
-                "--no-commit",
-                "other",
-            ])
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .expect("git binary available");
-        assert!(
-            out.status.success(),
-            "fixture merge must start clean: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        root.join("cli").to_string_lossy().into_owned()
-    }
 }

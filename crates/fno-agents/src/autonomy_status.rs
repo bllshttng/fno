@@ -368,17 +368,7 @@ mod tests {
     struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
 
     impl EnvGuard {
-        fn set(name: &'static str, value: &str) -> Self {
-            let prior = std::env::var_os(name);
-            std::env::set_var(name, value);
-            EnvGuard(vec![(name, prior)])
-        }
 
-        fn clear(name: &'static str) -> Self {
-            let prior = std::env::var_os(name);
-            std::env::remove_var(name);
-            EnvGuard(vec![(name, prior)])
-        }
     }
 
     impl Drop for EnvGuard {

@@ -298,9 +298,4 @@ mod tests {
         );
     }
 
-    fn read_probe(home: &crate::paths::AgentsHome, account: &str) -> Option<serde_json::Value> {
-        let raw = std::fs::read_to_string(login_probes_path(home)).ok()?;
-        let doc: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        doc.get("probes")?.get(account).cloned()
-    }
 }

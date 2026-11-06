@@ -2678,22 +2678,6 @@ mod tests {
         }
     }
 
-    // -- opencode store probe ------------------------------------
-    // Every case drives an injected runner, so the suite never shells out to a
-    // real opencode binary or reads ~/.local/share/opencode.
-
-    const OC_SES: &str = "ses_09679f284ffeJv7NdBAoLQLnLZ";
-
-    fn opencode_entry(session_id: Option<&str>) -> AgentEntry {
-        AgentEntry {
-            name: "o".into(),
-            provider: "opencode".into(),
-            substrate: None,
-            session_id: session_id.map(Into::into),
-            cwd: PathBuf::from("/x"),
-        }
-    }
-
     #[test]
     fn codex_index_present_id_absent_is_false() {
         // The id is NOT in the index -> the session ended (index drops it) ->
@@ -2723,17 +2707,7 @@ mod tests {
         });
     }
 
-    fn gemini_entry(session_id: &str, cwd: &str) -> AgentEntry {
-        AgentEntry {
-            name: "g".into(),
-            provider: "gemini".into(),
-            substrate: None,
-            session_id: Some(session_id.into()),
-            cwd: PathBuf::from(cwd),
-        }
-    }
-
-    const G_UUID: &str = "35624650-b11e-4300-ad85-0fc87baeb3af";
+    
 
     // ---- test helpers (no external tempfile dep) ----
 

@@ -12,7 +12,6 @@ use tempfile::TempDir;
 /// and restore the prior values even if a test panics.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 const TEST_SESSION_ID: &str = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-const OTHER_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
 
 struct EnvReset {
     home: Option<std::ffi::OsString>,

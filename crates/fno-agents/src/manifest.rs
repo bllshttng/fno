@@ -962,16 +962,6 @@ mod tests {
         }
     }
 
-    fn view_title<'a>(text: &'a str, title: &'a str) -> ScreenView<'a> {
-        ScreenView {
-            visible_text: text,
-            cursor_row: 0,
-            cursor_col: 0,
-            osc_title: Some(title),
-            osc_progress: None,
-        }
-    }
-
     #[test]
     fn parses_fields_and_sorts_by_priority_desc() {
         let m = Manifest::parse(
@@ -1072,13 +1062,6 @@ mod tests {
     fn bundled(agent: &str) -> Manifest {
         Manifest::parse(bundled_manifest(agent).expect("bundled manifest exists"))
             .expect("bundled manifest parses")
-    }
-
-    /// Derive the old boolean readiness from a manifest verdict: ready only when
-    /// the live state is `idle` and the rule did not ask us to hold state. This
-    /// is the mapping the daemon badge will use when E2 wires evaluate() in.
-    fn manifest_ready(m: &Manifest, screen: &ScreenView) -> bool {
-        matches!(m.evaluate(screen), Some(v) if v.state == "idle" && !v.skip_state_update)
     }
 
     #[test]

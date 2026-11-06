@@ -375,16 +375,6 @@ mod tests {
         assert_eq!(d.is_ready(&view("Waiting for auth \u{276f}")), Ok(false));
     }
 
-    // ---- opencode (US3): fixtures condensed from a live 1.14.50
-    // mux-pane capture (capture method: `fno mux pane run -- opencode` +
-    // `pane read`), per the markers-from-capture locked decision. ----
-
-    fn opencode_screen(footer_hint: &str) -> String {
-        format!(
-            "   \u{2503}\n   \u{2503}  Ask anything... \"Fix a TODO in the codebase\"\n   \u{2503}\n   \u{2503}  Sisyphus - Ultraworker \u{b7} model \u{b7} medium\n   \u{2579}\u{2580}\u{2580}\u{2580}\u{2580}\n{footer_hint}\n  ~/proj:main  \u{2299} 6 MCP /status   1.14.50"
-        )
-    }
-
     #[test]
     fn no_signal_detector_errors_never_guesses() {
         // "goose" is the canonical genuinely-unhosted CLI (opencode graduated

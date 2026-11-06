@@ -877,27 +877,6 @@ mod tests {
         assert!(!ran_this_boot(recorded_boot(&receipt), BOOT + 86_400));
     }
 
-    fn plan_fixture(name: &str, config_dir: Option<&str>) -> crate::reentry::ReentryPlan {
-        crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "respawn".into(),
-            name: name.into(),
-            fno_id: None,
-            node: None,
-            session_id: "123e4567-0000-0000-0000-000000000000".into(),
-            short_id: "123e4567".into(),
-            launch_account: "default".into(),
-            claude_config_dir: config_dir.map(str::to_string),
-            route_settings_path: None,
-            cwd: "/tmp/wt".into(),
-            substrate: "thread".into(),
-            mux: None,
-            argv: vec!["claude".into(), "--resume".into(), "123e4567".into()],
-            env: Default::default(),
-        }
-    }
-
     #[test]
     fn boot_failed_refuses_a_name() {
         let dir = tempfile::tempdir().unwrap();

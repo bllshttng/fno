@@ -702,30 +702,6 @@ fn emit_review_invocation_fields(
     let _ = emitter.emit_fields("review_invocation", fields);
 }
 
-#[cfg(test)]
-fn review_start_audit_fields_with_origin(
-    thread_id: &str,
-    target_raw: &str,
-    delivery: ReviewDelivery,
-    audit_payload: Option<&str>,
-    audit_sender: Option<&str>,
-    audit_target_cwd: Option<&str>,
-    failure_reason: Option<&str>,
-    audit_origin: Option<&str>,
-) -> serde_json::Map<String, serde_json::Value> {
-    review_start_audit_fields_with_origin_and_self(
-        thread_id,
-        target_raw,
-        delivery,
-        audit_payload,
-        audit_sender,
-        audit_target_cwd,
-        failure_reason,
-        audit_origin,
-        false,
-    )
-}
-
 fn review_start_audit_fields_with_origin_and_self(
     thread_id: &str,
     target_raw: &str,

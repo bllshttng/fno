@@ -1153,16 +1153,6 @@ mod tests {
         r
     }
 
-    fn counters(pairs: &[(&'static str, u64)]) -> BTreeMap<&'static str, u64> {
-        crate::provenance::Provenance::all_labels()
-            .into_iter()
-            .map(|l| (l, 0u64))
-            .collect::<BTreeMap<&'static str, u64>>()
-            .into_iter()
-            .chain(pairs.iter().map(|(k, v)| (*k, *v)))
-            .collect()
-    }
-
     #[test]
     fn substantive_needs_two_turns_and_a_minute() {
         // AC6-HP

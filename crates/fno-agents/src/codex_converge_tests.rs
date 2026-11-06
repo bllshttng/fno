@@ -374,30 +374,6 @@ fn a_failed_rollback_is_persisted_and_named_first() {
     assert!(!receipt_path(&fake.live).exists());
 }
 
-/// A machine whose dev marketplace was added as `footnote` before the rename:
-/// config keys it `footnote`, but the stage manifest now names it `fno`, so
-/// Codex lists it as `fno`.
-fn pre_rename_dev_machine(fake: &mut Fake, stage: &Path) -> String {
-    let src = stage.display().to_string();
-    let config = format!(
-        "# a user comment survives\n[marketplaces.footnote]\nsource = \"{src}\"\nsource_type = \"local\"\n"
-    );
-    fs::create_dir_all(owned_dir(&fake.live)).unwrap();
-    fs::write(fake.live.join("config.toml"), &config).unwrap();
-    let marker = json!({"channel": "dev", "marketplace": "footnote", "ref": null, "source": src});
-    fs::write(marker_path(&fake.live), format!("{marker}\n")).unwrap();
-    fake.homes
-        .entry(fake.live.clone())
-        .or_default()
-        .marketplaces = vec![json!({
-        "name": MARKETPLACE,
-        "key": "footnote",
-        "root": src,
-        "marketplaceSource": {"sourceType": "local", "source": src},
-    })];
-    config
-}
-
 #[test]
 fn every_refusal_lands_before_the_live_install_moves() {
     let tmp = tempfile::tempdir().unwrap();

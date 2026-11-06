@@ -2350,14 +2350,6 @@ pub(crate) fn is_compile(row: &crate::census::ProcRow) -> bool {
     })
 }
 
-/// Whether the holder cargo shows a compile process. `None` when the table
-/// cannot see the holder at all, so an invisible holder is never read as
-/// idle. `Some(false)` means the holder has no compile under it right now.
-#[cfg(test)]
-fn holder_compiling(rows: &[crate::census::ProcRow], holder_pid: u32) -> Option<bool> {
-    holder_compiling_map(&parent_map(rows), rows, holder_pid)
-}
-
 fn holder_compiling_map(
     parent: &ParentMap,
     rows: &[crate::census::ProcRow],
@@ -2948,48 +2940,6 @@ pub fn run_test_run(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    /// One isolated end-to-end run: temp home, self owner pins, the argv
-    /// on `sh -c`. Returns the run's exit code.
-    fn run_isolated(argv: &str) -> i32 {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let td = tempfile::TempDir::new().unwrap();
-        let saved = std::env::var_os("FNO_AGENTS_HOME");
-        let saved_state = std::env::var_os("FNO_STATE_DIR");
-        std::env::set_var("FNO_AGENTS_HOME", td.path());
-        // self_owner_env carries the hermetic stamp, and the fence it arms
-        // judges the STATE root: pin it beside the agents home, or the run
-        // resolves $HOME/.fno/spaces and the fence refuses the whole test.
-        std::env::set_var("FNO_STATE_DIR", td.path());
-        crate::paths::pin_test_claims_root(td.path());
-        for (key, value) in self_owner_env() {
-            std::env::set_var(key, value);
-        }
-        let code = run_test_run(&[
-            "--".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            argv.to_string(),
-        ]);
-        for key in [
-            "FNO_TEST_OWNER_PID",
-            "FNO_TEST_OWNER_BIRTH",
-            "FNO_TEST_HERMETIC",
-        ] {
-            std::env::remove_var(key);
-        }
-        match saved {
-            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-            None => std::env::remove_var("FNO_AGENTS_HOME"),
-        }
-        match saved_state {
-            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-            None => std::env::remove_var("FNO_STATE_DIR"),
-        }
-        code
-    }
-
     #[test]
     fn nested_owner_rejects_a_foreign_or_stale_token() {
         // The env pins are process-global: hold the shared env lock so a
@@ -3006,27 +2956,6 @@ mod tests {
         std::env::remove_var("FNO_TEST_OWNER_PID");
         std::env::remove_var("FNO_TEST_OWNER_BIRTH");
         assert_eq!(result, None);
-    }
-
-    fn marker_for(dir: &Path, worktree: &Path, pid: u32) -> PathBuf {
-        let marker = dir.join(format!(
-            "{}.json",
-            crate::claims::encode_key(&worktree.to_string_lossy())
-        ));
-        std::fs::create_dir_all(dir).unwrap();
-        let body = serde_json::json!({
-            "pid": pid,
-            "cargo_pid": pid,
-            "worktree": worktree,
-            "holder": "cargo:/other:42",
-            "since_ms": crate::claims::now_ms(),
-        });
-        std::fs::write(&marker, body.to_string()).unwrap();
-        marker
-    }
-
-    fn proc_row(pid: u32, ppid: u32, command: &str) -> crate::census::ProcRow {
-        crate::census::test_proc_row(pid, ppid, command)
     }
 
     /// The compile cap reads the spawn gate's fleet share against its

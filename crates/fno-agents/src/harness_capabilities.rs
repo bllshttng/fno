@@ -2269,31 +2269,4 @@ mod tests {
         }
     }
 
-    fn form_with_pre_exec() -> (ResumeForm, Vec<String>) {
-        (
-            ResumeForm {
-                kind: "subcommand".into(),
-                tokens: vec![
-                    "codex".into(),
-                    "resume".into(),
-                    "{session_id}".into(),
-                    "--remote".into(),
-                    "unix://".into(),
-                ],
-                pre_exec: vec![
-                    "codex".into(),
-                    "app-server".into(),
-                    "daemon".into(),
-                    "start".into(),
-                ],
-            },
-            vec![
-                "codex".into(),
-                "resume".into(),
-                "SESS".into(),
-                "--remote".into(),
-                "unix://".into(),
-            ],
-        )
-    }
 }

@@ -852,72 +852,11 @@ mod tests {
         assert!(decide(cmd).is_none(), "should have allowed: {cmd:?}");
     }
 
-    const WRAPS: &[&str] = &[
-        "{cmd}",
-        "( {cmd} )",
-        "( {cmd} & )",
-        "{ {cmd}; }",
-        "bash -c '{cmd}'",
-        "sh -c \"{cmd}\"",
-        "cd /tmp && {cmd}",
-        "true || {cmd}",
-        "echo hi\n{cmd} &",
-        "for i in 1 2; do {cmd}; done",
-        "if true; then {cmd}; fi",
-        "while read l; do {cmd}; done",
-        "until false; do {cmd}; done",
-        "x=$(echo 1); {cmd}",
-        ": | {cmd}",
-        "echo ${#PATH}; {cmd}",
-    ];
-    const BOUNDING_WRAPS: &[&str] = &[
-        "ulimit -t 60; {cmd}",
-        "timeout 300 bash -c '{cmd}'",
-        "{cmd} | head -c 1M",
-    ];
-    const PREFIXES: &[&str] = &[
-        "",
-        "nohup ",
-        "setsid ",
-        "env ",
-        "env FOO=1 ",
-        "FOO=1 ",
-        "sudo ",
-        "sudo -u me ",
-        "nice -n 5 ",
-        "time ",
-        "command ",
-        "exec ",
-        "exec -a fno-load-x ",
-        "stdbuf -o0 ",
-        "sudo -n ",
-        "command -p ",
-    ];
-    const GENERATORS: &[&str] = &[
-        "yes > /dev/null",
-        "yes",
-        "sleep infinity",
-        "dd if=/dev/zero of=/dev/null",
-        "stress -c 8",
-        "cat /dev/urandom > /dev/null",
-    ];
-    const LEGAL: &[&str] = &[
-        "timeout 300 yes > /dev/null",
-        "gtimeout 60 stress -c 8",
-        "yes | head -c 1M",
-        "dd if=/dev/zero of=/dev/null count=10",
-        "stress -c 8 -t 60",
-        "timeout 5 bash -c \"yes > /dev/null\"",
-        "echo yes",
-        "npm test",
-        "cargo build",
-        "git commit -m \"yes it works\"",
-        "rg yes .",
-        "grep -rn yes .",
-        "gh pr checks --watch",
-        "ls -la",
-        "fno agents fleet orphans --reap",
-    ];
+    
+    
+    
+    
+    
 
     #[test]
     fn refuses_each_unbounded_shape() {

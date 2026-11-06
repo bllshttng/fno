@@ -15,12 +15,6 @@ fn termination(id: &str, ts: &str, reason: &str) -> String {
     )
 }
 
-fn block(id: &str, ts: &str) -> String {
-    format!(
-        r#"{{"ts":"{ts}","type":"loop_check","source":"hook","data":{{"session_id":"{id}","decision":"block"}}}}"#
-    )
-}
-
 fn run_json(log: &std::path::Path, events: &std::path::Path, now: &str) -> Vec<Value> {
     let flags = |out: &mut Vec<String>| {
         out.push("--json".into());

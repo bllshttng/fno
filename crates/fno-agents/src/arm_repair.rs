@@ -716,14 +716,6 @@ mod tests {
         }
     }
 
-    fn dead_pid() -> i32 {
-        let mut candidate = 999_999i32;
-        while unsafe { libc::kill(candidate, 0) } == 0 {
-            candidate += 1;
-        }
-        candidate
-    }
-
     #[test]
     fn unarmed_rows_carry_the_config_command_and_never_heal_auto() {
         let mut r = row("heal", SCHED_LAUNCHD);
