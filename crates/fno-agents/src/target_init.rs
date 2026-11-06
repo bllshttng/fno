@@ -1,8 +1,8 @@
-//! `fno do target init`: the native port of the Python command, with a real
-//! `--steps` flag. The bash helper stays; this module is the decision layer
-//! the Python command was: validate the call, run the gates, build the exact
-//! helper environment, run the helper, propagate its exit, and print the
-//! orientation report.
+//! `fno do target init`: the native port of the Python command, with native
+//! `--steps` and `--advisory` flags. The bash helper stays; this module is the
+//! decision layer. It validates the call, runs the gates, builds the helper
+//! environment, runs the helper, propagates its exit, and prints the orientation
+//! report.
 //!
 //! The parity contract was `tests/golden/target_init/`, frozen from the
 //! Python leg and asserted by `tests/target_init_parity.rs` until the
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const USAGE: &str = "usage: fno do target init [--input <text|ab-id>] [--plan-path <path>] \
-[--size S|M|L] [--model <m>] [--harness <h>] [--beastmode|--beast] [--no-merge] \
+[--size S|M|L] [--model <m>] [--harness <h>] [--beastmode|--beast] [--no-merge] [--advisory] \
 [--deliverables <n>] [--steps]\n";
 
 /// A refusal: the message prints on stderr and the run exits with `code`.
@@ -39,7 +39,7 @@ fn refuse(message: impl Into<String>) -> Fail {
 }
 
 /// The parsed command surface. Every option the Python command accepted, plus
-/// `--steps`.
+/// the native `--steps` and `--advisory` flags.
 struct Args {
     input: Option<String>,
     plan_path: Option<String>,
@@ -48,11 +48,12 @@ struct Args {
     harness: Option<String>,
     beastmode: bool,
     no_merge: bool,
+    advisory: bool,
     deliverables: Option<i64>,
     steps: bool,
 }
 
-/// Hand-rolled parse over the same spellings typer accepted, plus `--steps`.
+/// Hand-rolled parse over the same spellings typer accepted, plus native flags.
 /// An unknown flag or a bare positional exits 2 naming the offending token.
 fn parse_args(rest: &[String]) -> Result<Args, Fail> {
     let mut args = Args {
@@ -63,6 +64,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
         harness: None,
         beastmode: false,
         no_merge: false,
+        advisory: false,
         deliverables: None,
         steps: false,
     };
@@ -94,6 +96,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             }
             "--beastmode" | "--beast" => args.beastmode = true,
             "--no-merge" => args.no_merge = true,
+            "--advisory" => args.advisory = true,
             "--deliverables" => {
                 let raw = next_value(&mut it, tok)?;
                 let parsed: i64 = raw
@@ -106,7 +109,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             other => {
                 if other.starts_with("--") {
                     return Err(usage_fail(&format!(
-                        "unknown flag {other}; --steps is the one flag the Python command did not carry"
+                        "unknown flag {other}; use --help to list supported flags"
                     )));
                 }
                 return Err(usage_fail(&format!(
@@ -142,6 +145,7 @@ fn print_help() {
          --steps  run this target one instructed step at a time; the stop gate\n\
          \x20        lets every stop through.\n"
     );
+    print!("--advisory  mark this run as owing no PR; a promise ends as DoneAdvisory.\n");
 }
 
 /// The public entry: the door hands the argv after `do target init`.
@@ -623,6 +627,8 @@ fn run_helper(
     if args.no_merge {
         cmd.env("TARGET_NO_MERGE", "1");
     }
+    // Advisory removes a PR obligation, so only the explicit flag grants it.
+    cmd.env("TARGET_ADVISORY", if args.advisory { "1" } else { "" });
     // The real --steps flag: the stop gate's steps mode, stamped for the
     // helper process. No environment variable ahead of it.
     if args.steps {
@@ -1199,6 +1205,59 @@ mod plan_carry_miss_tests {
             "{}",
             fail.message
         );
+    }
+}
+
+#[cfg(test)]
+mod advisory_flag_tests {
+    use super::*;
+
+    #[test]
+    fn advisory_flag_parses_as_explicit_no_pr_intent() {
+        let args = parse_args(&["--input".into(), "x-1".into(), "--advisory".into()])
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(args.advisory);
+        let default_args = parse_args(&["--input".into(), "x-1".into()])
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(!default_args.advisory);
+
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("hooks/helpers/init-target-state.sh");
+        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        std::fs::write(
+            &helper,
+            "#!/bin/bash\nprintf '%s' \"${TARGET_ADVISORY-unset}\" > \"$(dirname \"$0\")/advisory.txt\"\n",
+        )
+        .unwrap();
+        let previous_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
+        let previous_advisory = std::env::var_os("TARGET_ADVISORY");
+        std::env::set_var("CLAUDE_PLUGIN_ROOT", dir.path());
+        std::env::set_var("TARGET_ADVISORY", "0");
+        let explicit_result = run_helper(&args, None, None, false, None);
+        let explicit_value =
+            std::fs::read_to_string(dir.path().join("hooks/helpers/advisory.txt")).unwrap();
+        std::env::set_var("TARGET_ADVISORY", "1");
+        let default_result = run_helper(&default_args, None, None, false, None);
+        let default_value =
+            std::fs::read_to_string(dir.path().join("hooks/helpers/advisory.txt")).unwrap();
+        match previous_root {
+            Some(root) => std::env::set_var("CLAUDE_PLUGIN_ROOT", root),
+            None => std::env::remove_var("CLAUDE_PLUGIN_ROOT"),
+        }
+        match previous_advisory {
+            Some(value) => std::env::set_var("TARGET_ADVISORY", value),
+            None => std::env::remove_var("TARGET_ADVISORY"),
+        }
+        assert_eq!(
+            explicit_result.unwrap_or_else(|error| panic!("{}", error.message)),
+            0
+        );
+        assert_eq!(explicit_value, "1");
+        assert_eq!(
+            default_result.unwrap_or_else(|error| panic!("{}", error.message)),
+            0
+        );
+        assert_eq!(default_value, "");
     }
 }
 

@@ -349,6 +349,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SSH_CONNECTION` | rs | Set by sshd to `client_ip client_port server_ip server_port`. `fno mux serve --observe` names the watcher `user from client_ip` from it. |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | rs | unclear: crates/fno-agents/src/ledger_register.rs:617 |
+| `TARGET_ADVISORY` | rs | Init sets it to 1 only with `--advisory` and clears inherited values otherwise. The helper stamps advisory when it reads 1 or the plan declares `gates: advisory`. |
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
 | `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
 | `TARGET_INPUT` | rs | unclear: crates/fno-agents/src/target_gates.rs:473 |
