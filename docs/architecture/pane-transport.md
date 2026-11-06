@@ -150,7 +150,7 @@ The re-point is `fno agents session resume <name> --route <provider/model>`. It 
 
 The account does not move. `CLAUDE_CONFIG_DIR` selects which config claude reads, so it cannot ride a settings file read from that config, and the re-route keeps the row's account. A worker that must move to another account needs a fresh spawn.
 
-This is the lane-cap escape: a worker walled by a quota re-points to another lane instead of being reaped, and keeps the context a respawn would have thrown away.
+This is the lane-cap escape: a worker walled by a quota re-points to another lane instead of being reaped, and it keeps the conversation a respawn loses.
 
 ## The `fno_id` column answers identity, not idleness
 
