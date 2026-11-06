@@ -1546,10 +1546,12 @@ pub fn run(args: &[String]) -> i32 {
     // its queue and executed nothing. The merge reads durable state, so it runs
     // first; the sweep is the one arm that resumes per-PR across ticks.
     tick.run_phase("merge", Some("pr_watch_merge"), 1, 0, phase_merge);
+    // The eval bank has an independent scheduled gate leg. Let it run before
+    // the per-PR sweep can spend the tick's remaining deadline.
+    tick.run_phase("evals", None, 1, 0, phase_evals);
     tick.run_phase("sweep", Some("pr_watch_sweep"), 1, 0, phase_sweep);
     tick.run_phase("notify_watch", Some("notify_watch"), 1, 0, phase_notify);
     tick.run_phase("heal", None, 1, 0, phase_heal);
-    tick.run_phase("evals", None, 1, 0, phase_evals);
     // The fleet tail: the PR lane never pays all three p90s in one tick.
     tick.run_phase("stranded", Some("stranded"), 3, 0, phase_stranded);
     tick.run_phase("recovery", Some("recovery"), 3, 1, phase_recovery);

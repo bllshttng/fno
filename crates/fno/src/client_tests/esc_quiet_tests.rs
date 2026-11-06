@@ -170,3 +170,23 @@ async fn the_flush_leaves_the_carryless_move_to_prompt_unchanged() {
     assert!(v.move_to.is_some(), "a flush never resolves the prompt");
     assert!(buf.is_empty(), "and sends nothing");
 }
+
+// A lone Esc with no overlay open closes the pinned Needs input section and
+// still pends for the pane as before: chrome reacts, the pane loses nothing.
+#[tokio::test]
+async fn a_lone_esc_with_no_overlay_closes_the_pinned_needs_section() {
+    let mut v = two_pane_view();
+    v.needs_open = true;
+    let mut scanner = Scanner::default();
+    let mut carry = Vec::new();
+    let mut buf: Vec<u8> = Vec::new();
+    super::handle_stdin(&mut v, &mut scanner, &mut carry, b"\x1b", &mut buf)
+        .await
+        .unwrap();
+    assert!(!v.needs_open, "the lone Esc closed the pinned section");
+    // With the section already closed the same keypress is inert on chrome.
+    super::handle_stdin(&mut v, &mut scanner, &mut carry, b"\x1b", &mut buf)
+        .await
+        .unwrap();
+    assert!(!v.needs_open, "a second Esc stays inert once closed");
+}
