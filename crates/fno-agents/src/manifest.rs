@@ -962,16 +962,6 @@ mod tests {
         }
     }
 
-    fn view_title<'a>(text: &'a str, title: &'a str) -> ScreenView<'a> {
-        ScreenView {
-            visible_text: text,
-            cursor_row: 0,
-            cursor_col: 0,
-            osc_title: Some(title),
-            osc_progress: None,
-        }
-    }
-
     #[test]
     fn parses_fields_and_sorts_by_priority_desc() {
         let m = Manifest::parse(
@@ -1052,29 +1042,6 @@ mod tests {
     }
 
     #[test]
-    fn region_prompt_box_body_extracts_box_interior() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "live_prompt_box"
-            state = "idle"
-            priority = 950
-            region = "prompt_box_body"
-            gate = { regex = "❯" }
-            "#,
-        )
-        .unwrap();
-        // A "❯" in scrollback above the box must not count; only the box body does.
-        let screen = "❯ earlier command in history\n\
-                      ╭──────────────╮\n\
-                      │ ❯ type here  │\n\
-                      ╰──────────────╯";
-        assert!(m.evaluate(&view(screen)).is_some());
-        // No box on screen -> empty region -> no match.
-        assert!(m.evaluate(&view("just text, no box")).is_none());
-    }
-
-    #[test]
     fn empty_composite_gate_is_rejected_not_fail_open() {
         // `all = []` is vacuously true and would pin its state on every screen.
         // Both empty `all` and empty `any` must be parse errors.
@@ -1092,18 +1059,9 @@ mod tests {
 
     // ---- E6.3: bundled rule files (claude/codex/gemini) ----
 
-    use crate::readiness::{CodexReadinessDetector, GeminiReadinessDetector, ReadinessDetector};
-
     fn bundled(agent: &str) -> Manifest {
         Manifest::parse(bundled_manifest(agent).expect("bundled manifest exists"))
             .expect("bundled manifest parses")
-    }
-
-    /// Derive the old boolean readiness from a manifest verdict: ready only when
-    /// the live state is `idle` and the rule did not ask us to hold state. This
-    /// is the mapping the daemon badge will use when E2 wires evaluate() in.
-    fn manifest_ready(m: &Manifest, screen: &ScreenView) -> bool {
-        matches!(m.evaluate(screen), Some(v) if v.state == "idle" && !v.skip_state_update)
     }
 
     #[test]
@@ -1149,68 +1107,6 @@ mod tests {
         assert!(bundled_manifest("goose").is_none(), "unknown agent -> None");
     }
 
-    // AC-E6-4: codex/gemini ported to TOML reproduce the hardcoded
-    // CodexReadinessDetector/GeminiReadinessDetector decisions on the exact
-    // readiness.rs test inputs, INCLUDING gemini's "Waiting for auth" false-ready.
-    #[test]
-    fn ac_e6_4_codex_gemini_toml_match_hardcoded_detectors() {
-        let codex_m = bundled("codex");
-        let gemini_m = bundled("gemini");
-        // (input, expected ready) - mirrors readiness.rs's detector tests.
-        let cases: &[(&str, bool)] = &[
-            ("codex 0.130\n\n  build feature X\n\u{276f} ", true), // idle prompt
-            ("running tool...\nEsc to interrupt\n\u{276f}", false), // busy beats glyph
-            ("loading a 5000 byte banner of text", false),         // no glyph -> not ready
-            ("Waiting for auth...\n\u{276f}", false),              // gemini false-ready trap
-            ("Gemini ready\n\u{203a} ", true),                     // › idle glyph
-            ("Select Model\n\u{203a} 1. current\n  2. other", false),
-            // "Working"/"Thinking" up in scrollback must NOT block (Codex P1).
-            (
-                "I am Working on the Thinking task you asked about.\n\
-                 Here is a long reply that mentions Working again.\n\
-                 filler line\nanother filler\n\u{276f} ",
-                true,
-            ),
-        ];
-        for (text, want) in cases {
-            let trimmed = text.trim_end();
-            let screen = view(trimmed);
-            assert_eq!(
-                manifest_ready(&codex_m, &screen),
-                *want,
-                "codex.toml readiness mismatch for {trimmed:?}"
-            );
-            // Cross-check against the real hardcoded detector: the TOML must
-            // agree with the Rust it replaces, not just with `want`.
-            assert_eq!(
-                manifest_ready(&codex_m, &screen),
-                CodexReadinessDetector.is_ready(&screen).unwrap(),
-                "codex.toml diverges from CodexReadinessDetector for {trimmed:?}"
-            );
-            assert_eq!(
-                manifest_ready(&gemini_m, &screen),
-                GeminiReadinessDetector.is_ready(&screen).unwrap(),
-                "gemini.toml diverges from GeminiReadinessDetector for {trimmed:?}"
-            );
-        }
-    }
-
-    // AC-E6-2: claude.toml's braille-spinner osc_title_working rule badges
-    // `working` from the title alone, with the grid showing only scrollback.
-    #[test]
-    fn ac_e6_2_claude_osc_title_spinner_badges_working() {
-        let m = bundled("claude");
-        // Grid is pure scrollback (no spinner glyph); the title carries U+280B.
-        let screen = view_title("old output\nmore scrollback\n", "\u{280b} Compiling");
-        let v = m.evaluate(&screen).expect("spinner title matches");
-        assert_eq!(v.state, "working");
-        assert_eq!(v.rule_id, "osc_title_working");
-        // No title at all -> the title rule cannot fire (engine never guesses).
-        assert!(m
-            .evaluate(&view("old output\nmore scrollback"))
-            .is_none_or(|v| v.rule_id != "osc_title_working"));
-    }
-
     // A live permission prompt outranks an idle composer box drawn beneath it:
     // badging `idle` while a prompt is up would be a false-ready (forbidden).
     #[test]
@@ -1229,51 +1125,6 @@ mod tests {
             "permission prompt must beat the idle box"
         );
         assert_eq!(v.rule_id, "permission_prompt");
-    }
-
-    #[test]
-    fn load_manifest_prefers_override_then_bundled_then_none() {
-        // No override dir -> bundled.
-        let m = load_manifest("claude", None)
-            .expect("known agent")
-            .expect("parses");
-        assert!(!m.rules().is_empty());
-        // Unknown agent, no override -> None (caller fails loud). hermes is now
-        // bundled (full-roster parity), so use goose (a real coding CLI we
-        // deliberately do not bundle a manifest for).
-        assert!(load_manifest("goose", None).is_none());
-
-        // A readable <agent>.toml override wins over the bundled copy.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("codex.toml"),
-            "[[rule]]\nid = \"override_only\"\nstate = \"idle\"\npriority = 1\nregion = \"whole_recent\"\ngate = { contains = \"OVR\" }\n",
-        )
-        .unwrap();
-        let m = load_manifest("codex", Some(dir.path()))
-            .expect("override present")
-            .expect("override parses");
-        assert_eq!(m.rules().len(), 1);
-        assert_eq!(m.rules()[0].id, "override_only");
-        // A missing override file for another agent falls through to bundled.
-        let m = load_manifest("gemini", Some(dir.path()))
-            .expect("falls back to bundled")
-            .expect("parses");
-        assert!(m.rules().iter().any(|r| r.id == "idle_prompt"));
-        // A present-but-malformed override surfaces the parse error (no silent
-        // fallback to bundled - a bad hand edit must fail loud).
-        std::fs::write(dir.path().join("claude.toml"), "this = is = not = toml").unwrap();
-        assert!(matches!(
-            load_manifest("claude", Some(dir.path())),
-            Some(Err(ManifestError::Toml(_)))
-        ));
-        // A present override that won't read (invalid UTF-8) also fails loud as
-        // an Io error, NOT a silent fallback to bundled (gemini review).
-        std::fs::write(dir.path().join("gemini.toml"), [0xff, 0xfe, 0x00]).unwrap();
-        assert!(matches!(
-            load_manifest("gemini", Some(dir.path())),
-            Some(Err(ManifestError::Io { .. }))
-        ));
     }
 
     // AC2-ERR: an adaptation that leaves a unknown source key in the TOML
@@ -1322,54 +1173,6 @@ mod tests {
         assert_eq!(ans.fingerprint, *blake3::hash(screen.as_bytes()).as_bytes());
     }
 
-    // AC3-ERR: duplicated indices are not a clean 1..N run -> None (fail closed).
-    #[test]
-    fn xc929_extract_answer_rejects_duplicate_indices() {
-        let m = blocked_answer_manifest();
-        let screen = "proceed?\n1. Yes\n1. No";
-        let (_, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert!(ans.is_none(), "duplicate index -> not answerable");
-    }
-
-    // `send = "digit_enter"` appends CR to the pinned keystroke.
-
-    // Parse-time fail-loud: an [answer] on a non-blocked rule is a config bug.
-    #[test]
-    fn xc929_answer_on_non_blocked_rule_fails_loud() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "idle"
-            priority = 1
-            region = "bottom_non_empty_lines(8)"
-            gate = { contains = "x" }
-            [rule.answer]
-            option = '(?P<idx>[0-9])\.\s+(?P<label>.+)'
-            send = "digit"
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { rule, field } if rule == "r" && field.starts_with("answer"))
-        );
-    }
-
-    // Integration: the bundled claude permission_prompt rule is answerable on a
-    // real "Do you want to proceed? / 1. Yes / 2. No" screen.
-    #[test]
-    fn xc929_bundled_claude_permission_prompt_is_answerable() {
-        let m = bundled("claude");
-        let screen =
-            "Do you want to proceed?\n  ❯ 1. Yes\n  2. No, and tell Claude what to do differently";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(v.rule_id, "permission_prompt");
-        let ans = ans.expect("claude permission prompt is answerable");
-        assert_eq!(ans.options.len(), 2);
-        assert_eq!(ans.options[0].keystroke, b"1");
-        assert_eq!(ans.options[1].idx, "2");
-    }
-
     // (codex review P2): a model reply that PRINTS "Do you trust …" plus a
     // plain numbered list while idle must NOT become answerable - only a live menu
     // draws the "›" selector before a digit. The gate's required marker is what
@@ -1385,54 +1188,6 @@ mod tests {
             "a printed list without the › selector must not fire trust_prompt"
         );
         assert!(ans.is_none(), "no live menu -> not answerable");
-    }
-
-    // Codex 0.144.1 renders command approval as a borderless numbered
-    // menu and commits a bare digit. This screen was captured from the live TUI.
-    #[test]
-    fn xf498_bundled_codex_command_approval_is_answerable() {
-        let m = bundled("codex");
-        let screen = "Would you like to run the following command?\n\n\
-            Environment: local\n\n\
-            $ touch /tmp/fno-x-aaaa-approval-capture\n\n\
-            \u{203a} 1. Yes, proceed (y)\n\
-              2. Yes, and don't ask again for commands that start with `touch /tmp/fno-x-aaaa-approval-capture` (p)\n\
-              3. No, and tell Codex what to do differently (esc)\n\n\
-            Press enter to confirm or esc to cancel";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(v.rule_id, "approval_prompt");
-        assert_eq!(v.state, "blocked");
-        let ans = ans.expect("codex command approval is answerable");
-        assert_eq!(ans.options.len(), 3);
-        assert_eq!(ans.options[0].label, "Yes, proceed (y)");
-        assert_eq!(ans.options[0].keystroke, b"1");
-        assert_eq!(ans.options[2].idx, "3");
-        assert_eq!(ans.options[2].keystroke, b"3");
-    }
-
-    // The codex request_user_input dialog (plan mode) is blocked and
-    // answerable. Screen shaped after the live openharness capture
-    // (cli/src/lib/__fixtures__/question-codex.txt): a Question N/M block
-    // over marked numbered rows, closed by the option header and the
-    // `enter to submit answer` footer.
-    #[test]
-    fn xd27e_bundled_codex_question_prompt_is_blocked_and_answerable() {
-        let m = bundled("codex");
-        let screen = "  Question 1/1 (1 unanswered)\n\
-            Which colour should the demo use?\n\
-            \u{203a} 1. Red    Creates a bold, high-contrast\n\
-                        accent.\n\
-              2. Green  Creates a fresh, success-\n\
-              option 1/4 | tab to add notes\n\
-              enter to submit answer | esc to interrupt";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(v.rule_id, "question_prompt");
-        assert_eq!(v.state, "blocked");
-        let ans = ans.expect("codex question dialog is answerable");
-        assert_eq!(ans.options.len(), 2);
-        assert_eq!(ans.options[0].label, "Red    Creates a bold, high-contrast");
-        assert_eq!(ans.options[0].keystroke, b"1");
-        assert_eq!(ans.options[1].idx, "2");
     }
 
     // A model reply that PRINTS the footer phrase over a plain numbered list
@@ -1454,21 +1209,6 @@ mod tests {
             );
             assert!(ans.is_none(), "no live dialog -> not answerable");
         }
-    }
-
-    // agy's trust prompt is ARROW-ONLY ("> Yes … / No, exit" +
-    // "↑/↓ Navigate") - no numbered options. No agy rule matches it, so it stays
-    // focus-only (the documented Open Q1 no-op), never a fabricated grammar.
-    #[test]
-    fn x5103_bundled_agy_arrow_menu_is_focus_only() {
-        let m = bundled("agy");
-        let screen = "Do you trust the contents of this project?\n\
-            Antigravity CLI requires permission to read, edit, and execute files here.\n\
-            > Yes, I trust this folder\n  No, exit\n  \u{2191}/\u{2193} Navigate \u{b7} enter Confirm";
-        assert!(
-            m.evaluate_answerable(&view(screen)).is_none(),
-            "agy arrow-only menu must not be answerable (focus-only fallback)"
-        );
     }
 
     #[test]

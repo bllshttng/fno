@@ -241,6 +241,7 @@ pub(crate) enum Phase {
 pub(crate) struct Launcher {
     pub draft: LaunchDraft,
     pub recent_models: Vec<RecentModelChoice>,
+    pub machines: Vec<String>,
     /// The active tab.
     pub focus: Focus,
     pub phase: Phase,
@@ -321,6 +322,7 @@ pub(crate) enum PickerAction {
     InsertNode(String),
     /// Set the placement.
     Place(Placement),
+    RunOn(Option<String>),
     /// The Model list's `more` row: rebuild the picker over the harness's
     /// full catalog tail, Esc stepping back to the main list.
     OpenMore,
@@ -432,6 +434,7 @@ pub(crate) struct LaunchDraft {
     pub effort: String,
     pub permission: String,
     pub placement: Placement,
+    pub host: Option<String>,
     /// The portal index a thread placement opens through, resolved from the
     /// live layout when the placement is picked (next free index).
     pub placement_portal: u8,
@@ -468,6 +471,9 @@ impl LaunchDraft {
 
     /// The draft cwd's facts row, when the catalog probe landed one.
     fn facts<'a>(&self, catalog: &'a Option<CatalogOutcome>) -> Option<&'a ProjectFacts> {
+        if self.host.is_some() {
+            return None;
+        }
         match catalog {
             Some(CatalogOutcome::Ok(_, _, facts)) => facts.iter().find(|f| f.cwd == self.cwd()),
             _ => None,
@@ -523,6 +529,7 @@ impl LaunchDraft {
             revision: self.revision,
             cwd: self.cwd(),
             harness: self.harness(),
+            host: self.host.clone(),
             substrate: substrate.to_string(),
             model: if !self.route.is_empty() && !native_model_pin {
                 None
@@ -584,7 +591,10 @@ fn non_empty(s: &str) -> Option<String> {
 /// pin their chip instead (`--model`), or the launch refuses them exactly
 /// as today (`--cwd`).
 fn pill_is_chip_owned(flag: &str) -> bool {
-    matches!(flag, "--model" | "--effort" | "--harness")
+    matches!(
+        flag,
+        "--model" | "--effort" | "--harness" | "--permission-mode"
+    )
 }
 
 /// Commit a `--word` the user typed in the message: remove the word, add
@@ -599,17 +609,6 @@ fn commit_verbatim_pill(l: &mut Launcher) {
     }
     cut_trailing_word(l);
     add_pill(l, word, true);
-}
-
-/// Remove the typed `--word` from the message (the picker-pick commit
-/// path); unlike the verbatim Space commit it never commits on its own.
-fn commit_typed_flag_word(l: &mut Launcher) {
-    let has_flag_word = trailing_word(&l.draft.message)
-        .map(|w| w.starts_with("--"))
-        .unwrap_or(false);
-    if has_flag_word {
-        cut_trailing_word(l);
-    }
 }
 
 /// Drop the message's trailing `--word` and park the cursor there.
@@ -672,6 +671,7 @@ fn apply_chip_pin(l: &mut Launcher, flag: &str, value: &str) {
             l.draft.route.clear();
         }
         "--effort" => l.draft.effort = value.to_string(),
+        "--permission-mode" => l.draft.permission = value.to_string(),
         "--harness" => {
             if let Some(idx) = l.draft.harnesses.iter().position(|h| h == value) {
                 l.draft.harness_idx = idx;
@@ -734,6 +734,7 @@ pub(crate) fn open(view: &mut View) {
         None => Launcher {
             draft: fresh_draft(view),
             recent_models: Vec::new(),
+            machines: Vec::new(),
             focus: Focus::Message,
             phase: Phase::Editing,
             armed: None,
@@ -759,6 +760,7 @@ pub(crate) fn open(view: &mut View) {
             };
         }
     }
+    launcher.machines = view.machine_tree.destinations();
     view.launcher = Some(launcher);
     // A fresh open starts with a fresh esc carry: a lone ESC stranded in the
     // retained dock's carry must never close the reopened dock.
@@ -949,6 +951,7 @@ fn fresh_draft(view: &View) -> LaunchDraft {
         effort: String::new(),
         permission: String::new(),
         placement: Placement::default(),
+        host: None,
         placement_portal: 0,
         pills: Vec::new(),
         pill_value_capture: false,
@@ -1114,7 +1117,7 @@ async fn submit(
     // (env var, then api_key_file) refuses pre-wire naming the env var.
     // The draft stays intact; rows with no key_env are not checked, and
     // the spawn door stays the final gate.
-    if !l.draft.provider.is_empty() {
+    if l.draft.host.is_none() && !l.draft.provider.is_empty() {
         let needle = l
             .draft
             .model_row
@@ -1161,7 +1164,9 @@ async fn submit(
             .map(|f| f.policy.clone()),
         _ => None,
     };
-    let worktree = if matches!(&policy, Some(Ok(w)) if w == "never") {
+    let worktree = if l.draft.host.is_some() {
+        explicit
+    } else if matches!(&policy, Some(Ok(w)) if w == "never") {
         Some(false)
     } else {
         // A failed policy read is as good as an unread one: the default
@@ -1191,6 +1196,14 @@ async fn submit(
         l.phase = Phase::Refused {
             request_id,
             reason: "the connected mux server does not support provider pins or extra launch flags; reconnect to a server running current fno".to_string(),
+        };
+        return Ok(());
+    }
+    if request.host.is_some() && !wire_at_least(&view.session, 122) {
+        l.phase = Phase::Refused {
+            request_id,
+            reason: "the mux server does not support remote launches; reconnect to current fno"
+                .into(),
         };
         return Ok(());
     }
@@ -1768,14 +1781,11 @@ pub(crate) async fn launcher_keys(
                         // A disabled or header row: the picker stays open.
                     }
                     LKey::Char(' ') if picker.field == Focus::Plus => {
-                        // Space commits the typed text as a verbatim flag:
-                        // the filter is the word after the dashes the
-                        // message still holds. An empty filter is no flag:
-                        // the picker closes and the dashes stay typed.
+                        // Space commits the filter as a canonical flag.
+                        // An empty filter closes the picker without a flag.
                         let filter = std::mem::take(&mut picker.filter);
                         l.picker = None;
                         if !filter.is_empty() {
-                            cut_trailing_word(l);
                             add_pill(l, format!("--{filter}"), true);
                         }
                     }
@@ -2044,7 +2054,7 @@ pub(crate) async fn launcher_keys(
                 } else {
                     None
                 };
-                let dash_anchor = if c == '-' {
+                let flag_anchor = if matches!(c, '-' | '—' | '+') {
                     view.launcher.as_ref().and_then(|l| pills_anchor(l, view))
                 } else {
                     None
@@ -2092,17 +2102,26 @@ pub(crate) async fn launcher_keys(
                                 Focus::Message,
                             );
                         }
-                        Focus::Message if c == '-' && !l.draft.pill_value_capture => {
-                            // The second dash of a word-start `--` opens the
-                            // flags picker; the typed text stays in the
-                            // message until a pick or a Space commits it.
-                            let opens = trailing_word(&l.draft.message) == Some("-");
+                        Focus::Message
+                            if matches!(c, '-' | '—' | '+') && !l.draft.pill_value_capture =>
+                        {
+                            let before: String =
+                                l.draft.message.chars().take(l.draft.cursor_chars).collect();
+                            let opens = if c == '-' {
+                                before.ends_with('-')
+                                    && before.split_whitespace().last() == Some("-")
+                            } else {
+                                before.chars().last().is_none_or(char::is_whitespace)
+                            };
                             if opens {
+                                if c == '-' {
+                                    backspace(&mut l.draft);
+                                }
                                 open_picker_at(
                                     l,
                                     &view.launcher_catalog,
                                     &view.backlog,
-                                    dash_anchor,
+                                    flag_anchor,
                                     Focus::Plus,
                                 );
                             } else {
@@ -3252,11 +3271,24 @@ pub(crate) fn picker_rows(
             }
         }
         Focus::Where => {
-            // Run on: today only Local. Cloud, Remote Control and SSH name
-            // no substrate in the door yet, so there are no rows to offer.
             rows.push(PopupRow::Header("Run on".to_string()));
             actions.push(None);
-            push_entry(&mut rows, &mut actions, "\u{2713}", "Local", "", true, None);
+            for host in std::iter::once(None).chain(l.machines.iter().cloned().map(Some)) {
+                let label = host.as_deref().unwrap_or("Local");
+                push_entry(
+                    &mut rows,
+                    &mut actions,
+                    if l.draft.host == host {
+                        "\u{2713}"
+                    } else {
+                        "\u{2022}"
+                    },
+                    label,
+                    "",
+                    true,
+                    Some(PickerAction::RunOn(host.clone())),
+                );
+            }
             // Open as: the placement (the view a thread shows through).
             rows.push(PopupRow::Header("Open as".to_string()));
             actions.push(None);
@@ -3600,7 +3632,7 @@ pub(crate) fn show_steps(l: &mut Launcher, title: String, lines: Vec<String>, an
 pub(crate) fn open_help(l: &mut Launcher, anchor: Anchor) {
     let lines = [
         "enter: launch \u{b7} ctrl+j: launch from any chip \u{b7} shift+enter: force launch",
-        "--: flag picker \u{b7} type --flag value + space: free-hand pill",
+        "+flag or —flag: flag picker \u{b7} --flag also works",
         "--force: force past admission and the spawn gate (journaled)",
         "@: pick a backlog node into the prompt",
         "!: run a shell line in a pane",
@@ -3783,6 +3815,10 @@ pub(crate) fn apply_picker_action(
                 insert_char(&mut l.draft, c);
             }
         }
+        PickerAction::RunOn(host) => {
+            l.draft.host = host;
+            l.draft.bump();
+        }
         PickerAction::Place(p) => {
             l.draft.placement = p;
             l.draft.placement_portal = portal;
@@ -3813,10 +3849,7 @@ pub(crate) fn apply_picker_action(
             }
         }
         PickerAction::AddPill { flag, picks_value } => {
-            // A flag pick removes the typed `--word` from the message and
-            // adds the pill; a value-taking flag opens value capture. The
-            // flag spelling loses any ` <value>` suffix the picker showed.
-            commit_typed_flag_word(l);
+            // A value-taking flag opens value capture after the pick.
             add_pill(l, flag, picks_value);
         }
         // Drilled back into by commit_picker_action; a direct commit here
@@ -4012,10 +4045,11 @@ impl Launcher {
         let d = &self.draft;
         match f {
             Focus::Where => {
+                let host = d.host.as_deref().unwrap_or("Local");
                 if d.placement == Placement::default() {
-                    "Local".to_string()
+                    host.to_string()
                 } else {
-                    format!("Local \u{b7} {}", d.placement.label())
+                    format!("{host} \u{b7} {}", d.placement.label())
                 }
             }
             Focus::Project => d
@@ -4505,7 +4539,7 @@ impl Launcher {
                 let placeholder = if self.shell {
                     format!("shell command in {}", self.draft.cwd())
                 } else {
-                    "prompt \u{b7} -- flags \u{b7} @ node \u{b7} ! shell \u{b7} ? help".to_string()
+                    "prompt \u{b7} +flag \u{b7} @ node \u{b7} ! shell \u{b7} ? help".to_string()
                 };
                 buf.set_string(
                     sl.message.x + PROMPT_GUTTER as u16,

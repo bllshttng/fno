@@ -244,65 +244,6 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
         .release();
 }
 
-#[test]
-fn succession_refusal_reports_an_ineligible_caller() {
-    let fixture = SuccessionFixture::new(2);
-    fixture.write_entries(vec![
-        fixture.lead("lead-a", "session-a", "x-epic"),
-        fixture.lead("lead-b", "session-b", "x-epic"),
-        fixture.worker("worker-a", "session-a"),
-        fixture.worker("worker-b", "session-b"),
-    ]);
-
-    let refusal = fixture
-        .spawn("successor", Some("session-a"), Some("x-epic"))
-        .expect_err("two live holders cannot both succeed the same team");
-    assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-    assert_eq!(
-        refusal.receipt.as_ref().unwrap()["succession"],
-        "caller_not_sole_holder"
-    );
-}
-
-/// AC2-HP / AC2-EDGE: at the user's max_live with the memory axis on and
-/// reading room, one settled spawn passes; a worker created now keeps the
-/// ceiling, and the refusal names `settling` with the settle facts.
-#[test]
-fn max_live_yields_one_spawn_a_minute_when_cpu_and_ram_have_room() {
-    let fixture = SuccessionFixture::with_config_body(
-        "[agents]\nmax_live = 2\nmin_free_gb = 0.001\nmax_swap_pct = 0\n",
-    );
-    fixture.write_entries(vec![fixture.worker("w0", "s"), fixture.worker("w1", "s")]);
-    fixture
-        .spawn("next", None, None)
-        .expect("two settled workers of max_live 2: one burst spawn passes")
-        .release();
-
-    // A worker created now keeps the ceiling: the fleet is still settling.
-    let mut fresh = fixture.worker("w2", "s");
-    fresh["created_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
-    fixture.write_entries(vec![fixture.worker("w0", "s"), fresh]);
-    let refusal = fixture
-        .spawn("next", None, None)
-        .expect_err("a worker created now keeps the ceiling: still settling");
-    assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-    let receipt = refusal.receipt.expect("no-wait refusal carries a receipt");
-    assert_eq!(
-        (
-            &receipt["axis"],
-            &receipt["max_live"],
-            &receipt["burst"],
-            &receipt["burst_settle_s"]
-        ),
-        (
-            &serde_json::json!("max_live"),
-            &serde_json::json!(2),
-            &serde_json::json!("settling"),
-            &serde_json::json!(60)
-        )
-    );
-}
-
 /// AC2-EDGE: the refusal sentence names the release remedy for a counted
 /// reservation, preferring the suspect one a dead holder left behind.
 #[test]

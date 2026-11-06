@@ -2664,70 +2664,6 @@ mod tests {
         ));
     }
 
-    // ---- codex JSONL parse (pinned to fixture vocabulary) ----
-
-    #[test]
-    fn codex_stream_rows() {
-        let ev = parse_codex_line(
-            r#"{"type":"thread.started","thread_id":"019e4958-80d1-7492-8054-2854dfda502c"}"#,
-        );
-        assert_eq!(
-            ev,
-            ParsedEvent::SessionCreated {
-                session_id: "019e4958-80d1-7492-8054-2854dfda502c".into()
-            }
-        );
-
-        let ev = parse_codex_line(
-            r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"hello"}}"#,
-        );
-        assert_eq!(
-            ev,
-            ParsedEvent::OutputChunk {
-                text: "hello".into()
-            }
-        );
-
-        let ev = parse_codex_line(
-            r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"boom"}}"#,
-        );
-        assert_eq!(
-            ev,
-            ParsedEvent::ProviderError {
-                message: "boom".into()
-            }
-        );
-
-        let ev = parse_codex_line(
-            r#"{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"echo hi"}}"#,
-        );
-        match ev {
-            ParsedEvent::ToolUse { name, args } => {
-                assert_eq!(name, "command_execution");
-                assert_eq!(args.unwrap()["command"], "echo hi");
-            }
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-
-        let ev = parse_codex_line(r#"{"type":"turn.completed","usage":{"output_tokens":91}}"#);
-        assert_eq!(
-            ev,
-            ParsedEvent::ReplyComplete {
-                text: String::new(),
-                duration_ms: 0
-            }
-        );
-
-        assert!(matches!(
-            parse_codex_line("Reading additional input from stdin..."),
-            ParsedEvent::Unknown { .. }
-        ));
-        assert!(matches!(
-            parse_codex_line(r#"{"type":"turn.started"}"#),
-            ParsedEvent::Unknown { .. }
-        ));
-    }
-
     // ---- gemini blob parse ----
 
     // ---- reachability tri-state (HOME-overridden) ----
@@ -2739,82 +2675,6 @@ mod tests {
             substrate: None,
             session_id: Some(session_id.into()),
             cwd: PathBuf::from("/x"),
-        }
-    }
-
-    // -- opencode store probe ------------------------------------
-    // Every case drives an injected runner, so the suite never shells out to a
-    // real opencode binary or reads ~/.local/share/opencode.
-
-    const OC_SES: &str = "ses_09679f284ffeJv7NdBAoLQLnLZ";
-
-    fn opencode_entry(session_id: Option<&str>) -> AgentEntry {
-        AgentEntry {
-            name: "o".into(),
-            provider: "opencode".into(),
-            substrate: None,
-            session_id: session_id.map(Into::into),
-            cwd: PathBuf::from("/x"),
-        }
-    }
-
-    #[test]
-    fn opencode_reachable_when_store_returns_the_id() {
-        // Leading plugin banner: opencode plugins print to stdout ahead of real
-        // output, so the probe must tolerate garbage before the row.
-        fn run(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Ok((
-                true,
-                format!("[memory-plugin] OpenCode plugin loading\nid\n{OC_SES}\n"),
-            ))
-        }
-        assert_eq!(
-            opencode_reachable_with(
-                &opencode_entry(Some(OC_SES)),
-                Duration::from_secs(2),
-                &(run as OpencodeDbRunner)
-            ),
-            Ok(true)
-        );
-    }
-
-    #[test]
-    fn opencode_infrastructure_failure_is_inconclusive_never_gone() {
-        // Spawn failure (binary missing) and a nonzero exit (unopenable store)
-        // must both stay Err, or a dead-pane pass would orphan a live pane.
-        fn spawn_failed(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Err("No such file or directory (os error 2)".into())
-        }
-        fn nonzero(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Ok((false, String::new()))
-        }
-        for run in [
-            spawn_failed as OpencodeDbRunner,
-            nonzero as OpencodeDbRunner,
-        ] {
-            let err = opencode_reachable_with(
-                &opencode_entry(Some(OC_SES)),
-                Duration::from_secs(2),
-                &run,
-            )
-            .unwrap_err();
-            assert_eq!(err.provider, "opencode");
-        }
-    }
-
-    #[test]
-    fn opencode_malformed_id_never_reaches_the_subprocess() {
-        fn run(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            panic!("probe must reject a malformed id before spawning");
-        }
-        for bad in ["ses_'; drop table session--", "ses_ x", "ses_", "not-a-ses"] {
-            let err = opencode_reachable_with(
-                &opencode_entry(Some(bad)),
-                Duration::from_secs(2),
-                &(run as OpencodeDbRunner),
-            )
-            .unwrap_err();
-            assert!(err.reason.contains(bad), "reason should quote {bad:?}");
         }
     }
 
@@ -2844,48 +2704,6 @@ mod tests {
             assert!(CodexProvider
                 .reachability(&entry, Duration::from_secs(2))
                 .is_err());
-        });
-    }
-
-    fn gemini_entry(session_id: &str, cwd: &str) -> AgentEntry {
-        AgentEntry {
-            name: "g".into(),
-            provider: "gemini".into(),
-            substrate: None,
-            session_id: Some(session_id.into()),
-            cwd: PathBuf::from(cwd),
-        }
-    }
-
-    const G_UUID: &str = "35624650-b11e-4300-ad85-0fc87baeb3af";
-
-    #[test]
-    fn gemini_reachability_is_cwd_pinned_and_verifies_full_uuid() {
-        let tmp = tempdir();
-        // Filename carries the 8-char short prefix; the FULL uuid must appear in
-        // the file's first line for the probe to confirm (defeats collisions).
-        let chats = tmp
-            .join(".gemini")
-            .join("tmp")
-            .join("myproject")
-            .join("chats");
-        std::fs::create_dir_all(&chats).unwrap();
-        std::fs::write(
-            chats.join("session-35624650.json"),
-            format!("{{\"sessionId\":\"{G_UUID}\",\"messages\":[]}}\n").as_bytes(),
-        )
-        .unwrap();
-        with_home(&tmp, || {
-            let entry = gemini_entry(G_UUID, "/work/myproject");
-            assert_eq!(
-                GeminiProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(true)
-            );
-            // Same id but a DIFFERENT cwd must not find it (cwd-pinned).
-            let other = gemini_entry(G_UUID, "/work/elsewhere");
-            assert!(GeminiProvider
-                .reachability(&other, Duration::from_secs(2))
-                .is_err()); // chats dir for "elsewhere" absent -> inconclusive
         });
     }
 

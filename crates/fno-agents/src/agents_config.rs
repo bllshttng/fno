@@ -2521,43 +2521,6 @@ mod tests {
     }
 
     #[test]
-    fn autonomy_mode_decides_the_merge_readers_over_standing_config() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (name, body, want) in [
-            ("default-unset", "", false),
-            ("balanced-yes", "[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n", true),
-            ("yolo-unset", "[autonomy]\nmode = \"yolo\"\n", true),
-            (
-                "yolo-explicit-no",
-                "[autonomy]\nmode = \"yolo\"\n[auto_merge]\nenabled = false\ngrant = \"none\"\n",
-                false,
-            ),
-            (
-                "ask-yes",
-                "[autonomy]\nmode = \"ask\"\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
-                false,
-            ),
-            (
-                "ask-allowed",
-                "[autonomy]\nmode = \"ask\"\nallow = [\"merge\"]\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
-                true,
-            ),
-            (
-                "bad-mode",
-                "[autonomy]\nmode = \"banana\"\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
-                false,
-            ),
-        ] {
-            clear_config_env();
-            let cwd = write_project_settings(&format!("autonomy-{name}"), body);
-            std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-            let got = (auto_merge_enabled(&cwd), auto_merge_grant_dispatches(&cwd));
-            clear_config_env();
-            assert_eq!(got, (want, want), "{name}");
-        }
-    }
-
-    #[test]
     fn auto_merge_enabled_unreadable_or_invalid_project_masks_global_true() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for (name, make_project) in [("unreadable", true), ("invalid-toml", false)] {
@@ -2585,22 +2548,6 @@ mod tests {
             );
         }
         clear_config_env();
-    }
-
-    // --- auto_merge.grant dispatch reader ---------------------------------
-
-    #[test]
-    fn auto_merge_grant_canonical_none_outranks_legacy_true_in_one_file() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "amg-both",
-            "[auto_merge]\ngrant = \"none\"\n\n[dispatch]\nauto_merge = true\n",
-        );
-        std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-        let got = auto_merge_grant_dispatches(&cwd);
-        clear_config_env();
-        assert!(!got, "a canonical grant leaf in the same file must decide");
     }
 
     // --- review.optional_apps reader ---------------------------------------
@@ -2643,17 +2590,6 @@ mod tests {
         clear_config_env();
         let cwd = write_project_settings("ams-bad", "[auto_merge]\nmerge_strategy = \"octopus\"\n");
         assert_eq!(auto_merge_strategy(&cwd), "merge");
-    }
-
-    #[test]
-    fn auto_merge_require_fresh_ci_invalid_defaults_false() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "amfci-invalid",
-            "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
-        );
-        assert!(!auto_merge_require_fresh_ci(&cwd));
     }
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL

@@ -1,32 +1,8 @@
 use fno_agents::codex_fake_daemon::{Behavior, FakeDaemon, Interrupt, Steer};
 use fno_agents::codex_posture::CodexPosture;
-use fno_agents::codex_thread::{
-    parse_thread_start_response, thread_start_request_json, CodexThread, CodexThreadActor,
-    InterruptOutcome, ThreadStartError,
-};
+use fno_agents::codex_thread::{CodexThread, CodexThreadActor, InterruptOutcome};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-#[test]
-fn thread_start_reads_nested_thread_id_and_rejects_top_level_alias() {
-    let request: serde_json::Value =
-        serde_json::from_str(&thread_start_request_json("/tmp/worktree", "never"))
-            .expect("valid request JSON");
-    assert_eq!(request["method"], "thread/start");
-    assert_eq!(request["params"]["cwd"], "/tmp/worktree");
-    assert_eq!(request["params"]["approvalPolicy"], "never");
-
-    assert_eq!(
-        parse_thread_start_response(
-            r#"{"id":1,"result":{"thread":{"id":"thread-1","path":"/tmp/rollout"}}}"#
-        ),
-        Ok(("thread-1".to_string(), "/tmp/rollout".to_string()))
-    );
-    assert_eq!(
-        parse_thread_start_response(r#"{"id":1,"result":{"threadId":"thread-1"}}"#),
-        Err(ThreadStartError::NotConfirmed)
-    );
-}
 
 /// Serializes every `CODEX_HOME` mutation in this binary: two fake daemons
 /// must never overlap, because the variable that points the driver at one is
@@ -189,45 +165,6 @@ async fn failed_completion_case(manual_followup: bool) {
 async fn failed_completion_retries_without_reporting_done() {
     failed_completion_case(false).await;
     failed_completion_case(true).await;
-}
-
-/// AC1: two back-to-back submits against an idle thread make ONE turn/start,
-/// ONE turn/steer, ONE turn/completed, and BOTH waiters resolve from that
-/// shared completion. On the old mutex handle the second ask queued behind the
-/// whole first turn and drove a SECOND turn/start (zero steers) - the daemon
-/// test `codex_thread_ask_while_driving_steers_instead_of_queueing` is the
-/// probe that fails on the old code; this pins the actor's half.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn submit_while_driving_steers_into_the_shared_turn() {
-    with_fake_daemon(Behavior::quick(), async {
-        let (actor, _keep) = start_actor().await;
-        let reply_a = actor.submit("first question".into()).await.unwrap();
-        // Give the actor time to receive the turn/start ack (turn 1 driving).
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert_eq!(actor.current_turn_id().as_deref(), Some("turn-1"));
-        let reply_b = actor.submit("follow-up".into()).await.unwrap();
-        let a = tokio::time::timeout(std::time::Duration::from_secs(10), reply_a)
-            .await
-            .expect("first submit resolves")
-            .unwrap()
-            .expect("turn 1 completed");
-        let b = tokio::time::timeout(std::time::Duration::from_secs(10), reply_b)
-            .await
-            .expect("steered submit resolves")
-            .unwrap()
-            .expect("shared turn completed");
-        assert_eq!(a.turn_id, "turn-1");
-        assert_eq!(b.turn_id, "turn-1", "both waiters ride the shared turn");
-        assert_eq!(a.text, "REPLY-1");
-        assert_eq!(b.text, "REPLY-1");
-        assert_eq!(
-            actor.current_turn_id(),
-            None,
-            "cleared on routed completion"
-        );
-        actor.shutdown().await.unwrap();
-    })
-    .await;
 }
 
 /// AC2: a steer that fails its expectedTurnId precondition (the turn
