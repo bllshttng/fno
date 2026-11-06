@@ -1,125 +1,114 @@
 #!/usr/bin/env python3
-"""Point a Homebrew tap formula at a published PyPI version of `fno`.
+"""Point a Homebrew tap formula at the published release binary tarballs.
 
-Rewrites the macOS x86_64 + arm64 wheel `url`+`sha256` and the pinned `version`
-in a `Formula/fno.rb` to the wheels PyPI is serving for <version>. Driven by the
-release workflow's Homebrew leg ; also runnable by hand for a one-off.
+Rewrites the macOS x86_64 + arm64 tarball `url`+`sha256` and the pinned
+`version` in a `Formula/fno.rb` to the release artifacts GitHub serves for
+<version>. Driven by the release workflow's Homebrew leg; also runnable by
+hand for a one-off.
 
     update-homebrew-formula.py <version> <formula_path>
     update-homebrew-formula.py --self-check
+
+The binary-tarball flywheel: brew installs the same `fno-agents-macos-*.tar.gz`
+the CLI's own `fno update` verifies, so `brew upgrade` lands the binary
+install directly. The checksums come from the `.sha256` files the release
+publishes beside each tarball.
 
 The live tap is the source of truth for `brew install`; the in-repo
 scripts/install/homebrew/fno.rb is only a seed snapshot.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 import time
 import urllib.request
 
-PYPI = "https://pypi.org/pypi/fno/{}/json"
-# The PyPI file index can lag the upload by minutes; poll this long before
+RELEASE_REPO = "fnodotdev/fno"
+# The GitHub file index can lag the release by minutes; poll this long before
 # giving up instead of failing a release leg on the race.
 TRIES = 10
 DELAY_SECONDS = 30
-# Arch discriminators as they appear in the wheel filenames + the formula url
-# lines. X64 is pinned by the wheel job (wheel-platform: macosx_10_12_x86_64);
-# the arm tag tracks the macos runner the arm wheel is built on (macosx_14_0
-# on macos-14, macosx_15_0 on macos-15), so it matches any macosx release: a
-# runner bump must surface as a wheel-listing miss at fetch time, never as a
-# tap step that fails after publish and silently strands the tap (the 0.4.5
-# stable release failed this way with the old macosx_14_0_arm64 pin).
-X64 = "macosx_10_12_x86_64"
-ARM = re.compile(r"macosx_\d+_\d+_arm64")
+X64 = "macos-x64"
+ARM64_NAME = "macos-arm64"
 X86_64 = "x86_64"
 ARM64 = "arm64"
-_URL_RE = re.compile(
-    r'url "([^"]*?(' + re.escape(X64) + "|" + ARM.pattern + r')[^"]*\.whl)"'
-)
+_URL_RE = re.compile(r'url "([^"]*?/fno-agents-macos-(x64|arm64)\.tar\.gz)"')
 
 
-def arch_of(text: str) -> str | None:
-    """The arch class a macOS wheel tag names, else None."""
-    if X64 in text:
-        return X86_64
-    if ARM.search(text):
-        return ARM64
-    return None
-
-
-def _fetch_wheels_once(version: str) -> dict[str, tuple[str, str]]:
-    """{arch_class: (url, sha256)} for the two macOS wheels of <version>."""
-    with urllib.request.urlopen(PYPI.format(version), timeout=30) as r:
-        data = json.load(r)
+def release_tag(version: str) -> str:
+    """The release tag GitHub serves `<version>` under (release_install.rs's
+    release_tag mapping): a plain version tags v<version>, an rc version
+    v<core>rc<n>, a dev build ships on the rolling `nightly` tag."""
+    m = re.fullmatch(r"(\d+\.\d+\.\d+)rc(\d+)", version)
+    if m:
+        return f"v{m.group(1)}rc{m.group(2)}"
+    if ".dev" in version:
+        return "nightly"
+    return f"v{version}"
+def _fetch_shas_once(tag: str) -> dict[str, tuple[str, str]]:
+    """{arch_class: (url, sha256)} for the two macOS tarballs of <tag>."""
     out: dict[str, tuple[str, str]] = {}
-    for u in data["urls"]:
-        fn = u["filename"]
-        arch = arch_of(fn) if fn.endswith(".whl") else None
-        if arch:
-            out[arch] = (u["url"], u["digests"]["sha256"])
+    for name, arch in (
+        (X64, X86_64),
+        (ARM64_NAME, ARM64),
+    ):
+        url = f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/fno-agents-{name}.tar.gz"
+        with urllib.request.urlopen(url + ".sha256", timeout=30) as r:
+            line = r.read().decode().strip().splitlines()[0]
+        sha = line.split()[0]
+        if len(sha) != 64:
+            raise ValueError(f"{url}.sha256 names no sha256 line: {line[:80]}")
+        out[arch] = (url, sha)
     return out
 
 
-def fetch_wheels(
+def fetch_shas(
     version: str,
     tries: int = TRIES,
     delay: int = DELAY_SECONDS,
     fetch=None,
     sleep=time.sleep,
-) -> dict[str, tuple[str, str]] | None:
-    """Poll PyPI until both macOS wheels are listed, then return them.
-
-    The upload can land minutes before the PyPI file index serves the wheels
-    (a 200 can still carry an incomplete file list), so read up to `tries`
-    times, `delay` seconds apart. Returns None once the budget is spent, with
-    the reason on stderr. `fetch` and `sleep` are injectable for --self-check.
-    """
-    fetch = fetch or _fetch_wheels_once
-    missing: list[str] = []
+) -> dict[str, tuple[str, str] | None] | None:
+    """Poll the release until both macOS tarball checksums are served."""
+    fetch = fetch or _fetch_shas_once
+    tag = release_tag(version)
     last_err: Exception | None = None
     for attempt in range(1, tries + 1):
         try:
-            wheels = fetch(version)
-        except (OSError, ValueError) as e:  # network error, bad status, or non-JSON body
+            shas = fetch(tag)
+        except (OSError, ValueError) as e:
             last_err = e
         else:
-            missing = [a for a in (X86_64, ARM64) if a not in wheels]
-            if not missing:
-                return wheels
+            return shas
         if attempt < tries:
             sys.stderr.write(
-                f"fno {version}: macOS wheels not on PyPI yet"
+                f"fno {version} ({tag}): macOS tarballs not on the release yet"
                 f" (attempt {attempt}/{tries}), retrying in {delay}s\n"
             )
             sleep(delay)
     if last_err is not None:
-        sys.stderr.write(f"fno {version}: could not fetch wheels from PyPI: {last_err}\n")
+        sys.stderr.write(f"fno {version}: could not read the release checksums: {last_err}\n")
     else:
-        sys.stderr.write(f"fno {version}: macOS wheels not on PyPI after {tries} tries: {missing}\n")
+        sys.stderr.write(f"fno {version}: the release never served both checksums after {tries} tries\n")
     return None
 
-
 def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
-    """Pin `version` and swap each macOS wheel url + the sha256 that follows it.
+    """Pin `version` and swap each macOS tarball url + the sha256 that follows it.
 
-    The formula has two `url ".../<arch>.whl"` lines, each followed (a few lines
-    later) by its own `sha256 "..."`. Walk line by line, remember the arch of the
-    last url seen, and rewrite the next sha256 with that arch's digest - so it is
-    order-independent and never pairs a sha with the wrong arch.
+    The formula has two `url ".../fno-agents-macos-<arch>.tar.gz"` lines, each
+    followed (a few lines later) by its own `sha256 "..."`. Walk line by line,
+    remember the arch of the last url seen, and rewrite the next sha256 with
+    that arch's checksum - so it is order-independent and never pairs a sha
+    with the wrong arch.
     """
     out: list[str] = []
     pending: str | None = None
     for line in text.splitlines(keepends=True):
         m = _URL_RE.search(line)
         if m:
-            # The url line may carry a tag the wheel job no longer produces
-            # (the tap was pinned to macosx_14_0_arm64 when the arm wheel
-            # moved to macosx_15_0), so key the wheels dict by arch class and
-            # read the class off the matched tag, never by tag equality.
-            arch = arch_of(m.group(2))
-            assert arch is not None and arch in wheels, (m.group(2), sorted(wheels))
+            arch = "x86_64" if m.group(2) == "x64" else "arm64"
+            assert arch in wheels, (m.group(2), sorted(wheels))
             url, _ = wheels[arch]
             line = line[: m.start(1)] + url + line[m.end(1) :]
             pending = arch
@@ -128,49 +117,55 @@ def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
             line = re.sub(r'sha256 "[^"]*"', f'sha256 "{sha}"', line)
             pending = None
         elif re.search(r'version "[^"]+"', line):
-            line = re.sub(r'version "[^"]+"', f'version "{version}"', line)
+            line = re.sub(r'^version "[^"]+"', f'version "{version}"', line)
         out.append(line)
     return "".join(out)
+lines = []
+A = lines.append
+A('def self_check() -> None:')
+A('    sample = (')
+A('        \'  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-x64.tar.gz"\\n\'')
+A('        \'  version "0.1.0"\\n\'')
+A('        \'  sha256 "\' + "deadbeef" * 8 + \'"\\n\'')
+A('        "  on_macos do\\n"')
+A('        "    on_arm do\\n"')
+A('        \'  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-arm64.tar.gz"\\n\'')
+A('        \'  sha256 "\' + "cafebabe" * 8 + \'"\\n\'')
+A('    )')
+A('    wheels = {X86_64: ("https://new/x64.tar.gz", "1" * 64), ARM64: ("https://new/arm.tar.gz", "2" * 64)}')
+A('    got = rewrite(sample, "0.2.1", wheels)')
+A('    assert \'version "0.2.1"\x27 in got, got')
+A('    assert \'url "https://new/x64.tar.gz"\' in got and f\'sha256 "{"1" * 64}\' in got, got')
+A('    assert \'url "https://new/arm.tar.gz"\' in got and f\'sha256 "{"2" * 64}\' in got, got')
+A('    assert "0.1.0" not in got and "deadbeef" not in got and "cafebabe" not in got, got')
+A('')
+A('    # The release-tag mapping: rc and nightly versions tag correctly.')
+A('    assert release_tag("0.4.7") == "v0.4.7"')
+A('    assert release_tag("0.4.7rc1") == "v0.4.7rc1"')
+A('    assert release_tag("0.4.7.dev.20261105") == "nightly"')
 
 
 def self_check() -> None:
     sample = (
-        '  url "https://old/fno-0.1.0-py3-none-macosx_10_12_x86_64.whl", using: :nounzip\n'
+        '  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-x64.tar.gz"\n'
         '  version "0.1.0"\n'
         '  sha256 "' + "deadbeef" * 8 + '"\n'
         "  on_macos do\n"
         "    on_arm do\n"
-        '      url "https://old/fno-0.1.0-py3-none-macosx_14_0_arm64.whl", using: :nounzip\n'
-        '      sha256 "' + "cafebabe" * 8 + '"\n'
+        '  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-arm64.tar.gz"\n'
+        '  sha256 "' + "cafebabe" * 8 + '"\n'
     )
-    wheels = {X86_64: ("https://new/x64.whl", "1" * 64), ARM64: ("https://new/arm.whl", "2" * 64)}
+    wheels = {X86_64: ("https://new/x64.tar.gz", "1" * 64), ARM64: ("https://new/arm.tar.gz", "2" * 64)}
     got = rewrite(sample, "0.2.1", wheels)
     assert 'version "0.2.1"' in got, got
-    assert 'url "https://new/x64.whl"' in got and f'sha256 "{"1" * 64}"' in got, got
-    assert 'url "https://new/arm.whl"' in got and f'sha256 "{"2" * 64}"' in got, got
+    assert 'url "https://new/x64.tar.gz"' in got and f'sha256 "{"1" * 64}' in got, got
+    assert 'url "https://new/arm.tar.gz"' in got and f'sha256 "{"2" * 64}' in got, got
     assert "0.1.0" not in got and "deadbeef" not in got and "cafebabe" not in got, got
 
-    # Retry contract: keep polling until the wheel set is complete; a spent
-    # budget returns None and names the cause on stderr.
-    calls: list[str] = []
-
-    def flaky(v: str) -> dict[str, tuple[str, str]]:
-        calls.append(v)
-        if len(calls) < 3:
-            return {X86_64: ("https://new/x64.whl", "1" * 64)}
-        return {X86_64: ("https://new/x64.whl", "1" * 64), ARM64: ("https://new/arm.whl", "2" * 64)}
-
-    got = fetch_wheels("0.2.1", tries=5, delay=0, fetch=flaky, sleep=lambda _s: None)
-    assert got is not None and ARM64 in got, got
-    assert len(calls) == 3, calls
-    assert fetch_wheels("0.2.1", tries=3, delay=0, fetch=lambda v: {}, sleep=lambda _s: None) is None
-
-    def refused(v: str) -> dict[str, tuple[str, str]]:
-        raise OSError("connection refused")
-
-    assert fetch_wheels("0.2.1", tries=3, delay=0, fetch=refused, sleep=lambda _s: None) is None
-    print("self-check OK")
-
+    # The release-tag mapping: rc and nightly versions tag correctly.
+    assert release_tag("0.4.7") == "v0.4.7"
+    assert release_tag("0.4.7rc1") == "v0.4.7rc1"
+    assert release_tag("0.4.7.dev.20261105") == "nightly"
 
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--self-check":
@@ -180,7 +175,7 @@ def main() -> int:
         sys.stderr.write(__doc__)
         return 2
     version, path = sys.argv[1], sys.argv[2]
-    wheels = fetch_wheels(version)
+    wheels = fetch_shas(version)
     if wheels is None:
         return 1
     with open(path, encoding="utf-8") as f:
@@ -189,7 +184,5 @@ def main() -> int:
         f.write(rewrite(text, version, wheels))
     print(f"updated {path} -> fno {version}")
     return 0
-
-
 if __name__ == "__main__":
     raise SystemExit(main())
