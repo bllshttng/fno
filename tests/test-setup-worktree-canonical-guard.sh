@@ -232,7 +232,40 @@ else
   pass=$((pass+1))
 fi
 
-rm -rf "$SBX1" "$SBX2" "$SBX3" "$SBX4" "$SBX5" "$SBX6"
+# ---------------------------------------------------------------------------
+# T7: a REAL worktree placed INSIDE the canonical tree still links. The
+# claude lane's own placement is .claude/worktrees/<name>, a real checkout
+# sitting inside the canonical directory tree. Its show-toplevel is itself,
+# so the T5 guard must not fire on it. probed live 2026-11-06: macOS answers
+# /private/tmp for a /tmp path, and -ef absorbs the spelling difference.
+# ---------------------------------------------------------------------------
+SBX7="$(mktemp -d)"
+make_canonical "$SBX7/canonical"
+/usr/bin/git -C "$SBX7/canonical" init -q
+/usr/bin/git -C "$SBX7/canonical" -c user.email=test@test -c user.name=test commit -q --allow-empty -m seed
+mkdir -p "$SBX7/canonical/.claude/worktrees"
+/usr/bin/git -C "$SBX7/canonical" worktree add -q -b w1 "$SBX7/canonical/.claude/worktrees/w1"
+printf 'LOCAL-PERMS\n' > "$SBX7/canonical/.claude/settings.local.json"
+OUT7="$(PATH="/usr/bin:/bin:/usr/sbin:/sbin" CANONICAL="$SBX7/canonical" WORKTREE="$SBX7/canonical/.claude/worktrees/w1" bash "$SETUP" 2>&1)"
+RC7=$?
+
+check_eq "T7: exits 0 on a worktree inside the canonical tree" "0" "$RC7"
+if [ -L "$SBX7/canonical/.claude/worktrees/w1/.claude/settings.local.json" ]; then
+  echo "PASS: T7: the shared settings link landed in the nested worktree"
+  pass=$((pass+1))
+else
+  echo "FAIL: T7: the nested-worktree link did not land: $OUT7"
+  fail=$((fail+1))
+fi
+if [ -L "$SBX7/canonical/.claude/settings.local.json" ]; then
+  echo "FAIL: T7: the guard over-fired and symlinked the canonical root"
+  fail=$((fail+1))
+else
+  echo "PASS: T7: the canonical root itself keeps its real file"
+  pass=$((pass+1))
+fi
+
+rm -rf "$SBX1" "$SBX2" "$SBX3" "$SBX4" "$SBX5" "$SBX6" "$SBX7"
 
 # ---------------------------------------------------------------------------
 # Summary
