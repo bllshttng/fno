@@ -3681,33 +3681,6 @@ mod tests {
     //     bounded enough that a real hang still fails in seconds (never
     //     minutes). Never widen production constants.
 
-    fn tmpdir() -> PathBuf {
-        // Unique per call BY CONSTRUCTION. The pid is identical for every test
-        // in a single test binary, and `as_nanos()` is only as fine-grained as
-        // the OS clock -- on a coarse clock under parallel load two tests can
-        // read the SAME nanos and collide on this path, mixing their session
-        // files into one dir. That collision was an observed load-flake: a
-        // locate_session test would read another test's socket path. The
-        // process-wide atomic sequence makes the path collision-proof regardless
-        // of clock resolution or scheduling, so every socket/timing test gets an
-        // isolated tree even under a saturating concurrent build.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "fno-claude-ask-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            seq
-        ));
-        fs::create_dir_all(&p).unwrap();
-        crate::paths::pin_test_claims_root(&p.join("claims-root"));
-        p
-    }
-
     // --- parse_short_id ---
 
     #[test]
