@@ -1391,6 +1391,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         pending_inside_leg: std::sync::Mutex::new(std::collections::HashMap::new()),
         codex_threads: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
+    let request_admission = Arc::new(connection::RequestAdmission::default());
     schedule_codex_thread_recovery(Arc::clone(&ctx));
 
     // Active-backlog drain supervisor, opt-in via config.active_backlog.
@@ -1462,10 +1463,11 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
                     // clients (Gemini high). Shared state is advisory-lock
                     // protected, so concurrent handling is safe.
                     let ctx = Arc::clone(&ctx);
+                    let admission = Arc::clone(&request_admission);
                     let live = Arc::clone(&live_conns);
                     live.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     tokio::spawn(async move {
-                        serve_connection(ctx, stream).await;
+                        connection::serve_connection(ctx, admission, stream).await;
                         live.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     });
                 }
@@ -1658,6 +1660,9 @@ use crate::codex_thread::InterruptOutcome;
 
 mod codex_thread_lane;
 mod codex_thread_resume;
+mod connection;
+#[cfg(test)]
+mod connection_admission_tests;
 mod convert;
 mod report;
 pub(crate) mod sandbox_host;
@@ -1675,37 +1680,6 @@ use thread_row_status::{
 
 fn emit_state(emitter: &EventEmitter, state: DaemonState) {
     let _ = emitter.emit("daemon_state", &json!({"state": state.as_str()}));
-}
-/// Idle cap for the first read on a connection: a client that connects but
-/// never sends a frame self-terminates rather than holding the task forever.
-const CONN_READ_TIMEOUT: Duration = Duration::from_secs(30);
-
-async fn serve_connection(ctx: Arc<Ctx>, mut stream: UnixStream) {
-    // One request per accepted connection (clients open per RPC). A read fault
-    // is mapped to a structured error response so callers get a deterministic
-    // error code rather than a transport EOF (Codex P2): only a clean hangup
-    // (UnexpectedEof) is silent. A silent client is bounded by the timeout.
-    let req = match tokio::time::timeout(CONN_READ_TIMEOUT, read_request(&mut stream)).await {
-        Err(_elapsed) => return, // client sent nothing within the window; drop
-        Ok(Ok(r)) => r,
-        Ok(Err(crate::protocol::ProtocolError::UnexpectedEof)) => return, // clean hangup
-        Ok(Err(e)) => {
-            // Malformed / oversized frame: we could not parse a request id, so
-            // reply against id 0 with a structured MalformedFrame error.
-            let resp = Response::err(0, ErrorCode::MalformedFrame, format!("{e}"));
-            let _ = write_response(&mut stream, &resp).await;
-            return;
-        }
-    };
-    // `agent.logs` (with --follow) upgrades the same stream to a
-    // WebSocket and streams appended log lines until the client detaches; it
-    // does not fit the one-request/one-response shape.
-    if req.method == "agent.logs" {
-        crate::logs::handle_logs(&ctx.home, &req, stream).await;
-        return;
-    }
-    let resp = dispatch(&ctx, &req).await;
-    let _ = write_response(&mut stream, &resp).await;
 }
 
 /// Clears a one-in-flight sweep gate on drop.

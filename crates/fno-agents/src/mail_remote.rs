@@ -15,6 +15,7 @@ use crate::mail::address::{split_target, target_error};
 use crate::mail_bus;
 use crate::store_remote::{self, Remote};
 use std::ffi::OsString;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 /// The state-root files this module owns: the sender's local queue when the
@@ -1040,18 +1041,55 @@ pub fn exec_forward(argv: &[OsString], label: &str, mail_env: bool) -> i32 {
         let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
         cmd.env(HOP_ENV, depth.to_string());
     }
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("{label}: local forward failed: {e}");
-            1
-        }
-    }
+    let error = cmd.exec();
+    eprintln!("{label}: local forward failed: {error}");
+    1
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_forward_replaces_its_pid_and_returns_destination_status() {
+        const TEST_PID_PATH: &str = "FNO_TEST_LOCAL_FORWARD_PID_PATH";
+        if let Some(path) = std::env::var_os(TEST_PID_PATH) {
+            let path = path.to_string_lossy();
+            let script = format!(
+                "test \"$FNO_MAIL_LOCAL_FORWARD\" = 1 && test \"$FNO_MAIL_HOP\" = 1 && printf '%s' \"$$\" > '{path}' && exit 19"
+            );
+            let argv = [
+                OsString::from("/bin/sh"),
+                OsString::from("-c"),
+                OsString::from(script),
+            ];
+            std::process::exit(exec_forward(&argv, "test local forward", true));
+        }
+
+        let pid_path =
+            std::env::temp_dir().join(format!("fno-local-forward-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pid_path);
+        let child = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(
+                "mail_remote::tests::local_forward_replaces_its_pid_and_returns_destination_status",
+            )
+            .arg("--nocapture")
+            .env_remove(HOP_ENV)
+            .env(TEST_PID_PATH, &pid_path)
+            .spawn()
+            .unwrap();
+        let child_pid = child.id();
+        let status = child.wait_with_output().unwrap();
+        let destination_pid: u32 = std::fs::read_to_string(&pid_path)
+            .expect("destination wrote its pid")
+            .parse()
+            .expect("destination pid is numeric");
+        let _ = std::fs::remove_file(&pid_path);
+
+        assert_eq!(status.status.code(), Some(19), "destination exit status");
+        assert_eq!(destination_pid, child_pid, "destination replaced relay pid");
+    }
 
     // One declaration, every contract: the CI delta caps new test
     // declarations, so the relay's unit contracts share one table-style
