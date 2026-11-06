@@ -662,13 +662,11 @@ mod tests {
         );
         let mux = super::skipped_legs_line(true);
         let stale = super::skipped_legs_line(false);
-        assert!(mux.contains("the mux kill did not run"), "{mux}");
-        assert!(
-            stale.contains("the stale-idle mux heal did not run"),
-            "{stale}"
-        );
+        assert!(mux.contains("the mux kill,"), "{mux}");
+        assert!(stale.contains("the stale-idle mux heal,"), "{stale}");
         for line in [&mux, &stale] {
             assert!(line.contains("the daemon leg failed first"), "{line}");
+            assert!(line.ends_with("did not run."), "{line}");
         }
     }
 
