@@ -1116,7 +1116,9 @@ mod tests {
         // the pane child execs without the key even when the keeper
         // inherited it.
         let mut cmd = CommandBuilder::new("sh");
-        cmd.env("REX_SESSION", "user-session");
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            cmd.env(key, "user-session");
+        }
         for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
             cmd.env_remove(key);
         }
