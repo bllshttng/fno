@@ -389,8 +389,8 @@ mod tests {
         assert!(!rung_is_user(Some(&json!({"level": "lead"}))));
         assert!(!rung_is_user(Some(&json!({"level": "higher"}))));
         assert!(
-            !rung_is_user(Some(&json!({}))),
-            "a rung with no level reads lead-rung"
+            rung_is_user(Some(&json!({}))),
+            "a rung with no level reads user-rung, matching on_board"
         );
     }
 }

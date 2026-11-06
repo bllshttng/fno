@@ -1365,9 +1365,23 @@ impl View {
                 .as_deref()
                 .is_some_and(|s| ids.contains(s))
                 || names.contains(a.name.as_str());
-            if asks && a.badge != Some(AgentBadge::Blocked) {
-                a.badge = Some(AgentBadge::Blocked);
-                a.reason = Some("filed_question".into());
+            let key = a
+                .harness_session_id
+                .clone()
+                .unwrap_or_else(|| a.name.clone());
+            if asks {
+                // An already-stamped row keeps its first capture: the badge
+                // under a live stamp is always the stamp itself.
+                if a.reason.as_deref() != Some("filed_question") {
+                    self.question_stamps
+                        .insert(key, (a.badge.take(), a.reason.take()));
+                    a.badge = Some(AgentBadge::Blocked);
+                    a.reason = Some("filed_question".into());
+                }
+            } else if let Some((badge, reason)) = self.question_stamps.remove(&key) {
+                // The question closed: the row reads its own badge again.
+                a.badge = badge;
+                a.reason = reason;
             }
         }
     }
