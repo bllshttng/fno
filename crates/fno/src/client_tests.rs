@@ -4,6 +4,8 @@ use crate::proto::{AnswerOption, AnswerablePrompt, PaneMeta, Reach, TabMeta};
 mod chrome_hit_helpers;
 #[path = "client/tests/density_button_tests.rs"]
 mod density_button_tests;
+#[path = "client/tests/overlay_pad_tests.rs"]
+mod overlay_pad_tests;
 #[path = "client/tests/sideline_footer_tests.rs"]
 mod sideline_footer_tests;
 use crate::client::{
