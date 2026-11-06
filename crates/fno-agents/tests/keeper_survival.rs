@@ -517,9 +517,9 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
     // orphan road. A held subscriber seat keeps it alive past the bound;
     // dropping the seat ends it inside the bound plus one poll. The exit
     // unlinks the socket the normal way, since the dir is still standing.
-    // The bound is 3 s and the hold 3.5 s: a connect that lands inside the
-    // bound needs headroom against a loaded runner, so the seat cannot lose
-    // the race to the self-end clock.
+    // The bound is 3 s and the hold 3.5 s. The connect deadline is 2 s,
+    // inside the bound: the seat always lands before the self-end clock can
+    // fire, so the leg carries no connect-versus-bound race.
     fn connect_seat(sock: &PathBuf, secs: u64) -> std::os::unix::net::UnixStream {
         let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
@@ -538,7 +538,7 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
     let mut c = spawn_blocked_keeper(&sock_c, 33, Some("3000"));
     // Seat first, then probe: a probe racing the seat could itself be
     // seated, and its own clear would start the bound clock early.
-    let seat = connect_seat(&sock_c, 10);
+    let seat = connect_seat(&sock_c, 2);
     let child_c = identify(&sock_c)["child_pid"].as_u64().unwrap() as u32;
     let _child_c = KillGuard(child_c);
     let _keeper_c = KillGuard(c.id());
