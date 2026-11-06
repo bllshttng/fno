@@ -2403,12 +2403,27 @@ pub(crate) fn tail_text_strict(path: &std::path::Path, cap: u64) -> Option<Strin
     String::from_utf8(tail_bytes(path, cap)).ok()
 }
 
+/// Test seam: pin the boot for fixtures that fabricate pre-boot history.
+/// A stamp older than the real boot clamps to the boot under the awake-idle
+/// rule, so a backdated fixture reads fresh on a young machine and can no
+/// longer express quiet-past-grace. The pin restores that expression.
+/// Never set in production; a production boot reads the kernel.
+fn test_boot_override() -> Option<i64> {
+    std::env::var("FNO_TEST_BOOT_EPOCH_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|ms| *ms > 0)
+}
+
 /// Host boot as epoch ms. Linux reuses `claims::linux_boot_time_s` (the
 /// cached `/proc/stat` btime); macOS reads sysctl `kern.boottime`. None on
 /// any failure, never "now": a caller that cannot know the boot must drop
 /// the boot clause, not invent one.
 #[cfg(target_os = "linux")]
 pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
     crate::claims::linux_boot_time_s().and_then(|s| boot_ms_from(s, 0))
 }
 
@@ -2417,6 +2432,9 @@ pub fn host_boot_epoch_ms() -> Option<i64> {
 /// Linux btime: constant for the life of the host, read once per process.
 #[cfg(target_os = "macos")]
 pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
     static BOOT: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
     *BOOT.get_or_init(|| {
         let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
@@ -2444,6 +2462,9 @@ pub fn host_boot_epoch_ms() -> Option<i64> {
 /// Platforms with neither reader read absent, like every other bound.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
     None
 }
 
