@@ -860,8 +860,10 @@ fn run_home(args: &[String]) -> i32 {
                         }
                     }
                 }
-            } else if !auto_mode_fixed {
-                echo_stderr("fno doctor: nothing to fix.");
+            } else if let Some(message) =
+                nothing_to_fix_message(auto_mode_fixed, auto_mode_fix_failed)
+            {
+                echo_stderr(message);
             }
         }
     }
@@ -875,6 +877,17 @@ fn run_home(args: &[String]) -> i32 {
         1
     } else {
         0
+    }
+}
+
+fn nothing_to_fix_message(
+    auto_mode_fixed: bool,
+    auto_mode_fix_failed: bool,
+) -> Option<&'static str> {
+    if auto_mode_fixed || auto_mode_fix_failed {
+        None
+    } else {
+        Some("fno doctor: nothing to fix.")
     }
 }
 
@@ -930,7 +943,7 @@ fn cost_check_report() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_command_for, report};
+    use super::{bounded_command_for, nothing_to_fix_message, report};
 
     fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
         args.iter().map(std::ffi::OsString::from).collect()
@@ -1047,5 +1060,10 @@ mod tests {
             serde_json::from_slice(&std::fs::read(settings).unwrap()).unwrap();
         assert_eq!(written["model"], "opus");
         assert_eq!(written["autoMode"]["allow"][1], "My custom Auto Mode rule");
+        assert_eq!(nothing_to_fix_message(false, true), None);
+        assert_eq!(
+            nothing_to_fix_message(false, false),
+            Some("fno doctor: nothing to fix.")
+        );
     }
 }
