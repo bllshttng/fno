@@ -44,6 +44,10 @@
 #      agent session and so never loads plugin hooks, which leaves the
 #      settings file the only place a WorktreeRemove hook can reach it. That
 #      is Claude Code config, not footnote state - nothing accumulates there.
+#      setup_run.rs names the active Claude Code settings file in the consent
+#      step description; it constructs no path and writes no Footnote state.
+#      cli_hooks_tests.rs uses synthetic home and config roots to check the
+#      settings-path resolver; the test writes no files at either root.
 #      plans_path.rs reads Claude's own plansDirectory setting to place plan
 #      docs in the project-selected directory; it does not write footnote state
 #      under .claude.
@@ -387,6 +391,10 @@ crates/fno-agents/src/orphans.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno/src/cli_hooks.rs
+# setup_run.rs names the Claude Code user settings file in an approval description.
+crates/fno/src/setup_run.rs
+# cli_hooks_tests.rs uses synthetic roots to check settings-path selection.
+crates/fno/src/cli_hooks_tests.rs
 crates/fno-agents/src/provider.rs
 crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs
