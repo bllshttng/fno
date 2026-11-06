@@ -1053,11 +1053,8 @@ mod tests {
     #[test]
     fn local_forward_replaces_its_pid_and_returns_destination_status() {
         const TEST_PID_PATH: &str = "FNO_TEST_LOCAL_FORWARD_PID_PATH";
-        if let Some(path) = std::env::var_os(TEST_PID_PATH) {
-            let path = path.to_string_lossy();
-            let script = format!(
-                "test \"$FNO_MAIL_LOCAL_FORWARD\" = 1 && test \"$FNO_MAIL_HOP\" = 1 && printf '%s' \"$$\" > '{path}' && exit 19"
-            );
+        if std::env::var_os(TEST_PID_PATH).is_some() {
+            let script = "test \"$FNO_MAIL_LOCAL_FORWARD\" = 1 && test \"$FNO_MAIL_HOP\" = 1 && printf '%s' \"$$\" > \"$FNO_TEST_LOCAL_FORWARD_PID_PATH\" && exit 19";
             let argv = [
                 OsString::from("/bin/sh"),
                 OsString::from("-c"),
