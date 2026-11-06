@@ -1800,9 +1800,11 @@ mod tests {
         // arrives last: a fold-order tail would keep exactly the wrong row.
         let got = last_tail(vec![live, old_rotation.clone()], 1, true);
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0], old_rotation);
+        // The live journal's row is newer: ts ordering must keep it over the
+        // rotation row that arrives last in fold order.
+        assert_eq!(got[0]["ts"].as_str(), Some("2026-11-06T11:00:00.000Z"));
         let newer = serde_json::json!({"ts": "2026-11-06T12:00:00.000Z"});
         let got = last_tail(vec![old_rotation, newer.clone()], 1, true);
-        assert_eq!(got[0], newer);
+        assert_eq!(got[0]["ts"].as_str(), Some("2026-11-06T12:00:00.000Z"));
     }
 }
