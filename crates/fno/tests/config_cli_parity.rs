@@ -44,6 +44,7 @@ const STATE_AGENTS_EVENTS: &[(&str, &str)] = &[
 ];
 const FAKE_BIN: &[(&str, &str)] = &[("FNO_AGENTS_BIN", "<FIXTURE>/fake_bin/fno-agents")];
 const NO_BIN: &[(&str, &str)] = &[("FNO_AGENTS_BIN", "/nonexistent/fno-agents")];
+const FAKE_PY: &[(&str, &str)] = &[("FNO_PY", "<FIXTURE>/fake_bin/fno-py")];
 const ZAI_STAMP: &[(&str, &str)] = &[("FNO_ROUTE_PROVIDER", "zai")];
 
 fn cases() -> Vec<Case> {
@@ -171,8 +172,8 @@ fn cases() -> Vec<Case> {
         Case {
             name: "builddir_help",
             argv: &["config", "build-dir", "--help"],
-            env: &[],
-            fixture: "empty_project",
+            env: FAKE_PY,
+            fixture: "forward_help",
         },
         Case {
             name: "budget_nostamp",
@@ -249,8 +250,8 @@ fn cases() -> Vec<Case> {
         Case {
             name: "backlog_help",
             argv: &["config", "active-backlog", "--help"],
-            env: &[],
-            fixture: "empty_project",
+            env: FAKE_PY,
+            fixture: "forward_help",
         },
         Case {
             name: "plugin_usage",
@@ -352,9 +353,10 @@ fn unique_root(name: &str) -> PathBuf {
 
 /// Build the fixture through the driver, the way the capture ran it.
 fn build_fixture(case: &Case, root: &Path) {
+    debug_assert!(!case.fixture.is_empty());
     let out = Command::new("python3")
         .arg(DRIVER)
-        .args(["--fixture", case.fixture])
+        .args(["--fixture", case.name])
         .arg(root)
         .output()
         .expect("python3 must exist to rebuild parity fixtures");

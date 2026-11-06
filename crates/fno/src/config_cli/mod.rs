@@ -609,7 +609,7 @@ pub fn aliased_layers(repo_root: &Path) -> Vec<(PathBuf, Value)> {
 /// `load_settings_for_repo` reads a foreign repo's chain.
 pub fn aliased_layers_at(root: &Path) -> Vec<(PathBuf, Value)> {
     let mut layers = Vec::new();
-    for candidate in chain_at(root) {
+    for candidate in prefer_toml(chain_at(root)) {
         if !candidate.is_file() {
             continue;
         }

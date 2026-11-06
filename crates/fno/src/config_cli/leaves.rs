@@ -244,7 +244,7 @@ pub fn run_budget(args: &[OsString]) -> i32 {
         }
         Some(budget) => {
             println!(
-                "{stamp} declares a subagent budget of {budget}; declared width {parsed} exceeds it - run inline or split the work"
+                "refused: {stamp} declares a subagent budget of {budget}; declared width {parsed} exceeds it - run inline or split the work"
             );
             1
         }

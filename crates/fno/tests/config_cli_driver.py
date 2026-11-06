@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -79,6 +80,25 @@ def write_project(root: Path) -> Path:
 
 def fixture_empty_project(root: Path) -> Path:
     return write_project(root)
+
+
+def fixture_forward_help(root: Path) -> Path:
+    project = write_project(root)
+    bin_dir = root / "fake_bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    launcher = bin_dir / "fno-py"
+    golden_dir = REPO / "crates" / "fno" / "tests" / "golden" / "config_cli"
+    launcher.write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        f"  'config build-dir --help') cat {shlex.quote(str(golden_dir / 'builddir_help.out'))} ;;\n"
+        f"  'config active-backlog --help') cat {shlex.quote(str(golden_dir / 'backlog_help.out'))} ;;\n"
+        "  *) exit 64 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    return project
 
 
 def fixture_scalar(root: Path) -> Path:
@@ -193,6 +213,7 @@ def fixture_fake_agents(root: Path, receipt: str) -> Path:
 def build_fixture(case: Case, root: Path) -> Path:
     project = {
         "empty_project": fixture_empty_project,
+        "forward_help": fixture_forward_help,
         "scalar": fixture_scalar,
         "layering": fixture_layering,
         "providers_alias": fixture_providers_alias,
@@ -268,19 +289,39 @@ def load_oracle_modules() -> None:
     import types
 
     def oracle_ref(repo_path: str) -> str:
-        for depth in range(0, 10):
-            rev = "HEAD" if depth == 0 else f"HEAD~{depth}"
-            probe = sp.run(
-                ["git", "cat-file", "-e", f"{rev}:{repo_path}"],
-                capture_output=True,
-                cwd=REPO,
-            )
-            if probe.returncode == 0:
-                return rev
-        raise SystemExit(
-            f"no ancestor of HEAD within 10 commits holds {repo_path}; "
-            "the base-commit leg is out of reach for capture"
+        present = sp.run(
+            ["git", "cat-file", "-e", f"HEAD:{repo_path}"],
+            cwd=REPO,
+            stdout=sp.DEVNULL,
+            stderr=sp.DEVNULL,
         )
+        if present.returncode == 0:
+            return "HEAD"
+        touched = sp.run(
+            ["git", "log", "--format=%H", "HEAD", "--", repo_path],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for commit in touched.stdout.splitlines():
+            parents = sp.run(
+                ["git", "show", "-s", "--format=%P", commit],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.split()
+            for candidate in (commit, *parents):
+                probe = sp.run(
+                    ["git", "cat-file", "-e", f"{candidate}:{repo_path}"],
+                    cwd=REPO,
+                    stdout=sp.DEVNULL,
+                    stderr=sp.DEVNULL,
+                )
+                if probe.returncode == 0:
+                    return candidate
+        raise SystemExit(f"no reachable ancestor of HEAD holds {repo_path}")
 
     for module_name, repo_path in (
         ("fno.config_cli", "cli/src/fno/config_cli.py"),
@@ -339,6 +380,7 @@ EVENTS_PIN = {"FNO_EVENTS_PATH": "<FIXTURE>/state/events.jsonl"}
 AGENTS_PIN = {"FNO_AGENTS_HOME": "<FIXTURE>/fake_home/.fno/agents"}
 NO_BIN = {"FNO_AGENTS_BIN": "/nonexistent/fno-agents"}
 FAKE_BIN = {"FNO_AGENTS_BIN": "<FIXTURE>/fake_bin/fno-agents"}
+FAKE_PY = {"FNO_PY": "<FIXTURE>/fake_bin/fno-py"}
 
 CASES: list[Case] = [
     Case("get_scalar", ["config", "get", "review.max_rounds"], fixture="scalar"),
@@ -376,7 +418,7 @@ CASES: list[Case] = [
     ),
     Case("history_help", ["config", "history", "--help"]),
     Case("build_dir", ["config", "build-dir"], dict(STATE_PIN)),
-    Case("builddir_help", ["config", "build-dir", "--help"], fixture="empty_project"),
+    Case("builddir_help", ["config", "build-dir", "--help"], dict(FAKE_PY), fixture="forward_help"),
     Case("budget_nostamp", ["config", "assert-subagent-budget", "--width", "4"], fixture="budget"),
     Case(
         "budget_within",
@@ -424,7 +466,7 @@ CASES: list[Case] = [
         dict(FAKE_BIN),
         fixture="fake_agents_list",
     ),
-    Case("backlog_help", ["config", "active-backlog", "--help"]),
+    Case("backlog_help", ["config", "active-backlog", "--help"], dict(FAKE_PY), fixture="forward_help"),
     Case("plugin_usage", ["config", "plugin", "install"], dict(NO_BIN)),
     Case("plugin_help", ["config", "plugin", "install", "--help"]),
     Case(
