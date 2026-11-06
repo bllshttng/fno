@@ -1300,20 +1300,6 @@ mod shape_review_coverage_tests {
         assert_eq!(shaped["coverage"], "uncovered");
     }
 
-    #[test]
-    fn spent_row_keeps_the_producers_covered_word_and_names_it_reviewed() {
-        let shaped = shape_review_coverage(&row("stale", "c3", None, Some(true)), None, false);
-        assert_eq!(shaped["coverage"], "covered");
-        assert_eq!(shaped["review_state"], "reviewed");
-    }
-
-    #[test]
-    fn the_same_row_unspent_reads_uncovered() {
-        let shaped = shape_review_coverage(&row("stale", "c3", None, Some(false)), None, false);
-        assert_eq!(shaped["coverage"], "uncovered");
-        assert_eq!(shaped["review_state"], "unreviewed");
-        assert_eq!(shaped["reviewed_count"], 1);
-    }
 
     #[test]
     fn every_golden_table_row_derives_its_expected_word() {

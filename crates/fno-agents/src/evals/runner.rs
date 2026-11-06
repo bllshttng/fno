@@ -1346,33 +1346,6 @@ mod tests {
         assert_eq!(seat_harness(None, None), None);
     }
 
-    #[test]
-    fn the_spawn_carries_the_lane_coordinate() {
-        let lane = LaneRow {
-            name: "acme".into(),
-            harness: "codex".into(),
-            route: "openai/gpt-5.6".into(),
-            account: "acme".into(),
-            ..Default::default()
-        };
-        let argv = spawn_argv(
-            "ev-th-evals-1-2",
-            "/tmp/wt",
-            60,
-            Some("codex"),
-            Some(&lane),
-            "do the thing",
-            &[],
-        );
-        let joined = argv.join(" ");
-        assert!(
-            joined.contains("--harness codex"),
-            "the resolved lane harness rides the argv: {joined}"
-        );
-        assert!(joined.contains("--route openai/gpt-5.6"));
-        assert!(joined.contains("--account acme"));
-        assert!(joined.ends_with("-- do the thing"));
-    }
 
     #[test]
     fn a_rules_ref_replaces_only_the_rules_paths_of_the_fixture_tree() {

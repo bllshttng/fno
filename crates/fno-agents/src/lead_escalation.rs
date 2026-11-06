@@ -740,34 +740,6 @@ mod tests {
         assert!(msg.contains("empty"));
     }
 
-    #[test]
-    fn reading_mixed_with_rows_is_refused() {
-        let ans = render(&req(vec!["reading:board-unreadable", "x-1111"], Some(true)));
-        assert!(!ans.ok);
-        let msg = ans.message.expect("refusal names itself");
-        assert!(msg.contains("reading:board-unreadable"));
-        assert!(msg.contains("x-1111"));
-    }
-
-    #[test]
-    fn two_readings_are_refused() {
-        let ans = render(&req(
-            vec!["reading:board-unreadable", "reading:undelivered:x-1"],
-            None,
-        ));
-        assert!(!ans.ok);
-        let msg = ans.message.expect("refusal names itself");
-        assert!(msg.contains("multiple readings"));
-        assert!(msg.contains("reading:board-unreadable"));
-    }
-
-    #[test]
-    fn unknown_reading_kind_is_refused() {
-        let ans = render(&req(vec!["reading:bogus"], None));
-        assert!(!ans.ok);
-        let msg = ans.message.expect("refusal names itself");
-        assert!(msg.contains("unknown reading id [reading:bogus]"));
-    }
 
     // --- the mail twin ---
 

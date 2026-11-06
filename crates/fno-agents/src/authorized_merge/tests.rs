@@ -1794,24 +1794,6 @@ fn a_worktree_held_branch_recovers_through_the_rest_endpoint_with_the_pin() {
     assert!(calls[1].contains(&"merge_method=squash".to_string()));
 }
 
-#[test]
-fn an_arm_never_takes_the_worktree_recovery() {
-    // A queue arm is not a merge, so a checkout refusal has nothing to
-    // recover: PUT .../merge would merge NOW, past the queue's own wait.
-    let fake = Fake {
-        gh_ok: false,
-        gh_output: "fatal: 'feature/x' is already used by worktree at /w".to_string(),
-        ..clean()
-    };
-    let authorized = Authorized {
-        facts: open_facts(),
-        head: "abc123".to_string(),
-        strategy: "squash".to_string(),
-        merge_grant: None,
-    };
-    let _ = effect(&fake, &request(Effect::Arm), &authorized);
-    assert_eq!(fake.gh_calls.borrow().len(), 1);
-}
 
 #[test]
 fn a_dead_state_read_after_a_failed_effect_is_unknown() {

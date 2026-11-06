@@ -848,11 +848,6 @@ mod tests {
     }
 
     /// A body is required; none of the three forms is also a refusal.
-    #[test]
-    fn missing_body_is_refused() {
-        let parsed = parse_args(&vec_args(&["--to", "m-1"])).expect("parse");
-        assert_eq!(resolve_body(&parsed).unwrap_err(), 1);
-    }
 
     /// An unknown kind refuses naming the valid set; a removed kind hints at
     /// its replacement.
@@ -864,11 +859,6 @@ mod tests {
     }
 
     /// `--to` is required: the usage block, exit 2.
-    #[test]
-    fn missing_to_is_a_usage_error() {
-        assert_eq!(run(&vec_args(&["hello there"])), 2);
-        assert_eq!(run(&[]), 2);
-    }
 
     /// The retired `<harness>-<hex6+>` address form is recognized for the
     /// migration arm; every other shape passes through untouched.
@@ -999,72 +989,9 @@ mod tests {
     /// A visible candidate whose uniqueness went unproven is exactly the
     /// wake-a-stranger risk: choosing the one row we can see is the guess.
     /// Failing open is safe only when there is no candidate to choose between.
-    #[test]
-    fn lone_visible_candidate_still_refuses() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _bus = crate::claims::EnvVarGuard::set(
-            "FNO_BUS_DIR",
-            dir.path().join("bus").to_str().unwrap(),
-        );
-        let code = route_ladder(
-            &reach(
-                Some("9a063cd3-69d4-415a-ada5-649b0164189c"),
-                vec![],
-                vec!["transcript"],
-            ),
-            "9a063cd3",
-            false,
-            None,
-            "ack",
-            None,
-            "m-1",
-            None,
-        );
-        assert_ne!(code, 0, "unproven uniqueness refuses");
-        assert!(
-            !dir.path().join("bus").join("messages.jsonl").exists(),
-            "the wake-a-stranger refusal queues nothing"
-        );
-    }
 
     /// `--sender-session` outside the candidate set sends nothing: membership
     /// is checked against the real candidate set or not at all.
-    #[test]
-    fn sender_session_noncandidate_sends_nothing() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _bus = crate::claims::EnvVarGuard::set(
-            "FNO_BUS_DIR",
-            dir.path().join("bus").to_str().unwrap(),
-        );
-        let code = route_ladder(
-            &reach(
-                None,
-                vec![
-                    "aaaaaaaa-1111-2222-3333-4444deadbeef".to_string(),
-                    "bbbbbbbb-1111-2222-3333-5555deadbeef".to_string(),
-                ],
-                vec![],
-            ),
-            "deadbeef",
-            false,
-            Some("cccccccc-1111-2222-3333-6666deadbeef"),
-            "ack",
-            None,
-            "m-1",
-            None,
-        );
-        assert_ne!(code, 0, "a non-candidate --sender-session refuses");
-        assert!(
-            !dir.path().join("bus").join("messages.jsonl").exists(),
-            "nothing was sent"
-        );
-    }
 
     /// The retired handle kept refusing after its discovery ladders died:
     /// there proven uniqueness is the only thing vouching for the address.

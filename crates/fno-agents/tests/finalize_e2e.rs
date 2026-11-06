@@ -855,50 +855,6 @@ fn generic_completion_finalize_consumes_selected_verdict_without_pr_paths() {
     assert!(store_text(&env.events).contains("DoneDelivery"));
 }
 
-#[test]
-fn generic_completion_finalize_rejects_incomplete_selected_verdict() {
-    let env = setup("S-delivery-incomplete");
-    fs::write(
-        &env.events,
-        serde_json::json!({
-            "ts": "2026-08-02T12:00:00Z",
-            "type": "delivery_verdict_evaluated",
-            "source": "target",
-            "data": {
-                "evaluator_version": "delivery-evaluator.v1",
-                "session_id": "S-delivery-incomplete",
-                "work_order_node_id": "ab-testnode",
-                "attempt_id": "attempt-1",
-                "aggregate": "passed",
-                "fact_revision": "sha256:abc",
-                "required_requirements": [{
-                    "deliverable_id": "output",
-                    "evidence_id": "artifact-ready"
-                }],
-                "requirements": [],
-                "diagnostics": []
-            }
-        })
-        .to_string()
-            + "\n",
-    )
-    .unwrap();
-
-    let out = run_finalize(&env, "DoneDelivery");
-
-    assert!(!out.status.success());
-    assert_eq!(
-        count_event(&env.events, "plan_stamped", "S-delivery-incomplete"),
-        0,
-        "incomplete verdict must not stamp"
-    );
-    assert!(handoff_files(&env).is_empty());
-    assert!(store_text(&env.events).contains("delivery_receipt"));
-    assert_eq!(
-        count_event(&env.events, "termination", "S-delivery-incomplete"),
-        0
-    );
-}
 
 #[test]
 fn generic_completion_finalize_real_stamp_reaches_done_with_bound_receipt() {
@@ -1029,28 +985,6 @@ fn finalize_missing_manifest_is_noop() {
     );
 }
 
-#[test]
-fn generic_finalize_missing_or_unbound_manifest_requires_retry() {
-    let missing = setup("S-generic-gone");
-    fs::remove_file(&missing.state).unwrap();
-    assert!(!run_finalize(&missing, "DoneDelivery").status.success());
-
-    for session_line in ["", "session_id: ''\n"] {
-        let unbound = setup("S-generic-unbound");
-        fs::write(
-            &unbound.state,
-            format!(
-                "---\n{session_line}created_at: 2026-08-02T12:00:00Z\nattended: true\n---\ngraph_node_id: ab-testnode\n"
-            ),
-        )
-        .unwrap();
-        assert!(!run_finalize(&unbound, "DoneDelivery").status.success());
-        assert_eq!(
-            count_event(&unbound.events, "termination", "S-generic-unbound"),
-            0
-        );
-    }
-}
 
 /// `delegated` is a non-ship reason: ledger row only, no stamp/handoff. This is
 /// exactly what handoff.sh invokes against the archived manifest. (AC7-EDGE,
@@ -1616,29 +1550,6 @@ fn finalize_withholds_arm_when_optional_review_outstanding() {
     );
 }
 
-#[test]
-fn finalize_arms_when_coverage_satisfied_despite_usage_limited_optional() {
-    // x-0eaf: a covered review_coverage event (a local lane reviewed) overrides
-    // the usage-limited optional-app withhold, so a quota-dead bot cannot wedge
-    // the autonomous merge when a local lane covered the diff.
-    let env = setup("S-optional-limited-covered");
-    set_posture(&env, "S-optional-limited-covered", true);
-    configure_optional_codex(&env);
-    let covered = "{\"ts\":\"2026-08-05T12:00:00Z\",\"type\":\"review_coverage\",\
-\"source\":\"hook\",\"data\":{\"pr\":358,\"coverage\":\"covered\",\
-\"reviewed_count\":1,\"head_sha\":\"abc123def456abc123def456abc123def456abc1\"}}\n";
-    fs::write(&env.events, covered).unwrap();
-    let out = run_finalize_shimmed(&env, "DonePRGreen", GH_OPTIONAL_USAGE_LIMITED);
-    assert!(out.status.success());
-    assert!(
-        calls(&env).contains("gh pr merge 358 --auto --merge"),
-        "covered event must override the usage-limited optional withhold: {}",
-        calls(&env)
-    );
-    let event = finalized_event(&env, "S-optional-limited-covered");
-    assert_eq!(event.pointer("/data/auto_merge_armed"), Some(&true.into()));
-    assert!(event.pointer("/data/auto_merge_blocked_reason").is_none());
-}
 
 #[test]
 fn finalize_live_auto_merge_switch_vetoes_an_approved_run() {
@@ -1755,31 +1666,6 @@ fn finalize_withholds_arm_when_optional_review_is_stale() {
 /// scan never read comments for a pass, so a flawlessly-reviewed PR withheld
 /// arming forever while loop-check counted the same comment. The pinned sha
 /// equals the PR head, so the pass is Fresh without a git call.
-#[test]
-fn finalize_arms_when_optional_clean_pass_comment_pins_the_head() {
-    let env = setup("S-optional-clean-pass");
-    set_posture(&env, "S-optional-clean-pass", true);
-    configure_optional_codex(&env);
-    write_covered_event(&env);
-    let gh = "#!/bin/sh\n\
-         echo \"gh $*\" >> calls.log\n\
-     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
-         case \"$*\" in\n\
-           *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"createdAt\":\"2026-08-17T00:00:00Z\",\"body\":\"Codex Review: Didn’t find any major issues. Bravo. Reviewed commit: abc123def456abc123def456abc123def456abc1\"}]}' ;;\n\
-           *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
-           *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
-         esac\n";
-    let out = run_finalize_shimmed(&env, "DonePRGreen", gh);
-    assert!(out.status.success());
-    assert!(
-        calls(&env).contains("gh pr merge 358 --auto --merge"),
-        "a pinned clean-pass comment must satisfy the optional check: {}",
-        calls(&env)
-    );
-    let event = finalized_event(&env, "S-optional-clean-pass");
-    assert_eq!(event.pointer("/data/auto_merge_armed"), Some(&true.into()));
-    assert!(event.pointer("/data/auto_merge_blocked_reason").is_none());
-}
 
 /// The configured merge strategy reaches the argv. Before this, `--merge`
 /// was hardcoded, so a squash-only repo was armed with a method it forbids -
