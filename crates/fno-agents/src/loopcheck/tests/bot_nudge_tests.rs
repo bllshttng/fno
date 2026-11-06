@@ -37,15 +37,6 @@ fn unresponsive_bot_drives_the_giveup_message() {
     assert!(msg.contains("config.review.optional_apps"), "{msg}");
 }
 
-fn nudge_cfg() -> NudgeConfig {
-    NudgeConfig {
-        login: "chatgpt-codex-connector".into(),
-        review_handle: "@codex review".into(),
-        wait_minutes: 15,
-        ceiling: 3,
-    }
-}
-
 #[test]
 fn resolved_nudge_configs_default_nudges_codex_only() {
     let cfgs = resolved_nudge_configs(&Settings::default());

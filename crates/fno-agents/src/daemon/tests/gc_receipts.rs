@@ -612,24 +612,6 @@ fn teamed_and_brainstorm_rows_keep_and_tree_buckets_only_keep_trees() {
 
 // ── x-b150: the reap receipt gate ────────────────────────────────────────
 
-fn write_receipt_at(home: &AgentsHome, name: &str, reaped_at: &str) -> std::path::PathBuf {
-    let dir = home.root().join("reap-receipts");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
-    let receipt = serde_json::json!({
-        "row_name": "t-expiry",
-        "short_id": "texpiry",
-        "harness": "claude",
-        "harness_session_id": "expiry-sess",
-        "cwd": "/tmp",
-        "created_at": "2020-01-01T00:00:00Z",
-        "reaped_at": reaped_at,
-        "resume": "claude --resume expiry-sess",
-    });
-    std::fs::write(&path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
-    path
-}
-
 /// x-70e1 AC6: the active-surface removal is a REAL effect of the sweep. A
 /// typed outcome that does not confirm (Failed) HOLDS the row for retry, and
 /// a confirming outcome is recorded on the staged receipt as an

@@ -122,27 +122,6 @@ fn start_daemon(home: &AgentsHome) -> DaemonChild {
     start_daemon_env(home, &[])
 }
 
-fn start_daemon_with_bin(home: &AgentsHome, daemon_bin: &Path) -> DaemonChild {
-    let seen = common::count_events(home, "daemon_started");
-    let stderr =
-        std::fs::File::create(home.root().join("daemon.stderr")).expect("daemon.stderr creates");
-    let mut cmd = Command::new(daemon_bin);
-    cmd.env("FNO_AGENTS_HOME", home.root())
-        .env("HOME", home.root())
-        .envs(fno_agents::test_run::self_owner_env())
-        .env("FNO_AGENTS_IDLE_EXIT_SECS", "3600")
-        .env("FNO_EVENTS_PATH", home.root().join(".fno/events.jsonl"))
-        // Outside any git checkout, so the daily reclaim sweep's cargo-build-dirs
-        // lane (`crate::reclaim::maybe_run_daily`) finds no workspace manifest to
-        // resolve and never reaches the real machine's build base.
-        .current_dir(home.root())
-        .stderr(std::process::Stdio::from(stderr));
-    let child = cmd.spawn().expect("daemon spawns");
-    common::wait_for_path(&home.supervisor_sock(), Duration::from_secs(10));
-    common::wait_for_event_count(home, "daemon_started", seen + 1, Duration::from_secs(10));
-    DaemonChild(child)
-}
-
 /// Like [`start_daemon`] but with extra env on the daemon process. Used by tests
 /// that seed a precise registry status the startup reconcile sweep (Architecture
 /// B) would otherwise settle -- e.g. `FNO_AGENTS_NO_STARTUP_RECONCILE=1` to keep
