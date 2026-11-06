@@ -21,8 +21,8 @@ mod telegram;
 use crate::attention::AttentionItem;
 use crate::attention_file::FileAnswer;
 use crate::attention_http::{
-    delivery_id, now_unix, record_sink_health, retry_next_at, Deliveries, DeliveryRow, PostResult,
-    RefusedSink, RETRIES_PER_BEAT, RETRY_ATTEMPTS_CAP,
+    delivery_id, record_sink_health, Deliveries, DeliveryRow, PostResult, RefusedSink,
+    RETRIES_PER_BEAT, RETRY_ATTEMPTS_CAP,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -108,6 +108,16 @@ fn health_result(sent: &Sent) -> PostResult {
             body: String::new(),
             error: Some(why.clone()),
         },
+    }
+}
+
+/// The url a health row records for this sink: the server url when the
+/// transport has one, else the transport's own name, so a dead-sink line
+/// still names where the posts went.
+fn chat_sink_url(sink: &ChatSink) -> String {
+    match sink.url.as_deref() {
+        Some(url) if !url.is_empty() => url.to_string(),
+        _ => format!("{:?}", sink.kind),
     }
 }
 
@@ -373,7 +383,7 @@ fn tick_one(
         record_sink_health(
             state_dir,
             &sink.name,
-            sink.url.as_deref().unwrap_or(""),
+            &chat_sink_url(sink),
             &health_result(&sent),
         );
         match sent {
@@ -431,7 +441,7 @@ fn tick_one(
                 record_sink_health(
                     state_dir,
                     &sink.name,
-                    sink.url.as_deref().unwrap_or(""),
+                    &chat_sink_url(sink),
                     &health_result(&sent),
                 );
                 match sent {
@@ -472,7 +482,7 @@ fn tick_one(
         record_sink_health(
             state_dir,
             &sink.name,
-            sink.url.as_deref().unwrap_or(""),
+            &chat_sink_url(sink),
             &health_result(&sent),
         );
         match sent {
