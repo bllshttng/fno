@@ -98,6 +98,23 @@ fn claude_auto_mode_setup_requires_explicit_approval() {
     assert_eq!(step.layer, Layer::Global);
     assert_eq!(step.kind, Kind::Approve);
     assert!(step.question.to_lowercase().contains("auto mode"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    let mut skips = Vec::new();
+    let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0].id, "claude-auto-mode");
+    assert!(proposed[0].key.is_empty());
+    assert!(proposed[0].reason.contains("--only claude-auto-mode"));
+    assert!(
+        !settings.exists(),
+        "a dry-run proposal must not write settings"
+    );
+
+    assert!(crate::cli_hooks::install_claude_auto_mode_allow(&settings).changed);
+    let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
+    assert!(proposed.is_empty(), "installed rules need no new proposal");
 }
 
 #[test]

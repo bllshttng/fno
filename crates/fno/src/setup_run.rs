@@ -1522,7 +1522,8 @@ fn dry_run(
     let mut skips: Vec<String> = Vec::new();
     let mut rows: Vec<Row> = pending.into_iter().collect();
     let mut needs_human: Vec<String> = Vec::new();
-    let mut proposed = compute_proposals(steps, root, &mut skips);
+    let settings = crate::cli_hooks::user_claude_settings_path();
+    let mut proposed = compute_proposals(steps, root, &settings, &mut skips);
     proposed.extend_from_slice(join_proposed);
     match detected
         .get("gh")
@@ -1567,7 +1568,12 @@ fn dry_run(
 /// The proposal half of a dry run, shared with `--check`: the same rows a
 /// dry run offers, computed with nothing printed. `skips` collects the
 /// "why not" lines `--dry-run` prints.
-fn compute_proposals(steps: &[&Step], root: &Path, skips: &mut Vec<String>) -> Vec<Proposal> {
+fn compute_proposals(
+    steps: &[&Step],
+    root: &Path,
+    settings: &Path,
+    skips: &mut Vec<String>,
+) -> Vec<Proposal> {
     let mut proposed: Vec<Proposal> = Vec::new();
     for step in steps {
         match step.id {
@@ -1593,6 +1599,24 @@ fn compute_proposals(steps: &[&Step], root: &Path, skips: &mut Vec<String>) -> V
             "backlog-prefix" => {
                 if let Some(p) = propose_backlog_prefix(root, skips) {
                     proposed.push(p);
+                }
+            }
+            "claude-auto-mode" => {
+                if matches!(
+                    crate::cli_hooks::claude_auto_mode_allow_status(settings),
+                    Ok(false)
+                ) {
+                    proposed.push(Proposal {
+                        id: step.id,
+                        key: String::new(),
+                        value: String::new(),
+                        scope: layer_name(step.layer),
+                        reason: format!(
+                            "{}; apply with `fno config setup run --only {}` after explicit approval",
+                            step.effect, step.id
+                        ),
+                        source: "default",
+                    });
                 }
             }
             _ => {}
@@ -1712,7 +1736,8 @@ pub(crate) fn append_setup_event(kind: &str, data: serde_json::Value) {
 /// nothing; its exit code is the verdict.
 fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposal]) -> i32 {
     let mut skips: Vec<String> = Vec::new();
-    let mut proposed = compute_proposals(steps, root, &mut skips);
+    let settings = crate::cli_hooks::user_claude_settings_path();
+    let mut proposed = compute_proposals(steps, root, &settings, &mut skips);
     proposed.extend_from_slice(join_proposed);
     let global = crate::config_defaults::global_config_path();
     let project = root.join(".fno").join("config.toml");
