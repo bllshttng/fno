@@ -2121,9 +2121,11 @@ reason = "no fno hook registration for muse (no plugin hook file and no capabili
 state = "supported"
 via = ["hooks/session-state.sh", "hooks/hooks.json", "crates/fno-agents/src/hook/session_state.rs"]
 
+# A parked prompt stays observable when its notification is missed.
 [harness.claude.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done", PostModelSwitch = "model" }
 blocked = "Notification"
+screen_backstop = true
 
 [harness.codex.hooks.session_state]
 state = "supported"
@@ -2169,10 +2171,11 @@ blocked = "none"
 state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/hook/adapter/opencode.rs", "crates/fno-agents/src/hook/session_state.rs"]
 
-# A permission prompt rides as a Notification, so the row reads blocked.
+# Permission notifications are primary; the screen backs up a missed event.
 [harness.opencode.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "Notification"
+screen_backstop = true
 
 [harness.pi.hooks.session_state]
 state = "supported"
