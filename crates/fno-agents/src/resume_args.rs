@@ -26,6 +26,9 @@ pub struct ResumeArgs {
     /// `thread` is the only accepted value, because thread-to-pane is not
     /// built and a pane-to-pane resume is what the bare command already does.
     pub substrate: Option<String>,
+    /// The requested re-route (`provider/model` or `provider,model`), raw.
+    /// The split is `resume_reroute`'s job, the way retask's front splits it.
+    pub route: Option<String>,
     /// Print the conversion plan and change nothing.
     pub dry_run: bool,
     /// Accept a converted session whose harness minted a NEW id, recording
@@ -52,6 +55,16 @@ pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
             );
             return Err(13);
         }
+    }
+    // A print-only run never mutates the row, and the re-route IS a row
+    // mutation, so the pair has no honest output. Refuse rather than print
+    // today's argv while --route sits ignored.
+    if parsed.route.is_some() && parsed.print_command {
+        eprintln!(
+            "fno agents resume: --route restamps the row before the re-entry, so it has \
+             no print-only form; drop --print-command to run it, or drop --route"
+        );
+        return Err(2);
     }
     Ok(parsed)
 }
@@ -142,6 +155,17 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
                     }
                 });
             }
+            "--route" => {
+                // The re-route request rides as raw text; resume_reroute
+                // splits and resolves it after the row resolves.
+                parsed.route = Some(match iter.next() {
+                    Some(v) if !v.starts_with("--") => v.clone(),
+                    _ => {
+                        eprintln!("fno-agents: --route needs a value");
+                        return Err(2);
+                    }
+                });
+            }
             other if other.starts_with("--") => {
                 eprintln!("fno-agents: unknown resume flag: {other}");
                 return Err(2);
@@ -169,6 +193,16 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
     }
     if parsed.message_already_queued && parsed.message.is_none() {
         eprintln!("fno-agents: --message-already-queued needs --message");
+        return Err(2);
+    }
+    // A route on a conversion is a flag nobody would read: the conversion
+    // door never launches a route, so a silently carried value would mislead
+    // the caller about a re-route that never happens.
+    if parsed.route.is_some() && parsed.substrate.is_some() {
+        eprintln!(
+            "fno-agents: resume --route re-enters a claude row on a new route; \
+             --substrate thread converts a live pane, a different job"
+        );
         return Err(2);
     }
     // The conversion-only flags refuse on a plain resume rather than being
@@ -335,6 +369,40 @@ mod tests {
         // A value-less --account is a usage error, not an unknown flag.
         assert_eq!(
             parse_resume_args(&args(&["zzz-nonexistent-probe", "--account"])),
+            Err(2)
+        );
+    }
+
+    #[test]
+    fn route_parses_pair_and_equals_forms() {
+        // The re-route value rides the parser as raw text; the reroute step
+        // owns the split. Both spellings expand like every sibling flag.
+        let parsed = parse_resume_args(&args(&["alpha", "--route", "zai/glm-5.3-flash"]))
+            .expect("resume with --route parses");
+        assert_eq!(parsed.route.as_deref(), Some("zai/glm-5.3-flash"));
+        let parsed = parse_resume_args(&args(&["alpha", "--route=zai/glm-5.3-flash"]))
+            .expect("resume --route= parses");
+        assert_eq!(parsed.route.as_deref(), Some("zai/glm-5.3-flash"));
+        let parsed = parse_resume_args(&args(&["alpha", "--route", "zai,glm-5.3-flash"]))
+            .expect("the comma spelling parses unchanged");
+        assert_eq!(parsed.route.as_deref(), Some("zai,glm-5.3-flash"));
+    }
+
+    #[test]
+    fn route_needs_a_value_and_refuses_a_thread_conversion() {
+        // A value-less --route is a usage error, not an unknown flag.
+        assert_eq!(parse_resume_args(&args(&["alpha", "--route"])), Err(2));
+        // The conversion door is a different job: --substrate thread turns a
+        // live pane into a thread and never launches a route, so a route
+        // there refuses at parse instead of being dropped one fork later.
+        assert_eq!(
+            parse_resume_args(&args(&[
+                "alpha",
+                "--substrate",
+                "thread",
+                "--route",
+                "zai/glm-5.3-flash"
+            ])),
             Err(2)
         );
     }
