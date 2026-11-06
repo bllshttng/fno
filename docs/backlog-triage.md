@@ -62,7 +62,7 @@ fno backlog capture dismiss --reason "superseded by ab-..."
 ```
 
 Struck lines (promoted `[x]` and dismissed `[-]`) are **never deleted**, so the
-trail survives for autocorrect provenance.
+trail survives for provenance.
 
 ## Bloat control
 

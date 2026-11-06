@@ -27,13 +27,10 @@ A single file at `~/.fno/postmortems/{YYYY-MM-DD}-{session_id_short}.md` with:
 - `## Last output of failed phase` (last 50 lines of the failing phase's artifact body OR the stop-hook log)
 - `## Hypotheses` (deterministic, templated from a lookup table keyed on `blocked_reason.kind`)
 
-A one-line entry is also appended to `~/.fno/corrections.log` (when present, which it will be once the autocorrect feature is in steady state):
-
-```
-2026-04-27T15:32:04Z | S1 | target-postmortem | ~/.fno/postmortems/2026-04-27-f31156b3.md | test_failure: 3 tests failing in src/auth/login.test.ts
-```
-
-The autocorrect monthly review reads `~/.fno/corrections.log` and follows the link to the postmortem.
+The file lands in the postmortems dir, where the observer reads it
+(`crates/fno-agents/src/observer/mod.rs`, `postmortems_dir`). Failed
+terminations reach the eval loop through the trace pass
+(`crates/fno-agents/src/evals_traces.rs`), not through any log file.
 
 ## Manual invocation (rare)
 
@@ -49,14 +46,13 @@ bash skills/target/scripts/postmortem/generate-postmortem.sh \
   --output-dir ~/.fno/postmortems/
 ```
 
-Both forms print the generated path to stdout. The script never crashes on partial input - missing fields become the literal string `unknown` so the autocorrect parser can detect them.
+Both forms print the generated path to stdout. The script never crashes on partial input - missing fields become the literal string `unknown` so the eval traces reader can detect them.
 
 ## See also
 
 - [postmortem-format.md](postmortem-format.md) - the file format spec the script implements
 - `scripts/postmortem/generate-postmortem.sh` - the generator
 - `hooks/target-stop-hook.sh` (BLOCKED branch, around line 4464) - the call site
-- `skills/autocorrect/` - the self-improvement loop that consumes these postmortems
 
 ## Append-only invariant
 
