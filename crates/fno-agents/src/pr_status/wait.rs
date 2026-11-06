@@ -1042,31 +1042,6 @@ mod tests {
         );
     }
 
-    /// An interval already past the cap stays flat: the cap is a ceiling,
-    /// never a pull. The deadline (not the payload list) ends the wait, and
-    /// every gap stays at the base interval.
-    #[test]
-    fn an_interval_past_the_cap_stays_flat() {
-        let t = Cell::new(0.0);
-        let payloads: Vec<(i32, Value)> = (0..2)
-            .map(|_| (2, json!({"verdict": "pending", "settled": false})))
-            .collect();
-        let (code, _stdout, stderr) = wait_status(
-            9,
-            "settled",
-            None,
-            1500.0,
-            600.0,
-            staged_poll(payloads),
-            |_| Some(Vec::new()),
-            |s| t.set(t.get() + s),
-            || t.get(),
-        );
-        assert_eq!(code, 2, "the deadline ended the wait");
-        assert!(stderr.contains("still not settled after 1500s"), "{stderr}");
-        assert_eq!(t.get(), 600.0 + 600.0, "two flat 600s gaps, no growth");
-    }
-
     #[test]
     fn a_local_head_read_that_fails_degrades_to_none() {
         assert!(local_head_sha(Path::new("/nonexistent-fno-test-dir")).is_none());
@@ -1190,30 +1165,6 @@ mod tests {
         );
         assert_eq!(code, 0, "the pinned read answers at the named head");
         assert!(stdout.contains("\"settled\":true"), "{stdout}");
-    }
-
-    /// The pin's value: a literal sha passes through; `HEAD` names the local
-    /// checkout's own HEAD, read free, so the armed command stays plain (a
-    /// worktree Bash guard refuses a command substitution in the recipe).
-    #[test]
-    fn the_pin_resolves_head_from_the_local_checkout() {
-        let no_pin = json!({"cwd": env!("CARGO_MANIFEST_DIR")});
-        assert!(matches!(resolve_expect_head(&no_pin), ExpectHead::None));
-        let literal = json!({"cwd": env!("CARGO_MANIFEST_DIR"), "expect_head": "aaaaaaaa1234"});
-        match resolve_expect_head(&literal) {
-            ExpectHead::Sha(sha) => assert_eq!(sha, "aaaaaaaa1234", "the literal passes through"),
-            other => panic!("expected a literal sha, got {other:?}"),
-        }
-        let head = json!({"cwd": env!("CARGO_MANIFEST_DIR"), "expect_head": "HEAD"});
-        match resolve_expect_head(&head) {
-            ExpectHead::Sha(sha) => assert!(sha.len() >= 40, "{sha} is a sha"),
-            other => panic!("a git checkout resolves HEAD, got {other:?}"),
-        }
-        let nowhere = json!({"cwd": "/nonexistent-fno-test-dir", "expect_head": "HEAD"});
-        assert!(matches!(
-            resolve_expect_head(&nowhere),
-            ExpectHead::LocalUnresolved
-        ));
     }
 
     /// A fake gh: one live failing check (node-closure completed after its

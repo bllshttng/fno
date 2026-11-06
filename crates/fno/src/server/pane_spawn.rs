@@ -703,7 +703,7 @@ impl Core {
             // with nobody attached (the common case at spawn) would never
             // reach the server's own log - the one place a headless caller
             // (a stress script, CI) can see why a pane came up unkept.
-            eprintln!(
+            crate::mux_log!(warn;
                 "fno mux: keeper unavailable for pane {id} ({keeper_err}); running unkept inline"
             );
             self.notice_all(format!(

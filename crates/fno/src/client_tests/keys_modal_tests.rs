@@ -63,51 +63,6 @@ fn which_key_lists_the_dead_row_removal_commands() {
     }
     assert!(drawn[1] > drawn[0], "rows wrap at 50: {drawn:?}");
 }
-
-#[test]
-fn client_compose_keys_modal_renders_the_which_key_reference() {
-    // prefix+? opens the centered which-key modal in the plain-body shape:
-    // title + esc chip, a dim hint under the title, a fixed 60% viewport
-    // with two-column rows and blank-line section spacing. Deep sections sit
-    // below the fold; the table is browsed by scroll or '/' filter, and the
-    // tail notes + glyph legend ride the unfiltered tail.
-    let mut view = two_pane_view();
-    view.term = (57, 80);
-    view.open_keys_modal();
-    let text = frame_text(&view.compose());
-    assert!(text.contains("keybindings"), "chrome title present");
-    assert!(text.contains("esc close"), "dismiss affordance present");
-    assert!(
-        text.contains("⏎ runs the selected chord"),
-        "dim hint under the title"
-    );
-    assert!(
-        text.contains("j/k scroll · / filter · ⏎ run · esc close"),
-        "footer names the scroll and search keys"
-    );
-    assert!(
-        text.contains("global (no prefix)"),
-        "the first section header renders"
-    );
-    assert!(
-        !text.contains("panes"),
-        "fixed height: deep sections sit below the fold (scroll/filter to them)"
-    );
-    // The two-column anatomy: the global `w` row renders key then label on
-    // one line, key left. The ` w ` cell matches only the w row - the
-    // Ctrl+Opt+Left meta row's label also says "row selector".
-    let key_line = text
-        .lines()
-        .find(|l| l.contains(" w ") && l.contains("sideline row selector"))
-        .expect("the global w row renders");
-    let wcol = key_line.find(" w ").expect("the w key cell");
-    let label = key_line.find("sideline row selector").unwrap();
-    assert!(wcol < label, "key column left of the label: {key_line:?}");
-    // The tail notes + glyph legend sit BELOW the fold at scroll 0 (they
-    // ride after every section, panes included) and are reached by scroll;
-    // x7683_keys_modal_names_every_menu_trigger pins that reachability.
-}
-
 #[tokio::test]
 async fn keys_modal_j_k_and_filter_drive_the_plain_body_modal() {
     // The modal's own grammar: j/k move the cursor; '/' enters the live

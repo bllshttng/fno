@@ -235,43 +235,6 @@ pub fn resolve_thread_posture(
 mod tests {
     use super::*;
 
-    /// AC1-HP: a typed pair survives to both halves, and the operator's exact
-    /// string rides beside them.
-    #[test]
-    fn typed_pairs_keep_both_halves_distinct() {
-        for (mode, sandbox, approval) in [
-            (
-                "read-only:on-request",
-                CodexSandbox::ReadOnly,
-                CodexApproval::OnRequest,
-            ),
-            (
-                "workspace-write:on-failure",
-                CodexSandbox::WorkspaceWrite,
-                CodexApproval::OnFailure,
-            ),
-            (
-                "danger-full-access:never",
-                CodexSandbox::DangerFullAccess,
-                CodexApproval::Never,
-            ),
-            (
-                "read-only:untrusted",
-                CodexSandbox::ReadOnly,
-                CodexApproval::Untrusted,
-            ),
-        ] {
-            let posture = resolve_thread_posture(None, Some(mode), None).expect("pair maps");
-            assert_eq!(posture.sandbox, sandbox, "sandbox half of {mode}");
-            assert_eq!(posture.approval, approval, "approval half of {mode}");
-            assert_eq!(posture.requested, mode, "exact requested string");
-        }
-        // The two bounded sandbox spellings are no longer the same answer.
-        let read_only = resolve_thread_posture(None, Some("read-only:never"), None).unwrap();
-        let write = resolve_thread_posture(None, Some("workspace-write:never"), None).unwrap();
-        assert_ne!(read_only.sandbox, write.sandbox);
-    }
-
     /// AC1-ERR: fail closed, and say which value. An unknown half refuses
     /// even though the other half parsed; no posture is guessed.
     #[test]

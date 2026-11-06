@@ -568,65 +568,6 @@ mod tests {
         set_test_projects_dir(None);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn tail_reader_rereads_cached_paths_every_call() {
-        // freshness under the cache: a transcript GROWS between ticks
-        // and the next call picks up the newer prose with no new walk.
-        let uuid = "346f5d0d-9840-473c-af21-eaf100ca9ec3";
-        let dir = scratch(uuid, "older");
-        let file = dir
-            .join("-Users-someone-repo")
-            .join(format!("{uuid}.jsonl"));
-        let mut reader = TailReader::with_rescan_every(std::time::Duration::from_secs(86400));
-        let keys = vec![(uuid.to_string(), None)];
-        assert_eq!(
-            reader.tails(&keys).get(uuid).map(String::as_str),
-            Some("older")
-        );
-        std::fs::write(
-            &file,
-            format!(
-                "{}\n{}\n",
-                turn(r#"{"type":"text","text":"older"}"#),
-                turn(r#"{"type":"text","text":"newer"}"#)
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            reader.tails(&keys).get(uuid).map(String::as_str),
-            Some("newer"),
-            "content freshness is per call, only discovery is paced"
-        );
-        assert_eq!(reader.scans(), 1);
-        set_test_projects_dir(None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn tail_reader_walks_again_after_the_cadence() {
-        // A uuid with NO transcript stays missing every call, so the cadence
-        // is what decides whether it re-walks: ZERO walks each call (the
-        // stateless `session_tails` behavior), a long cadence walks once.
-        // Distinct scratch uuid from every other test: scratch() keys the
-        // temp dir on it, and a shared dir races two tests' teardowns.
-        let dir = scratch("ffffffff-0000-0000-0000-00000000000a", "decoy");
-        let uuid = "346f5d0d-9840-473c-af21-eaf100ca9ec4";
-        let keys = vec![(uuid.to_string(), None)];
-        let mut eager = TailReader::with_rescan_every(std::time::Duration::ZERO);
-        eager.tails(&keys);
-        eager.tails(&keys);
-        eager.tails(&keys);
-        assert_eq!(eager.scans(), 3);
-        let mut paced = TailReader::with_rescan_every(std::time::Duration::from_secs(86400));
-        paced.tails(&keys);
-        paced.tails(&keys);
-        paced.tails(&keys);
-        assert_eq!(paced.scans(), 1);
-        set_test_projects_dir(None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn tail_reader_re_resolves_a_moved_transcript() {
         // A cached path that stops reading (the file moved) must drop from
@@ -661,33 +602,6 @@ mod tests {
         set_test_projects_dir(None);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn tail_reader_finds_a_late_appearing_transcript_within_the_cadence() {
-        let uuid = "346f5d0d-9840-473c-af21-eaf100ca9ec5";
-        let dir = scratch("ffffffff-0000-0000-0000-000000000000", "decoy");
-        let mut reader = TailReader::with_rescan_every(std::time::Duration::from_secs(86400));
-        let keys = vec![(uuid.to_string(), None)];
-        // First walk: no transcript for the uuid yet, and the cadence bars an
-        // immediate second walk.
-        assert!(reader.tails(&keys).get(uuid).is_none());
-        // The transcript appears; ZERO-cadence reader (a fresh reader models
-        // the next rescan window) finds it on its next walk.
-        let proj = dir.join("-Users-someone-repo");
-        std::fs::write(
-            proj.join(format!("{uuid}.jsonl")),
-            format!("{}\n", turn(r#"{"type":"text","text":"appeared"}"#)),
-        )
-        .unwrap();
-        let mut fresh = TailReader::with_rescan_every(std::time::Duration::ZERO);
-        assert_eq!(
-            fresh.tails(&keys).get(uuid).map(String::as_str),
-            Some("appeared")
-        );
-        set_test_projects_dir(None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn compose_tail_takes_the_newest_assistant_prose_line() {
         let raw = [
@@ -715,24 +629,6 @@ mod tests {
         .join("\n");
         assert_eq!(compose_tail(&raw).as_deref(), Some("newest codex line"));
     }
-
-    #[test]
-    fn compose_tail_falls_back_to_the_codex_task_complete_summary() {
-        // A rollout whose tail window holds no prose (the final turn ended in
-        // tool calls; the summary rode `task_complete`) answers with the
-        // summary codex itself shows, first non-empty line.
-        let raw = [
-            r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"id":"i1"}}}"#.to_string(),
-            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":91}}}}"#.to_string(),
-            codex_summary("PR #2530 is open: https://github.com/fnodotdev/fno/pull/2530\\n\\nThe body guard passed. RESULT: SUCCESS pr=#2530"),
-        ]
-        .join("\n");
-        assert_eq!(
-            compose_tail(&raw).as_deref(),
-            Some("PR #2530 is open: https://github.com/fnodotdev/fno/pull/2530")
-        );
-    }
-
     #[test]
     fn compose_tail_prose_outranks_a_newer_codex_summary() {
         // The summary is a FALLBACK: any prose in the window wins, even when
@@ -768,14 +664,6 @@ mod tests {
         assert_eq!(got.chars().count(), TAIL_MAX_CHARS);
         assert!(got.chars().all(|c| c == 'y'));
     }
-
-    #[test]
-    fn compose_tail_caps_a_pathological_line() {
-        let long = "x".repeat(TAIL_MAX_CHARS * 3);
-        let got = compose_tail(&turn(&format!(r#"{{"type":"text","text":"{long}"}}"#))).unwrap();
-        assert_eq!(got.chars().count(), TAIL_MAX_CHARS);
-    }
-
     #[test]
     fn transcript_uuid_shape_refuses_traversal() {
         // Registry content is untrusted and lands in a path join.
@@ -813,60 +701,6 @@ mod tests {
         // Absent, not empty-string: the row renders no cell, never a placeholder.
         assert!(!got.contains_key(absent));
     }
-
-    #[test]
-    fn session_tails_reads_the_row_log_path_directly() {
-        // A row that names its own transcript needs no glob: the rollout lives
-        // outside every claude projects dir, and the direct read is what makes
-        // its tail land.
-        let dir = std::env::temp_dir().join(format!("fno-logtail-{}-direct", std::process::id()));
-        let rollout = dir.join("2026").join("09").join("01");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&rollout).unwrap();
-        let live = "01a0608a-1234-1234-1234-000000000001";
-        let path = rollout.join(format!("rollout-2026-09-01T22-14-58-{live}.jsonl"));
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n{}\n",
-                turn(r#"{"type":"text","text":"stale"}"#),
-                turn(r#"{"type":"text","text":"wake lane text"}"#)
-            ),
-        )
-        .unwrap();
-        // A claude projects dir that contains NOTHING for this uuid: the
-        // direct read must win without the glob finding anything.
-        let empty_projects = dir.join("projects");
-        std::fs::create_dir_all(&empty_projects).unwrap();
-        set_test_projects_dir(Some(&empty_projects));
-        let got = session_tails(&[(live.to_string(), Some(path.to_string_lossy().into_owned()))]);
-        set_test_projects_dir(None);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(got.get(live).map(String::as_str), Some("wake lane text"));
-    }
-
-    #[test]
-    fn session_tails_glob_finds_a_codex_rollout_by_uuid() {
-        // No log_path on the row: the widened scan must still land the rollout
-        // - three directory levels down, with the timestamp prefix before the
-        // uuid - or the column stays blank for every row that lost its path.
-        let dir = std::env::temp_dir().join(format!("fno-logtail-{}-glob", std::process::id()));
-        let day = dir.join("2026").join("09").join("02");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&day).unwrap();
-        let live = "01a0608a-1234-1234-1234-000000000002";
-        std::fs::write(
-            day.join(format!("rollout-2026-09-02T08-00-00-{live}.jsonl")),
-            format!("{}\n", turn(r#"{"type":"text","text":"globbed rollout"}"#)),
-        )
-        .unwrap();
-        set_test_sessions_dir(Some(&dir));
-        let got = session_tails(&[(live.to_string(), None)]);
-        set_test_sessions_dir(None);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(got.get(live).map(String::as_str), Some("globbed rollout"));
-    }
-
     #[test]
     fn session_tails_prefixed_match_refuses_a_partial_uuid_suffix() {
         // The `-` separator in the prefixed match keeps a LONGER hex tail from

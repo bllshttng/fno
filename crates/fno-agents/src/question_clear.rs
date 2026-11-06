@@ -1630,13 +1630,32 @@ fn find_decision(path: &Path, decision_id: &str) -> Option<(Value, String)> {
         })
 }
 
-fn append_decision_mirror(path: &Path, line: &str, decision_id: &str) -> Result<(), String> {
+pub(crate) fn append_decision_mirror(
+    path: &Path,
+    line: &str,
+    decision_id: &str,
+) -> Result<(), String> {
     // A recovery-annotated read re-mirrors only its raw stored envelope: the
     // mirror row must stay byte-identical to the first append, so identity
     // hashes the stored bytes, never the annotated render.
     let line = crate::event_store::raw_stored_line(path, line)?;
     let event_id = stored_event_id(path, &line)?.unwrap_or_else(|| decision_id.to_string());
     crate::event_store::append_envelope(path, &line, Some(&event_id)).map(|_| ())
+}
+
+/// Record one built decision event everywhere the door writes it: the graph
+/// store, the project journal, and the decisions index. The caller owns the
+/// error text. Returns the decision id.
+pub(crate) fn record_decision_row(req: &ClearRequest, event: Value) -> Result<String, String> {
+    let line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+    let id = event["data"]["decision_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    api::decision_record(&Store::new(&req.graph), event).map_err(|e| e.0)?;
+    append_decision_mirror(&req.journal_path, &line, &id)?;
+    append_decision_mirror(&req.decisions_path, &line, &id)?;
+    Ok(id)
 }
 
 fn stored_event_id(path: &Path, line: &str) -> Result<Option<String>, String> {
@@ -1665,7 +1684,7 @@ fn stored_event_id(path: &Path, line: &str) -> Result<Option<String>, String> {
     }
 }
 
-fn make_decision(
+pub(crate) fn make_decision(
     req: &ClearRequest,
     qid: &str,
     question_event: &Value,

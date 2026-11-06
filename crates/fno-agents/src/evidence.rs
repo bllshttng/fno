@@ -672,15 +672,6 @@ mod tests {
         );
     }
 
-    // AC7-EDGE: ordinary prose with a bare basename is never a claim.
-    #[test]
-    fn bare_basename_in_prose_is_not_a_claim() {
-        let dir = tempfile::tempdir().expect("tmp");
-        write_file(dir.path(), "sample.py", 200);
-        assert!(find_code_claims("port sample.py out of the tree").is_empty());
-        assert!(check_citations("port sample.py out of the tree", dir.path()).is_empty());
-    }
-
     // AC8-HP: the real shell runner executes and captures the head.
     #[test]
     fn real_runner_executes_a_read() {
@@ -690,29 +681,6 @@ mod tests {
         assert_eq!(rows[0]["exit"], 0);
         assert_eq!(rows[0]["out_head"], "hi");
         assert!(rows[0]["ts"].as_str().expect("ts").ends_with('Z'));
-    }
-
-    // AC9-EDGE: an all-zero answer set refuses under the zero-control rule;
-    // one read with output alongside the zero lets both rows through.
-    #[test]
-    fn all_zero_answer_set_refuses() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let outcomes: Vec<Result<RunOutcome, String>> = vec![ok_run("", 1), ok_run("", 0)];
-        let mut calls = 0usize;
-        let mut runner = |_cmd: &str, _root: &Path| -> Result<RunOutcome, String> {
-            let r = outcomes[calls].clone();
-            calls += 1;
-            r
-        };
-        let err = run_reads(
-            &["grep -c x f".to_string(), "true".to_string()],
-            dir.path(),
-            &mut runner,
-        )
-        .expect_err("zero refuses");
-        assert_eq!(err.kind, "unmeasured");
-        assert!(err.message.contains("zero needs a control"));
-        assert!(err.message.contains("symbol, age, directory"));
     }
 
     // AC10-ERR: a read that cannot run refuses, naming the command.

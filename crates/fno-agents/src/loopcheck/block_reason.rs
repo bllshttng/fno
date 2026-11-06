@@ -151,10 +151,10 @@ pub(super) fn build_block_reason(
         // answered a state this build does not know.
         let guidance = match pr.state {
             PrState::Closed => {
-                "PR is closed. Reopen with `gh pr reopen`, or create a new PR: `gh pr create`"
+                "PR is closed. Reopen with `gh pr reopen`, or create a new PR: `gh pr create`. If this deliverable owes no PR, restart with `fno do target init --advisory`, or set `gates: advisory` in the plan frontmatter."
             }
             PrState::None => {
-                "No PR for HEAD yet. An unplanned node plans first (`/fno:blueprint <node>`) and commits; then create one: `/fno:ship pr create`, or `gh pr create`"
+                "No PR for HEAD yet. An unplanned node plans first (`/fno:blueprint <node>`) and commits; then create one: `/fno:ship pr create`, or `gh pr create`. If this deliverable owes no PR, restart with `fno do target init --advisory`, or set `gates: advisory` in the plan frontmatter."
             }
             _ => "PR state is not open or merged - verify on GitHub and update locally",
         };

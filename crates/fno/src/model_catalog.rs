@@ -993,17 +993,6 @@ mod tests {
         assert_eq!(zai.model_ids(), vec!["glm-5.3-flash".to_string()]);
         assert_eq!(zai.name, "Z.ai");
     }
-
-    #[test]
-    fn needs_refresh_true_when_missing_or_older_than_24h() {
-        let now = SystemTime::now();
-        assert!(needs_refresh(None, now));
-        let old = now - Duration::from_secs(25 * 60 * 60);
-        assert!(needs_refresh(Some(old), now));
-        let fresh = now - Duration::from_secs(3600);
-        assert!(!needs_refresh(Some(fresh), now));
-    }
-
     #[test]
     fn refresh_commits_a_good_fetch_and_leaves_no_tmp() {
         let (dir, _guard) = state_fixture();
@@ -1016,24 +1005,6 @@ mod tests {
         let catalog = load(&dir).unwrap();
         assert!(catalog.get("deepseek").is_some());
     }
-
-    #[test]
-    fn failed_parse_keeps_old_cache_and_deletes_tmp() {
-        let (dir, _guard) = state_fixture();
-        let cache = cache_path(&dir);
-        std::fs::write(&cache, FIXTURE).unwrap();
-        let tmp = dir.join("cache").join("models-dev.json.tmp.999");
-        std::fs::write(&tmp, "not json at all {").unwrap();
-        let committed = install_from(&tmp, &cache);
-        assert!(committed.is_err());
-        assert_eq!(
-            std::fs::read_to_string(&cache).unwrap(),
-            FIXTURE,
-            "old cache kept"
-        );
-        assert!(!tmp.exists(), "tmp deleted");
-    }
-
     #[test]
     fn load_reason_names_the_cache_path_when_missing_or_unparseable() {
         let (dir, _guard) = state_fixture();

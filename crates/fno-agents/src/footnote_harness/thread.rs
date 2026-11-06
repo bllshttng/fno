@@ -511,9 +511,7 @@ pub fn dispatch_thread(
                 .unwrap_or_else(|_| Stdio::null()),
         )
         .stderr(Stdio::from(log_file));
-    for var in crate::claims::AMBIENT_IDENTITY_NAMES {
-        cmd.env_remove(var);
-    }
+    crate::claims::scrub_identity_env(&mut cmd);
     // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
     // the host, and fnh under it, off the $HOME/.fno fallback its own
     // resolver would take.

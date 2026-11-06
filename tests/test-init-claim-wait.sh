@@ -188,6 +188,15 @@ case "$subcmd1 $subcmd2" in
     printf '{"status":"ready","id":"%s"}\n' "$node_id"
     exit 0
     ;;
+  "claim status")
+    # Canned disk-claim JSON for the self-preplaced-holder check. No file or
+    # an absent file means empty output: the init self-check finds no holder
+    # and keeps the legacy true-duplicate behavior (test 6).
+    if [ -n "$CLAIM_STATUS_JSON_FILE" ] && [ -f "$CLAIM_STATUS_JSON_FILE" ]; then
+      cat "$CLAIM_STATUS_JSON_FILE"
+    fi
+    exit 0
+    ;;
   *)
     exit 0
     ;;
@@ -342,6 +351,137 @@ if grep -q "claim_held_by_other" "$SBX6/space/target-state.md" 2>/dev/null; then
   pass=$((pass+1))
 else
   echo "FAIL: T6: claim_held_by_other not found in target-state.md"
+  fail=$((fail+1))
+fi
+
+# ---------------------------------------------------------------------------
+# Test 7: acquire rc=1 + holder = this worker's own registry agent name
+# (the pre-placed spawn-handover row) -> NO cancel sentinel
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 7: own registry agent name as holder -> no cancel sentinel ---"
+INIT_NODE7="ab-00000007"
+INIT_SID7="11223344-0000-0000-0000-000000000007"
+
+SBX7="$(make_init_sandbox t7)"
+touch "$SBX7/call-log" "$SBX7/space/events.jsonl"
+
+ALWAYS_FAIL7="$SBX7/always-fail"
+echo "1" > "$ALWAYS_FAIL7"
+STATUS7="$SBX7/claim-status.json"
+printf '{"holder":"target-x-ce51-worker-o","state":"held"}' > "$STATUS7"
+
+OUT7="$(
+  run_init "$SBX7" "$INIT_NODE7" "$INIT_SID7" \
+    ACQUIRE_RC_FILE="$ALWAYS_FAIL7" \
+    CLAIM_STATUS_JSON_FILE="$STATUS7" \
+    FNO_WORKER_NAME="target-x-ce51-worker-o"
+)"
+
+check_file_absent "T7: .target-cancelled NOT created (holder is our own row)" "$SBX7/space/.target-cancelled"
+if grep -q "claim_held_by_self_preplaced" "$SBX7/space/target-state.md" 2>/dev/null; then
+  echo "PASS: T7: blocked_reason=claim_held_by_self_preplaced"
+  pass=$((pass+1))
+else
+  echo "FAIL: T7: claim_held_by_self_preplaced not found in target-state.md"
+  fail=$((fail+1))
+fi
+check_contains "T7: init says the claim names this session" "cancel sentinel not set" "$OUT7"
+
+# ---------------------------------------------------------------------------
+# Test 8: acquire rc=1 + holder = spawn-handover:<our name> -> NO sentinel
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 8: spawn-handover prefixed holder -> no cancel sentinel ---"
+INIT_NODE8="ab-00000008"
+INIT_SID8="55667788-0000-0000-0000-000000000008"
+
+SBX8="$(make_init_sandbox t8)"
+touch "$SBX8/call-log" "$SBX8/space/events.jsonl"
+
+ALWAYS_FAIL8="$SBX8/always-fail"
+echo "1" > "$ALWAYS_FAIL8"
+STATUS8="$SBX8/claim-status.json"
+printf '{"holder":"spawn-handover:target-x-ce51-worker-p","state":"suspect","basis":"pid-absent"}' > "$STATUS8"
+
+OUT8="$(
+  run_init "$SBX8" "$INIT_NODE8" "$INIT_SID8" \
+    ACQUIRE_RC_FILE="$ALWAYS_FAIL8" \
+    CLAIM_STATUS_JSON_FILE="$STATUS8" \
+    FNO_WORKER_NAME="target-x-ce51-worker-p"
+)"
+
+check_file_absent "T8: .target-cancelled NOT created (spawn-handover row)" "$SBX8/space/.target-cancelled"
+if grep -q "claim_held_by_self_preplaced" "$SBX8/space/target-state.md" 2>/dev/null; then
+  echo "PASS: T8: blocked_reason=claim_held_by_self_preplaced"
+  pass=$((pass+1))
+else
+  echo "FAIL: T8: claim_held_by_self_preplaced not found in target-state.md"
+  fail=$((fail+1))
+fi
+
+# ---------------------------------------------------------------------------
+# Test 9: acquire rc=1 + foreign holder but session_id names this session
+# (case-folded, no ses_ prefix) -> NO sentinel
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 9: recorded session_id names this session -> no sentinel ---"
+INIT_NODE9="ab-00000009"
+INIT_SID9="9aabbbcc-0000-0000-0000-000000000009"
+
+SBX9="$(make_init_sandbox t9)"
+touch "$SBX9/call-log" "$SBX9/space/events.jsonl"
+
+ALWAYS_FAIL9="$SBX9/always-fail"
+echo "1" > "$ALWAYS_FAIL9"
+STATUS9="$SBX9/claim-status.json"
+printf '{"holder":"target-session:some-other-session","session_id":"9AABBBCC-0000-0000-0000-000000000009"}' > "$STATUS9"
+
+OUT9="$(
+  run_init "$SBX9" "$INIT_NODE9" "$INIT_SID9" \
+    ACQUIRE_RC_FILE="$ALWAYS_FAIL9" \
+    CLAIM_STATUS_JSON_FILE="$STATUS9"
+)"
+
+check_file_absent "T9: .target-cancelled NOT created (session_id matches)" "$SBX9/space/.target-cancelled"
+if grep -q "claim_held_by_self_preplaced" "$SBX9/space/target-state.md" 2>/dev/null; then
+  echo "PASS: T9: blocked_reason=claim_held_by_self_preplaced"
+  pass=$((pass+1))
+else
+  echo "FAIL: T9: claim_held_by_self_preplaced not found in target-state.md"
+  fail=$((fail+1))
+fi
+
+# ---------------------------------------------------------------------------
+# Test 10: acquire rc=1 + genuinely foreign holder and session -> sentinel
+# stays (the self-check must not swallow real duplicates)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 10: foreign holder and session -> sentinel still set ---"
+INIT_NODE10="ab-00000010"
+INIT_SID10="ddeeff00-0000-0000-0000-000000000010"
+
+SBX10="$(make_init_sandbox t10)"
+touch "$SBX10/call-log" "$SBX10/space/events.jsonl"
+
+ALWAYS_FAIL10="$SBX10/always-fail"
+echo "1" > "$ALWAYS_FAIL10"
+STATUS10="$SBX10/claim-status.json"
+printf '{"holder":"target-session:a-foreign-session","session_id":"12345678-0000-0000-0000-00000000aaaa"}' > "$STATUS10"
+
+OUT10="$(
+  run_init "$SBX10" "$INIT_NODE10" "$INIT_SID10" \
+    ACQUIRE_RC_FILE="$ALWAYS_FAIL10" \
+    CLAIM_STATUS_JSON_FILE="$STATUS10" \
+    FNO_WORKER_NAME="target-x-ce51-worker-q"
+)"
+
+check_file_exists "T10: .target-cancelled created (foreign hold)" "$SBX10/space/.target-cancelled"
+if grep -q "target_claim_blocked_reason: claim_held_by_other" "$SBX10/space/target-state.md" 2>/dev/null; then
+  echo "PASS: T10: blocked_reason=claim_held_by_other"
+  pass=$((pass+1))
+else
+  echo "FAIL: T10: claim_held_by_other not found in target-state.md"
   fail=$((fail+1))
 fi
 

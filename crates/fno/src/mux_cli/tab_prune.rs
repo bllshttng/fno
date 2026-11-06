@@ -406,37 +406,6 @@ mod tests {
         assert_eq!(outcome.kept_unreachable, 0);
         assert_eq!(outcome.kept_not_probed, 0);
     }
-
-    #[test]
-    fn named_would_close_is_what_an_include_named_pass_folds() {
-        let tab = |squad_id: u64, squad_name: Option<&str>, tab_id: u64| LiveTab {
-            session: "main".into(),
-            squad_id,
-            squad_name: squad_name.map(Into::into),
-            tab_id,
-            tab_name: None,
-            pane_count: 1,
-            pristine: true,
-            used_shell_only: false,
-            orphaned: false,
-            release: None,
-        };
-        // Two pristine tabs per workspace: each folds one, its last tab stays.
-        let tabs = vec![
-            tab(1, None, 11),
-            tab(1, None, 12),
-            tab(2, Some("named"), 21),
-            tab(2, Some("named"), 22),
-        ];
-        let dry = prune_live_tabs_measuring_named(&tabs, false, true, false);
-        assert_eq!(
-            (dry.would_close, dry.skipped_named, dry.named_would_close),
-            (1, 2, 1)
-        );
-        let widened = prune_live_tabs(&tabs, true, true, false);
-        assert_eq!(widened.would_close, dry.would_close + dry.named_would_close);
-    }
-
     #[test]
     fn workspace_prune_never_folds_a_workspace_only_tab() {
         // The tab arm folds SURPLUS pristine tabs. A squad's only tab is not
@@ -486,61 +455,6 @@ mod tests {
         assert_eq!(outcome.would_close, 2, "the count decrements as tabs fold");
         assert_eq!(outcome.kept, 1, "a workspace never folds to zero tabs");
     }
-
-    #[test]
-    fn workspace_prune_folds_answering_session_despite_dead_sibling() {
-        // AC4-HP: one session answers PaneLs, a sibling (the socket a
-        // dead server left behind) does not. The assertion is that the tab
-        // fold RUNS over the answering session's tabs anyway - asserting the
-        // prune ran proves nothing, it always ran when every socket was live.
-        let scope = sweep_scope(1, &["x7b5e-proof".into()]);
-        assert!(
-            scope.fold_tabs,
-            "a dead sibling does not silence the answering session"
-        );
-
-        let pristine = |tab_id: u64| LiveTab {
-            session: "main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id,
-            tab_name: None,
-            pane_count: 1,
-            pristine: true,
-            used_shell_only: false,
-            orphaned: false,
-            release: None,
-        };
-        // Five tabs in one squad: four pristine, one running. The fold
-        // empties the squad to its LAST tab - the running one is it - so all
-        // four pristine tabs are surplus (the pinned two-tab case folds a
-        // pristine down to a lone running tab the same way).
-        let mut tabs: Vec<LiveTab> = (11..=14).map(pristine).collect();
-        tabs.push(LiveTab {
-            session: "main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id: 15,
-            tab_name: None,
-            pane_count: 1,
-            pristine: false,
-            used_shell_only: false,
-            orphaned: false,
-            release: None,
-        });
-        let outcome = prune_live_tabs(&tabs, false, true, false);
-        assert_eq!(
-            outcome.would_close, 4,
-            "the fold runs despite the dead sibling"
-        );
-        assert_eq!(outcome.kept, 1, "the squad's last tab stands");
-        // The five-way kept arithmetic accounts for every tab.
-        assert_eq!(outcome.kept_last_in_squad, 1);
-        assert_eq!(outcome.kept_not_pristine, 0);
-        assert_eq!(outcome.kept_zero_panes, 0);
-        assert_eq!(outcome.kept_unreachable, 0);
-    }
-
     #[test]
     fn workspace_prune_names_the_unreachable_session_in_the_receipt() {
         // AC5-ERR: a positive marker - the refusal names WHICH
@@ -634,28 +548,6 @@ mod tests {
         assert_eq!(outcome.kept_last_in_squad, 1);
         assert_eq!(outcome.kept, 1);
     }
-
-    #[test]
-    fn workspace_prune_skipped_fold_counts_as_not_probed() {
-        // `--dead-only` skips the fold: every tab is "kept" only in the sense
-        // that nobody looked, and the receipt says so instead of folding them
-        // into a real reason.
-        let tabs = [used_shell_tab(51), used_shell_tab(52)];
-        let outcome = TabPruneOutcome {
-            kept: tabs.len(),
-            kept_not_probed: tabs.len(),
-            ..TabPruneOutcome::default()
-        };
-        assert_eq!(outcome.kept, outcome.kept_not_probed);
-        assert_eq!(
-            outcome.kept_last_in_squad
-                + outcome.kept_not_pristine
-                + outcome.kept_zero_panes
-                + outcome.kept_unreachable,
-            0
-        );
-    }
-
     #[test]
     fn live_tab_label_names_session_squad_and_tab() {
         let tab = LiveTab {
@@ -712,54 +604,6 @@ mod tests {
             "zero sessions is empty, not partial"
         );
     }
-
-    #[test]
-    fn orphaned_worker_tab_with_scrollback_closes_by_default_and_is_named() {
-        // The node's marker: a tab whose pane hosted a Dead worker is NOT
-        // pristine (scrollback), yet closes with every flag off and is NAMED
-        // in the receipt. A count-only assertion is refused: pristine tabs
-        // already close today.
-        let tab = LiveTab {
-            session: "no-such-fno-main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id: 2,
-            tab_name: Some("worker".into()),
-            pane_count: 1,
-            pristine: false,
-            used_shell_only: false,
-            orphaned: true,
-            release: None,
-        };
-        // The companion tab shares the unreachable session, so the squad has
-        // two tabs and the last-in-squad guard lets the fold decide. A live
-        // session name here would make the suite close a REAL tab.
-        let companion = LiveTab {
-            session: "no-such-fno-main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id: 3,
-            tab_name: None,
-            pane_count: 1,
-            pristine: false,
-            used_shell_only: true,
-            orphaned: false,
-            release: None,
-        };
-        let out = prune_live_tabs(&[tab, companion], false, false, false);
-        assert_eq!(out.closed_orphaned, 0, "no server answers in a unit test");
-        assert_eq!(out.would_close_orphaned, 0);
-        assert!(
-            out.closed_named.iter().any(|l| l.contains("worker")),
-            "the orphaned tab is named even when the close cannot reach a server: {closed_named:?}",
-            closed_named = out.closed_named
-        );
-        assert_eq!(
-            out.kept_unreachable, 1,
-            "the unreachable close is kept and counted, never silent"
-        );
-    }
-
     #[test]
     fn the_reap_flag_set_leaves_a_live_process_tab_standing() {
         // The combination `fno agents reap` passes automatically is

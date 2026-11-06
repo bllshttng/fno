@@ -207,6 +207,17 @@ pub fn on_board(data: &Value, ts: &str, now_secs: i64) -> bool {
     }
 }
 
+/// Whether a recorded rung sits at the user rung right now: no rung, or a
+/// user-level one. The ask-time notification leg matches [`on_board`]'s
+/// level arm, so the toast fires exactly when the row is already the
+/// user's to answer; a lead-rung row wakes its holder instead.
+pub fn rung_is_user(rung: Option<&Value>) -> bool {
+    matches!(
+        rung.and_then(|r| r.get("level")).and_then(Value::as_str),
+        None | Some("user")
+    )
+}
+
 /// The rung a holder climbs to: the node lead's higher-up when one lives
 /// and has not held the row yet, else the user (`None`).
 fn next_rung(cwd: &Path, node: Option<&str>, data: &Value) -> Option<Value> {
@@ -369,5 +380,17 @@ mod tests {
         assert_eq!(top["data"]["rung"], json!({"level": "user"}));
         assert_eq!(top["data"]["via"].as_array().map(Vec::len), Some(2));
         assert!(on_board(&top["data"], "t2", 0));
+    }
+
+    #[test]
+    fn the_notification_leg_matches_the_board_visibility_level() {
+        assert!(rung_is_user(None), "no rung reads user-rung");
+        assert!(rung_is_user(Some(&json!({"level": "user"}))));
+        assert!(!rung_is_user(Some(&json!({"level": "lead"}))));
+        assert!(!rung_is_user(Some(&json!({"level": "higher"}))));
+        assert!(
+            rung_is_user(Some(&json!({}))),
+            "a rung with no level reads user-rung, matching on_board"
+        );
     }
 }

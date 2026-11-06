@@ -51,7 +51,7 @@ impl Core {
             let text = format!(
                 "workspace {id}: two live workspaces share one stored identity; member write skipped"
             );
-            eprintln!("fno mux: {text}");
+            crate::mux_log!(error; "fno mux: {text}");
             self.notice_all(text);
         }
         true
@@ -146,7 +146,7 @@ impl Core {
                 let current = batch.conflicts.is_empty();
                 self.store_generations.extend(batch.generations);
                 if !batch.conflicts.is_empty() {
-                    eprintln!(
+                    crate::mux_log!(warn;
                         "fno mux: stale partial-write baseline retained for {}",
                         batch.conflicts.join(", ")
                     );
@@ -179,7 +179,7 @@ impl Core {
         if batch.conflicts.is_empty() {
             true
         } else {
-            eprintln!(
+            crate::mux_log!(warn;
                 "fno mux: stale {context} snapshots skipped for {}",
                 batch.conflicts.join(", ")
             );

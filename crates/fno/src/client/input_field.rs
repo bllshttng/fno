@@ -20,6 +20,7 @@ pub(crate) enum FieldEvent {
     /// Enter, with the trimmed text. The field stays open.
     Submit(String),
     Cancel,
+    Tab,
 }
 
 impl InputField {
@@ -93,6 +94,7 @@ impl InputField {
                     events.push(FieldEvent::Submit(self.text.trim().to_string()))
                 }
                 LKey::Esc => events.push(FieldEvent::Cancel),
+                LKey::Tab | LKey::BackTab => events.push(FieldEvent::Tab),
                 _ => {}
             }
         }

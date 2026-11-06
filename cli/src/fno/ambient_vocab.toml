@@ -43,6 +43,11 @@ identity_markers = [
 # its place in hermetic.py's original table; the reasons live in the port's
 # git history and docs/architecture/test-hermeticity.md.
 ambient_names = [
+    # Test seams: pid-path hooks the harness test fixtures set on their own
+    # children. A developer shell never carries them, and a leaked value
+    # would retarget a fixture's pid file, so they scrub with the ambient set.
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
     "CLAUDE_PLUGIN_ROOT",
     "CODEX_PLUGIN_ROOT",
     "CLAUDE_CONFIG_DIR",
@@ -75,13 +80,14 @@ ambient_names = [
     "COLORFGBG",
     "EVENTS_FILE",
     "GLOBAL_EVENTS_PATH",
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
     "XDG_DATA_HOME",
     "XDG_BIN_HOME",
     "CARGO_BUILD_BUILD_DIR",
     "CARGO_MANIFEST_DIR",
     "STATE_FILE",
     "POSTMORTEMS_DIR",
-    "POSTMORTEM_CORRECTIONS_LOG",
     "WORKTREE_STATUS_REGISTRY",
     "TASK_LOCK_TTL_HOURS",
     "TASK_DO_TTL_HOURS",
@@ -108,6 +114,12 @@ ambient_names = [
     "HELP_ROUTING_BLESS",
     "BUDDY_HOME",
     "BUDDY_KEY",
+    # Self-re-exec test sentinels (main.rs, mail_remote.rs): set by the repo's
+    # own tests on a raw Command, never present in a developer's shell. The
+    # ambient-surface test names the scrub as the classification; the tests
+    # that use them set them explicitly, so the scrub cannot starve them.
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
 ]
 
 # Read by source but NOT ambient state: the process needs these to run.
@@ -124,6 +136,8 @@ environment = [
     "__CFBundleIdentifier",
     "PYTHONPATH",
     "PYTEST_CURRENT_TEST",
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
     "CI",
     "INVOCATION_ID",
     "CRON_JOB",

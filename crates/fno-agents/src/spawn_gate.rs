@@ -34,7 +34,7 @@ use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_rece
 use crate::spawn_gate_slots::{annotate_burst, burst_slot_reading, slot_tick_line};
 use crate::state::RegistryEntry;
 use crate::AgentStatus;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Exit codes, allocated by the shared table in
 /// `cli/src/fno/agents/spawn_gate.py` and kept unique across both trees by
@@ -1322,6 +1322,8 @@ pub struct GateInput {
     pub session_phase: Option<String>,
 }
 
+pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
+
 const REVIEW_SESSION_REMEDY: &str = "run the review in the session that did the work: \
      /fno:review <level> ($fno:review <level> on codex), or fno do target request-self-review";
 
@@ -2321,6 +2323,8 @@ fn decide_gate(
             return Err(Refusal::with_receipt(EXIT_QUEUE_TIMEOUT, receipt));
         }
         std::thread::sleep(pause);
+        // A queued pass must not reuse the admit pass's roster reading.
+        crate::backlog::worked::forget_roster_reading();
     }
 }
 

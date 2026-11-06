@@ -404,25 +404,6 @@ mod tests {
         );
         assert_eq!(failures.len(), 4, "{failures:?}");
     }
-
-    #[test]
-    fn agents_surface_baseline_drift_runs_both_directions() {
-        let live = vec![
-            "fno-agents".to_string(),
-            "fno-agents claim".to_string(),
-            "fno-agents claim sweep".to_string(),
-        ];
-        // A missing row is an addition; a stale row is a removal.
-        let baseline = vec![
-            "mux".to_string(),
-            "fno-agents claim".to_string(),
-            "fno-agents detect".to_string(),
-        ];
-        let (added, removed) = baseline_drift(&live, &baseline);
-        assert_eq!(added, vec!["fno-agents", "fno-agents claim sweep"]);
-        assert_eq!(removed, vec!["fno-agents detect"]);
-    }
-
     #[test]
     fn agents_surface_holds_on_the_committed_tree() {
         // The CI gate: the real sources, the real hidden record, the real

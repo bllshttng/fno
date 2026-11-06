@@ -25,7 +25,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_CODE_SESSION_ID` | rs | unclear: crates/fno-agents/src/claims.rs |
 | `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` | rs | Consecutive Stop-hook block cap the harness enforces before it force-ends the turn (Claude Code default 9). The run records whether the env override or the default bound. |
 | `CLAUDE_CONFIG_DIR` | rs | Overrides the Claude config directory for managed provider lookups. |
-| `CLAUDE_DIR_OVERRIDE` | rs | Redirects the Claude config root the corrections-verify reads the rule repo's git log from; mirrors the bash-side override in autocorrect-pack.sh. |
+| `CLAUDE_DIR_OVERRIDE` | rs | Redirects the whole Claude config root. Read by crates/fno-agents/src/claude_roster.rs `config_dir` and crates/fno-agents/src/harness_reader.rs. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
 | `CLAUDE_JOB_DIR` | rs | Set by Claude Code in a `claude --bg` job. Its `state.json` names the job, and the SessionStart launch claim reads that name to match the launcher's record. The write gate also falls back to its tmp dir in a refusal when the payload carries no session id; the payload's session wins when present. |
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
@@ -171,6 +171,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MUX_OPENPTY_HANG_MS` | rs | unclear: crates/fno/src/pty.rs:1355 |
 | `FNO_MUX_OPENPTY_TIMEOUT_MS` | rs | unclear: crates/fno/src/pty.rs:1341 |
 | `FNO_MUX_PANE_GROUP_MAX` | rs | unclear: crates/fno/src/process_admission.rs:378 |
+| `FNO_MUX_PANIC_PROBE` | rs | Test-only subprocess probe output path for the mux panic-log regression test. |
 | `FNO_MUX_SCROLLBACK_LINES` | rs | unclear: crates/fno/src/vt.rs:68 |
 | `FNO_MUX_SHELL_INTEGRATION` | rs | unclear: crates/fno/src/client.rs:577 |
 | `FNO_MUX_STATS_JSON` | rs | The mux server's stats snapshot the front door hands the native scoreboard door (`server_stats::snapshot_for_scoreboard` sets it; `scoreboard/door.rs` reads it): the human_touch emission-failure counter and its measurement window as one JSON object. Unset, the door reports the counter unavailable, never zero. |
@@ -274,6 +275,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_CLAUDE_CONFIG_LOG` | rs | Test seam: records the config root passed to `claude agents --json --all` while testing a pinned account root. |
 | `FNO_TEST_FOOTPRINT_PAYLOAD` | rs | Test seam: when set, the spawn gate's footprint probe returns this payload verbatim, so gate tests pin the CPU axis instead of reading the live machine. |
 | `FNO_TEST_FOOTPRINT_PAYLOAD_SEQ` | rs | Test seam: newline-separated footprint probe results consumed once per read; `ERR <message>` simulates probe failure, and the last line sticks so gate tests can verify retries and sample counts. |
+| `FNO_TEST_BOOT_EPOCH_MS` | rs | Test seam: pins the host boot epoch in ms, so fixtures that fabricate pre-boot transcript history keep it quiet under the awake-idle clamp instead of reading fresh from a young boot. |
 | `FNO_TEST_FULL` | rs | The whole-suite lane mark: the guard reads it typed on the command, and the test-run door stamps it into a whole run's cargo env, so its slot asks queue instead of try-locking. |
 | `FNO_TEST_HERMETIC` | py+rs | unclear: cli/src/fno/hermetic.py:557 |
 | `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
@@ -331,7 +333,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `PI_CODING_AGENT_DIR` | rs | pi's agent dir; fno installs the extension under it and resolves the session store from it. |
 | `PI_CODING_AGENT_SESSION_DIR` | rs | pi's flat session store override; fno matches a session by the file header's cwd. |
 | `POSTMORTEMS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:2981 |
-| `POSTMORTEM_CORRECTIONS_LOG` | rs | Overrides the corrections.log path; the finalize writer and the corrections-verify reader resolve it together. crates/fno-agents/src/finalize.rs:3098 |
 | `POST_MERGE_NONINTERACTIVE` | rs | Scrubbed from tests: cli/src/fno/hermetic.py:167. Read in crates/fno-agents/src/post_merge/ritual.rs:1483: set to 1, the post-merge ritual runs noninteractive. |
 | `PR_WATCH_FIRE_CMD` | rs | Test seam: a program the `pr-watch tick` runs in place of the `fno agents spawn` review fire. |
 | `PWD` | rs | unclear: crates/fno-agents/src/accounts/records.rs:799 |
@@ -348,6 +349,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SSH_CONNECTION` | rs | Set by sshd to `client_ip client_port server_ip server_port`. `fno mux serve --observe` names the watcher `user from client_ip` from it. |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | rs | unclear: crates/fno-agents/src/ledger_register.rs:617 |
+| `TARGET_ADVISORY` | rs | Init sets it to 1 only with `--advisory` and clears inherited values otherwise. The helper stamps advisory when it reads 1 or the plan declares `gates: advisory`. |
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
 | `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
 | `TARGET_INPUT` | rs | unclear: crates/fno-agents/src/target_gates.rs:473 |

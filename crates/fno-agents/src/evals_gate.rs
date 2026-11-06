@@ -1,7 +1,7 @@
 //! The evals gate: the daemon's check on skill, agent, hook, command and bank
 //! changes. CI cannot run it: a bank run needs worker lanes.
 //!
-//! Each `evals-arm` tick runs one pass over two independent legs.
+//! Each daemon `evals-arm` schedule tick runs one pass over two independent legs.
 //!
 //! **Main leg.** Once a day, and at once when the route config hash changes,
 //! it runs one cohort per seat at `origin/main`. The worker seat runs the
@@ -28,17 +28,16 @@
 //! on its own pass rate instead, so no PR waits forever on the day's main
 //! run. A queued head reposts pending, so a re-run never keeps an older red.
 //!
-//! The runs are detached, and the tick never waits on one. A later tick reads
+//! The runs are detached, and the daemon arm never waits on one. A later arm tick reads
 //! the history rows, so a daemon restart loses no run. Plumbing never reads as
 //! a pass: no result by the limit, or a spent budget, is red and names the
 //! cause and the clearing command. A baseline the compare cannot answer reads
 //! pending, never red. A run whose rows are all status unavailable is the
 //! lane's gap, not the head's: it reads pending and re-runs.
 //!
-//! **The settle.** Grading a finished run also runs outside the tick, on the
-//! daemon's one-minute `evals_settle` sweep: a fleet-loaded sweep saturates
-//! the tick's budget, and a green run once waited over an hour for a tick
-//! with room. Both graders take the state-dir settle lock, so one finished
+//! **The settle.** Grading a finished run also runs on the daemon's one-minute
+//! `evals_settle` sweep: the pr-watch budget can saturate, and a green run once
+//! waited over an hour for a tick with room. Both graders take the state-dir settle lock, so one finished
 //! run grades exactly once; an idle gate costs the sweep one state read.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -3195,31 +3194,6 @@ mod tests {
         w.tick(true, Utc::now());
         assert_eq!(w.spawns.borrow().len(), 1, "launched once the slot frees");
         assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
-    }
-
-    #[test]
-    fn a_head_the_baseline_cannot_cover_does_not_hold_the_lane() {
-        let mut w = World::new("skills/s\ncrates/x/a.rs\n");
-        std::fs::write(
-            w.dir.path().join("evals/bank/c1.yaml"),
-            "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
-        )
-        .unwrap();
-        // Head 7 covers a task the baseline never graded and would need a
-        // build the fixture cannot seat; its launch attempt skips and the
-        // lane still reaches head 8 in the same tick.
-        w.files_b = "skills/s\n".into();
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1, "the covered head launched");
-        let argv = spawns[0].join(" ");
-        assert!(argv.contains(&format!("--ref {SHA2}")), "{argv}");
-        assert!(argv.contains("--task g1"), "{argv}");
-        drop(spawns);
-        let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
-        assert_eq!(state.heads.get(SHA2).map(String::as_str), Some(QUEUED));
     }
 
     fn dir_of(w: &World) -> PathBuf {

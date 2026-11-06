@@ -31,7 +31,7 @@ We chose the three process-backed binaries in `stress-rust-e2e-concurrency.sh` f
 | `cold_start_serves_while_the_startup_sweep_is_still_running` | R | A real status response arrives before the delayed startup sweep completes. |
 | `client_declines_to_spawn_while_the_singleton_lock_is_held` | R | A held singleton lock prevents a competing daemon spawn. |
 | `restart_over_a_large_roster_leaves_exactly_one_daemon` | R | Concurrent restart at the observed 28-row failure scale leaves one daemon. |
-| `daemon_child_env_isolated_probe` | R | Intended and sibling daemon launches receive distinct child environments; its stdout marker remains the stress vacuity guard. |
+| `daemon_child_env_isolated_probe` | R | Intended and sibling daemon launches receive distinct child environments; its stdout marker remained the stress vacuity guard until the round-two cut removed the probe, and the guard moved to the restart keeper's completion line. |
 | `status_client_exits_13_when_daemon_down` | R | The real status client reports down without lazy-starting a daemon. |
 | `a_daemon_restart_over_a_loss_shaped_registry_loses_no_rows` | R | Startup read-modify-write preserves every row in a loss-shaped registry. |
 | `a_future_schema_registry_is_refused_not_dropped_on_restart` | R | Startup refuses future-schema data and preserves the original bytes. |

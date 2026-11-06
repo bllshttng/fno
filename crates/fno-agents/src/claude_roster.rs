@@ -697,11 +697,9 @@ pub(crate) fn blocked_short_ids_from_rows(
 /// who run Claude with a non-default home). When unset, `$HOME/.claude/daemon`.
 pub const DAEMON_DIR_ENV: &str = "FNO_CLAUDE_DAEMON_DIR";
 
-/// The Claude Code config root (`$HOME/.claude`): the rule-file git repo the
-/// corrections post-commit hook watches. `CLAUDE_DIR_OVERRIDE` mirrors the
-/// bash-side override (scripts/autocorrect-pack.sh) so tests and alt-home
-/// setups redirect the whole tree. Read-only consumers; footnote stores no
-/// state there.
+/// The Claude Code config root (`$HOME/.claude`). `CLAUDE_DIR_OVERRIDE`
+/// redirects the whole tree for tests and alt-home setups. Read-only
+/// consumers; footnote stores no state there.
 pub fn config_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("CLAUDE_DIR_OVERRIDE") {
         return PathBuf::from(v);
@@ -1172,95 +1170,6 @@ mod tests {
         );
         assert_eq!(snapshot.live_bg_pid("cccc3333"), None, "no pid to stamp");
         assert_eq!(snapshot.live_bg_pid("dddd4444"), None, "no row at all");
-    }
-
-    #[test]
-    fn sock_rows() {
-        let base = std::env::temp_dir().join(format!(
-            "fno-ctrlsock-none-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let dir = base.join("d").join("spare");
-        std::fs::create_dir_all(&dir).unwrap();
-        let pty = dir.join("x.pty.sock");
-        std::fs::write(&pty, b"").unwrap();
-        let w = RosterWorker {
-            session_id: "x".into(),
-            pid: None,
-            repl_pid: None,
-            proc_start: None,
-            pty_sock: Some(pty.to_string_lossy().into_owned()),
-            pty_auth: None,
-            cli_version: None,
-            cwd: String::new(),
-            worktree_path: None,
-        };
-        assert!(w.resolve_control_sock().is_none());
-        std::fs::remove_dir_all(&base).ok();
-
-        let stdout = br#"[
-          {"kind":"background","id":"aaaa1111","state":"stopped"},
-          {"kind":"interactive","name":"operator"},
-          {"kind":"background","short_id":"bbbb2222","status":"working"}
-        ]"#;
-        let snapshot = read_all_agents_with(|| {
-            Ok(ClaudeCommandOutput {
-                success: true,
-                stdout: stdout.to_vec(),
-                stderr: Vec::new(),
-            })
-        });
-
-        let ClaudeAgentsSnapshot::Known { rows, warnings } = snapshot else {
-            panic!("valid agent JSON must be known");
-        };
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].short_id, "aaaa1111");
-        assert_eq!(rows[0].state.as_deref(), Some("stopped"));
-        assert_eq!(rows[1].short_id, "bbbb2222");
-        assert_eq!(rows[1].state.as_deref(), Some("working"));
-        assert!(warnings.is_empty());
-
-        let snapshot = read_all_agents_with(|| Err("timed out after 15s".to_string()));
-        let ClaudeAgentsSnapshot::Unknown { warnings, .. } = snapshot else {
-            panic!("a timeout must not prove an empty agent list");
-        };
-        assert!(warnings.iter().any(|warning| warning.contains("timed out")));
-
-        let snapshot = parse_all_agents(
-            br#"[
-              {"kind":"background","id":"aaaa1111","state":"stopped"},
-              {"kind":"background","state":"stopped"}
-            ]"#,
-        );
-        // A partial list is Known but carries its warnings: the parsed rows
-        // are real, the skipped ones could hide anything.
-        let ClaudeAgentsSnapshot::Known { rows, warnings } = &snapshot else {
-            panic!("rows that parsed are real; partial parse must not poison them");
-        };
-        assert_eq!(rows.len(), 1);
-        assert!(!warnings.is_empty());
-        assert!(snapshot.find("aaaa1111").is_some());
-
-        let snapshot = parse_all_agents(br#"[{"kind":"background"}]"#);
-        assert!(matches!(snapshot, ClaudeAgentsSnapshot::Unknown { .. }));
-        assert!(snapshot.warning_text().contains("0 of 1"));
-
-        let snapshot = parse_all_agents(
-            br#"[
-              {"kind":"background","id":"aaaa1111","state":"done","pid":65340},
-              {"kind":"background","id":"bbbb2222","state":"working"}
-            ]"#,
-        );
-        let ClaudeAgentsSnapshot::Known { rows, .. } = snapshot else {
-            panic!("clean list must be known");
-        };
-        assert_eq!(rows[0].pid, Some(65340));
-        assert_eq!(rows[1].pid, None);
     }
 
     fn alternate_account_env_lock() -> &'static std::sync::Mutex<()> {

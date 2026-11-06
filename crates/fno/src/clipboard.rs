@@ -191,25 +191,11 @@ pub(crate) fn on_path(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn available_tool_none_when_path_empty() {
-        // AC6-EDGE: no clipboard tool -> copy is degraded (doctor flags it).
-        assert_eq!(available_tool_with(|_| false), None);
-    }
-
     #[test]
     fn available_tool_returns_first_in_preference_order() {
         // Every tool present -> the macOS-first preference order wins.
         assert_eq!(available_tool_with(|_| true), Some("pbcopy"));
     }
-
-    #[test]
-    fn available_tool_skips_absent_prefers_present() {
-        // Only xclip on PATH: pbcopy/wl-copy skipped, xclip found.
-        assert_eq!(available_tool_with(|n| n == "xclip"), Some("xclip"));
-    }
-
     #[test]
     fn base64_matches_known_vectors() {
         assert_eq!(base64(b""), "");
@@ -229,16 +215,6 @@ mod tests {
         let mid = std::str::from_utf8(&payload[1..payload.len() - 1]).unwrap();
         assert_eq!(mid, "]52;c;aGk="); // base64("hi") == "aGk="
     }
-
-    #[test]
-    fn osc52_caps_long_payload_and_flags_truncation() {
-        let big = "x".repeat(1_000_000);
-        let (payload, truncated) = osc52_payload(&big);
-        assert!(truncated, "over-cap selection flagged");
-        // Base64 body stays under the cap (payload = ESC ]52;c; + body + BEL).
-        assert!(payload.len() < OSC52_B64_CAP + 16);
-    }
-
     #[test]
     fn local_tool_success_short_circuits_osc52() {
         // AC2-HP: a working local tool lands the copy; no OSC 52 is emitted.

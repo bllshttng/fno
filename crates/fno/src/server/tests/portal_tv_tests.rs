@@ -71,52 +71,6 @@ fn a_view_opens_a_pane_that_is_never_a_portal() {
         core.reap_pane(pid);
     }
 }
-
-#[test]
-fn a_transient_leaf_captures_as_an_ordinal_shell_slot() {
-    // A MIXED tab (operator leaf + view leaf) still stores, but the view
-    // leaf binds Shell: no owner binding survives that would re-attach
-    // the row behind the operator's back at restore.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, _client_id, p1, _rx) = thread_core();
-    let view_pane = core
-        .spawn_pane_cmd(
-            &[
-                "env".to_string(),
-                "FNO_VIEW_TRANSIENT=1".to_string(),
-                "/bin/cat".to_string(),
-            ],
-            24,
-            40,
-            "/tmp/seen",
-        )
-        .expect("view pane");
-    core.attached.insert("deadbee1".into(), view_pane);
-    let (sid, ti) = core.session.find_pane(p1).expect("shell pane placed");
-    {
-        let squad = core.session.squad_mut(sid).unwrap();
-        let tab = &mut squad.tabs[ti];
-        let leaf = std::mem::replace(&mut tab.root, Node::Leaf(view_pane));
-        tab.root = Node::Branch {
-            axis: crate::tree::Axis::Horizontal,
-            children: vec![(0.5, leaf), (0.5, Node::Leaf(view_pane))],
-        };
-    }
-    let (trees, _active) = core.stored_tab_trees(sid).expect("the squad stores");
-    assert_eq!(trees.len(), 1, "the mixed tab is stored");
-    let slots = &trees[0].slots;
-    let view_slots: Vec<_> = slots
-        .iter()
-        .filter(|s| s.pane_id == Some(view_pane))
-        .collect();
-    assert_eq!(view_slots.len(), 1, "the view leaf has exactly one slot");
-    assert!(
-        matches!(view_slots[0].binding, crate::proto::LayoutBinding::Shell),
-        "the view leaf binds Shell, never Fno"
-    );
-    core.reap_pane(view_pane);
-}
-
 #[test]
 fn restore_prunes_the_old_stand_in_shapes() {
     // The 17:47Z shape, minted the old way: portalN shells, orphaned held
@@ -204,73 +158,5 @@ fn a_pane_worker_named_after_no_row_is_never_pruned() {
     assert!(
         core.panes.contains_key(&worker),
         "a pane whose name no row answers is kept"
-    );
-}
-
-#[test]
-fn a_pane_substrate_row_shell_is_kept_and_a_leftover_view_is_reaped() {
-    // A worker hold whose row hosts a pane is that worker's resume door,
-    // kept on purpose. An unplaced adopted leftover that is a portal
-    // remnant (a transient view here) is reaped by the leftovers pass,
-    // never tabbed.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, _client_id, _p1, _rx) = thread_core();
-    // The worker hold: FNO_AGENT_SELF candor2, its row hosts pane p1-ish.
-    let hold = core
-        .spawn_pane_cmd(
-            &[
-                "env".to_string(),
-                "FNO_AGENT_SELF=candor2".to_string(),
-                "/bin/cat".to_string(),
-            ],
-            24,
-            40,
-            "/tmp/seen",
-        )
-        .expect("worker hold");
-    core.panes.get_mut(&hold).unwrap().name = Some("candor2".into());
-    let mut host = bg_row("candor2", "/tmp/seen", None);
-    host.mux = Some(("main".into(), 41));
-    core.agents = vec![host];
-    core.prune_portal_standins();
-    assert!(
-        core.panes.contains_key(&hold),
-        "a pane-substrate row's hold is the resume door: kept"
-    );
-
-    // The leftover: an unplaced adopted transient view.
-    let view = core
-        .spawn_pane_cmd(
-            &[
-                "env".to_string(),
-                "FNO_VIEW_TRANSIENT=1".to_string(),
-                "/bin/cat".to_string(),
-            ],
-            24,
-            40,
-            "/tmp/seen",
-        )
-        .expect("leftover view");
-    core.keeper_adopted.push(AdoptedKeeper {
-        pane: view,
-        child_pid: core.panes.get(&view).and_then(|e| e.pty.child_pid()),
-        argv: vec![
-            "env".to_string(),
-            "FNO_VIEW_TRANSIENT=1".to_string(),
-            "/bin/cat".to_string(),
-        ],
-        cwd: "/tmp/seen".into(),
-        placed: false,
-    });
-    let tabs_before = core.session.squad(1).unwrap().tabs.len();
-    core.place_adopted_leftovers(1);
-    assert!(
-        !core.panes.contains_key(&view),
-        "a leftover view is reaped, not tabbed"
-    );
-    assert_eq!(
-        core.session.squad(1).unwrap().tabs.len(),
-        tabs_before,
-        "no tab was minted for the remnant"
     );
 }

@@ -13,7 +13,6 @@ chats	table door under review_doors::dispatch; read model
 claude-birth-exec	door: the fleet's claude birth exec path (revive-proof rides as an argument)
 commands	door: prints the command surface for harness scripts
 context-run	door: context runner transport
-corrections-verify	door: autocorrect verdicts read back by the updater
 day	door: the inbox relay reaches it via resolve_binary; no advertised fno agents day spelling
 delivery-evaluate	door: delivery evaluation transport (fno do pr evidence reads it back)
 do	door: the do/pr front pair (do pr, do ci, do show, do diff route through pr_front/ci_front/rev_front)

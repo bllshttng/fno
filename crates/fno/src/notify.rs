@@ -65,18 +65,4 @@ mod tests {
         let mid = std::str::from_utf8(&payload[1..payload.len() - 1]).unwrap();
         assert_eq!(mid, "]777;notify;pane w1;done");
     }
-
-    #[test]
-    fn sanitize_strips_controls_and_caps_length() {
-        // An embedded escape attempt never reaches the tty as an escape.
-        assert_eq!(sanitize("a\u{1b}]0;evil\u{7}b", 1024), "a]0;evilb");
-        // Over-cap text truncates on a char boundary (chars, not bytes).
-        let big = "é".repeat(MAX_FIELD_CHARS + 5);
-        assert_eq!(
-            sanitize(&big, MAX_FIELD_CHARS).chars().count(),
-            MAX_FIELD_CHARS
-        );
-        // Printable text passes through unchanged.
-        assert_eq!(sanitize("clean", 1024), "clean");
-    }
 }

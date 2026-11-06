@@ -59,6 +59,7 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `sort-agents` | `o` | `o` | `o` | sort table columns |
 | `cycle-agent-group` | `W` | `W` | `W` | group agents by workspace, lead, cwd, status, harness, or none |
 | `toggle-card-head` | `Y` | `Y` | `Y` | show or hide the card header row |
+| `toggle-group-by-lead` | `t` | `t` | `t` | nest workers under their lead in cards |
 | `toggle-status` | `s` | `s` | `s` | toggle status |
 | `settings` | `S` | `S` | `S` | settings (theme, toggles, prefix) |
 | `sweep-threads` | `T` | `T` | `T` | sweep threads (close, reap) |
@@ -67,4 +68,5 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `show-pane-ids` | `\` | `\` | `\` | hold to show pane ids |
 | `show-keys` | `?` | `?` | `?` | keys of this view (* for all) |
 | `grab-work` | `g` | `g` | `g` | grab work (dispatch next ready) |
+| `report` | `!` | `!` | `!` | report a problem |
 | `detach` | `d` | `d` | `Q` | detach |

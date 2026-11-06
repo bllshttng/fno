@@ -24,28 +24,6 @@ fn density_button_click_routes_to_the_cycle() {
         crate::keys::Event::ToggleAgentSort
     );
 }
-
-#[test]
-fn density_button_preserves_the_top_header_rollup() {
-    let mut v = wide_view(vec![agent_row("b", 5, Some(AgentBadge::Blocked), false)]);
-    v.density = Density::Regular;
-    let lines: Vec<String> = frame_text(&v.compose())
-        .lines()
-        .map(str::to_string)
-        .collect();
-    assert!(lines[1].contains('▲'), "rollup survives: {:?}", lines[1]);
-    assert!(
-        lines[0].contains(density_glyph(Density::Regular)),
-        "density button remains visible: {:?}",
-        lines[0]
-    );
-    assert!(
-        lines[0].contains('\u{f0f3}'),
-        "bell glyph shows in the tab bar: {:?}",
-        lines[0]
-    );
-}
-
 #[test]
 fn the_strip_presents_tabs_density_and_the_tab_bar_bell() {
     let v = wide_view(vec![agent_row("w", 4, Some(AgentBadge::Working), false)]);

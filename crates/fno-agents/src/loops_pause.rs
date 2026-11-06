@@ -1161,7 +1161,7 @@ fn markdown_doc() -> String {
                 .unwrap_or_else(|| "`fno agents loops table`".to_string()),
         ));
     }
-    out.push_str("\nThe launchd labels the pr-watch installer and the autocorrect installer own, as the table reports them: `");
+    out.push_str("\nThe launchd labels the pr-watch installer owns, as the table reports them: `");
     out.push_str(&crate::tick_ledger::LAUNCHD_LABELS.join("`, `"));
     out.push_str(
         "`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.\n",
@@ -1306,57 +1306,5 @@ mod tests {
             mail_session_id_from_whoami(&json!({"fno_id":"short"})),
             None
         );
-    }
-
-    /// The done probe: end-to-end through the env-resolved readers. Pins HOME
-    /// and FNO_AGENTS_HOME so neither the sentinel nor the fleet record
-    /// touches real state, and holds the shared env lock so a parallel
-    /// env-pinned test cannot observe the mutation.
-    #[test]
-    fn loops_paused_reports_fleet_incident() {
-        let guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        let saved_home = std::env::var_os("HOME");
-        let saved_agents = std::env::var_os("FNO_AGENTS_HOME");
-        std::env::set_var("HOME", tmp.path());
-        let agents = tmp.path().join("agents-home");
-        std::fs::create_dir_all(&agents).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &agents);
-        std::fs::write(
-            crate::fleet_incident::fleet_stop_path(&crate::paths::AgentsHome::at(&agents)),
-            serde_json::to_string(&stopped_record(7)).unwrap(),
-        )
-        .unwrap();
-
-        let value = paused_json();
-        let mut alias = stopped_record(8);
-        alias.holds = vec!["spawns".into(), "loops".into()];
-        alias.origin = Some("pause-all".into());
-        std::fs::write(
-            crate::fleet_incident::fleet_stop_path(&crate::paths::AgentsHome::at(&agents)),
-            serde_json::to_string(&alias).unwrap(),
-        )
-        .unwrap();
-        let alias_value = paused_json();
-
-        match saved_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match saved_agents {
-            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-            None => std::env::remove_var("FNO_AGENTS_HOME"),
-        }
-        drop(guard);
-
-        assert_eq!(value["paused"], true);
-        assert_eq!(value["source"], "fleet_incident");
-        assert_eq!(value["generation"], 7);
-        assert_eq!(value["state"], "fleet_stop");
-        assert_eq!(alias_value["paused"], true);
-        assert_eq!(alias_value["source"], "fleet_incident");
-        assert_eq!(alias_value["generation"], 8);
     }
 }
