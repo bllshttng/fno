@@ -35,7 +35,7 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 | `evals` | `daemon` | 60 | always | `control_plane_tick` | `fno agents loops table` |
 | `pane_loop` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 
-The launchd labels the pr-watch installer and the autocorrect installer own, as the table reports them: `sh.fno.pr-watcher`, `sh.fno.groom`, `sh.fno.autocontinue`, `sh.fno.sync-backlog`, `sh.fno.board-server`, `com.user.autocorrect`, `com.user.autocorrect-watcher`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.
+The launchd labels the pr-watch installer owns, as the table reports them: `sh.fno.pr-watcher`, `sh.fno.groom`, `sh.fno.autocontinue`, `sh.fno.sync-backlog`, `sh.fno.board-server`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.
 
 ### worker_wake
 
