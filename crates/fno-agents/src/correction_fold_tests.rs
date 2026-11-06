@@ -175,7 +175,7 @@ fn ac4_ac9_a_held_lock_skips_the_cap_defers_and_each_corrector_names_itself() {
         assert!(rows(&fx).is_empty(), "a skipped tick journals no row");
     }
     let capped = pass(&fx, 2, NOW);
-    assert_eq!(capped.rows_appended, 2);
+    assert_eq!(capped.rows_appended, 2, "capped pass receipt: {capped:?}");
     assert!(capped.rows_capped);
     assert_eq!(rows(&fx).len(), 2);
     pass(&fx, 2, NOW);
