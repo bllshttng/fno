@@ -58,7 +58,7 @@ fn judge(path: &Path, temp: &Path, pin: Option<&Path>) -> Result<(), String> {
     }
 }
 
-pub(super) fn check(path: &Path) -> Result<(), String> {
+pub(crate) fn check(path: &Path) -> Result<(), String> {
     let mode = std::env::var("FNO_TEST_HERMETIC").ok();
     if mode.as_deref() == Some("0") {
         return Ok(());
