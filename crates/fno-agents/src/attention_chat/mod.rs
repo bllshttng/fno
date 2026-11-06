@@ -20,7 +20,10 @@ mod telegram;
 
 use crate::attention::AttentionItem;
 use crate::attention_file::FileAnswer;
-use crate::attention_http::{delivery_id, Deliveries, DeliveryRow, PostResult, RefusedSink};
+use crate::attention_http::{
+    delivery_id, now_unix, record_sink_health, retry_next_at, Deliveries, DeliveryRow, PostResult,
+    RefusedSink, RETRIES_PER_BEAT, RETRY_ATTEMPTS_CAP,
+};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
@@ -86,6 +89,24 @@ impl Sent {
                 None => "no response".to_string(),
             })
         }
+    }
+}
+
+/// The health outcome a `Sent` folds into: a posted message delivered, a
+/// dropped or retried one failed with its reason. The chat lane records
+/// through the same sink-health helper as the ntfy/webhook lane.
+fn health_result(sent: &Sent) -> PostResult {
+    match sent {
+        Sent::Posted(_) => PostResult {
+            status: Some(200),
+            body: String::new(),
+            error: None,
+        },
+        Sent::Dropped(why) | Sent::Retry(why) => PostResult {
+            status: None,
+            body: String::new(),
+            error: Some(why.clone()),
+        },
     }
 }
 
@@ -318,6 +339,7 @@ pub fn tick_chat(
             sink,
             &mut **transport,
             &mut state,
+            &state_dir,
             deadline,
             &mut tick,
         );
@@ -331,6 +353,7 @@ fn tick_one(
     sink: &ChatSink,
     transport: &mut dyn ChatTransport,
     state: &mut ChatState,
+    state_dir: &Path,
     deadline: Instant,
     tick: &mut ChatTick,
 ) {
@@ -345,7 +368,14 @@ fn tick_one(
     for did in closing {
         let row = state.deliveries[&did].clone();
         let ext = row.external_id.clone().unwrap_or_default();
-        match transport.reply(&ext, &format!("Closed: {}", row.item_id)) {
+        let sent = transport.reply(&ext, &format!("Closed: {}", row.item_id));
+        record_sink_health(
+            state_dir,
+            &sink.name,
+            sink.url.as_deref().unwrap_or(""),
+            &health_result(&sent),
+        );
+        match sent {
             Sent::Posted(_) => {
                 state.deliveries.get_mut(&did).expect("row").status = "closed".into();
                 tick.closed += 1;
@@ -363,7 +393,10 @@ fn tick_one(
             )),
         }
     }
-    // Post each open item once per sink.
+    // Post each open item once per sink; a dropped post for an item still
+    // open resends past its next_at under the shared retry policy.
+    let now = crate::attention_http::now_unix();
+    let mut retries = 0u64;
     for item in open {
         if Instant::now() >= deadline {
             tick.skip = Some("timeout".into());
@@ -372,9 +405,6 @@ fn tick_one(
             return;
         }
         let did = delivery_id(&sink.name, &item.id, "item.opened");
-        if state.deliveries.contains_key(&did) {
-            continue;
-        }
         let buttons: Vec<(String, String)> = item
             .options
             .iter()
@@ -383,35 +413,107 @@ fn tick_one(
                 (format!("{}. {text}", o.n), format!("{}:{}", item.id, o.n))
             })
             .collect();
-        let status = match transport.send(&render_item(item), &buttons) {
+        if let Some(row) = state.deliveries.get_mut(&did) {
+            if row.status == "dropped" && row.attempts >= crate::attention_http::RETRY_ATTEMPTS_CAP
+            {
+                row.status = "abandoned".into();
+                row.next_at = None;
+            }
+            let due = row.next_at.is_none() || now >= row.next_at.unwrap_or(0);
+            if row.status == "dropped"
+                && due
+                && row.attempts < crate::attention_http::RETRY_ATTEMPTS_CAP
+                && retries < crate::attention_http::RETRIES_PER_BEAT
+            {
+                retries += 1;
+                row.attempts += 1;
+                let sent = transport.send(&render_item(item), &buttons);
+                record_sink_health(
+                    state_dir,
+                    &sink.name,
+                    sink.url.as_deref().unwrap_or(""),
+                    &health_result(&sent),
+                );
+                match sent {
+                    Sent::Posted(ext) => {
+                        row.status = "delivered".into();
+                        row.external_id = Some(ext);
+                        row.next_at = None;
+                        tick.delivered += 1;
+                    }
+                    Sent::Dropped(why) => {
+                        row.last_status = None;
+                        if row.attempts >= crate::attention_http::RETRY_ATTEMPTS_CAP {
+                            row.status = "abandoned".into();
+                            row.next_at = None;
+                        } else {
+                            row.next_at =
+                                Some(crate::attention_http::retry_next_at(now, row.attempts));
+                        }
+                        tick.detail
+                            .push(format!("chat: {} dropped {} ({why})", sink.name, item.id));
+                    }
+                    Sent::Retry(why) => {
+                        row.last_status = None;
+                        // Stays dropped and due: the next beat retries
+                        // without spending another attempt.
+                        tick.detail.push(format!(
+                            "chat: {} retries {} next beat ({why})",
+                            sink.name, item.id
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+        let sent = transport.send(&render_item(item), &buttons);
+        record_sink_health(
+            state_dir,
+            &sink.name,
+            sink.url.as_deref().unwrap_or(""),
+            &health_result(&sent),
+        );
+        match sent {
             Sent::Posted(ext) => {
                 tick.delivered += 1;
-                Some(("delivered", Some(ext)))
+                state.deliveries.insert(
+                    did,
+                    DeliveryRow {
+                        item_id: item.id.clone(),
+                        sink: sink.name.clone(),
+                        event: "item.opened".into(),
+                        status: "delivered".into(),
+                        external_id: Some(ext),
+                        attempts: 1,
+                        next_at: None,
+                        last_status: Some(200),
+                    },
+                );
             }
             Sent::Dropped(why) => {
                 tick.detail
                     .push(format!("chat: {} dropped {} ({why})", sink.name, item.id));
-                Some(("dropped", None))
+                state.deliveries.insert(
+                    did,
+                    DeliveryRow {
+                        item_id: item.id.clone(),
+                        sink: sink.name.clone(),
+                        event: "item.opened".into(),
+                        status: "dropped".into(),
+                        external_id: None,
+                        attempts: 1,
+                        next_at: Some(crate::attention_http::retry_next_at(now, 1)),
+                        last_status: None,
+                    },
+                );
             }
             Sent::Retry(why) => {
                 tick.detail.push(format!(
                     "chat: {} retries {} next beat ({why})",
                     sink.name, item.id
                 ));
-                None
+                // No row yet: the same delivery_id retries next beat.
             }
-        };
-        if let Some((status, ext)) = status {
-            state.deliveries.insert(
-                did,
-                DeliveryRow {
-                    item_id: item.id.clone(),
-                    sink: sink.name.clone(),
-                    event: "item.opened".into(),
-                    status: status.into(),
-                    external_id: ext,
-                },
-            );
         }
     }
     if Instant::now() >= deadline {
@@ -622,6 +724,7 @@ pub(crate) mod testkit {
             self.responses.push_back(PostResult {
                 status: Some(200),
                 body: body.to_string(),
+                error: None,
             });
             self
         }
@@ -630,6 +733,7 @@ pub(crate) mod testkit {
             self.responses.push_back(PostResult {
                 status: Some(status),
                 body: String::new(),
+                error: None,
             });
             self
         }
@@ -648,6 +752,7 @@ pub(crate) mod testkit {
             self.responses.pop_front().unwrap_or(PostResult {
                 status: Some(200),
                 body: "{}".into(),
+                error: None,
             })
         }
     }
