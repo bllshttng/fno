@@ -1,73 +1,48 @@
 #!/usr/bin/env bash
 # Post-install hook for the fno Claude Code plugin.
 #
-# Lands a complete `fno` (CLI + all three Rust binaries) on PATH, routed by
-# the plugin channel this tree came from (the version in plugin.json, which
-# release.yml keeps distinct per channel):
+# Lands a complete `fno` (the front door plus the three fno-agents binaries)
+# on PATH, routed by the plugin channel this tree came from (the version in
+# plugin.json, which release.yml keeps distinct per channel):
 #
-#   every channel        1. fetch the release tarball for this plugin's
-#                          version from GitHub Releases, verify its sha256,
-#                          unpack to staging, run the staged front door's
-#                          `fno update --adopt`. The Rust side owns
-#                          the proof, swap, links, marker and uv retire.
-#   fallback             2. the uv wheel path (by name, pinned rc, nightly
-#                          wheel) and then the source build, exactly as
-#                          before; any fallback to the source build says so
-#                          out loud - an rc or dev install never silently
-#                          downgrades.
+#   every channel   1. fetch the release tarball for this plugin's version
+#                      from GitHub Releases, verify its sha256, unpack to
+#                      staging, run the staged front door's
+#                      `fno update --adopt`. The Rust side owns the proof,
+#                      swap, links, marker and the retire of an old wheel.
+#   fallback        2. scripts/install/fno.sh pinned to the same version,
+#                      which installs the same tarball through its own
+#                      fetcher (curl or wget).
 #
-# Guarded for name-collision safety (AC7-FR) on every channel: we verify the
-# installed package is OURS (its version matches this plugin's declared
-# version, comparing PEP 440 and semver spellings) and fall back to the
-# source build on any mismatch, so the reserved 0.0.0 placeholder or a
-# squatted `fno` never runs in place of ours. Last resort:
-# `uv tool install` / `pip install --user` from the bundled cli/ source
-# (Python-only; the Rust binaries then need `cargo install --locked --path <repo>/crates/fno`, whose native update installs the rest).
-#
-# Every path logs which one it took (AC7-UI), so the user knows whether the
-# daemon-backed commands will work without a second step.
+# No Python and no uv are involved. Every path logs which one it took, so the
+# user knows what landed.
 set -euo pipefail
 
 # The terminal line every consumer reads (the session-start hook's notice, the
-# skills, the channel-matrix smoke): name the exit code on the way out. The
-# background-era wrapper used to print it; the consented direct run owns it now.
+# skills, the channel-matrix smoke): name the exit code on the way out.
 trap 'rc=$?; printf "installer exit %s\n" "$rc"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI_DIR="$(dirname "$SCRIPT_DIR")/cli"
 FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-fnodotdev/fno}"
 
-# Shared channel/version math (stable|rc|nightly detection, spelling-tolerant
-# version match, wheel-platform glob). Absent the helper, fall back to the
-# legacy exact-match behavior for the stable channel.
+# Shared channel/version math (stable|rc|nightly detection, the tarball
+# platform name). Absent the helper, fall back to the stable channel.
 PLUGIN_VERSION_LIB="$(dirname "$SCRIPT_DIR")/scripts/release/plugin-version.sh"
 if [[ -f "$PLUGIN_VERSION_LIB" ]]; then
   # shellcheck disable=SC1090
   source "$PLUGIN_VERSION_LIB"
 else
   plugin_channel() { echo stable; }
-  plugin_version_matches() { [ "$1" = "$2" ]; }
-  plugin_wheel_platform() { echo ""; }
+  plugin_tarball_platform() { echo ""; }
 fi
 
 log() { printf "[fno postinstall] %s\n" "$*"; }
 err() { printf "[fno postinstall] ERROR: %s\n" "$*" >&2; }
-# PyPI carries prebuilt wheels (all four Rust binaries inside) for exactly four
-# targets. Any other platform lands on the Python-only source install, which
-# leaves the daemon-backed commands missing. Say so before installing, with the
-# build commands, instead of after a half-working install.
-platform_wheel_notice() {
-  case "$(uname -s)/$(uname -m)" in
-    Darwin/arm64|Darwin/x86_64|Linux/x86_64|Linux/aarch64) return 0 ;;
-  esac
-  log "no prebuilt wheel for $(uname -s)/$(uname -m). PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
-  log "This install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
-}
 # Printed after a successful install so a new user knows the one configuration
 # step exists (install never prompts). Optional: defaults work without it.
 next_steps() { log "Next: run 'fno config setup run --check' to see what this machine still needs."; }
 
-# The two steps fno.sh runs after a verified install (fno.sh wire_harnesses,
+# The two steps fno.sh runs after a verified install (wire_harnesses,
 # run_setup_once), so the plugin route leaves the same machine. Best effort:
 # the CLI is installed already. FNO_NO_WIRE skips both, as it does there.
 wire_and_setup() { # wire_and_setup <front-door path>
@@ -80,273 +55,28 @@ wire_and_setup() { # wire_and_setup <front-door path>
   "$1" config setup run --once ${FNO_YES:+--yes} --json >&2 || log "the run-once setup did not finish; run 'fno config setup run' to retry."
 }
 
-if [[ ! -f "$CLI_DIR/pyproject.toml" ]]; then
-  err "expected cli/ at $CLI_DIR but pyproject.toml is missing."
-  exit 1
-fi
-
 # Version this plugin declares: plugin.json is the ONE version field, and
 # release.yml stamps it per channel on the nightly tag (stable's tree carries
-# the plain release version). An install must match it to count as "ours"
-# (the name-collision / placeholder guard).
+# the plain release version). The staged front door's --adopt refuses a
+# tarball that does not ship it.
 src_version() {
   local v
-  # sed -n ... p: print ONLY a matched version; emit nothing (not the whole
-  # line) if the format is unexpected, so SRC_VERSION is either clean or empty -
-  # an empty SRC_VERSION fails the guard closed (falls back to source).
   v="$(grep '"version"' "$SCRIPT_DIR/plugin.json" 2>/dev/null \
         | head -1 | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')" || true
   printf '%s' "$v"
 }
 
-# The nightly release's wheel asset for this platform, when one exists.
-nightly_wheel_url() {
-  local plat json url
-  plat="$(plugin_wheel_platform "$(uname -s)" "$(uname -m)")"
-  [[ -n "$plat" ]] || return 1
-  command -v python3 >/dev/null 2>&1 || return 1
-  json="$(curl -fsSL "https://api.github.com/repos/${FNO_RELEASE_REPO}/releases/tags/nightly" 2>/dev/null)" || return 1
-  url="$(FNO_WHEEL_PLATFORM="$plat" python3 -c '
-import json, os, re, sys
-plat = os.environ["FNO_WHEEL_PLATFORM"]
-data = json.load(sys.stdin)
-for a in data.get("assets", []):
-    if a.get("name", "").endswith(".whl") and re.search(plat, a["name"]):
-        print(a["browser_download_url"]); sys.exit(0)
-sys.exit(1)
-' 2>/dev/null <<<"$json")" || return 1
-  printf '%s' "$url"
-}
+FNO_BINARY_DIR="${FNO_STATE_DIR:-$HOME/.fno}/install/bin"
+FNO_LINK_DIR="${FNO_INSTALL_DIR:-$HOME/.local/bin}"
 
-# Version uv reports for an installed `fno` tool, normalized (no leading v).
-uv_installed_fno_version() {
-  local v
-  v="$(uv tool list 2>/dev/null | awk '$1=="fno"{print $2; exit}' | sed -E 's/^v//')" || true
-  printf '%s' "$v"
-}
-
-# Positive marker for a provisioned install: the console script exists AND the
-# venv ships compiled bytecode. A zero exit from uv proves nothing about what
-# landed, so every install path verifies before trusting itself. Deliberately
-# NOT the front-door check below: a Python-only source install must also pass
-# here, and it carries no Rust binaries.
-uv_install_verifies() {
-  local td
-  td="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)" || return 1
-  [[ -x "$td/fno/bin/fno-py" ]] || return 1
-  [[ -n "$(find "$td/fno/lib" -name '*.pyc' -print -quit 2>/dev/null)" ]]
-}
-
-# The post-install shim sweep (x-c911): repair any fno* shim in the tool bin
-# that is missing, dangles, or resolves into a temp dir; fail loud when
-# unrepairable.
+# The post-install shim sweep: repair any fno* shim in the link dir that is
+# missing, dangles, or resolves into a temp dir; fail loud when unrepairable.
 shim_sweep() {
-  local fno td
-  # The venv copy of the front door, never the tool-bin shim under check.
-  fno="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)/fno/bin/fno"
-  td="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir --bin 2>/dev/null)" || td="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
-  # A Python-only install has no front door, and one predating the sweep
-  # refuses the command: either way there is nothing to sweep with.
+  local fno="$FNO_BINARY_DIR/fno"
   [[ -x "$fno" ]] || return 0
   "$fno" config setup shim-check --help >/dev/null 2>&1 || return 0
-  "$fno" config setup shim-check --repair --bin-dir "$td" && return 0
-  err "fno shims in $td are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $fno config setup shim-check --bin-dir $td"
-  return 1
-}
-
-# The complete-install marker (x-538e): the Rust `fno` front door rides in the
-# release wheel as a shared_script, so a binary-complete install lands it in
-# the tool venv bin beside fno-py. Checked only on the wheel paths - a source
-# build has none and is reported as Python-only instead (AC2-EDGE).
-frontdoor_installed() {
-  local td
-  td="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)" || return 1
-  [[ -x "$td/fno/bin/fno" ]]
-}
-
-# The install receipt (x-538e, AC2-HP/AC2-EDGE): name the actual front-door
-# path and PROVE both command families answer through it - `mux ls` is native
-# Rust (no Python), `--version` forwards to fno-py. A missing or shadowed
-# front door is a named incomplete install with the supported repair, never a
-# success inferred from uv's exit code.
-verify_frontdoor() {
-  local td winner out
-  td="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)" || {
-    err "uv tool dir unreadable; cannot locate the installed fno front door."; return 1; }
-  local fno_bin="$td/fno/bin/fno"
-  if [[ ! -x "$fno_bin" ]]; then
-    err "incomplete install: no fno front door at $fno_bin. The installed wheel predates the complete payload; update to a release wheel that carries it, or run 'cargo install fno'."
-    return 1
-  fi
-  winner="$(command -v fno 2>/dev/null || true)"
-  if [[ -n "$winner" && "$winner" != "$fno_bin" ]]; then
-    log "note: 'fno' on PATH resolves to $winner; the mux forwards to the same fno-py, so both work."
-  fi
-  log "fno front door: $fno_bin"
-  if out="$("$fno_bin" mux ls 2>&1)"; then
-    log "fno mux answers (mux ls rc=0)."
-  else
-    err "incomplete install: 'fno mux ls' failed at $fno_bin: $(printf '%s' "$out" | head -1)"
-    return 1
-  fi
-  if out="$("$fno_bin" --version 2>&1)"; then
-    log "fno --version forwarded to the Python CLI ($out)."
-  else
-    err "incomplete install: 'fno --version' did not forward at $fno_bin: $(printf '%s' "$out" | head -1)"
-    return 1
-  fi
-  return 0
-}
-
-# `uv_install_verifies`, RE-CHECKED until it passes or the budget runs out.
-#
-# uv exits before its own artifacts settle: the console script is deleted and
-# recreated across an install and is absent for ~490ms, a gap that closed only
-# ~40ms before uv exited in an idle measurement (see
-# docs/architecture/cli-lazy-imports.md). A verify firing the instant uv returns
-# therefore races the install it is verifying and refuses a good tree.
-#
-# One of FOUR provisioning paths carrying this wait. The others are
-# `__fno_verify_within` inside `_uv_retry_sh` in cli/src/fno/update.py,
-# `install_verified_within` in crates/fno/src/bootstrap.rs, and
-# `uv_install_verifies_within` in scripts/install/fno.sh. All four spend the same
-# 15 * 0.2s = 3s and all four RE-CHECK rather than sleeping blind, so a genuinely
-# broken install still fails with the same message.
-# tests/ci/test_uv_install_verify_wait.sh asserts the four budgets match; change
-# one and change all four.
-uv_install_verifies_within() {
-  local n=0
-  while :; do
-    uv_install_verifies && return 0
-    n=$((n + 1))
-    [[ "$n" -gt 15 ]] && return 1
-    sleep 0.2
-  done
-}
-
-# `uv tool install --force --compile-bytecode "$@"` with ONE retried failure:
-# the ENOTEMPTY signature, uv's removal walk racing a concurrent importer's
-# bytecode rewrite (docs/architecture/cli-lazy-imports.md). Any other failure
-# returns non-zero immediately, uv's error already printed verbatim above.
-# Bounded at three attempts; success is accepted only via uv_install_verifies.
-uv_tool_install_retry() {
-  local attempts=0 err
-  err="$(mktemp)" || { err "cannot create a temp file to capture uv's error."; return 1; }
-  while :; do
-    attempts=$((attempts + 1))
-    if uv tool install --force --compile-bytecode "$@" 2>"$err"; then
-      rm -f "$err"
-      uv_install_verifies_within || { err "uv exited 0 but the install does not verify after waiting 3s: no fno-py script or no shipped bytecode under the tool venv. Inspect it with 'uv tool dir'."; return 1; }
-      return 0
-    fi
-    cat "$err" >&2
-    if ! grep -q "Directory not empty" "$err" || ! grep -q "os error 66" "$err"; then
-      rm -f "$err"
-      return 1
-    fi
-    rm -f "$err"
-    if [[ "$attempts" -ge 3 ]]; then
-      err "uv tool install hit the directory race (os error 66) three times. A concurrent fno process is rewriting bytecode into the venv mid-removal. Stop fno processes and re-run."
-      return 1
-    fi
-    sleep 1
-  done
-}
-
-# The clobber guard (gap audit blocker 1, 2026-10-02): an existing `fno` tool
-# env may be a working install from a DIFFERENT source (a dev checkout, a study
-# build) or have live processes running from it. `uv tool install --force`
-# replaces that env in place - the exact move that broke a live study when a
-# session-start installer ran unnoticed. Every install path here routes through
-# one call to this guard first. FNO_INSTALL_REPLACE=1 is the named override.
-tool_env_dir() {
-  if command -v uv >/dev/null 2>&1; then
-    NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null && return 0
-    return 1
-  fi
-  # uv itself is absent (the fno.sh delegation path): the env it left behind
-  # still lives at the default location, and the guard must still read it.
-  if [[ -n "${UV_TOOL_DIR:-}" ]]; then
-    printf '%s\n' "$UV_TOOL_DIR"
-    return 0
-  fi
-  printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/uv/tools"
-}
-
-# The direct_url.json uv records for a local-path install, stripped to its
-# path. Empty when there is no env, or the install came from a registry or a
-# remote URL (https, a nightly GitHub Release wheel) - neither is ever "a
-# different local source", so only file:// receipts leave this function.
-tool_receipt_source() {
-  local td f url
-  td="$(tool_env_dir)" || return 0
-  f="$(find "$td/fno/lib" -path '*.dist-info/direct_url.json' -print -quit 2>/dev/null)"
-  [[ -n "$f" ]] || return 0
-  url="$(sed -n -E 's/.*"url"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$f")"
-  url="${url%%$'\n'*}"
-  case "$url" in
-    file://*) printf '%s\n' "$url" ;;
-  esac
-}
-
-# One ps line per live process whose argv names a path inside the tool env.
-# Over-catching is safe: the guard refuses with a named override, so a merely
-# suspicious line costs a deliberate confirmation, never a broken env.
-live_tool_env_processes() {
-  local td
-  td="$(tool_env_dir)" || return 0
-  [[ -d "$td/fno" ]] || return 0
-  ps -axo pid=,args= 2>/dev/null | awk -v td="$td/fno" 'index($0, td) > 0 && $0 !~ / (awk|ps) -/'
-}
-
-clobber_guard() {
-  if [[ "${FNO_INSTALL_REPLACE:-0}" == "1" ]]; then
-    log "FNO_INSTALL_REPLACE=1: replacing any existing fno tool env on request."
-    return 0
-  fi
-  local td live receipt receipt_dir
-  td="$(tool_env_dir)" || return 0
-  [[ -d "$td/fno" ]] || return 0 # no existing env: nothing to clobber
-  live="$(live_tool_env_processes)"
-  if [[ -n "$live" ]]; then
-    err "refusing to reinstall: process(es) are running from the existing fno tool env ($td/fno):"
-    printf '%s\n' "$live" | head -5 >&2
-    err "stop them first, or set FNO_INSTALL_REPLACE=1 to replace the env anyway."
-    return 1
-  fi
-  receipt="$(tool_receipt_source)"
-  if [[ -n "$receipt" ]]; then
-    receipt_dir="${receipt#file://}"
-    receipt_dir="${receipt_dir%/}"
-    # Physical-path both sides before comparing: uv records the path AS GIVEN,
-    # so a symlinked install must not read as a foreign source (a dead source
-    # dir keeps its recorded path and still refuses).
-    cli_physical="$(cd "$CLI_DIR" 2>/dev/null && pwd -P)" || cli_physical="$CLI_DIR"
-    receipt_physical="$(cd "$receipt_dir" 2>/dev/null && pwd -P)" || receipt_physical="$receipt_dir"
-    if [[ "$receipt_physical" != "$cli_physical" ]]; then
-      err "refusing to reinstall: the existing fno tool env was installed from $receipt_dir, not this plugin's $CLI_DIR."
-      err "Replacing it would discard that install. Re-run the install from that source instead, or set FNO_INSTALL_REPLACE=1."
-      return 1
-    fi
-  fi
-  return 0
-}
-
-install_source_via_uv() {
-  log "installing from $CLI_DIR via uv tool install (source build; Python-only)..."
-  # --reinstall-package/--refresh-package: uv serves a cached wheel when the
-  # version string is unchanged, silently reinstalling stale bytes from a
-  # switched checkout (hurdle B11); fno doctor update uses the same flags.
-  if uv_tool_install_retry --reinstall-package fno --refresh-package fno "$CLI_DIR"; then
-    log "installed Python-only fno from source. INCOMPLETE install: no 'fno' front door and no Rust binaries -"
-    log "run 'cargo install --locked --path <repo>/crates/fno' for the daemon-backed commands, or install a published PyPI wheel for the advertised 'fno' command."
-    log "restart your shell (or source your env) to pick up PATH."
-    next_steps
-    # Incomplete installs exit 3, not 0: the terminal installer-exit line
-    # names the code, and a user following "the output ends with installer
-    # exit 0" must never be handed a half install as done (gap audit blocker 2).
-    return 3
-  fi
+  "$fno" config setup shim-check --repair --bin-dir "$FNO_LINK_DIR" && return 0
+  err "fno shims in $FNO_LINK_DIR are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $fno config setup shim-check --bin-dir $FNO_LINK_DIR"
   return 1
 }
 
@@ -364,14 +94,14 @@ release_tag_for_version() { # release_tag_for_version <PEP 440 version> <channel
 # The primary install path on every channel: fetch the release tarball for
 # THIS plugin's version plus its .sha256, verify the sum, unpack to staging,
 # and let the staged front door adopt it (`fno update --adopt`: Rust owns the
-# proof, swap, links, marker and uv retire). Returns non-zero on any failure;
-# every failure prints its cause and the caller falls back to the uv wheel
-# path (AC3-ERR: a checksum mismatch swaps nothing and names itself).
+# proof, swap, links, marker and the wheel retire). Returns non-zero on any
+# failure; every failure prints its cause (a checksum mismatch swaps nothing
+# and names itself).
 try_binary_install() {
   local plat tag url sum_url stage sum_file tarball want got door
   plat="$(plugin_tarball_platform "$(uname -s)" "$(uname -m)")"
-  [[ -n "$plat" ]] || { log "no release tarball is built for $(uname -s)/$(uname -m); skipping the direct install."; return 1; }
-  [[ -n "$SRC_VERSION" ]] || return 1
+  [[ -n "$plat" ]] || { err "no release tarball is built for $(uname -s)/$(uname -m). With a Rust toolchain (https://rustup.rs), build from source: cargo install --locked fno"; return 1; }
+  [[ -n "$SRC_VERSION" ]] || { err "plugin.json declares no readable version."; return 1; }
   command -v curl >/dev/null 2>&1 || { log "curl is not available; skipping the direct install."; return 1; }
   command -v tar >/dev/null 2>&1 || { log "tar is unavailable; skipping the direct install."; return 1; }
   tag="$(release_tag_for_version "$SRC_VERSION" "$CHANNEL")"
@@ -380,40 +110,40 @@ try_binary_install() {
   mkdir -p "$stage"
   log "fetching the release binaries: $url"
   if ! curl -fsSL --max-time 300 -o "$stage/tarball" "$url"; then
-    err "the release tarball fetch failed (offline, or the release does not exist yet); falling back to the uv wheel path."
+    err "the release tarball fetch failed (offline, or the release does not exist yet)."
     rm -rf "$stage"
     return 1
   fi
   sum_url="${url}.sha256"
   sum_file="$stage/tarball.sha256"
   if ! curl -fsSL --max-time 60 -o "$sum_file" "$sum_url"; then
-    err "the .sha256 fetch failed; falling back to the uv wheel path."
+    err "the .sha256 fetch failed: $sum_url"
     rm -rf "$stage"
     return 1
   fi
-  mv "$stage/tarball" "$stage/fno-agents-$plat.tar.gz"
+  tarball="$stage/fno-agents-$plat.tar.gz"
+  mv "$stage/tarball" "$tarball"
   want="$(cut -d' ' -f1 "$sum_file")"
   if command -v sha256sum >/dev/null 2>&1; then
-    got="$(sha256sum "$stage/fno-agents-$plat.tar.gz" | cut -d' ' -f1)"
+    got="$(sha256sum "$tarball" | cut -d' ' -f1)"
   else
-    got="$(shasum -a 256 "$stage/fno-agents-$plat.tar.gz" | cut -d' ' -f1)"
+    got="$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
   fi
   if [[ "$got" != "$want" ]]; then
-    err "sha256 mismatch for fno-agents-$plat.tar.gz (expected ${want:-none}, got ${got:-none}); swapping nothing and falling back to the uv wheel path (AC3-ERR)."
+    err "sha256 mismatch for fno-agents-$plat.tar.gz (expected ${want:-none}, got ${got:-none}); swapping nothing."
     rm -rf "$stage"
     return 1
   fi
-  if ! tar -xzf "$stage/fno-agents-$plat.tar.gz" -C "$stage"; then
-    err "the tarball did not unpack; falling back to the uv wheel path."
+  if ! tar -xzf "$tarball" -C "$stage"; then
+    err "the tarball did not unpack."
     rm -rf "$stage"
     return 1
   fi
   door="$stage/fno"
-  [[ -x "$door" ]] || { err "the tarball carries no executable fno front door; falling back to the uv wheel path."; rm -rf "$stage"; return 1; }
-  export FNO_INSTALL_DIR="${FNO_INSTALL_DIR:-$HOME/.local/bin}"
-  log "installing the binaries into ~/.fno/install/bin and linking them into $FNO_INSTALL_DIR..."
-  if ! "$door" update --adopt "$stage" >&2; then
-    err "the staged front door's --adopt run failed; falling back to the uv wheel path."
+  [[ -x "$door" ]] || { err "the tarball carries no executable fno front door."; rm -rf "$stage"; return 1; }
+  log "installing the binaries into $FNO_BINARY_DIR and linking them into $FNO_LINK_DIR..."
+  if ! FNO_INSTALL_DIR="$FNO_LINK_DIR" "$door" update --adopt "$stage" >&2; then
+    err "the staged front door's --adopt run failed."
     rm -rf "$stage"
     return 1
   fi
@@ -435,21 +165,22 @@ finish_success() {
   bash "$(dirname "$SCRIPT_DIR")/scripts/ensure-global-dir.sh" || true
 }
 
-# `fno update` moved this machine to the binary install. A uv install here
-# would relink the wheel's entrypoints over the move, so the binary install
-# owns updates and this run only wires and sets up.
-FNO_BINARY_DIR="${FNO_STATE_DIR:-$HOME/.fno}/install/bin"
+# Already a binary install at this plugin's version: wire and set up only;
+# `fno update` owns updates.
 if [[ "$(cat "${FNO_STATE_DIR:-$HOME/.fno}/install/channel" 2>/dev/null)" == "binary" && -x "$FNO_BINARY_DIR/fno" ]]; then
-  log "binary install at $FNO_BINARY_DIR; skipping the uv wheel install (fno update updates it)."
-  wire_and_setup "$FNO_BINARY_DIR/fno"
-  finish_success
-  exit 0
+  installed="$("$FNO_BINARY_DIR/fno" version --json 2>/dev/null | sed -n -E 's/.*"package"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')" || installed=""
+  if [[ -n "$SRC_VERSION" && "$installed" == "$SRC_VERSION" ]]; then
+    log "fno $installed already installed at $FNO_BINARY_DIR; skipping the download."
+    shim_sweep || exit 1
+    wire_and_setup "$FNO_BINARY_DIR/fno"
+    finish_success
+    exit 0
+  fi
 fi
 
-# The direct install: the primary path on every channel. Only its
-# failure falls through to the uv wheel path and the source build below.
+# The direct install: the primary path on every channel.
 if try_binary_install; then
-  log "binary install adopted; the uv wheel path is not needed."
+  log "binary install adopted."
   shim_sweep || exit 1
   wire_and_setup "$FNO_BINARY_DIR/fno"
   log "restart your shell (or source your env) to pick up PATH."
@@ -458,152 +189,20 @@ if try_binary_install; then
   exit 0
 fi
 
-# No uv: delegate to the one installer that provisions it (scripts/install/fno.sh
-# chains Astral's standalone uv), pinned to this plugin's channel so the wheel
-# matches what the plugin declares. The pip fallback below stays as the offline
-# last resort. A nightly with no matching wheel skips the delegation: a nightly
-# install never silently downgrades to the stable PyPI wheel.
-if ! command -v uv >/dev/null 2>&1; then
-  FNO_SH="$(dirname "$SCRIPT_DIR")/scripts/install/fno.sh"
-  if [[ -f "$FNO_SH" ]]; then
-    fno_sh_spec=""
-    case "$CHANNEL" in
-      nightly)
-        NIGHTLY_WHEEL="$(nightly_wheel_url || true)"
-        [[ -n "$NIGHTLY_WHEEL" ]] && fno_sh_spec="FNO_INSTALL_WHEEL=$NIGHTLY_WHEEL"
-        ;;
-      rc|stable)
-        [[ -n "$SRC_VERSION" ]] && fno_sh_spec="FNO_VERSION=$SRC_VERSION"
-        ;;
-    esac
-    if [[ -n "$fno_sh_spec" ]]; then
-      log "uv not found; delegating to scripts/install/fno.sh: it runs the uv installer from astral.sh (that installer edits your shell profile), then installs fno from PyPI into the uv tool bin directory..."
-      # The guard reads the env at its default location while uv itself is
-      # absent: a tool env outliving a removed uv is exactly the one the
-      # delegation would otherwise replace unguarded.
-      clobber_guard || exit 3
-      fno_sh_rc=0
-      env "$fno_sh_spec" sh "$FNO_SH" || fno_sh_rc=$?
-      if [[ "$fno_sh_rc" -eq 0 ]]; then
-        finish_success
-        next_steps
-        exit 0
-      fi
-      err "fno.sh could not install uv or fno (exit $fno_sh_rc); falling back to a Python-only install."
-    fi
-  fi
-fi
-
-if command -v uv >/dev/null 2>&1; then
-
-  # Name the machine's shape before touching it. uv present means the
-  # astral.sh installer (and its shell-profile edit) never runs here.
-  log "uv found at $(command -v uv); this run touches only the fno tool env and never edits your shell profile."
-
-  # Idempotent: already binary-complete at our version -> nothing to do. Require
-  # the front door and ALL THREE agent binaries, not just the client: a
-  # same-version install missing the mux (e.g. a pre-x-538e wheel) must NOT take
-  # this skip, or the advertised `fno` command stays missing - the exact
-  # incomplete state this postinstall repairs.
-  if [[ -n "$SRC_VERSION" ]] \
-     && plugin_version_matches "$(uv_installed_fno_version)" "$SRC_VERSION" \
-     && command -v fno >/dev/null 2>&1 \
-     && command -v fno-agents >/dev/null 2>&1 \
-     && command -v fno-agents-daemon >/dev/null 2>&1 \
-     && command -v fno-agents-worker >/dev/null 2>&1; then
-    log "fno $SRC_VERSION already installed (binary-complete); skipping."
-    shim_sweep || exit 1
-    finish_success
-    exit 0
-  fi
-
-  # One guard in front of every replacing install (channel wheel, source
-  # build). The idempotent skip above never replaces anything, so it runs
-  # without the guard.
-  clobber_guard || exit 3
-
-  # Install the release matching THIS plugin's channel, then prove it is ours.
-  # stdout only is silenced: the retry wrapper's stderr (uv's verbatim error,
-  # the verify refusal, the three-attempts race message) is the diagnostic
-  # surface and must reach the user.
-  try_channel_install() { # try_channel_install <uv-spec> <origin-label>
-    if uv_tool_install_retry "$1" >/dev/null; then
-      INSTALLED="$(uv_installed_fno_version)"
-      if [[ -n "$SRC_VERSION" ]] && plugin_version_matches "$INSTALLED" "$SRC_VERSION"; then
-        log "installed fno $INSTALLED from $2 (front door + CLI + agent binaries on PATH)."
-        # The receipt proves the advertised command, not uv's exit code. A wheel
-        # that predates the complete payload stays installed (the Python CLI
-        # works) but the missing front door is named with its repair (AC2-EDGE).
-        # An incomplete receipt exits 3 (gap audit 2): the terminal
-        # installer-exit line names the failure instead of declaring it done.
-        if ! verify_frontdoor; then
-          finish_success
-          exit 3
-        fi
-        shim_sweep || exit 1
-        wire_and_setup "$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir)/fno/bin/fno"
-        log "restart your shell (or source your env) to pick up PATH."
-        finish_success
-        next_steps
-        exit 0
-      fi
-      # Not ours: the reserved 0.0.0 placeholder, a name collision, or a version
-      # that does not match this plugin's declared version. Remove it and build
-      # from source rather than run a foreign/empty fno (AC7-FR).
-      log "installed fno is ${INSTALLED:-unresolved}, not this plugin's ${SRC_VERSION:-version} - using the bundled source instead."
-      uv tool uninstall fno >/dev/null 2>&1 || true
-    else
-      log "$2 unavailable (offline, or not yet published) - using the bundled source."
-    fi
-  }
-
-  platform_wheel_notice
-  case "$CHANNEL" in
-    rc)
-      log "channel rc: pinning the candidate from PyPI as fno==$SRC_VERSION (a plain by-name install skips pre-releases)..."
-      try_channel_install "fno==$SRC_VERSION" "PyPI"
-      ;;
-    nightly)
-      NIGHTLY_WHEEL="$(nightly_wheel_url || true)"
-      if [[ -n "$NIGHTLY_WHEEL" ]]; then
-        log "channel nightly: installing this platform's wheel from the nightly GitHub Release: $NIGHTLY_WHEEL"
-        try_channel_install "$NIGHTLY_WHEEL" "the nightly GitHub Release"
-      else
-        log "channel nightly: no wheel for this platform on the nightly GitHub Release (offline, rate-limited, or an unsupported platform) - using the bundled source."
-      fi
-      ;;
-    *)
-      log "preferring the published PyPI wheel: uv tool install fno (by name)..."
-      try_channel_install "fno" "PyPI"
-      ;;
-  esac
-
-  # install_source_via_uv returns 3 when it INSTALLED but Python-only
-  # (incomplete): still a terminal outcome for this path, but a non-zero one -
-  # the terminal installer-exit line names the incomplete install.
-  src_rc=0
-  install_source_via_uv || src_rc=$?
-  if [[ "$src_rc" -eq 3 ]]; then
-    finish_success
-    exit 3
-  fi
-  err "uv tool install failed; falling through to pip fallback."
-fi
-
-if command -v pip >/dev/null 2>&1 || command -v pip3 >/dev/null 2>&1; then
-  PIP="$(command -v pip || command -v pip3)"
-  log "uv unavailable; falling back to $PIP install --user from $CLI_DIR (Python-only)..."
-  if "$PIP" install --user "$CLI_DIR"; then
-    log "installed Python-only fno via pip --user. INCOMPLETE install: no 'fno' front door - run 'cargo install --locked --path <repo>/crates/fno' for the Rust binaries, or install a published PyPI wheel for the advertised command."
-    log "ensure ~/.local/bin (or your user site-scripts dir) is on PATH."
+# The fallback: scripts/install/fno.sh, pinned to this plugin's version, so a
+# curl-less machine with wget still lands the same release.
+FNO_SH="$(dirname "$SCRIPT_DIR")/scripts/install/fno.sh"
+if [[ -f "$FNO_SH" && -n "$SRC_VERSION" ]]; then
+  log "falling back to scripts/install/fno.sh for fno $SRC_VERSION..."
+  fno_sh_rc=0
+  FNO_VERSION="$SRC_VERSION" sh "$FNO_SH" || fno_sh_rc=$?
+  if [[ "$fno_sh_rc" -eq 0 ]]; then
     finish_success
     next_steps
-    # Incomplete: exit non-zero so no success stamp is written (gap audit 2).
-    exit 3
-  else
-    err "pip install --user failed."
+    exit 0
   fi
+  err "fno.sh could not install fno $SRC_VERSION (exit $fno_sh_rc)."
 fi
 
-err "fno CLI requires Python with uv or pip; install Python from https://python.org and re-run /plugin install fno"
+err "fno is not installed. Retry once online, or install by hand: curl -fsSL fno.sh | sh"
 exit 1

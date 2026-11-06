@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Runs every cli/tests/smoke/test_*.sh, collects failures, summarizes.
+# Runs every tests/smoke/test_*.sh, collects failures, summarizes.
 set -uo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-SMOKE_DIR="$REPO_ROOT/cli/tests/smoke"
+SMOKE_DIR="$REPO_ROOT/tests/smoke"
 
 cd "$REPO_ROOT"
 

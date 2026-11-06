@@ -6,7 +6,6 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-CLI_DIR="$REPO_ROOT/cli"
 HOOK="$REPO_ROOT/hooks/target-stop-hook.sh"
 # Phase 1 of stop-hook refactor: _observe_wake_signals lives in
 # scripts/lib/wake-signals.sh; the hook sources it. Sourcing the lib
@@ -37,11 +36,11 @@ _observe_wake_signals
 # wake-signals op reads through).
 _signals_dir() {
     local tmpdir="$1"
-    FNO_SPACES_DIR="$tmpdir/spaces" uv run --project "$CLI_DIR" python3 -c "
-from pathlib import Path
-from fno.paths import space_dir
-print(space_dir(Path('$tmpdir')) / 'wake-signals')
-"
+    # A non-repo root keys its space on its own path, slashes swapped
+    # (paths.rs space_slug).
+    local root
+    root="$(cd "$tmpdir" && pwd -P)"
+    printf '%s/spaces/%s/wake-signals\n' "$tmpdir" "${root//\//-}"
 }
 
 # ---- AC2-ERR: no signals -> no wake_signal_observed lines ---------------

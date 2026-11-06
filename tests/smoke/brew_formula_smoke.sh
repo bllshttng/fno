@@ -4,10 +4,10 @@
 # Two tiers, both run against the REPO copy of the formula
 # (scripts/install/homebrew/fno.rb), which is byte-identical to the tap copy:
 #
-#   STRUCTURAL (always, no wheel/brew install needed):
+#   STRUCTURAL (always, no tarball/brew install needed):
 #     1. `ruby -c` parses the committed formula.
-#     2. The launch-critical elements are present: Language::Python::Virtualenv,
-#        depends_on python, the EXPLICIT `bin.install_symlink ... fno-agents*`
+#     2. The launch-critical elements are present: depends_on :macos (no
+#        Python dependency), the EXPLICIT `bin.install_symlink ... fno-agents*`
 #        (the shared_scripts symlink, Locked Decision 4), the three-binary
 #        `test do` asserts, and the license.
 #     3. `brew style` passes modulo the tap-context-only Sorbet/frozen-string
@@ -15,11 +15,11 @@
 #        not carry Sorbet sigils). Full `brew audit --strict --new fno` needs the
 #        published PyPI url + generated resources - an operator LAUNCH step.
 #
-#   INSTALL (only with a binary-complete wheel + brew, gated on CI or
+#   INSTALL (only with a release tarball + brew, gated on CI or
 #   FNO_BREW_SMOKE_INSTALL=1 so a local run never mutates the dev's brew):
-#     4. A concrete local-tarball formula (url=file://<tarball built from the
-#        wheel's shared scripts>, REAL sha256, the seed's install + test
-#        blocks) installs via `brew install` (AC1-HP/AC5-HP).
+#     4. A concrete local-tarball formula (url=file://<the given tarball>,
+#        REAL sha256, the seed's install + test blocks) installs via
+#        `brew install` (AC1-HP/AC5-HP).
 #     5. All three fno-agents* binaries resolve under the keg bin (US2/AC2-HP):
 #        proof the explicit symlink surfaces the tarball's binaries.
 #     6. `brew test fno` passes (AC1-UI/AC5-UI) and `fno mux ls` runs (no 127).
@@ -29,24 +29,19 @@
 # Per-check pass/fail; exits non-zero on any miss (AC5-ERR/UI) so a broken
 # formula fails the release rather than going silently green.
 #
-# Usage: brew_formula_smoke.sh <path-to-binary-complete-wheel>
-#   The wheel is required for the INSTALL tier (its shared scripts build the
-#   synthetic release tarball); the STRUCTURAL tier ignores it.
+# Usage: brew_formula_smoke.sh <path-to-fno-agents-macos-<arch>.tar.gz>
+#   The tarball is required for the INSTALL tier; the STRUCTURAL tier
+#   ignores it.
 #   The by-name `brew install <owner>/fno/fno` + the full `--new` audit go green
 #   only AFTER the publish + tap creation (foundation launch); this
 #   smoke proves the formula + the symlink mechanism now.
 set -uo pipefail
 
-# An inherited PYTHONPATH can only contaminate the unzipped wheel's scripts;
-# nothing here runs Python, and preflight.sh exports exactly that var.
-unset PYTHONPATH
-[ -z "${PYTHONPATH:-}" ] || { echo "FAIL[env] PYTHONPATH survived unset (readonly?); refusing to smoke against a contaminated sys.path"; exit 1; }
+TARBALL="${1:-}"
 
-WHEEL="${1:-}"
-
-# Repo root from this script's location (cli/tests/smoke/ -> repo root).
+# Repo root from this script's location (tests/smoke/ -> repo root).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FORMULA="$REPO_ROOT/scripts/install/homebrew/fno.rb"
 [ -f "$FORMULA" ] || { echo "FAIL[input] formula not found at $FORMULA"; exit 1; }
 
@@ -158,7 +153,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# INSTALL tier (binary-complete wheel + brew, CI or opt-in only)
+# INSTALL tier (release tarball + brew, CI or opt-in only)
 # ---------------------------------------------------------------------------
 
 install_gate() { [ "${CI:-}" = "true" ] || [ "${FNO_BREW_SMOKE_INSTALL:-}" = "1" ]; }
@@ -174,30 +169,17 @@ elif brew list --formula fno >/dev/null 2>&1; then
   # (incl. CI runners) has nothing here, so the tier runs. Reaching the `else`
   # below thus guarantees no pre-existing `fno`, making the trap's uninstall safe.
   echo "--- INSTALL tier skipped: an 'fno' keg is already installed; refusing to mutate the real install ---"
-elif [ -z "$WHEEL" ] || [ ! -f "$WHEEL" ]; then
-  miss "install-input" "INSTALL tier gated ON but no binary-complete wheel given (arg 1): '${WHEEL:-}'"
+elif [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+  miss "install-input" "INSTALL tier gated ON but no release tarball given (arg 1): '${TARBALL:-}'"
 else
-  WHEEL="$(cd "$(dirname "$WHEEL")" && pwd)/$(basename "$WHEEL")"
-  SHA="$(shasum -a 256 "$WHEEL" | awk '{print $1}')"
-
-  # The tap installs the RELEASE TARBALL (the binary flywheel), so the smoke
-  # builds one from the wheel's shared scripts: same four binaries, the same
-  # root-level layout the release job tars, at
-  # fno-agents-macos-<arch>.tar.gz. The formula template below then matches
-  # the committed seed's shape (libexec install + keg-bin symlinks).
-  STAGE="$(mktemp -d)"
-  ARCH_DIR="macos-arm64"
-  case "$(uname -m)" in
-    x86_64) ARCH_DIR="macos-x64" ;;
-  esac
-  TARBALL="$STAGE/fno-agents-$ARCH_DIR.tar.gz"
-  mkdir -p "$STAGE/scripts"
-  unzip -o "$WHEEL" 'fno-*.data/scripts/*' -d "$STAGE/unzipped" >/dev/null
-  tar -czf "$TARBALL" -C "$STAGE/unzipped/fno-*.data/scripts" fno fno-agents fno-agents-daemon fno-agents-worker
+  # The tap installs the release tarball, the same root-level four-binary
+  # layout release-binaries.yml tars. The formula template below matches the
+  # committed seed's shape (libexec install + keg-bin symlinks).
+  TARBALL="$(cd "$(dirname "$TARBALL")" && pwd)/$(basename "$TARBALL")"
   TSHA="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
 
   # Modern brew only installs formulae from a tap, so stage the concrete
-  # local-wheel formula into a throwaway tap (this also exercises the real
+  # local-tarball formula into a throwaway tap (this also exercises the real
   # `brew install <owner>/fno/fno` tap path the launched channel uses).
   TAP="local/fnosmoke"
   brew untap "$TAP" >/dev/null 2>&1 || true
@@ -209,12 +191,9 @@ else
   mkdir -p "$TAP_DIR/Formula"
   SMOKE_FORMULA="$TAP_DIR/Formula/fno.rb"
 
-  # Concrete local-wheel formula: real file:// url + REAL sha256 (so brew's
-  # fetch + hash verify runs - the AC1-ERR path). It uses the SAME install
-  # MECHANISM as the committed formula: url's :nounzip keeps the wheel a file, a
-  # venv is built from the python@3.13 dep, and pip installs the wheel FILE from
-  # buildpath (Dir["*.whl"]) - so this smoke actually exercises the launched path
-  # (deps resolve from PyPI via the own-tap network, same as the committed one).
+  # Concrete local-tarball formula: real file:// url + REAL sha256 (so brew's
+  # fetch + hash verify runs - the AC1-ERR path), with the SAME install block
+  # as the committed formula.
   cat > "$SMOKE_FORMULA" <<RUBY
 class Fno < Formula
   desc "Autonomous delivery pipeline CLI (footnote) - smoke"
@@ -260,7 +239,7 @@ RUBY
 
   # --- check 6: the advertised command runs (no 127) + brew test passes ---
   # `fno mux ls` proves the Rust front door natively; the tarball carries no
-  # Python CLI, so the old fno-py row is gone with the wheel install.
+  # Python CLI, so no Python row is checked.
   if [ -x "$KEGBIN/fno" ]; then
     run_capture "$KEGBIN/fno" mux ls
     if [ "$RC" -eq 0 ]; then

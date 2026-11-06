@@ -3,12 +3,12 @@
 #
 # The zero-binary bootstrap script (scripts/install/bootstrap.sh) is the one
 # thing an agent can run when no fno binary exists. Its report is consumed by
-# machines, so the contract this test pins is: always-valid JSON, the seven
+# machines, so the contract this test pins is: always-valid JSON, the five
 # prerequisite checks with absolute paths, an honest restart_needed flag, and
 # the never-edits-shell-rc promise (repair sets FNO_NO_MODIFY_PATH and runs
 # postinstall.sh instead of touching a profile).
 #
-# Every case runs in a throwaway sandbox: a fake HOME, a fake `uv` on PATH, a
+# Every case runs in a throwaway sandbox: a fake HOME, a
 # fake plugin tree, and stub binaries. No network, no real install.
 #
 # Exit codes: 0 pass / 1 assertion failed / 77 skipped (missing deps)
@@ -52,29 +52,15 @@ mk_sandbox() {
   printf '#!/bin/sh\ntouch "%s/postinstall-ran"\nexit 0\n' "$sb" > "$sb/plugin/.claude-plugin/postinstall.sh"
   chmod +x "$sb/plugin/.claude-plugin/postinstall.sh"
 
-  # Fake uv answering the two `tool dir` forms (--bin must be distinguished
-  # from the bare form, which shares the first two words).
-  cat > "$sb/bin/uv" <<EOF
-#!/bin/sh
-case "\$1 \$2" in
-  "tool dir")
-    case " \$3" in
-      " --bin") echo "$sb/home/tools-bin" ;;
-      *) echo "$sb/home/tools" ;;
-    esac ;;
-  *) exit 0 ;;
-esac
-EOF
-  chmod +x "$sb/bin/uv"
-
+  # The binary install: the four binaries in ~/.fno/install/bin, the PATH
+  # links in ~/.local/bin.
   if [[ "$green" == 1 ]]; then
-    mkdir -p "$sb/home/tools/fno/bin" "$sb/home/tools-bin"
-    printf '#!/bin/sh\n[ "$1" = --version ] && { echo "fno 0.4.0"; exit 0; }\nexit 1\n' > "$sb/home/tools/fno/bin/fno-py"
-    printf '#!/bin/sh\n[ "$1" = "mux" ] && exit 0\n[ "$1" = --version ] && { echo "fno 0.4.0"; exit 0; }\nexit 1\n' > "$sb/home/tools/fno/bin/fno"
-    chmod +x "$sb/home/tools/fno/bin/fno-py" "$sb/home/tools/fno/bin/fno"
+    mkdir -p "$sb/home/.fno/install/bin" "$sb/home/.local/bin"
+    printf '#!/bin/sh\n[ "$1" = "mux" ] && exit 0\n[ "$1" = --version ] && { echo "fno 0.4.0"; exit 0; }\nexit 1\n' > "$sb/home/.fno/install/bin/fno"
+    chmod +x "$sb/home/.fno/install/bin/fno"
     for b in fno-agents fno-agents-daemon fno-agents-worker; do
-      printf '#!/bin/sh\nexit 0\n' > "$sb/home/tools-bin/$b"
-      chmod +x "$sb/home/tools-bin/$b"
+      printf '#!/bin/sh\nexit 0\n' > "$sb/home/.fno/install/bin/$b"
+      chmod +x "$sb/home/.fno/install/bin/$b"
     done
     printf '#!/bin/sh\necho "cargo 1.0"\n' > "$sb/bin/cargo"
     chmod +x "$sb/bin/cargo"
@@ -84,7 +70,7 @@ EOF
   printf '# user rc, do not touch\n' > "$sb/home/.zshrc"
 
   if [[ "$on_path" == 1 ]]; then
-    printf '%s/bin:%s/home/tools-bin:/usr/bin:/bin\n' "$sb" "$sb" > "$sb/pathfile"
+    printf '%s/bin:%s/home/.local/bin:/usr/bin:/bin\n' "$sb" "$sb" > "$sb/pathfile"
   else
     printf '%s/bin:/usr/bin:/bin\n' "$sb" > "$sb/pathfile"
   fi
@@ -121,27 +107,26 @@ SB="$(mk_sandbox 1 1)"
 RC="$(run_bs "$SB")"
 [[ "$RC" == 0 ]] || fail "all-green report should exit 0, got $RC; stderr: $(cat "$SB/report.err")"
 assert_json "$SB/report.json" \
-  "d['ready'] is True and d['restart_needed'] is False and d['mode'] == 'report' and len(d['checks']) == 7" \
+  "d['ready'] is True and d['restart_needed'] is False and d['mode'] == 'report' and len(d['checks']) == 5" \
   "all-green top-level fields"
 assert_json "$SB/report.json" \
   "all(c['state'] == 'ok' for c in d['checks'] if c['required'])" \
   "all-green required checks ok"
 assert_json "$SB/report.json" \
-  "(lambda n: n['path'] == '$SB/home/tools/fno/bin/fno-py' and n['path'].startswith('/'))(n['wheel'])" \
-  "wheel check carries an absolute path"
+  "n['frontdoor']['path'] == '$SB/home/.fno/install/bin/fno'" \
+  "frontdoor check carries the binary install's absolute path"
 
-### 2. Empty machine (no uv anywhere): exit 1, JSON still valid, fixes named.
+### 2. Empty machine (nothing installed): exit 1, JSON still valid, fixes named.
 SB="$(mk_sandbox 0 0)"
-rm -f "$SB/bin/uv"
 RC="$(run_bs "$SB")"
 [[ "$RC" == 1 ]] || fail "empty machine should exit 1, got $RC"
 assert_json "$SB/report.json" "d['ready'] is False" "empty machine not ready"
 assert_json "$SB/report.json" \
-  "n['uv']['state'] == 'missing' and 'astral.sh' in n['uv']['fix']" \
-  "uv missing names the uv installer fix"
+  "n['frontdoor']['state'] == 'missing' and 'fno.sh' in n['frontdoor']['fix']" \
+  "frontdoor missing names the installer fix"
 assert_json "$SB/report.json" \
-  "n['wheel']['state'] == 'missing' and n['wheel']['fix']" \
-  "wheel missing names a fix"
+  "n['fno-agents']['state'] == 'missing' and n['fno-agents']['fix']" \
+  "fno-agents missing names a fix"
 assert_json "$SB/report.json" \
   "n['rust']['state'] == 'optional_missing' and n['rust']['required'] is False" \
   "rust is optional and its absence is not a failure"
@@ -153,8 +138,8 @@ RC="$(run_bs "$SB")"
 [[ "$RC" == 0 ]] || fail "binaries-ok-but-off-PATH should still be ready (exit 0), got $RC"
 assert_json "$SB/report.json" "d['restart_needed'] is True" "off-PATH sets restart_needed"
 assert_json "$SB/report.json" \
-  "n['path']['state'] == 'missing' and 'export PATH=\"$SB/home/tools-bin:\$PATH\"' == n['path']['fix']" \
-  "path fix is the exact export with the absolute tool bin"
+  "n['path']['state'] == 'missing' and 'export PATH=\"$SB/home/.local/bin:\$PATH\"' == n['path']['fix']" \
+  "path fix is the exact export with the absolute link dir"
 
 ### 4. --from-source on a non-checkout: usage error, exit 2, no report expected.
 SB="$(mk_sandbox 1 1)"
@@ -184,8 +169,8 @@ RC="$(run_bs "$SB" --bogus)"
 ###    the checkout in the report; the sandbox stubs install nothing, so the
 ###    machine is still not ready and the exit says so.
 SB="$(mk_sandbox 0 0)"
-mkdir -p "$SB/checkout/cli" "$SB/checkout/crates/fno" "$SB/checkout/crates/fno-agents"
-touch "$SB/checkout/cli/pyproject.toml" "$SB/checkout/crates/fno/Cargo.toml" "$SB/checkout/crates/fno-agents/Cargo.toml"
+mkdir -p "$SB/checkout/crates/fno" "$SB/checkout/crates/fno-agents"
+touch "$SB/checkout/crates/fno/Cargo.toml" "$SB/checkout/crates/fno-agents/Cargo.toml"
 RC="$(run_bs "$SB" --from-source "$SB/checkout")"
 [[ "$RC" == 1 ]] || fail "from-source into a stub environment should exit 1 (nothing landed), got $RC"
 assert_json "$SB/report.json" \
@@ -196,9 +181,9 @@ assert_json "$SB/report.json" \
 ###    the report's JSON: the front door stub prints both; the report stays
 ###    parseable and the version line is clean.
 SB="$(mk_sandbox 0 0)"
-mkdir -p "$SB/home/tools/fno/bin" "$SB/home/tools-bin"
-printf '#!/bin/sh\n[ "$1" = "mux" ] && exit 0\n[ "$1" = --version ] && { printf "fno 0.4.0\\033[0m\\001dirty\\n"; exit 0; }\nexit 1\n' > "$SB/home/tools/fno/bin/fno"
-chmod +x "$SB/home/tools/fno/bin/fno"
+mkdir -p "$SB/home/.fno/install/bin"
+printf '#!/bin/sh\n[ "$1" = "mux" ] && exit 0\n[ "$1" = --version ] && { printf "fno 0.4.0\\033[0m\\001dirty\\n"; exit 0; }\nexit 1\n' > "$SB/home/.fno/install/bin/fno"
+chmod +x "$SB/home/.fno/install/bin/fno"
 RC="$(run_bs "$SB")"
 assert_json "$SB/report.json" "n['frontdoor']['state'] == 'ok'" "frontdoor still reports ok with dirty version output"
 assert_json "$SB/report.json" "'fno 0.4.0dirty' == n['frontdoor']['detail'].split(': ')[-1]" "version detail carries no escape or control chars"

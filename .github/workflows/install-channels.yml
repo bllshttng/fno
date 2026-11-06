@@ -29,7 +29,7 @@ on:
       - 'scripts/preflight.sh'
       - 'skills/tdd/SKILL.md'
       - '.github/workflows/install-channels.yml'
-      - 'cli/tests/smoke/channel_matrix_smoke.sh'
+      - 'tests/smoke/channel_matrix_smoke.sh'
       - 'scripts/ci/check-readme-install-commands.sh'
   schedule:
     - cron: '23 5 * * *'
@@ -164,7 +164,7 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          bash cli/tests/smoke/channel_matrix_smoke.sh '${{ matrix.row.id }}'
+          bash tests/smoke/channel_matrix_smoke.sh '${{ matrix.row.id }}'
           rc=$?
           set -e
           expect='${{ matrix.row.expect }}'

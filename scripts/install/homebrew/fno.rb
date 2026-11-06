@@ -3,7 +3,7 @@
 # This is the canonical source of the formula. It is copied verbatim into the
 # own tap repo (github.com/<owner>/homebrew-fno) so `brew install <owner>/fno/fno`
 # resolves it. Keeping the source here lets CI parse + audit it and lets the
-# brew clean-machine smoke (cli/tests/smoke/brew_formula_smoke.sh) prove the
+# brew clean-machine smoke (tests/smoke/brew_formula_smoke.sh) prove the
 # install + symlink mechanism against a freshly built release tarball.
 #
 # The binary-tarball flywheel (the wheel upgrade path): the formula installs

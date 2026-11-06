@@ -82,7 +82,7 @@ run_capture_bounded() {
 # rc=124 (every row runs this, so a regression here fails loudly on the
 # runner, not silently someday).
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # --- clean machine -----------------------------------------------------------
 # Fresh HOME, pristine SHELL (uv's profile edit refuses without one), no
@@ -113,7 +113,7 @@ export SHELL="${SHELL:-/bin/bash}"
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 unset PYTHONPATH
 unset XDG_CACHE_HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_BIN_HOME
-unset FNO_VERSION FNO_INSTALL_WHEEL FNO_INSTALL_DIR FNO_NO_MODIFY_PATH
+unset FNO_VERSION FNO_INSTALL_TARBALL FNO_INSTALL_DIR FNO_NO_MODIFY_PATH
 unset CLAUDE_CONFIG_DIR CLAUDE_PLUGIN_DATA CODEX_HOME CODEX_PLUGIN_CACHE
 unset UV_TOOL_DIR UV_TOOL_BIN_DIR
 # The scrub contract: prove the unsets took. An inherited PYTHONPATH would put
@@ -150,7 +150,7 @@ print(sorted(data["releases"], key=key)[-1])
 shared_smoke() {
   # $@ = candidate directories holding the installed fno / fno-agents binaries;
   # the first one carrying an fno binary wins (channels disagree about where
-  # the tool bin lands, and a macOS pip --user fallback lands elsewhere still).
+  # the binaries land).
   local bin_dir="" agents_bin="" d
   for d in "$@"; do
     if [ -x "$d/fno" ]; then
@@ -369,12 +369,7 @@ row_claude_plugin_session() {
   fi
   mkdir -p "$CLAUDE_PLUGIN_DATA"
   bash "$tree/.claude-plugin/postinstall.sh" >"$CLAUDE_PLUGIN_DATA/postinstall.log" 2>&1
-  local py_bins="" d
-  for d in "$HOME"/Library/Python/*/bin; do
-    [ -d "$d" ] && py_bins="$py_bins $d"
-  done
-  # shellcheck disable=SC2086
-  score_plugin_session "$CLAUDE_PLUGIN_DATA/postinstall.log" "$HOME/.local/bin" $py_bins
+  score_plugin_session "$CLAUDE_PLUGIN_DATA/postinstall.log" "$HOME/.local/bin"
 }
 
 row_codex_plugin_session() {
@@ -427,12 +422,7 @@ row_codex_plugin_session() {
   fi
   mkdir -p "$HOME/.local/state/fno/plugin-install"
   bash "$tree/.claude-plugin/postinstall.sh" >"$HOME/.local/state/fno/plugin-install/postinstall.log" 2>&1
-  local py_bins="" d
-  for d in "$HOME"/Library/Python/*/bin; do
-    [ -d "$d" ] && py_bins="$py_bins $d"
-  done
-  # shellcheck disable=SC2086
-  score_plugin_session "$HOME/.local/state/fno/plugin-install/postinstall.log" "$HOME/.local/bin" $py_bins
+  score_plugin_session "$HOME/.local/state/fno/plugin-install/postinstall.log" "$HOME/.local/bin"
 }
 
 row_fno_sh_served() {
@@ -545,7 +535,7 @@ row_brew() {
   assert_clean_machine
   export PATH="/opt/homebrew/bin:$PATH"
   echo "row brew: install starting under the 900s bound"
-  # 900s: a cold brew install (auto-update + bottles + pip) fits well under
+  # 900s: a cold brew install (auto-update + bottles) fits well under
   # it, and it stays 600s clear of the 1500s row watchdog, so a stalled fetch
   # scores as an honest fail here instead of a row hang.
   run_capture_bounded 900 brew install bllshttng/fno/fno
@@ -583,11 +573,9 @@ row_cargo() {
     miss "cargo-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0
   fi
-  # cargo install lands the front door here; its first forwarded command
-  # bootstraps the wheel, whose data scripts carry fno-agents into the uv
-  # tool bin ($HOME/.local/bin). `fno backlog` never provisions, so warm up
-  # once, and keep the tool bin on PATH for the front door's bare-name
-  # sibling fallback.
+  # cargo install lands the front door here, without fno-agents. `fno backlog`
+  # never provisions, so warm up once, and keep $HOME/.local/bin on PATH for
+  # the front door's bare-name sibling fallback.
   export PATH="$HOME/.local/bin:$CARGO_HOME/bin:$PATH"
   run_capture "$CARGO_HOME/bin/fno" config get config.review.posture
   shared_smoke "$CARGO_HOME/bin" "$HOME/.local/bin"
@@ -618,34 +606,26 @@ row_skills_sh() {
 }
 
 row_fno_sh_nightly() {
-  # x-6f1d: an install run from inside a NIGHTLY tree must land the nightly
-  # wheel, not the stable PyPI package. Stamp a scratch tree with the dev
-  # spelling the nightly tag carries (read off the nightly release's wheel
-  # name), run scripts/install/fno.sh from inside it, and require that exact
-  # dev version back from the installed front door.
+  # An install run from inside a NIGHTLY tree must land the nightly release
+  # tarball, not the latest stable one. Stamp a scratch tree with the dev
+  # spelling the nightly tag carries (read off the nightly release title,
+  # "nightly <version>"), run scripts/install/fno.sh from inside it, and
+  # require that exact dev version back from the installed front door.
   assert_clean_machine
-  local plat wheel_asset version
-  plat="$(bash -c "source '$REPO_ROOT/scripts/release/plugin-version.sh' && plugin_wheel_platform \"\$(uname -s)\" \"\$(uname -m)\"")"
+  local plat release_json version
+  plat="$(bash -c "source '$REPO_ROOT/scripts/release/plugin-version.sh' && plugin_tarball_platform \"\$(uname -s)\" \"\$(uname -m)\"")"
   if [ -z "$plat" ]; then
-    miss "platform" "no wheel platform pattern for $(uname -s)/$(uname -m)"
+    miss "platform" "no release tarball for $(uname -s)/$(uname -m)"
     return 0
   fi
-  wheel_asset="$(curl -fsSL "https://api.github.com/repos/fnodotdev/fno/releases/tags/nightly" \
-    | FNO_WHEEL_PLATFORM="$plat" python3 -c '
-import json, os, re, sys
-plat = os.environ["FNO_WHEEL_PLATFORM"]
-for a in json.load(sys.stdin).get("assets", []):
-    n = a.get("name", "")
-    if n.endswith(".whl") and re.search(plat, n):
-        print(n); break
-' 2>/dev/null)"
-  if [ -z "$wheel_asset" ]; then
-    miss "nightly" "no wheel for this platform on the nightly release (API read failed or unsupported platform)"
+  release_json="$(curl -fsSL "https://api.github.com/repos/fnodotdev/fno/releases/tags/nightly" 2>/dev/null)"
+  if ! printf '%s' "$release_json" | grep -qF "\"name\": \"fno-agents-$plat.tar.gz\""; then
+    miss "nightly" "no fno-agents-$plat.tar.gz on the nightly release (API read failed or unsupported platform)"
     return 0
   fi
-  version="$(printf '%s' "$wheel_asset" | sed -n -E 's/^fno-(.+)-py3-none-.*/\1/p')"
+  version="$(printf '%s' "$release_json" | sed -n -E 's/^  "name": "nightly ([^"]+)",?$/\1/p' | head -n 1)"
   if [ -z "$version" ]; then
-    miss "nightly" "could not read the version off wheel name $wheel_asset"
+    miss "nightly" "could not read the version off the nightly release title"
     return 0
   fi
   local tree="$BASE/nightly-tree"
@@ -667,7 +647,7 @@ for a in json.load(sys.stdin).get("assets", []):
   shared_smoke "$HOME/.local/bin"
   run_capture "$HOME/.local/bin/fno" --version
   if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "$version"; then
-    pass "nightly-version" "the nightly tree install reports the dev wheel's version ($version)"
+    pass "nightly-version" "the nightly tree install reports the nightly version ($version)"
   else
     miss "nightly-version" "expected $version from the nightly tree install, got rc=$RC: $(printf '%s' "$OUT" | tail -1)"
   fi
@@ -688,7 +668,7 @@ row_clone_setup() {
 
 # setup-scratch-home: the setup command's three report modes plus the wizard's
 # unattended refusal, scored on the fresh HOME the harness already scrubbed
-# to. The binary is built from THIS tree, not a published wheel: the wizard
+# to. The binary is built from THIS tree, not a published release: the wizard
 # command ships in no release yet, so the PyPI and script channels cannot serve
 # this row.
 row_setup_scratch_home() {

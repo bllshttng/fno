@@ -470,11 +470,11 @@ jobs:
           - Commit: ${stamped}
           - Version: ${version}
 
-          Install (pick the wheel for your platform):
+          Install (pick the tarball for your platform):
           "
-          for whl in dist/fno-*.whl; do
+          for tgz in dist/fno-agents-*.tar.gz; do
             notes="${notes}
-          - FNO_INSTALL_WHEEL=https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/$(basename "$whl") sh fno.sh"
+          - FNO_INSTALL_TARBALL=https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/$(basename "$tgz") sh fno.sh"
           done
 
           gh release create nightly \
