@@ -1866,7 +1866,9 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 return crate::codex_converge::run_release(json);
             }
             if harness == "opencode" {
-                return run_opencode_arm(harness, json, uninstall, status, quick, yes, dry_run);
+                return run_opencode_arm(
+                    harness, json, uninstall, status, quick, yes, dry_run, no_reclaim,
+                );
             }
             if harness == "grok" && status {
                 let receipt = grok_status_receipt();
@@ -1949,6 +1951,7 @@ fn run_opencode_arm(
     quick: bool,
     yes: bool,
     dry_run: bool,
+    no_reclaim: bool,
 ) -> i32 {
     let say = |line: String| {
         if json {
@@ -2115,8 +2118,10 @@ fn run_opencode_arm(
                 let joined: Vec<String> = stale.iter().map(|p| p.display().to_string()).collect();
                 say(format!("removed stale copies: {}", joined.join(", ")));
             }
-            let home = AgentsHome::from_env();
-            let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            if !no_reclaim {
+                let home = AgentsHome::from_env();
+                let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            }
             let full = Profile::Full.stage_dir();
             prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
             if receipt.status == "partial" {

@@ -1071,10 +1071,7 @@ pub async fn restart_daemon(
     // within its budget before failing, so the boot race heals here.
     let status = Request::new(1, "agent.status", json!({}));
     let result = match call_if_running(home, &status).await {
-        Ok(resp) => match resp.payload {
-            crate::protocol::ResponsePayload::Ok(v) => Some(v),
-            crate::protocol::ResponsePayload::Err(_) => None,
-        },
+        Ok(resp) => status_result(resp).ok(),
         Err(ClientError::DaemonNotRunning) => None,
         Err(e) => return Err(RestartError::Client(e)),
     };
