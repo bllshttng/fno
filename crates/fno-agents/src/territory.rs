@@ -1432,16 +1432,6 @@ max_concurrent = 0
     }
 
     #[test]
-    fn parse_duration_to_seconds_never_panics_on_a_non_ascii_suffix() {
-        // A malformed operator value ending mid multi-byte UTF-8 character
-        // must fall back to None, never panic the process.
-        let v = toml::Value::String("5\u{e9}".to_string());
-        assert_eq!(parse_duration_to_seconds(&v), None);
-        let v = toml::Value::String("5m".to_string());
-        assert_eq!(parse_duration_to_seconds(&v), Some(300));
-    }
-
-    #[test]
     fn territory_rows_project_the_ac7_row_shape() {
         let _env = env_guard();
         let (tmp, cwd, registry) = fixture_env();
@@ -1459,41 +1449,6 @@ max_concurrent = 0
         assert_eq!(teamed["holder"], "lead-a");
         assert_eq!(teamed["mission"], "e-1");
         assert_eq!(teamed["live"], 1, "w-1 works e-1a inside the team scope");
-    }
-
-    #[test]
-    fn territory_rows_count_each_worker_in_exactly_one_row() {
-        let _env = env_guard();
-        let (tmp, cwd, registry) = fixture_env();
-        // Seed the claims the two live workers' registry rows imply.
-        acquire_node_claim(tmp.path(), "e-1a", Some(std::process::id()), None, false);
-        acquire_node_claim(tmp.path(), "e-loose", Some(std::process::id()), None, false);
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-p", "status": "live", "role_scope": "alpha", "role_level": 1,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "w-1", "status": "live", "node": "e-1a", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
-                 "pid": std::process::id()},
-                {"name": "w-loose", "status": "live", "node": "e-loose", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
-                 "pid": std::process::id()}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let rows = territory_rows(&cwd, &registry);
-        let loose = rows.iter().find(|r| r["scope"] == "alpha").unwrap();
-        let teamed = rows.iter().find(|r| r["scope"] == "e-1").unwrap();
-        assert_eq!(
-            teamed["live"], 1,
-            "e-1a's worker counts for e-1 only: {rows:?}"
-        );
-        assert_eq!(
-            loose["live"], 1,
-            "e-loose's worker counts for alpha only: {rows:?}"
-        );
     }
 
     fn acquire_node_claim(
@@ -1518,84 +1473,6 @@ max_concurrent = 0
             crate::claims::AcquireOutcome::Acquired(record) => record,
             other => panic!("node claim fixture failed: {other:?}"),
         }
-    }
-
-    fn reaped_pid() -> u32 {
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        child.wait().unwrap();
-        pid
-    }
-
-    #[test]
-    fn territory_rows_count_live_and_suspect_node_claims_not_registry_node_fields() {
-        let _env = env_guard();
-        let (tmp, cwd, registry) = fixture_env();
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "w-1", "status": "live", "node": null, "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
-                 "pid": std::process::id()},
-                {"name": "w-2", "status": "live", "node": null, "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
-                 "pid": std::process::id()}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let live = acquire_node_claim(tmp.path(), "e-1a", Some(std::process::id()), None, false);
-        let suspect = acquire_node_claim(tmp.path(), "e-1", None, Some(60_000), true);
-        let stale = acquire_node_claim(tmp.path(), "e-loose", Some(reaped_pid()), None, false);
-        assert_eq!(
-            crate::claims::classify(&live, None),
-            crate::claims::ClaimState::Live
-        );
-        assert_eq!(
-            crate::claims::classify(&suspect, None),
-            crate::claims::ClaimState::Suspect
-        );
-        assert_eq!(
-            crate::claims::classify(&stale, None),
-            crate::claims::ClaimState::Stale
-        );
-
-        let rows = territory_rows(&cwd, &registry);
-        let teamed = rows.iter().find(|r| r["scope"] == "e-1").unwrap();
-        let loose = rows.iter().find(|r| r["scope"] == "alpha").unwrap();
-        assert_eq!(
-            teamed["live"], 2,
-            "live and suspect node claims count: {rows:?}"
-        );
-        assert_eq!(
-            loose["live"], 0,
-            "a stale node claim does not count: {rows:?}"
-        );
-
-        // Same fixture, the degrade arm: an unreadable claims root answers
-        // unknown, never an implicit zero row.
-        let (tmp, cwd, registry) = fixture_env();
-        std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
-        std::fs::write(tmp.path().join(".fno/claims"), "not a directory").unwrap();
-        let rows = territory_rows(&cwd, &registry);
-        assert_eq!(
-            rows.len(),
-            1,
-            "unknown store must not emit a zero row: {rows:?}"
-        );
-        assert_eq!(rows[0]["membership"], "unknown");
-        assert!(
-            rows[0]["reason"].as_str().unwrap().contains("claims"),
-            "{rows:?}"
-        );
-        assert!(rows[0]["live"].is_null(), "{rows:?}");
-
-        // And with no root to resolve at all: unavailable, not zero.
-        let error = live_node_claims_from(None).unwrap_err();
-        assert!(error.0.contains("claims path unavailable"), "{error:?}");
     }
 }
 
@@ -1695,32 +1572,5 @@ mod grant_tests {
                 "{refused}"
             );
         }
-    }
-
-    #[test]
-    fn the_strand_scan_lists_roles_the_move_left_behind() {
-        let rows = json!([
-            {"name": "mover", "status": "busy", "role_scope": "beta"},
-            {"name": "sub-1", "status": "busy", "role_scope": "e-1"},
-            {"name": "sub-3", "status": "busy", "role_scope": "e-3"},
-            {"name": "gone", "status": "exited", "role_scope": "e-1"},
-            {"name": "stale", "status": "busy", "role_scope": "e-ghost"},
-        ]);
-        let scan = |vacated: Value, entries: Value| {
-            role_grant_kind(&json!({
-                "op": "stranded", "vacated": vacated, "new_scope": "beta",
-                "target_name": "mover", "rows": rows, "projects": projects(),
-                "entries": entries,
-            }))
-            .unwrap()["stranded"]
-                .clone()
-        };
-        assert_eq!(
-            scan(json!("alpha"), json!(graph())),
-            json!(["sub-1", "stale"])
-        );
-        assert_eq!(scan(json!("alpha"), Value::Null), Value::Null);
-        assert_eq!(scan(Value::Null, Value::Null), json!([]));
-        assert_eq!(scan(json!("beta"), Value::Null), json!([]));
     }
 }

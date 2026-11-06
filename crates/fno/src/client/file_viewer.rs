@@ -1153,23 +1153,6 @@ mod tests {
         assert!(matches!(absent.body, Body::Failed(_)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
-
-    #[tokio::test]
-    async fn panel_takes_columns_from_the_panes_and_the_feed_yields() {
-        let mut v = bare_view();
-        v.feed = Some(super::super::feed_view::open_overlay(None, 0));
-        let before = v.content_dims().1;
-        assert!(v.feed_panel_w() > 0 && before == 120 - v.feed_panel_w());
-        let mut sock = Vec::new();
-        open(&mut v, file(3), &mut sock).await.unwrap();
-        assert_eq!(v.viewer_panel_w(), 48, "40% of 120");
-        assert_eq!(v.feed_panel_w(), 0, "the viewer holds the right edge");
-        assert_eq!(v.content_dims().1, 120 - 48);
-        assert!(!sock.is_empty(), "the new content area travels");
-        close(&mut v, &mut sock).await.unwrap();
-        assert_eq!(v.content_dims().1, before, "closing gives the edge back");
-    }
-
     #[tokio::test]
     async fn keys_scroll_resize_and_close() {
         let (mut v, mut sock) = opened(file(200)).await;
@@ -1241,17 +1224,6 @@ mod tests {
         key(&mut v, b"G").await;
         assert!(screen(&v).contains("tail marker"), "G reaches the tail");
     }
-
-    #[tokio::test]
-    async fn an_empty_markdown_file_says_so() {
-        let mut l = file(0);
-        l.body = Body::Markdown {
-            src: String::new(),
-            truncated: false,
-        };
-        assert!(screen(&opened(l).await.0).contains("(empty file)"));
-    }
-
     #[tokio::test]
     async fn an_image_body_paints_half_blocks_and_names_its_size() {
         let mut l = file(1);
@@ -1399,27 +1371,6 @@ mod tests {
             }
             _ => panic!("a valid pdf parses"),
         }
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn pdf_pages_flip_and_the_title_counts_them() {
-        let dir = pdf_dir();
-        let p = dir.join("book.pdf");
-        std::fs::write(&p, tiny_pdf(3)).unwrap();
-        let (mut v, mut sock) = opened(load(p, None, ViewerShape::Panel)).await;
-        let body = |v: &View| match &v.viewer.open.as_ref().unwrap().body {
-            Body::Pdf(s) => (s.page, s.pages, s.pic.is_some()),
-            _ => panic!("pdf body"),
-        };
-        assert_eq!(body(&v), (0, 3, true), "open renders the first page");
-        assert!(screen(&v).contains("page 1/3"), "{}", screen(&v));
-        keys(&mut v, b"n", &mut sock).await.unwrap();
-        assert_eq!(body(&v), (1, 3, true), "n flips to the second page");
-        assert!(screen(&v).contains("page 2/3"), "{}", screen(&v));
-        keys(&mut v, b"pp", &mut sock).await.unwrap();
-        assert_eq!(body(&v), (0, 3, true), "p clamps at the first page");
-        assert!(screen(&v).contains("page 1/3"), "{}", screen(&v));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

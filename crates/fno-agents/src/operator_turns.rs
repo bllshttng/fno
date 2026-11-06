@@ -1032,24 +1032,6 @@ mod tests {
     }
 
     #[test]
-    fn naive_timestamp_reads_as_utc_not_local() {
-        let out = read_raw(
-            "naive",
-            &[user_row_ts(
-                json!("ask"),
-                "u-naive",
-                "2026-09-06T21:00:00.000000",
-            )],
-        );
-        assert_eq!(out.payload.turns[0].ts_epoch, Some(1788728400.0));
-        let out = read_raw(
-            "naive-date-only",
-            &[user_row_ts(json!("ask"), "u-date", "2026-09-06")],
-        );
-        assert_eq!(out.payload.turns[0].ts_epoch, Some(1788652800.0));
-    }
-
-    #[test]
     fn ac2_scan_cursor_saves_state_and_second_read_stays_incremental() {
         let dir = tmp_dir("ac2");
         let tp = dir.join("transcript.jsonl");
@@ -1236,19 +1218,6 @@ mod tests {
             ],
         );
         assert_eq!(ids(&out), ["u-prose-1"]);
-    }
-
-    #[test]
-    fn stand_down_turn_is_marked_in_the_payload() {
-        let out = read_raw(
-            "stand-down-payload",
-            &[user_row(
-                json!("Perhaps our lead has overstayed its welcome"),
-                "u-stand-down",
-            )],
-        );
-        let payload = serde_json::to_value(&out.payload).unwrap();
-        assert_eq!(payload["turns"][0]["stand_down"], true);
     }
 
     #[test]

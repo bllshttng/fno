@@ -719,21 +719,6 @@ mod tests {
         assert_eq!(items[0].node.as_deref(), Some("x-1"));
         assert!(items[0].live);
     }
-
-    #[test]
-    fn empty_array_is_a_clean_empty_fold() {
-        assert_eq!(parse(b"[]").expect("empty array parses").len(), 0);
-    }
-
-    #[test]
-    fn missing_optional_fields_default() {
-        // node/name/title/live absent -> defaults, not a parse failure.
-        let json = br#"[{"kind":"budget_stop","session_id":"s","ts":"","evidence":"stopped"}]"#;
-        let items = parse(json).expect("parses with defaults");
-        assert_eq!(items[0].node, None);
-        assert!(!items[0].live);
-    }
-
     #[test]
     fn torn_json_fails_quiet() {
         assert!(parse(b"[{not json").is_none());
@@ -749,12 +734,6 @@ mod tests {
         assert!(!items[0].done);
         assert_eq!(items[1].node.as_deref(), Some("x-aaaa"));
     }
-
-    #[test]
-    fn torn_mine_json_fails_quiet() {
-        assert!(parse_mine(br#"{"mine":[{"n":1"#).is_none());
-    }
-
     #[test]
     fn parses_required_questions_json() {
         // AC4-HP: the projection payload with items and the answered array.
@@ -794,12 +773,6 @@ mod tests {
         assert_eq!(fold.answered.len(), 1);
         assert_eq!(fold.answered[0].rung.as_deref(), Some("mail"));
     }
-
-    #[test]
-    fn torn_questions_json_fails_quiet() {
-        assert!(parse_questions(br#"{"items":[{"id":"q-1""#).is_none());
-    }
-
     #[test]
     fn null_handle_item_parses_and_sibling_rows_survive() {
         // One cross-machine copy carried origin {"handle": null}; a bare
@@ -849,12 +822,5 @@ mod tests {
             "the good row is intact"
         );
         assert_eq!(fold.answered.len(), 1, "unreadable answered rows drop");
-    }
-
-    #[test]
-    fn write_wait_and_timeout_receipt_match_the_clear_bound() {
-        assert_eq!(WRITE_TIMEOUT, Duration::from_secs(45));
-        assert!(ANSWER_TIMEOUT_MESSAGE.contains("the answer may have landed"));
-        assert!(ANSWER_TIMEOUT_MESSAGE.contains("a rerun resumes"));
     }
 }

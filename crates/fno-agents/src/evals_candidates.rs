@@ -388,6 +388,9 @@ pub fn run(args: &[String]) -> i32 {
     if args.first().is_some_and(|a| a == "--traces") {
         return crate::evals_traces::run(&args[1..]);
     }
+    if args.first().is_some_and(|a| a == "--labels") {
+        return crate::evals_labels::run(&args[1..]);
+    }
     let limit = match crate::evals::flag_lookup(args, "--limit") {
         None => DEFAULT_LIMIT,
         Some(raw) => match raw.parse::<usize>() {

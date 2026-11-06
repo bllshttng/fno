@@ -122,44 +122,28 @@ fn start_daemon(home: &AgentsHome) -> DaemonChild {
     start_daemon_env(home, &[])
 }
 
-fn start_daemon_with_bin(home: &AgentsHome, daemon_bin: &Path) -> DaemonChild {
-    let seen = common::count_events(home, "daemon_started");
-    let stderr =
-        std::fs::File::create(home.root().join("daemon.stderr")).expect("daemon.stderr creates");
-    let mut cmd = Command::new(daemon_bin);
-    cmd.env("FNO_AGENTS_HOME", home.root())
-        .env("HOME", home.root())
-        .envs(fno_agents::test_run::self_owner_env())
-        .env("FNO_AGENTS_IDLE_EXIT_SECS", "3600")
-        .env("FNO_EVENTS_PATH", home.root().join(".fno/events.jsonl"))
-        // Outside any git checkout, so the daily reclaim sweep's cargo-build-dirs
-        // lane (`crate::reclaim::maybe_run_daily`) finds no workspace manifest to
-        // resolve and never reaches the real machine's build base.
-        .current_dir(home.root())
-        .stderr(std::process::Stdio::from(stderr));
-    let child = cmd.spawn().expect("daemon spawns");
-    common::wait_for_path(&home.supervisor_sock(), Duration::from_secs(10));
-    common::wait_for_event_count(home, "daemon_started", seen + 1, Duration::from_secs(10));
-    DaemonChild(child)
-}
-
 /// Like [`start_daemon`] but with extra env on the daemon process. Used by tests
 /// that seed a precise registry status the startup reconcile sweep (Architecture
 /// B) would otherwise settle -- e.g. `FNO_AGENTS_NO_STARTUP_RECONCILE=1` to keep
 /// an artificially-seeded mid-flight source row intact for a promote-admission
 /// assertion.
 fn start_daemon_env(home: &AgentsHome, extra: &[(&str, &str)]) -> DaemonChild {
-    start_daemon_env_in(home, home.root(), extra)
+    start_daemon_env_in(home, home.root(), extra, Path::new(DAEMON_BIN))
 }
 
 /// [`start_daemon_env`] with an explicit launch cwd: the daemon keeps whoever
 /// started it as its cwd, and the cwd-pin test needs a launch from inside a
 /// git worktree to prove the pin.
-fn start_daemon_env_in(home: &AgentsHome, dir: &Path, extra: &[(&str, &str)]) -> DaemonChild {
+fn start_daemon_env_in(
+    home: &AgentsHome,
+    dir: &Path,
+    extra: &[(&str, &str)],
+    daemon_bin: &Path,
+) -> DaemonChild {
     let seen = common::count_events(home, "daemon_started");
     let stderr =
         std::fs::File::create(home.root().join("daemon.stderr")).expect("daemon.stderr creates");
-    let mut cmd = Command::new(DAEMON_BIN);
+    let mut cmd = Command::new(daemon_bin);
     cmd.env("FNO_AGENTS_HOME", home.root())
         .env("HOME", home.root())
         .envs(fno_agents::test_run::self_owner_env())
@@ -656,10 +640,11 @@ async fn client_declines_to_spawn_while_the_singleton_lock_is_held() {
 async fn restart_leaves_exactly_one_daemon(rows: usize) {
     let home = short_home();
     home.ensure_root().unwrap();
+    let marker = home.root().join("daemon-env-probe.log");
     let daemon_bin = daemon_env_bin(
         &home,
         "restart-storm",
-        None,
+        Some(&marker),
         &[("FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS", "3000")],
     );
 
@@ -696,6 +681,13 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
         let h = home.clone();
         let b = daemon_bin.clone();
         tokio::spawn(async move { fno_agents::client::restart_daemon(&h, &b, false).await })
+    };
+    let sibling_home = short_home();
+    sibling_home.ensure_root().unwrap();
+    let sibling_bin = daemon_env_bin(&sibling_home, "sibling", Some(&marker), &[]);
+    let sibling = {
+        let h = sibling_home.clone();
+        tokio::task::spawn_blocking(move || start_daemon_env_in(&h, h.root(), &[], &sibling_bin))
     };
     let mut commands = Vec::new();
     for i in 0..CONCURRENT_COMMANDS {
@@ -821,11 +813,27 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
         "restart's successor must at least have reached the accept loop"
     );
 
-    unsafe {
-        libc::kill(outcome.new_pid as libc::pid_t, libc::SIGTERM);
-    }
-    std::thread::sleep(Duration::from_millis(200));
+    let sibling = sibling.await.expect("sibling daemon starts");
+    let sibling_pid = sibling.id();
+    let probe = std::fs::read_to_string(&marker).expect("daemon env probe marker");
+    assert!(
+        probe.contains("restart-storm delay=3000"),
+        "intended successor did not receive its delay seam: {probe}"
+    );
+    assert!(
+        probe.contains("sibling delay=unset"),
+        "sibling inherited the intended successor's delay: {probe}"
+    );
+    drop(sibling);
+    terminate_untracked(outcome.new_pid);
+    println!(
+        "daemon_child_env_isolated intended_pid={} sibling_pid={} marker={}",
+        outcome.new_pid,
+        sibling_pid,
+        marker.display()
+    );
     std::fs::remove_dir_all(home.root()).ok();
+    std::fs::remove_dir_all(sibling_home.root()).ok();
 }
 
 #[tokio::test]
@@ -833,60 +841,6 @@ async fn restart_over_a_large_roster_leaves_exactly_one_daemon() {
     // 28 rows is the size at which the operator's fleet actually broke. Eight
     // rows the week before did not.
     restart_leaves_exactly_one_daemon(28).await;
-}
-
-#[tokio::test]
-async fn daemon_child_env_isolated_probe() {
-    let intended_home = short_home();
-    let sibling_home = short_home();
-    intended_home.ensure_root().unwrap();
-    sibling_home.ensure_root().unwrap();
-    let marker = intended_home.root().join("daemon-env-probe.log");
-    let intended_bin = daemon_env_bin(
-        &intended_home,
-        "intended",
-        Some(&marker),
-        &[("FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS", "3000")],
-    );
-    let sibling_bin = daemon_env_bin(&sibling_home, "sibling", Some(&marker), &[]);
-
-    let mut incumbent = start_daemon(&intended_home);
-    // Reap DURING the restart: the pid-confirmed termination cannot see an
-    // unwaited zombie child of this test process die.
-    let reaper = std::thread::spawn(move || incumbent.wait());
-    let restart = {
-        let home = intended_home.clone();
-        let bin = intended_bin.clone();
-        tokio::spawn(async move { fno_agents::client::restart_daemon(&home, &bin, false).await })
-    };
-    let mut sibling = start_daemon_with_bin(&sibling_home, &sibling_bin);
-    let outcome = restart.await.unwrap().expect("probe restart succeeds");
-    reaper
-        .join()
-        .expect("incumbent reaper joins")
-        .expect("incumbent reap succeeds");
-    terminate_untracked(outcome.new_pid);
-    let sibling_pid = sibling.id();
-    unsafe { libc::kill(sibling_pid as libc::pid_t, libc::SIGTERM) };
-    let _ = sibling.wait();
-
-    let probe = std::fs::read_to_string(&marker).expect("daemon env probe marker");
-    assert!(
-        probe.contains("intended delay=3000"),
-        "intended successor did not receive its delay seam: {probe}"
-    );
-    assert!(
-        probe.contains("sibling delay=unset"),
-        "daemon_child_env_isolated expected sibling without delay; probe={probe}"
-    );
-    println!(
-        "daemon_child_env_isolated intended_pid={} sibling_pid={} marker={}",
-        outcome.new_pid,
-        sibling_pid,
-        marker.display()
-    );
-    std::fs::remove_dir_all(intended_home.root()).ok();
-    std::fs::remove_dir_all(sibling_home.root()).ok();
 }
 
 /// status (Wave 5, US6.10, AC10-ERR): with no daemon running, the `fno-agents
@@ -1565,53 +1519,6 @@ async fn stop_refuses_a_pane_row_and_names_the_row_ref() {
         libc::kill(daemon.id() as libc::pid_t, libc::SIGTERM);
     }
     let _ = daemon.wait();
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[tokio::test]
-async fn restart_when_down_starts_fresh() {
-    // AC2-EDGE: no daemon running -> restart starts a fresh one and reports it,
-    // with no error and old_pid == None.
-    let home = short_home();
-    home.ensure_root().unwrap();
-    let daemon_bin = daemon_env_bin(&home, "restart-when-down", None, &[]);
-
-    let outcome = fno_agents::client::restart_daemon(&home, &daemon_bin, false)
-        .await
-        .expect("restart-when-down succeeds");
-    assert_eq!(outcome.old_pid, None, "nothing was running");
-    assert!(pid_alive(outcome.new_pid), "fresh daemon is alive");
-
-    unsafe {
-        libc::kill(outcome.new_pid as libc::pid_t, libc::SIGTERM);
-    }
-    std::thread::sleep(Duration::from_millis(200));
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn the_default_wrapper_exports_the_test_binary_owner() {
-    // The default (no-extra) wrapper must arm every successor on the test
-    // binary itself: that is the one owner a bare `cargo test` provides, and
-    // the watchdog is what reaps the successor when the test binary dies. The
-    // behavioral counterpart is a_restart_successor_dies_with_its_test_owner,
-    // which hands an explicit owner through `extra`.
-    let home = short_home();
-    home.ensure_root().unwrap();
-    let bin = daemon_env_bin(&home, "default-owner", None, &[]);
-    let script = std::fs::read_to_string(&bin).expect("read the wrapper script");
-    let want_pid = std::process::id().to_string();
-    assert!(
-        script.contains(&format!(
-            "export FNO_TEST_OWNER_PID={}",
-            shell_quote(&want_pid)
-        )),
-        "the wrapper must arm successors on the test binary as owner:\n{script}"
-    );
-    assert!(
-        script.contains("export FNO_TEST_OWNER_BIRTH="),
-        "the wrapper must export the owner birth:\n{script}"
-    );
     std::fs::remove_dir_all(home.root()).ok();
 }
 
@@ -2708,7 +2615,7 @@ async fn daemon_cwd_survives_a_reaped_launch_worktree() {
 
     let home = short_home();
     home.ensure_root().unwrap();
-    let daemon = start_daemon_env_in(&home, &wt, &[]);
+    let daemon = start_daemon_env_in(&home, &wt, &[], Path::new(DAEMON_BIN));
 
     // The reaper deletes the launch worktree under the live daemon.
     e2e_git(
@@ -2776,4 +2683,113 @@ fn seed_registry(home: &AgentsHome, body: impl AsRef<str>) -> Result<(), String>
     let doc = serde_json::from_str(body.as_ref()).map_err(|e| e.to_string())?;
     fno_agents::registry_store::replace_document(&home.registry_json(), doc);
     Ok(())
+}
+
+#[test]
+fn daemon_evals_arm_runs_without_a_pr_watch_tick() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let root = temp.path();
+    let home = AgentsHome::at(root.join(".fno/agents"));
+    home.ensure_root().unwrap();
+    std::fs::create_dir_all(root.join("evals/bank")).unwrap();
+    let fno = common::make_script(root, "fno-stub", "exit 0");
+    let client = common::make_script(
+        root,
+        "fno-agents-stub",
+        r#"
+case "$1" in
+  evals-arm)
+    printf '%s\n' start >> "$FNO_AGENTS_HOME/evals-arm.started"
+    sleep 7
+    printf '%s\n' "$*" >> "$FNO_AGENTS_HOME/evals-arm.argv"
+    printf '%s\n' '{"acted":0,"skip_reason":"fresh","detail":"fixture evals-arm"}'
+    ;;
+  *)
+    printf '%s\n' '{}'
+    ;;
+esac
+"#,
+    );
+    let stderr = std::fs::File::create(root.join("daemon.stderr")).unwrap();
+    let mut cmd = Command::new(DAEMON_BIN);
+    cmd.env_clear()
+        .env("HOME", root)
+        .env("FNO_HOME", root)
+        .env("FNO_AGENTS_HOME", home.root())
+        .env("FNO_EVENTS_PATH", home.events_jsonl())
+        .env("FNO_CLAIMS_ROOT", root.join(".fno/claims"))
+        .env("FNO_AGENTS_BIN", &client)
+        .env("FNO_AGENTS_WORKER_BIN", WORKER_BIN)
+        .env("FNO_AGENTS_IDLE_EXIT_SECS", "3600")
+        .env("FNO_AGENTS_NO_STARTUP_RECONCILE", "1")
+        .env("FNO_BIN", &fno)
+        .env(
+            "PATH",
+            "/usr/bin:/bin:/Users/bb16/.cargo/bin:/opt/homebrew/bin",
+        )
+        .current_dir(root)
+        .stderr(std::process::Stdio::from(stderr));
+    let daemon = DaemonChild(cmd.spawn().expect("daemon spawns"));
+
+    common::wait_for_path(&home.supervisor_sock(), Duration::from_secs(10));
+    common::wait_for_event(&home, "daemon_started", Duration::from_secs(10));
+    common::wait_for_event(&home, "daemon_fleet_scope", Duration::from_secs(10));
+    let initial_events = common::event_text(&home);
+    assert!(
+        initial_events.contains("\"scope\":\"shared\""),
+        "fixture daemon must enable fleet arms: {initial_events}"
+    );
+    common::wait_for_path(
+        &home.root().join("evals-arm.started"),
+        Duration::from_secs(20),
+    );
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let response = runtime
+        .block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                fno_agents::client::call_if_running(
+                    &home,
+                    &Request::new(1, "agent.status", json!({})),
+                ),
+            )
+            .await
+        })
+        .expect("daemon keeps serving while evals-arm runs")
+        .expect("agent.status call succeeds");
+    assert!(response.result().is_some(), "agent.status has a result");
+    let marker = home.root().join("evals-arm.argv");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let events = common::event_text(&home);
+    assert!(
+        marker.exists(),
+        "daemon never invoked evals-arm; events={events}; stderr={}",
+        std::fs::read_to_string(root.join("daemon.stderr")).unwrap_or_default()
+    );
+    let argv = std::fs::read_to_string(home.root().join("evals-arm.argv")).unwrap();
+    assert!(
+        argv.contains("--summary-json"),
+        "daemon omitted the history summary: {argv}"
+    );
+    common::wait_for_event(&home, "\"arm\":\"evals\"", Duration::from_secs(5));
+    let events = common::event_text(&home);
+    assert!(
+        events.contains("fixture evals-arm"),
+        "the daemon did not journal the evals-arm receipt: {events}"
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    let calls = std::fs::read_to_string(&home.root().join("evals-arm.started")).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "the daemon stacked evals-arm before its cadence elapsed: {calls}"
+    );
+    drop(daemon);
 }

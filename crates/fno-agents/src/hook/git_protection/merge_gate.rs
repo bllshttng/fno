@@ -537,7 +537,7 @@ Auto-merge directly from Claude Code requires ALL of:
      answers true, OR the state file carries `auto_merge_source:
      env-target-auto-merge` (the run's spawn-time grant)
   2. Active target state file with `auto_merge_approved: true`
-     (megawalk-state.md does NOT authorize merge - target owns shipping)
+     (only the target manifest authorizes merge)
   3. Either:
      a. `external_review_passed: skipped` in state (explicit --no-external), OR
      b. External review artifact at

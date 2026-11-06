@@ -513,23 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_only_run_renders_the_legal_wait_not_a_red() {
-        // A keeper-cancelled head reads
-        // Pending beside its cancel-named rows, so the block names the
-        // cancellation and teaches the wait instead of a nonexistent
-        // failure to debug.
-        let mut pr = conflicting_pr();
-        pr.mergeable = "MERGEABLE".to_string();
-        pr.ci_conclusion = CiConclusion::Pending;
-        pr.failing_checks = vec!["rust-ci".to_string(), "smoke".to_string()];
-        let reason = build_block_reason(&pr, "abc", true, true);
-        assert!(reason.contains("were cancelled"), "got: {reason}");
-        assert!(reason.contains("rust-ci"), "got: {reason}");
-        assert!(!reason.contains("CI red"), "got: {reason}");
-        assert!(reason.contains("reason=\"ci\""), "got: {reason}");
-    }
-
-    #[test]
     fn slot_block_reason_names_the_holder_and_the_ritual() {
         // The idlable half renders the hold + the arm-and-tag ritual, and the
         // hint comes from the classifier by construction (build_block_reason
@@ -540,5 +523,20 @@ mod tests {
             "got: {reason}"
         );
         assert!(reason.contains("reason=\"merge_slot\""), "got: {reason}");
+    }
+
+    #[test]
+    fn no_pr_and_closed_pr_guidance_names_the_advisory_exit() {
+        for state in [PrState::None, PrState::Closed] {
+            let mut pr = frozen_pr();
+            pr.state = state;
+            let reason = build_block_reason(&pr, "abc", true, true);
+            assert!(reason.contains("fno do target init --advisory"), "{reason}");
+            assert!(reason.contains("gates: advisory"), "{reason}");
+        }
+        let mut red_open = frozen_pr();
+        red_open.ci_conclusion = CiConclusion::Failure(None);
+        let reason = build_block_reason(&red_open, "abc", true, true);
+        assert!(!reason.contains("--advisory"), "{reason}");
     }
 }

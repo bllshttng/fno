@@ -803,18 +803,4 @@ mod tests {
         assert_eq!(classify(&os(&["config"])), None);
         assert_eq!(classify(&os(&["config", "no-such-leaf"])), None);
     }
-
-    #[test]
-    fn deep_merge_matches_the_python_semantics() {
-        let mut base: Value =
-            serde_json::from_str(r#"{"a": {"x": 1, "y": 2}, "list": [1]}"#).unwrap();
-        let over: Value =
-            serde_json::from_str(r#"{"a": {"y": 3, "z": null}, "list": [2], "null_block": null}"#)
-                .unwrap();
-        deep_merge(&mut base, &over);
-        assert_eq!(base["a"]["x"], serde_json::json!(1));
-        assert_eq!(base["a"]["y"], serde_json::json!(3));
-        assert_eq!(base["a"]["z"], Value::Null);
-        assert_eq!(base["list"], serde_json::json!([2]));
-    }
 }

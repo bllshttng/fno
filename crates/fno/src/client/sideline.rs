@@ -11,8 +11,8 @@ mod observer_rows;
 use super::*;
 use crate::text_style::TLine;
 
-/// A snapshot freezes the need-input pulse on one beat, so a still shot can
-/// show each frame. The live client never sets it.
+/// A snapshot freezes the need-input mark on one point of its turn (up for
+/// ON, down for OFF), so a still shot can show two frames. The live client never sets it.
 pub(super) static PULSE_PIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 pub(super) const PULSE_ON: u8 = 1;
 pub(super) const PULSE_OFF: u8 = 2;
@@ -75,6 +75,45 @@ pub(super) fn head_sorts(card: bool) -> [Option<AgentSortColumn>; 5] {
             Some(Age),
         ]
     }
+}
+
+/// A sort column's whole word, for the card head and the sort notice, where
+/// the table's short head labels would read cryptic.
+pub(super) fn sort_name(column: AgentSortColumn) -> &'static str {
+    match column {
+        AgentSortColumn::Status => "status",
+        AgentSortColumn::Agent => "agent",
+        AgentSortColumn::LastMessage => "last message",
+        AgentSortColumn::Pr => "pr",
+        AgentSortColumn::Age => "age",
+        AgentSortColumn::Created => "created",
+        AgentSortColumn::Modified => "modified",
+        AgentSortColumn::Manual => "manual",
+    }
+}
+
+/// The card head's words: the sort and, when cards group by lead, the
+/// grouping. The longest form that leaves two spare cells off the border
+/// wins, so the narrow rail keeps the sort whole and shortens the rest.
+fn card_head_caption(grouped: bool, column: AgentSortColumn, arrow: &str, room: usize) -> String {
+    let name = sort_name(column);
+    let sort = format!("sort: {name} {arrow}");
+    let tiers = if grouped {
+        vec![
+            format!("group: lead \u{b7} {sort}"),
+            format!("by lead \u{b7} {sort}"),
+            format!("by lead \u{b7} {name} {arrow}"),
+        ]
+    } else {
+        vec![format!("{sort} \u{b7} node \u{b7} PR"), sort]
+    };
+    let room = room.saturating_sub(2);
+    let fit = match tiers.iter().find(|t| t.chars().count() <= room) {
+        Some(fit) => fit.clone(),
+        None => tiers.last().cloned().unwrap_or_default(),
+    };
+    // The caption rides the cell's right edge: a trailing space keeps it off the border.
+    format!("{fit} ")
 }
 
 fn head_label(column: AgentSortColumn) -> &'static str {
@@ -425,23 +464,20 @@ impl View {
         (out, out_depths)
     }
 
-    /// The glyph beside the count: it alternates on the spin clock while
-    /// anything needs input, so the count catches the eye without moving a
-    /// row. A space holds the cell on the off beat.
+    /// The glyph beside the count: it turns through four points on the spin
+    /// clock while anything needs input, so the count catches the eye without
+    /// moving a row or ever blanking its cell.
     pub(super) fn need_input_pulse(&self) -> char {
+        const TURN: [char; 4] = ['\u{25B2}', '\u{25B6}', '\u{25BC}', '\u{25C0}'];
         match PULSE_PIN.load(std::sync::atomic::Ordering::Relaxed) {
-            PULSE_ON => return '\u{25B2}',
-            PULSE_OFF => return ' ',
+            PULSE_ON => return TURN[0],
+            PULSE_OFF => return TURN[2],
             _ => {}
         }
-        match crate::lattice::spin_epoch() {
-            Some(t0)
-                if (t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS) % 2 == 0 =>
-            {
-                '\u{25B2}'
-            }
-            _ => ' ',
-        }
+        let frame = crate::lattice::spin_epoch().map_or(0, |t0| {
+            t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS
+        });
+        TURN[frame as usize % TURN.len()]
     }
 
     /// Paint the strip row at the slice's row 0: `Agents  Messages`
@@ -714,7 +750,12 @@ impl View {
                 DisplayRow::Sel(row)
                     if row.tab.is_none() && row.squad == self.layout.active_squad
             );
-            let band_w = if r == 0 { btn_reserved } else { text_w };
+            // A band's text keeps one spare cell off the rail border.
+            let band_w = if r == 0 {
+                btn_reserved
+            } else {
+                text_w.saturating_sub(1)
+            };
             let legacy = match drow {
                 DisplayRow::Sel(row) => {
                     let Some(squad) = self.layout.squads.iter().find(|s| s.id == row.squad) else {
@@ -785,7 +826,8 @@ impl View {
                         format!(
                             "{:>iw$}{}",
                             "",
-                            self.card_detail_text(a, now, text_w.saturating_sub(pad)),
+                            // One spare cell keeps the age off the rail border.
+                            self.card_detail_text(a, now, text_w.saturating_sub(pad + 1)),
                             iw = pad
                         )
                     },
@@ -802,7 +844,7 @@ impl View {
                                 self.card_graph,
                                 now,
                                 row_message_text(a).as_deref(),
-                                text_w.saturating_sub(pad),
+                                text_w.saturating_sub(pad + 1),
                             ),
                             iw = pad
                         )
@@ -1205,7 +1247,8 @@ impl View {
                 }
                 let prefix_width = prefix.width();
                 let suffix_width = suffix.width();
-                let base_width = name_w.saturating_sub(prefix_width);
+                // A card keeps one spare cell so the label never touches the border.
+                let base_width = name_w.saturating_sub(prefix_width + usize::from(card));
                 // Row 1 carries the role vocabulary: a lead's people title
                 // after its slug (`sorrel · lead of mux`), a worker's lead
                 // after its thread slug (`t-x0eee · sorrel`).
@@ -1322,7 +1365,12 @@ impl View {
                     vec![
                         rt_cell(String::new(), Color::Default, cell_flags::DIM, false),
                         rt_cell(
-                            "node · PR".to_string(),
+                            card_head_caption(
+                                self.group_by_lead,
+                                self.agent_sort.column,
+                                arrow(self.agent_sort.column),
+                                name_w,
+                            ),
                             Color::Default,
                             cell_flags::DIM,
                             true,
@@ -1415,9 +1463,15 @@ impl View {
                     // The dashed rule rides between adjacent cards (the
                     // operator's 2026-10-04 spacing mockup): no rule before a
                     // header, a blank, or the section's end.
+                    // Grouped by lead, a blank row follows the rule where a lead's
+                    // group ends, so the cards need no indent to show where it stops.
                     if matches!(rows_iter.peek(), Some(DisplayRow::Agent(_))) {
                         out_rows.push(DisplayRow::CardRule);
                         out_depths.push(0);
+                        if self.group_by_lead && depths_peek.peek() == Some(&0) {
+                            out_rows.push(DisplayRow::Blank);
+                            out_depths.push(0);
+                        }
                     }
                 }
                 DisplayRow::Blank => {
@@ -1590,7 +1644,8 @@ impl View {
                     .collect::<Vec<_>>()
                     .join(" ");
                 let w = crate::chrome::str_cols(&pairs);
-                let start = text_w.saturating_sub(w);
+                // One spare cell keeps the roll-up off the rail border.
+                let start = text_w.saturating_sub(w + 1);
                 // The strip yields to the surface that owns the line: the
                 // chosen fill's or the band's own fg there, dim only at
                 // rest (the composed contrast test pins 3:1 on both).
@@ -1674,9 +1729,11 @@ impl View {
         };
         let tail = format!("{created} · {activity}");
         let tail_w = crate::chrome::str_cols(&tail).min(text_w);
-        let head_w = text_w.saturating_sub(tail_w);
+        // One space always parts the head from the tail, so a cut id never meets the age.
+        let gap = usize::from(text_w > tail_w);
+        let head_w = text_w.saturating_sub(tail_w + gap);
         let head = crate::chrome::fit_ellipsis(&left, head_w);
-        let pad = " ".repeat(head_w.saturating_sub(crate::chrome::str_cols(&head)));
+        let pad = " ".repeat(head_w.saturating_sub(crate::chrome::str_cols(&head)) + gap);
         format!("{head}{pad}{tail}")
     }
 

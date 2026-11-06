@@ -122,11 +122,13 @@ fn composer_from_sidebar_opens_the_centered_sheet_with_full_values() {
     let mut h = ClientHarness::spawn_sized_with(&scratch, 24, 120, &env_refs);
     wait_input(&mut h);
     open_composer(&mut h);
-    let screen = h.wait_screen(10, |s| s.contains("new agent"));
+    let screen = h.wait_screen(10, |s| {
+        s.contains("new agent") && s.contains("prompt \u{b7} +flag") && s.contains("auto")
+    });
     assert!(screen.contains("new agent"), "sheet title: {screen}");
     // The chip row paints before any catalog read lands.
     assert!(
-        screen.contains("Local") && screen.contains("prompt \u{b7} -- flags"),
+        screen.contains("Local") && screen.contains("prompt \u{b7} +flag"),
         "the Where chip and the placeholder paint: {screen}"
     );
     assert!(
@@ -159,7 +161,9 @@ fn project_picker_lists_projects_and_enter_never_launches() {
     // Wait out the facts probe so the Branch/Worktree chips (painted while
     // facts are unread) no longer sit between Project and the input; this
     // scratch is not a git repo, so the pair hides once the probe lands.
-    h.wait_screen(35, |s| !s.contains("worktree"));
+    h.wait_screen(35, |s| {
+        s.contains("prompt \u{b7} +flag") && s.contains("auto") && !s.contains("worktree")
+    });
     // Shift-Tab from the input lands on the Directory chip; Enter drops its
     // picker (title `directory`).
     type_and_settle(&mut h, b"\x1b[Z");
@@ -341,7 +345,9 @@ fn where_chip_opens_the_local_and_placement_picker() {
     // Wait out the facts probe so the Branch/Worktree chips (painted while
     // facts are unread) no longer sit between Project and the input; this
     // scratch is not a git repo, so the pair hides once the probe lands.
-    h.wait_screen(15, |s| !s.contains("worktree"));
+    h.wait_screen(35, |s| {
+        s.contains("prompt \u{b7} +flag") && s.contains("auto") && !s.contains("worktree")
+    });
     // BackTab BackTab walks Message -> Project -> Where.
     type_and_settle(&mut h, b"\x1b[Z\x1b[Z");
     type_and_settle(&mut h, b"\r");
@@ -614,26 +620,25 @@ fn model_picker_shows_the_flagship_and_the_seeded_provider_group() {
 }
 
 #[test]
-fn typed_dash_dash_opens_the_flag_picker_and_a_pick_becomes_a_pill() {
-    // AC10-HP: `--` at a word start opens the harness's flag picker (the
-    // compiled capability table carries claude's captured flags); a pick
-    // becomes a pill on the pills row and leaves the message clean.
-    let scratch = Scratch::new("composer-flag-pills");
-    let mut h = ClientHarness::spawn_sized(&scratch, 24, 120);
-    wait_input(&mut h);
-    open_composer(&mut h);
-    type_and_settle(&mut h, b"--");
-    let screen = h.wait_screen(35, |s| s.contains("--agent"));
-    assert!(
-        screen.contains("--agent"),
-        "the flags picker lists the captured flags: {screen}"
-    );
-    // Narrow to --agent and pick it; the pill paints with its value slot.
-    type_and_settle(&mut h, b"agent");
-    type_and_settle(&mut h, b"\r");
-    let screen = h.wait_screen(10, |s| s.contains("--agent <value>"));
-    assert!(
-        screen.contains("--agent <value>"),
-        "the pill paints with its value slot: {screen}"
-    );
+fn flag_prefixes_open_the_picker_and_a_pick_becomes_a_pill() {
+    for (index, prefix) in ["--", "—", "+"].into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("composer-flags-{index}"));
+        let mut h = ClientHarness::spawn_sized(&scratch, 24, 120);
+        wait_input(&mut h);
+        open_composer(&mut h);
+        type_and_settle(&mut h, prefix.as_bytes());
+        let screen = h.wait_screen(35, |s| s.contains("--agent"));
+        assert!(
+            screen.contains("--agent"),
+            "the flags picker lists the captured flags: {screen}"
+        );
+        // Narrow to --agent and pick it; the pill paints with its value slot.
+        type_and_settle(&mut h, b"agent");
+        type_and_settle(&mut h, b"\r");
+        let screen = h.wait_screen(10, |s| s.contains("--agent <value>"));
+        assert!(
+            screen.contains("--agent <value>"),
+            "the pill paints with its value slot: {screen}"
+        );
+    }
 }

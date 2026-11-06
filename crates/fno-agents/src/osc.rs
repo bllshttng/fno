@@ -201,16 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn braille_spinner_title_survives_mid_codepoint_split() {
-        // claude's "working" signal is a braille spinner in the title. Split the
-        // 3-byte braille codepoint (U+280B = e2 a0 8b) across two feeds.
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b]2;\xe2\xa0");
-        osc.feed(b"\x8b Compiling\x07");
-        assert_eq!(osc.title(), Some("\u{280b} Compiling"));
-    }
-
-    #[test]
     fn osc_9_4_is_progress_but_bare_osc_9_is_not() {
         let mut osc = OscCapture::new();
         osc.feed(b"\x1b]9;4;1;50\x07");

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Shared throttle + background-detach helper for `fno backlog reconcile`.
 #
-# Sourced by two surfaces:
+# Sourced by one surface:
 #   - hooks/reconcile-session-start.sh  (SessionStart: fire-and-render)
-#   - hooks/megawalk-stop-hook.sh       (between loop iterations)
 #
 # Both share ONE throttle stamp (.fno/.reconcile-stamp) so a burst of
 # parallel sessions, or a long autonomous loop advancing every few minutes,

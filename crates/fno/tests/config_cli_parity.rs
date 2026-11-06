@@ -369,6 +369,15 @@ fn run_native(case: &Case, root: &Path) -> (String, String, i32) {
         .args(case.argv)
         .current_dir(&project)
         .env("PATH", std::env::var("PATH").unwrap_or_default());
+    for marker in [
+        "CODEX_THREAD_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CODEX_SESSION_ID",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+    ] {
+        command.env_remove(marker);
+    }
     for (key, value) in case_env(root, case.env) {
         command.env(key, value);
     }

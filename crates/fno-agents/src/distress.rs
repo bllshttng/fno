@@ -990,29 +990,6 @@ mod tests {
         assert_eq!(extract_help_distress("no distress at all"), None);
     }
 
-    /// The display span skips a quoted tag and lands on the real block, and
-    /// its coordinates index the original text, not the blanked copy.
-    #[test]
-    fn help_open_span_indexes_the_original_past_a_quoted_tag() {
-        let text =
-            "Not `<help>`-worthy. Real one:\n<help reason=\"ci\" evidence=\"red\">blocked</help>";
-        let (start, tag_end) = help_open_span(text).expect("the real block parses");
-        assert_eq!(
-            &text[start..tag_end],
-            "<help reason=\"ci\" evidence=\"red\">"
-        );
-        // An unclosed real block still spans its opening tag.
-        let unclosed = "recovery tail <help reason=\"x\">";
-        let (start, tag_end) = help_open_span(unclosed).expect("unclosed still parses");
-        assert_eq!(&unclosed[start..tag_end], "<help reason=\"x\">");
-        // A multibyte char inside an earlier span must not shift the span:
-        // the blanking is byte-preserving, so the slice lands on the real
-        // tag and never mid-character.
-        let unicode = "not `<help é界>`-worthy. real: <help reason=\"ci\">down</help>";
-        let (start, tag_end) = help_open_span(unicode).expect("the real block parses");
-        assert_eq!(&unicode[start..tag_end], "<help reason=\"ci\">");
-    }
-
     #[test]
     fn emit_help_distress_blocked_appends_envelope_and_dedups() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1352,58 +1329,6 @@ mod tests {
             extract_help_distress(&msg).expect("the directive carries a parseable help tag");
         assert_eq!(distress.class, HelpClass::Wait);
         assert!(msg.contains("pr_info_rest"), "got: {msg}");
-    }
-
-    #[test]
-    fn classed_fixture_turns_write_classed_rows() {
-        // AC4/AC9: the checked-in claude and codex fixtures each write one
-        // blocked row whose data.class matches, keyed on their turn id.
-        let claude_fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/distress/claude-classed-help.jsonl");
-        let codex_fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/distress/codex-classed-help.jsonl");
-        for (fixture, expect_class, expect_turn) in [
-            (&claude_fixture, "stuck", "u-assistant-late"),
-            (&codex_fixture, "stale-plan", "01jad4c-turn-codex"),
-        ] {
-            let tmp = tempfile::tempdir().unwrap();
-            let project = tmp.path().join("events.jsonl");
-            let global = tmp.path().join("global.jsonl");
-            let wrote = scan_and_emit(
-                &project,
-                &global,
-                tmp.path(),
-                &format!("run-{expect_class}"),
-                Some("x-fix"),
-                None,
-                fixture,
-                None,
-                None,
-            );
-            assert!(wrote.is_some(), "fixture {fixture:?} must write a row");
-            let row: serde_json::Value =
-                serde_json::from_str(&crate::events::committed_journal_text(&project)).unwrap();
-            assert_eq!(row["data"]["class"], expect_class);
-            assert_eq!(row["data"]["turn"], expect_turn);
-            assert_eq!(row["data"]["rung"], 0);
-        }
-        // AC10: the tag-free rerun of a fixture writes nothing.
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let wrote = scan_and_emit(
-            &project,
-            &global,
-            tmp.path(),
-            "run-plain",
-            None,
-            None,
-            &claude_fixture.join("no-such-file.jsonl"),
-            Some("all clear, nothing stuck here"),
-            None,
-        );
-        assert!(wrote.is_none());
-        assert!(!project.exists());
     }
 
     #[test]

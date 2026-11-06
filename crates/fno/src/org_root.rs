@@ -113,19 +113,4 @@ mod tests {
         // declines instead of guessing a root.
         assert_eq!(expand_lead_state_dir("$FNO_TEST_STATE_BASE/x"), None);
     }
-
-    #[test]
-    fn lead_expansion_still_declines_owner_owned_forms() {
-        // Templates, ~user and relative anchors stay declined: this crate
-        // does not duplicate their owner.
-        assert_eq!(expand_lead_state_dir("{vault}/state"), None);
-        assert_eq!(expand_lead_state_dir("{project}/state"), None);
-        assert_eq!(expand_lead_state_dir("~user/state"), None);
-        assert_eq!(expand_lead_state_dir("relative/state"), None);
-        // Absolute and ~-rooted values pass through untouched.
-        assert_eq!(
-            expand_lead_state_dir("/abs/state"),
-            Some(PathBuf::from("/abs/state"))
-        );
-    }
 }

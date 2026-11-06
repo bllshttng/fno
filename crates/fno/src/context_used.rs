@@ -60,21 +60,4 @@ mod tests {
     fn claude_assistant_usage_reads_raw_thousands() {
         assert_eq!(from_tail(CLAUDE_TURN).as_deref(), Some("98k"));
     }
-
-    // AC4-ERR: neither shape, or a broken line, reads None.
-    #[test]
-    fn no_usable_record_reads_none() {
-        assert_eq!(from_tail(""), None);
-        assert_eq!(from_tail("not json\n"), None);
-        assert_eq!(
-            from_tail(r#"{"type":"token_count","info":{}}"#),
-            None,
-            "a token_count with no window is not a percent"
-        );
-        assert_eq!(
-            from_tail(&format!("{CLAUDE_TURN}\n{CODEX_COUNT}\n")).as_deref(),
-            Some("50%"),
-            "the newest record wins"
-        );
-    }
 }

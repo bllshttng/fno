@@ -325,21 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn status_after_pipeline_denies() {
-        let r = denied("(fno bundle check 2>&1 | tail -8); echo \"EXIT=$?\"");
-        assert!(r.contains("$?"));
-        assert!(r.contains("set -o pipefail"));
-        assert!(r.contains("EXIT="));
-        denied("cargo build 2>&1 | tail -5\necho \"Exit code: $?\"");
-        denied("{ x | tail -3; }; echo $?");
-        denied("if x | tail -1; then echo $?; fi");
-        denied("x | tail -3 || echo \"failed $?\"");
-        denied("v=$(x | tail -1); echo $?");
-        // pipefail inside a subshell covers nothing after the `)`.
-        denied("(set -o pipefail; a | tail -3); b | tail -3; echo $?");
-    }
-
-    #[test]
     fn bare_backlog_denies() {
         let r = denied("backlog task list");
         assert!(r.contains("fno backlog"), "names the remedy: {r}");

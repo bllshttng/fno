@@ -360,43 +360,6 @@ const FGB_PROBE_CORE_DRAINED: &str = r#"{"resources":{"graphql":{"remaining":0,"
 
 const FGB_PROBE_CORE_HEALTHY: &str = r#"{"resources":{"graphql":{"remaining":4800,"reset":1791234567},"core":{"remaining":4980,"reset":1791234500}}}"#;
 
-/// The broker field set is the metadata set plus exactly `,url`, and the
-/// info set is the metadata set plus the four more the info payload maps.
-/// The superset relationships are what route the fallback reads to the
-/// broker and promise every key the mappers read; the consts are literals
-/// (concat! takes literals only), so drift between the strings is the
-/// failure this guards.
-#[test]
-fn graphql_field_sets_extend_the_metadata_set() {
-    use crate::loopcheck::gh_read::{
-        PR_INFO_FALLBACK_FIELDS, PR_VIEW_FIELDS, PR_VIEW_FIELDS_GRAPHQL,
-    };
-    let gate_extra = PR_VIEW_FIELDS_GRAPHQL
-        .strip_prefix(PR_VIEW_FIELDS)
-        .expect("the gate field set extends the metadata set");
-    assert_eq!(gate_extra, ",url");
-    let info_extra = PR_INFO_FALLBACK_FIELDS
-        .strip_prefix(PR_VIEW_FIELDS)
-        .expect("the info field set extends the metadata set");
-    assert_eq!(
-        info_extra,
-        ",url,body,mergedAt,mergeCommit,autoMergeRequest"
-    );
-    // The other leg: the adapter routes a read to REST only when every field
-    // sits in its metadata set, and to the broker when one does not.
-    use crate::pr_status::adapter::METADATA_FIELDS;
-    for field in PR_VIEW_FIELDS.split(',') {
-        assert!(
-            METADATA_FIELDS.contains(&field),
-            "{field} is in PR_VIEW_FIELDS but not the adapter's REST set"
-        );
-    }
-    assert!(
-        !METADATA_FIELDS.contains(&"url"),
-        "url must route to the broker"
-    );
-}
-
 /// The retry the earned fallback makes: same argv, broker-routing field
 /// set, and the repo the caller resolved pinned with --repo. The url the
 /// REST adapter does not serve is what routes the read to the

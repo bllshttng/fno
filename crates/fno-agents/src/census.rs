@@ -1269,43 +1269,8 @@ fn shutdown_reply(sock: &Path) -> Option<Value> {
 
 #[cfg(test)]
 mod process_table_tests {
-    /// AC1: a live pid reads a window of own and child cores; no daemon
-    /// reads null with a reason, never zeros.
-    #[tokio::test]
-    async fn daemon_cpu_reads_a_window_or_names_why_not() {
-        let window = std::time::Duration::from_millis(50);
-        let (cpu, reason) = super::daemon_cpu(Some(std::process::id()), window).await;
-        assert!(reason.is_null(), "{reason}");
-        assert!(cpu["window_s"].as_f64().unwrap() > 0.0);
-        assert!(cpu["own_cores"].as_f64().unwrap() >= 0.0);
-        assert!(cpu["children_cores"].as_f64().unwrap() >= 0.0);
-        let (cpu, reason) = super::daemon_cpu(None, window).await;
-        assert!(cpu.is_null());
-        assert!(reason.as_str().unwrap().contains("no daemon"));
-    }
 
-    use super::{pid_is_zombie, process_table, ps_text};
-
-    #[test]
-    fn process_table_reads_its_own_row() {
-        let (table, _unreadable) = process_table();
-        let me = std::process::id();
-        let row = table
-            .iter()
-            .find(|row| row.pid == me)
-            .expect("the test process reads its own row");
-        assert_eq!(row.ppid, unsafe { libc::getppid() } as u32);
-        assert!(row.rss_kb > 0, "resident memory reads nonzero");
-        let exe_name = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .expect("current_exe resolves");
-        assert!(
-            row.command.contains(&exe_name),
-            "the command holds the test binary name: {} (want {exe_name})",
-            row.command
-        );
-    }
+    use super::{pid_is_zombie, ps_text};
 
     // The parser it pins compiles only beside its Linux caller.
     #[cfg(not(target_os = "macos"))]

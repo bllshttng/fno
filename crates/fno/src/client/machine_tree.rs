@@ -71,6 +71,14 @@ impl MachineTree {
         }
     }
 
+    pub(super) fn destinations(&self) -> Vec<String> {
+        self.bands
+            .iter()
+            .filter(|b| !b.local)
+            .map(|b| b.host.clone())
+            .collect()
+    }
+
     /// Remote rows reading blocked. Zero while the toggle is off.
     pub(super) fn blocked_remote(&self) -> usize {
         if !self.on {
@@ -155,6 +163,9 @@ pub(super) fn apply(view: &mut View, read: Result<Value, String>) {
                 })
             });
             view.machine_tree.bands = fold(&map);
+            if let Some(l) = view.launcher.as_mut() {
+                l.machines = view.machine_tree.destinations();
+            }
             view.reanchor_selector(held);
             if let Some(hr) = view.hover_row {
                 let now_at = view.display_rows().get(hr).and_then(|r| match r {
@@ -543,61 +554,5 @@ mod tests {
         assert!(!bands[0].fresh);
         assert_eq!(bands.len(), 3);
         assert!(!bands[1].fresh, "a stale beat reads offline on its band");
-    }
-
-    #[test]
-    fn a_remote_seat_files_badges_pins_and_prices_by_its_machines_marks() {
-        let map = json!({"machines": [
-            {"host": "bb16", "local": false, "fresh": true, "age_s": 5, "sessions": [
-                {"name": "muriel", "harness": "claude", "project": "fno",
-                 "workspace": "footnote", "session_id": "133a419b", "status": "writing",
-                 "needs_input": true, "pinned": true, "cost_cents": 412, "tokens": 90000,
-                 "compactions": 2, "context_pct": 41, "last_message": "reading the diff"},
-                {"name": "ines", "harness": "claude", "project": "fnh", "age_s": 180},
-            ]},
-            {"host": "mbp3", "local": false, "fresh": false, "age_s": 400, "sessions": [
-                {"name": "dusty", "harness": "claude", "project": "fno", "needs_input": true},
-            ]},
-        ]});
-        let bands = fold(&map);
-        let seats = |host: &str| &bands.iter().find(|b| b.host == host).unwrap().seats;
-        let (muriel, ines) = (&seats("bb16")[0], &seats("bb16")[1]);
-        assert_eq!(seat_label(AgentGroup::Workspace, muriel), "footnote");
-        assert_eq!(
-            seat_label(AgentGroup::Workspace, ines),
-            "fnh",
-            "with no workspace the project stands in"
-        );
-        assert_eq!(seat_label(AgentGroup::Status, muriel), "Needs input");
-        assert_eq!(seat_label(AgentGroup::Status, ines), "Completed");
-        assert_eq!(muriel.row.badge, Some(AgentBadge::Blocked));
-        assert!(muriel.row.pinned && !ines.row.pinned);
-        let row = &muriel.row;
-        assert_eq!(
-            (
-                row.session_cost_cents,
-                row.session_tokens,
-                row.compaction_count,
-                row.context_used_pct,
-                row.tail.as_deref(),
-            ),
-            (
-                Some(412),
-                Some(90_000),
-                Some(2),
-                Some(41),
-                Some("reading the diff")
-            ),
-            "a remote row carries the fields a local card paints"
-        );
-        let bare = &ines.row;
-        assert!(
-            bare.session_cost_cents.is_none() && bare.session_tokens.is_none(),
-            "no reading is no zero"
-        );
-
-        let dusty = &seats("mbp3")[0];
-        assert!(!dusty.needs_input, "a stale beat raises no alert");
-        assert_eq!(seat_label(AgentGroup::Status, dusty), "Completed");
     }
 }

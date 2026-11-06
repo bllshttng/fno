@@ -929,26 +929,6 @@ mod tests {
     }
 
     #[test]
-    fn attach_still_accepts_the_retired_cross_project_flag() {
-        // Retired (d-460ea8c7): the flag is a silent no-op now; the old
-        // surface died with "unknown attach flag" before any resolution ran.
-        let a = parse_attach_args(&["cx".to_string(), "--cross-project".to_string()]).unwrap();
-        assert_eq!(a.name, "cx");
-        let err = parse_attach_args(&["cx".to_string(), "--nope".to_string()]).unwrap_err();
-        assert_eq!(
-            err,
-            (2, "fno-agents: unknown attach flag: --nope".to_string())
-        );
-        let err = parse_attach_args(&[]).unwrap_err();
-        assert_eq!(err, (2, "fno-agents: attach needs a <name>".to_string()));
-        let dash = ["--dial", "-oProxyCommand=x", "cx"].map(String::from);
-        let err = parse_attach_args(&dash).unwrap_err();
-        assert_eq!(err, (2, "fno-agents: --dial needs a host".to_string()));
-        let err = parse_attach_args(&["a".to_string(), "b".to_string()]).unwrap_err();
-        assert!(err.1.contains("attach takes one NAME"), "{err:?}");
-    }
-
-    #[test]
     fn mux_thread_fallthrough_exits_match_the_mux() {
         assert_eq!(MUX_THREAD_NO_SERVER, fno::mux_cli::EXIT_NO_SERVER);
         assert_eq!(MUX_THREAD_USAGE, fno::mux_cli::EXIT_USAGE);

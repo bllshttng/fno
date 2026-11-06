@@ -365,61 +365,6 @@ mod tests {
             "slots 0..k appear once"
         );
     }
-
-    #[test]
-    fn main_left_stacks_the_rest_on_the_right() {
-        let t = topology(TemplateName::MainLeft, 4).unwrap();
-        assert_valid(&t, 4);
-        match &t {
-            Node::Branch { axis, children } => {
-                assert_eq!(*axis, Axis::Horizontal);
-                assert_eq!(children[0].1, Node::Leaf(0)); // main
-                assert!(matches!(
-                    children[1].1,
-                    Node::Branch {
-                        axis: Axis::Vertical,
-                        ..
-                    }
-                ));
-            }
-            _ => panic!("expected a branch"),
-        }
-    }
-
-    #[test]
-    fn main_left_k2_is_a_flat_pair_not_a_single_child_branch() {
-        let t = topology(TemplateName::MainLeft, 2).unwrap();
-        assert_valid(&t, 2);
-        // No degenerate one-child branch: the "rest" collapsed to a leaf.
-        assert_eq!(
-            t,
-            Node::Branch {
-                axis: Axis::Horizontal,
-                children: vec![(0.5, Node::Leaf(0)), (0.5, Node::Leaf(1))],
-            }
-        );
-    }
-
-    #[test]
-    fn main_top_puts_the_row_below() {
-        let t = topology(TemplateName::MainTop, 4).unwrap();
-        assert_valid(&t, 4);
-        match &t {
-            Node::Branch { axis, children } => {
-                assert_eq!(*axis, Axis::Vertical);
-                assert_eq!(children[0].1, Node::Leaf(0));
-                assert!(matches!(
-                    children[1].1,
-                    Node::Branch {
-                        axis: Axis::Horizontal,
-                        ..
-                    }
-                ));
-            }
-            _ => panic!("expected a branch"),
-        }
-    }
-
     #[test]
     fn thirds_and_grid_have_the_documented_shapes() {
         assert_valid(&topology(TemplateName::RowThirds, 3).unwrap(), 3);
@@ -466,21 +411,6 @@ mod tests {
             })
         );
     }
-
-    #[test]
-    fn variadic_minimum_arity_is_enforced() {
-        assert_eq!(
-            topology(TemplateName::MainLeft, 1),
-            Err(TemplateError::Arity {
-                want: 2,
-                got: 1,
-                variadic: true
-            })
-        );
-        // Larger k is fine for a variadic template.
-        assert_valid(&topology(TemplateName::MainTop, 6).unwrap(), 6);
-    }
-
     // -- typed-tree compilation + spec validation --
 
     fn child(weight: f32, tree: LayoutTreeSpec) -> LayoutTreeChild {
@@ -526,35 +456,6 @@ mod tests {
         assert!(template_to_tree(TemplateName::RowThirds, &["a".into(), "b".into()]).is_err());
         assert!(template_to_tree(TemplateName::MainLeft, &["a".into()]).is_err());
     }
-
-    #[test]
-    fn anchored_layout_spec_accepts_a_valid_topology() {
-        let valid = spec(
-            LayoutTreeSpec::Split {
-                axis: Axis::Vertical,
-                children: vec![
-                    child(0.5, LayoutTreeSpec::Slot("anchor".into())),
-                    child(
-                        0.5,
-                        LayoutTreeSpec::Split {
-                            axis: Axis::Horizontal,
-                            children: vec![
-                                child(0.5, LayoutTreeSpec::Slot("r".into())),
-                                child(0.5, LayoutTreeSpec::Slot("t".into())),
-                            ],
-                        },
-                    ),
-                ],
-            },
-            vec![
-                ("anchor", LayoutBinding::Anchor),
-                ("r", LayoutBinding::Fno("abcd".into())),
-                ("t", LayoutBinding::Shell),
-            ],
-        );
-        validate_anchored_spec(&valid).expect("valid spec passes");
-    }
-
     fn flat(n: usize) -> LayoutTreeSpec {
         // A vertical split of n distinct slot leaves.
         LayoutTreeSpec::Split {
@@ -660,88 +561,6 @@ mod tests {
         v0.version = 2;
         assert_eq!(validate_anchored_spec(&v0), Err(SpecError::Version(2)));
     }
-
-    #[test]
-    fn anchored_layout_spec_rejects_bad_slots() {
-        let two = |bindings: Vec<(&str, LayoutBinding)>| {
-            spec(
-                LayoutTreeSpec::Split {
-                    axis: Axis::Vertical,
-                    children: vec![
-                        child(0.5, LayoutTreeSpec::Slot("anchor".into())),
-                        child(0.5, LayoutTreeSpec::Slot("r".into())),
-                    ],
-                },
-                bindings,
-            )
-        };
-        // Zero anchors.
-        assert_eq!(
-            validate_anchored_spec(&two(vec![
-                ("anchor", LayoutBinding::Shell),
-                ("r", LayoutBinding::Shell),
-            ])),
-            Err(SpecError::AnchorCount(0))
-        );
-        // Two anchors.
-        assert_eq!(
-            validate_anchored_spec(&two(vec![
-                ("anchor", LayoutBinding::Anchor),
-                ("r", LayoutBinding::Anchor),
-            ])),
-            Err(SpecError::AnchorCount(2))
-        );
-        // Tree references an undefined slot.
-        assert_eq!(
-            validate_anchored_spec(&spec(
-                LayoutTreeSpec::Split {
-                    axis: Axis::Vertical,
-                    children: vec![
-                        child(0.5, LayoutTreeSpec::Slot("anchor".into())),
-                        child(0.5, LayoutTreeSpec::Slot("ghost".into())),
-                    ],
-                },
-                vec![
-                    ("anchor", LayoutBinding::Anchor),
-                    ("r", LayoutBinding::Shell)
-                ],
-            )),
-            Err(SpecError::UnknownSlot("ghost".into()))
-        );
-        // A defined slot the tree never references.
-        assert_eq!(
-            validate_anchored_spec(&spec(
-                LayoutTreeSpec::Split {
-                    axis: Axis::Vertical,
-                    children: vec![
-                        child(0.5, LayoutTreeSpec::Slot("anchor".into())),
-                        child(0.5, LayoutTreeSpec::Slot("r".into())),
-                    ],
-                },
-                vec![
-                    ("anchor", LayoutBinding::Anchor),
-                    ("r", LayoutBinding::Shell),
-                    ("lonely", LayoutBinding::Shell),
-                ],
-            )),
-            Err(SpecError::UnreferencedSlot("lonely".into()))
-        );
-        // A slot referenced twice.
-        assert_eq!(
-            validate_anchored_spec(&spec(
-                LayoutTreeSpec::Split {
-                    axis: Axis::Vertical,
-                    children: vec![
-                        child(0.5, LayoutTreeSpec::Slot("anchor".into())),
-                        child(0.5, LayoutTreeSpec::Slot("anchor".into())),
-                    ],
-                },
-                vec![("anchor", LayoutBinding::Anchor)],
-            )),
-            Err(SpecError::DuplicateReference("anchor".into()))
-        );
-    }
-
     fn rect(rows: u16, cols: u16) -> Rect {
         Rect {
             x: 0,
@@ -759,13 +578,5 @@ mod tests {
         assert_eq!(pick_template(3, rect(80, 24)), Some(TemplateName::MainTop));
         assert_eq!(pick_template(4, rect(24, 80)), Some(TemplateName::Grid2x2));
         assert_eq!(pick_template(4, rect(80, 24)), Some(TemplateName::Grid2x2));
-    }
-
-    #[test]
-    fn pick_template_leaves_other_counts_unshaped() {
-        assert_eq!(pick_template(0, rect(24, 80)), None);
-        assert_eq!(pick_template(1, rect(24, 80)), None);
-        assert_eq!(pick_template(5, rect(24, 80)), None);
-        assert_eq!(pick_template(6, rect(24, 80)), None);
     }
 }

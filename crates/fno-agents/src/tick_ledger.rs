@@ -328,6 +328,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         reader: Some("fno-agents evals events"),
     },
     ArmSpec {
+        arm: "evals",
+        default_interval_s: crate::daemon::sweeps::EVALS_ARM_INTERVAL_SECS as u64,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: None,
+        reader: None,
+    },
+    ArmSpec {
         arm: "pane_loop",
         default_interval_s: 30,
         scheduler: SCHED_DAEMON,

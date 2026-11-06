@@ -2173,9 +2173,8 @@ fn intake_single(args: &IntakeArgs, plan_path: &str) -> i32 {
                 .any(|e| e.get("roadmap_id").and_then(Value::as_str) == Some(roadmap_id.as_str()))
         {
             eprintln!(
-                "unknown roadmap_id: {roadmap_id} (use /megawalk vision.md to create \
-                 a roadmap first, pass --force-new-roadmap, or omit --roadmap-id to \
-                 intake to the backlog)"
+                "unknown roadmap_id: {roadmap_id} (pass --force-new-roadmap to intake \
+                 onto a new roadmap, or omit --roadmap-id to intake to the backlog)"
             );
             return 2;
         }
@@ -2571,9 +2570,8 @@ fn do_intake_multi(args: &IntakeArgs, all_paths: &[String]) -> i32 {
                 .any(|e| e.get("roadmap_id").and_then(Value::as_str) == Some(roadmap_id.as_str()))
         {
             eprintln!(
-                "unknown roadmap_id: {roadmap_id} (use /megawalk vision.md to create \
-                 a roadmap first, pass --force-new-roadmap, or omit --roadmap-id to \
-                 intake to the backlog)"
+                "unknown roadmap_id: {roadmap_id} (pass --force-new-roadmap to intake \
+                 onto a new roadmap, or omit --roadmap-id to intake to the backlog)"
             );
             return 2;
         }

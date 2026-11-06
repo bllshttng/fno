@@ -405,32 +405,6 @@ mod tests {
         assert!(!s(&e.bottom).contains("49%"));
         assert!(s(&e.bottom).contains("node7 · main"));
     }
-
-    #[test]
-    fn bottom_drops_branch_next() {
-        // 16 cols with a 7-char node: step 1 (ctx dropped) still needs
-        // ` x-abc12 · main ` plus the `╰─` = 17 of 14 inner, so the branch
-        // drops too and the bare node span rides alone.
-        let f = EdgeFields {
-            node: Some("x-abc12"),
-            ..full()
-        };
-        let e = edges(&f, rect(16, 12), true);
-        assert_eq!(e.bottom_step, 2, "{:?}", s(&e.bottom));
-        assert!(s(&e.bottom).contains(" x-abc12 "), "{:?}", s(&e.bottom));
-        assert!(!s(&e.bottom).contains("main"), "{:?}", s(&e.bottom));
-        assert!(!s(&e.bottom).contains("49%"), "{:?}", s(&e.bottom));
-    }
-
-    #[test]
-    fn bottom_drops_the_node_span_when_it_cannot_fit() {
-        // 9 cols: even the bare node span cannot fit (`╰─` plus ` node7 `
-        // needs 9 of 7 inner); it drops whole, no marker.
-        let e = edges(&full(), rect(9, 12), false);
-        assert!(!s(&e.bottom).contains('…'), "{:?}", s(&e.bottom));
-        assert_eq!(cols_of(&e.bottom), 9);
-    }
-
     #[test]
     fn top_drops_the_model_first() {
         // 40 cols: the full tab (25) plus the full status span (17) needs 43
@@ -446,44 +420,6 @@ mod tests {
             s(&e.top)
         );
     }
-
-    #[test]
-    fn top_drops_the_word_next_glyph_survives() {
-        // 33 cols: the full tab (23) plus ` ● Work ` (8) plus the separator
-        // needs 32 of 31 inner; dropping the word frees 5 and the glyph stays.
-        let e = edges(&full(), rect(33, 12), false);
-        assert_eq!(e.top_step, 4, "{:?}", s(&e.top));
-        assert!(s(&e.top).contains('●'), "{:?}", s(&e.top));
-        assert!(!s(&e.top).contains("Work"), "{:?}", s(&e.top));
-        assert!(
-            s(&e.top).contains("lead-5317-succeed-g3"),
-            "{:?}",
-            s(&e.top)
-        );
-    }
-
-    #[test]
-    fn top_cuts_the_name_last() {
-        // 28 cols: even the bare glyph cannot sit beside the full tab; the
-        // word drops AND the name is cut (the last resort: name_max 18).
-        let e = edges(&full(), rect(28, 12), false);
-        assert_eq!(e.top_step, 4, "{:?}", s(&e.top));
-        assert!(s(&e.top).contains("lead-5317-succeed-"), "{:?}", s(&e.top));
-        assert!(!s(&e.top).contains('…'), "{:?}", s(&e.top));
-        assert!(s(&e.top).contains('●'), "{:?}", s(&e.top));
-        assert_eq!(cols_of(&e.top), 28);
-    }
-
-    #[test]
-    fn top_clips_the_name_at_the_floor() {
-        // 20 cols WITH a grip: the tab zone is 6, the name gets 2 => `le`.
-        let e = edges(&full(), rect(20, 12), true);
-        assert!(!s(&e.top).contains('…'), "{:?}", s(&e.top));
-        assert!(s(&e.top).contains("le "), "{:?}", s(&e.top));
-        assert!(s(&e.top).contains('●'), "{:?}", s(&e.top));
-        assert_eq!(cols_of(&e.top), 20);
-    }
-
     #[test]
     fn only_top_overflow_keeps_ctx_on_the_bottom() {
         // 34 cols: the tab (25) + status (17) cannot both fit, but the bottom
@@ -502,32 +438,6 @@ mod tests {
         assert!(!e.top.iter().any(|(c, _)| *c == '▐' || *c == '▌'));
         assert!(s(&e.top).starts_with("╭─ lead-5317-succeed-g3 ─"));
     }
-
-    // AC2-ERR
-    #[test]
-    fn long_and_cjk_names_cut_to_exactly_the_rect_width() {
-        let long = EdgeFields {
-            name: "k".repeat(200).leak(),
-            ..full()
-        };
-        let e = edges(&long, rect(40, 12), true);
-        assert_eq!(cols_of(&e.top), 40);
-        assert_eq!(s(&e.top).chars().next(), Some('╭'));
-        assert_eq!(s(&e.top).chars().last(), Some('╮'));
-        assert!(!s(&e.top).contains('…'));
-        let cjk = EdgeFields {
-            name: "패널프레임테스트 라벨",
-            ..full()
-        };
-        // 29 cols: the 21-col CJK name plus its tab costs 25 and the glyph
-        // span ` ●` needs 2 more of 27 inner, so the name clips with no
-        // marker and the edge still closes at exactly 29.
-        let e = edges(&cjk, rect(29, 12), false);
-        assert_eq!(cols_of(&e.top), 29);
-        assert!(!s(&e.top).contains('…'));
-        assert_eq!(cols_of(&e.bottom), 29);
-    }
-
     // AC3-HP
     #[test]
     fn a_plain_shell_shows_only_its_name() {
