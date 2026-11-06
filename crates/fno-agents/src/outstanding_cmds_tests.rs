@@ -183,7 +183,7 @@ fn a_delivery_without_an_asker_names_the_lead_escalation_lane() {
     );
 }
 
-// claude-push payload (x-1bb3): composition, cap, and the relay line format.
+// claude-push payload: composition, cap, and the relay line format.
 
 #[test]
 fn push_payload_names_the_question_the_decision_and_the_pick() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: PostToolUse - relay a filed question to the phone (x-1bb3)
+# fno hook: PostToolUse - relay a filed question to the phone
 #
 # A lead session that just ran `fno inbox outstanding ask` (user rung) or a
 # climb that landed on the user's board printed a `claude-push:` payload
