@@ -23,6 +23,7 @@ mod common;
 const GH_STUB: &str = r#"#!/bin/sh
 # Answers the tick's REST reads for one repo: o/r, PRs 7 (open) and 8 (merged).
 args="$*"
+if [ "${PR_WATCH_TEST_GH_DELAY:-0}" -gt 0 ]; then sleep "$PR_WATCH_TEST_GH_DELAY"; fi
 case " $args " in *" -i "*) printf 'HTTP/2.0 200 OK\r\n\r\n' ;; esac
 case "$args" in
   *rate_limit*) echo '{"resources":{"graphql":{"remaining":4000,"reset":1893456000},"core":{"remaining":4000,"reset":1893456000}}}' ;;
@@ -104,8 +105,7 @@ fn write_case(root: &Path, case: &Case, leg: &str) -> Home {
     }
     let config = format!(
         "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
-        state.display(),
-        case.enabled
+        state.display(), case.enabled
     );
     std::fs::write(state.join("config.toml"), &config).unwrap();
     std::fs::create_dir_all(repo.join(".fno")).unwrap();
@@ -209,4 +209,42 @@ fn the_tick_matches_its_frozen_goldens() {
         let rust = rust_leg(&write_case(root.path(), &case, "rust"));
         assert_golden("pr-watch-tick", case.label, &rust, None);
     }
+}
+
+#[test]
+fn an_exhausted_sweep_does_not_starve_the_evals_phase() {
+    let root = tempfile::tempdir().unwrap();
+    let case = Case {
+        label: "deadline evals",
+        enabled: true,
+        prs: &[7],
+        watermark: json!({"o/r#7": {"last_review_ts": "2026-10-01T00:00:00Z",
+                                     "last_seen_state": "OPEN", "retries": 0, "parked": null,
+                                     "merge_dispatched": false}}),
+    };
+    let home = write_case(root.path(), &case, "rust");
+    let mut cmd = Command::new(Path::new(env!("CARGO_BIN_EXE_fno-agents")));
+    cmd.args(["pr-watch", "tick"])
+        .env_clear()
+        .envs(fno_agents::test_run::self_owner_env())
+        .env("HOME", &home.dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", home.bin.display()))
+        .env("FNO_STATE_DIR", &home.state)
+        .env("FNO_CLAIMS_ROOT", &home.state)
+        .env("FNO_AGENTS_BIN", env!("CARGO_BIN_EXE_fno-agents"))
+        .env("FNO_BIN", home.bin.join("no-fno"))
+        .env("PR_WATCH_FIRE_CMD", home.bin.join("fire-ok"))
+        .env("FNO_GH_FACTS_DIR", home.dir.join("gh-facts"))
+        .env("FNO_PR_WATCH_TICK_TIMEOUT", "2")
+        .env("PR_WATCH_TEST_GH_DELAY", "5")
+        .current_dir(&home.repo);
+    let output = cmd.output().expect("tick runs");
+    let journal = masked_journal(&home);
+    let evals_row = journal.find("\"arm\":\"evals\"");
+    let sweep_row = journal.find("\"arm\":\"pr_watch_sweep\"");
+    assert!(
+        matches!((evals_row, sweep_row), (Some(evals), Some(sweep)) if evals < sweep),
+        "evals phase row must precede the sweep timeout; stdout={}; journal={journal}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
