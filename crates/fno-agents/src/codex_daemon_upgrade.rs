@@ -408,14 +408,15 @@ mod tests {
         );
     }
 
-    /// AC23-EDGE: a second transaction behind the lock reads lock-busy and
-    /// never touches the daemon. The lock file is the provider's own; the
-    /// test only holds and releases it. The transaction answers `Absent`
-    /// before it ever reaches the lock when the codex CLI is not on the
-    /// machine, so that test asserts the Absent gate instead - the lock-busy
-    /// arm runs wherever a CLI exists.
+    /// The verdict arm comes from the readiness probe alone, never from the
+    /// lock: the probe runs BEFORE the provider lock is taken, so a held lock
+    /// must not turn a current verdict into lock-busy or an unreadable one
+    /// into anything at all - only a stale verdict ever reaches the lock,
+    /// where a second transaction reads lock-busy. The lock file is the
+    /// provider's own; the test only holds and releases it. A CLI-less
+    /// machine answers `Absent` before anything else.
     #[tokio::test(flavor = "current_thread")]
-    async fn the_second_concurrent_transaction_reads_lock_busy() {
+    async fn the_verdict_comes_from_the_probe_even_while_the_lock_is_held() {
         use crate::harness_daemon::HarnessDaemonAdapter;
         let adapter = crate::codex_inject::CodexDaemonAdapter::from_environment();
         let held = crate::harness_daemon::acquire_lock(&adapter.lock_path())
@@ -429,12 +430,35 @@ mod tests {
             );
             return;
         }
-        match outcome {
-            crate::codex_daemon_upgrade::UpgradeOutcome::Held {
-                kind: crate::codex_daemon_upgrade::HoldKind::LockBusy,
-                ..
-            } => {}
-            other => panic!("expected lock-busy hold, got {other:?}"),
+        let verdict = crate::codex_daemon_readiness::codex_daemon_readiness().verdict;
+        match verdict {
+            crate::codex_daemon_readiness::VersionVerdict::Current => assert!(
+                matches!(
+                    outcome,
+                    crate::codex_daemon_upgrade::UpgradeOutcome::ReusedCurrent { .. }
+                ),
+                "a current verdict reuses without the lock, got {outcome:?}"
+            ),
+            crate::codex_daemon_readiness::VersionVerdict::Stale => assert!(
+                matches!(
+                    outcome,
+                    crate::codex_daemon_upgrade::UpgradeOutcome::Held {
+                        kind: crate::codex_daemon_upgrade::HoldKind::LockBusy,
+                        ..
+                    }
+                ),
+                "a stale verdict reaches the lock and reads lock-busy, got {outcome:?}"
+            ),
+            _ => assert!(
+                matches!(
+                    outcome,
+                    crate::codex_daemon_upgrade::UpgradeOutcome::Held {
+                        kind: crate::codex_daemon_upgrade::HoldKind::NotStale,
+                        ..
+                    }
+                ),
+                "an unreadable verdict holds not-stale without the lock, got {outcome:?}"
+            ),
         }
     }
 }

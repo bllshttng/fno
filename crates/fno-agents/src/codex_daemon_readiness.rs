@@ -146,7 +146,11 @@ pub fn live_version_readings() -> Vec<(String, Option<String>)> {
 }
 
 fn daemon_version_command() -> Option<String> {
-    let out = std::process::Command::new(codex_cli_path()?)
+    daemon_version_command_from(codex_cli_path()?.as_os_str(), 5)
+}
+
+fn daemon_version_command_from(bin: &std::ffi::OsStr, _secs: u64) -> Option<String> {
+    let out = std::process::Command::new(bin)
         .args(["app-server", "daemon", "version"])
         .output()
         .ok()?;
@@ -154,7 +158,11 @@ fn daemon_version_command() -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    text.split_whitespace().last().map(str::to_string)
+    daemon_version_output_version(&text)
+}
+
+fn daemon_version_output_version(stdout: &str) -> Option<String> {
+    stdout.split_whitespace().last().map(str::to_string)
 }
 
 /// Three-way version compare on dotted numeric prefixes. `None` = not both
@@ -232,5 +240,44 @@ mod tests {
         let mut unique: Vec<String> = disagree.iter().filter_map(|(_, v)| v.clone()).collect();
         unique.dedup();
         assert_ne!(unique.len(), 1, "disagreeing readers are unknown");
+    }
+
+    #[test]
+    fn the_daemon_version_probe_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "hangs-then-versions",
+            "#!/bin/bash\nsleep 20\necho 0.1.2\n",
+        );
+        let started = std::time::Instant::now();
+        let version = daemon_version_command_from(stub.as_os_str(), 1);
+        let elapsed = started.elapsed();
+        assert!(
+            version.is_none(),
+            "a probe past its bound reads none, got {version:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "a 20s hang must not hold the reader {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn the_daemon_version_command_reads_appserverversion_from_vendor_json() {
+        // Verbatim shape of codex 0.167.0 stdout (2026-11-06 probe on this
+        // laptop): compact JSON, no spaces, so the bare last-token read
+        // returned the whole blob.
+        let json = r#"{"status":"running","backend":"pid","managedCodexPath":"/Users/x/.codex/packages/standalone/current/bin/codex","managedCodexVersion":"0.167.0","socketPath":"/Users/x/.codex/app-server-control/app-server-control.sock","cliVersion":"0.167.0","appServerVersion":"0.167.0"}"#;
+        assert_eq!(
+            daemon_version_output_version(json).as_deref(),
+            Some("0.167.0"),
+            "the vendor JSON names appServerVersion"
+        );
+        assert_eq!(
+            daemon_version_output_version("0.154.0\n").as_deref(),
+            Some("0.154.0"),
+            "older bare vendor output keeps the last-token read"
+        );
     }
 }

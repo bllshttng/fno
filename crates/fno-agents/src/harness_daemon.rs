@@ -255,6 +255,22 @@ pub(crate) fn acquire_lock(path: &Path) -> Option<crate::chokepoint::Held> {
     crate::chokepoint::take(&crate::chokepoint::HARNESS_DAEMON, path).ok()
 }
 
+/// The ensure-refusal body for a lock take that failed. RED TEMP: the
+/// pre-existing message, extracted verbatim so the new contract can fail
+/// against it. Test-only until the fix wires it into the refusal.
+#[cfg(test)]
+fn lock_refusal_message(
+    harness: &str,
+    lock_path: &Path,
+    _refused: &crate::chokepoint::Refused,
+) -> String {
+    format!(
+        "harness={} observed=unreadable cannot lock daemon state {}; remedy=repair permissions or remove the lock",
+        harness,
+        lock_path.display()
+    )
+}
+
 /// Non-blocking variant: `None` = someone else holds it, try again later.
 /// The upgrade transaction takes this so a busy lock reads lock-busy instead
 /// of parking the restart command behind another transaction.
@@ -295,7 +311,10 @@ fn reap_owned_process(state: &DaemonState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_harness_daemon, DaemonState, HarnessDaemonAdapter};
+    use super::{
+        ensure_harness_daemon, lock_refusal_message, try_acquire_lock, DaemonState,
+        HarnessDaemonAdapter,
+    };
     use std::path::{Path, PathBuf};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -377,5 +396,59 @@ mod tests {
 
         assert!(error.contains("observed=unreadable"), "{error}");
         assert_eq!(boots.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_lock_refusal_names_the_holder_not_the_removal_remedy() {
+        let path = Path::new("/x/fno-harness-daemon.lock");
+        let held = crate::chokepoint::Refused {
+            row: "harness-daemon",
+            path: PathBuf::from(path),
+            waited: std::time::Duration::from_secs(10),
+            holder_pid: Some(59801),
+            holder_alive: true,
+            hold_age_secs: Some(372),
+            holder_op: Some("harness-daemon".to_string()),
+            waiter_pid: 42,
+            io_error: None,
+        };
+        let message = lock_refusal_message("codex", path, &held);
+        assert!(message.contains("holder pid 59801"), "{message}");
+        assert!(message.contains("held 372s"), "{message}");
+        assert!(
+            !message.contains("repair permissions"),
+            "a held lock is not a permissions problem: {message}"
+        );
+        let unopenable = crate::chokepoint::Refused {
+            io_error: Some("permission denied".to_string()),
+            holder_pid: None,
+            holder_alive: false,
+            hold_age_secs: None,
+            holder_op: None,
+            ..held
+        };
+        let message = lock_refusal_message("codex", path, &unopenable);
+        assert!(
+            message.contains("repair permissions"),
+            "only an unopenable file is a permissions problem: {message}"
+        );
+    }
+
+    #[test]
+    fn the_upgrade_try_lock_stamps_its_holder_so_a_refusal_can_name_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fno-harness-daemon.lock");
+        let held = try_acquire_lock(&path).expect("an unheld lock is taken");
+        let stamp = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            stamp.contains(&format!("\"pid\": {}", std::process::id())),
+            "the holder must be stamped for a waiter to name: {stamp:?}"
+        );
+        drop(held);
+        let stamp = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            stamp.trim().is_empty(),
+            "releasing clears the stamp: {stamp:?}"
+        );
     }
 }
