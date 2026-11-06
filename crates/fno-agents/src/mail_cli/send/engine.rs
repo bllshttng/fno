@@ -2052,6 +2052,9 @@ mod resolve_pane_entry_tests {
     #[test]
     fn a_short_candidate_two_rows_answer_to_names_no_pane() {
         crate::mail_hold::tests::with_hold_env(|dir| {
+            // `log_path` is a required field at the Value-loader's row check
+            // (the Python dataclass presence rule); a row without one fails
+            // the whole read and every candidate resolves to None.
             crate::mail_hold::tests::write_registry(
                 dir,
                 serde_json::json!([
@@ -2059,6 +2062,7 @@ mod resolve_pane_entry_tests {
                         "name": "t-parked-prompt-blocked",
                         "status": "live",
                         "cwd": "/repo",
+                        "log_path": "/repo/.fno/logs/a.log",
                         "harness": "codex",
                         "harness_session_id": "01a1ad25-f04f-7220-8b8e-6c41a3bad0dd",
                         "created_at": "2026-11-05T00:00:00Z"
@@ -2067,6 +2071,7 @@ mod resolve_pane_entry_tests {
                         "name": "t-composer-flags",
                         "status": "live",
                         "cwd": "/repo",
+                        "log_path": "/repo/.fno/logs/b.log",
                         "harness": "codex",
                         "harness_session_id": "01a1ad25-7752-7020-a858-4253ed259833",
                         "created_at": "2026-11-05T00:00:00Z"
