@@ -350,6 +350,9 @@ enum Role {
     /// help inside the command.
     DoctorTest(Vec<OsString>),
     DoctorHome(Vec<OsString>),
+    /// `fno doctor -h|--help`: the family usage, answered here so help never
+    /// forwards to the Python signpost and back.
+    DoctorHelp,
     DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
@@ -1400,6 +1403,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     match fno::doctor::classify(args) {
         Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
+        Some(fno::doctor::Claim::Help) => return Role::DoctorHelp,
         Some(fno::doctor::Claim::AgentsExec(label, argv)) => {
             return Role::DoctorAgentsExec(label, argv)
         }
@@ -2203,6 +2207,10 @@ fn main() {
             &rest,
         )),
         Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
+        Role::DoctorHelp => {
+            print!("{}", fno::doctor::HELP_TEXT);
+            std::process::exit(0);
+        }
         Role::DoctorAgentsExec(label, argv) => {
             let action: Vec<String> = argv
                 .iter()
