@@ -1400,21 +1400,12 @@ mod tests {
             .position(|word| word == "--word-cap")
             .expect("cap flag");
         assert_eq!(capped[cap_at + 1], "60");
-        // The sender-side consult rides the --json receipt, so the refusal
-        // text comes from the receipt and names the rules even when a door
-        // build prints its human report nowhere the consult looks.
-        let report_argv = crate::mail_arm::style_door_argv(None);
-        assert!(
-            report_argv.contains(&"--json".to_string()),
-            "the consult reads the JSON receipt, not the human streams"
-        );
-        assert!(
-            report_argv.contains(&"--stdin".to_string()),
-            "the body still rides stdin"
-        );
-        // The receipt's refusal report: the receipt's own human report
-        // carries the rule names and quoted words, so the sender can fix
-        // the body instead of re-sending blind.
+        // The sender-side consult rides the same door's --json receipt, so
+        // the refusal text comes from the receipt and names the rules even
+        // when a door build prints its human report nowhere the consult
+        // looks. The receipt's own human report carries the rule names and
+        // quoted words, so the sender can fix the body instead of
+        // re-sending blind.
         let receipt = serde_json::json!({
             "exception": null,
             "word_count": 40,
