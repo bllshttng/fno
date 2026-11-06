@@ -67,9 +67,9 @@ impl Report {
         )
         .title("report a problem")
         .footer(if self.pending.is_some() {
-            "filing…"
+            "   filing…"
         } else {
-            "Tab type  ·  Enter submit  ·  Esc cancel"
+            "   Tab type  ·  Enter submit  ·  Esc cancel"
         })
         .plain_body()
     }
