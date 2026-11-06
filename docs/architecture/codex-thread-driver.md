@@ -35,9 +35,9 @@ agy --conversation <uuid> --input-format stream-json --output-format stream-json
 
 That is the boot-once, drive-many property `codex exec resume` lacks, and it is the same shape as `provider.rs`'s `claude_stream_json_resume_argv`. So agy's lane can reuse machinery fno already ships for claude. Its `agent_response` steps also carry `text_delta` and a per-step `duration_seconds`, so a driver can attribute latency, which `codex exec resume` does not permit.
 
-**opencode's `true` now has an honest steering path.** `harness_map.py`'s `substrate_default` returns `thread` for any harness whose spawn claim is native, so opencode is routed onto the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, attach-writer steering, readback, and session liveness; server-kill survival, review, and viewport selection remain unproven.
+When a harness has a native spawn claim, `harness_map.py`'s `substrate_default` returns `thread`. Opencode's `true` now has an honest steering path. This routes opencode to the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, steering, readback, and session liveness. It does not prove server-kill survival, review, or viewport selection.
 
-The serve lane does not use opencode's general store-lookup identity path. `POST /session` returns the full session id, and every later turn binds that id to the shared serve. The detached writer's pid is capture metadata only; liveness comes from `GET /session/<id>`, so a completed writer does not make the session read dead.
+The serve lane does not use opencode's general store-lookup identity path. `POST /session` returns the full session id, and each later turn binds that id to the shared serve. `GET /session/<id>` provides liveness. The detached writer's pid is capture metadata only. A completed writer does not make the session dead.
 
 The wider point remains: a durable session and a driver fno can steer are separate claims. The opencode spawn claim is native because this lane proves both, while the other opencode shapes remain explicitly refused or unmeasured.
 
@@ -55,7 +55,7 @@ Before reading the protocol below, rule it out. Codex has three re-entry lanes a
 
 Two flags on that lane close the modals recorded as blocking unattended restore. `--cd <DIR>` sets the working root. Codex then never renders its "use session directory or current directory" prompt. That prompt defaults to the canonical checkout, and the correct answer is the worktree. `--dangerously-bypass-hook-trust` runs enabled hooks without persisted trust, which clears the hooks-trust gate. Neither needs a protocol and both were answered by hand three times on 2026-08-25.
 
-**What fno's own resume lane applies is `--cd` and hook trust, never the approvals bypass.** Hook trust is posture-free. It skips only hook review, so it rides every resume as a global right after the binary, gated on an installed codex that ships the flag (0.148.0 or newer, pinned by `FNO_CODEX_VERSION`). The approvals bypass is the deliberate gap. A registry row recorded no sandbox posture. The lane had no way to tell a bounded worker from a yolo one, and a forced bypass resumed every bounded worker with approvals off. That much is fixed (registry v19): the codex thread lane stamps `sandbox_posture` at spawn and the daemon's `thread/resume` applies it. A `--yolo` worker keeps `danger-full-access` across a daemon restart. A pre-v19 row resumes with the safe `workspace-write` default.
+**fno resumes with `--cd` and hook trust, not an approvals bypass.** Hook trust skips hook review and does not change sandbox posture. The thread lane applies it on every resume. The installed Codex must support the flag. Codex 0.148.0 is the minimum. `FNO_CODEX_VERSION` pins that version. The approvals bypass remains separate. A registry row once carried no sandbox posture. The lane did not distinguish bounded workers from yolo workers. A forced bypass resumed both with approvals off. Registry v19 fixed this. The thread lane stamps `sandbox_posture` at spawn and `thread/resume` reapplies it. Yolo workers keep `danger-full-access` across daemon restarts. Pre-v19 rows use the safe `workspace-write` default.
 
 **What rules `codex resume` out is not capability, it is the terminal.** With stdin redirected it exits 1 in under a tenth of a second:
 
@@ -117,7 +117,7 @@ sh -c 'codex app-server daemon start; exec codex resume <session-id> --remote un
 The frames the driver reads drive turns. They never paint a screen. Read that as a hard boundary rather than a preference. A screenshot cannot tell an exec from a proxy, and the process tree can:
 
 - No `codex app-server` has `fno-agents-daemon` as its parent. Read every hit's parent positively. Never count app-servers: a count of one is also what a broken daemon plus one orphan looks like.
-- No `fno` process READS OR WRITES the bytes between a viewer terminal and `codex`. In the mux viewport the pane's own process is `codex`, with no children. The composed `exec` is load-bearing. It replaces the shell, so the pane's child is `codex` itself with no fno process in between. The `;` rather than `&&` is load-bearing too. A failed pre-exec still runs the attach. That yields the more specific error, in the pane the operator is already looking at.
+- No `fno` process READS OR WRITES the bytes between a viewer terminal and `codex`. In the mux viewport the pane's own process is `codex`, with no children. The composed `exec` is load-bearing. It replaces the shell, so the pane's child is `codex` itself with no fno process in between. Using a semicolon matters too. `&&` skips the attach after a failed pre-exec. On failure, the attach still runs and shows its error in the pane.
 
 A change that reads frames here to draw something has rebuilt the rendering layer this lane deleted, merely relocated into a pane. Both doors read ONE declaration now: the contract's `interactive_attach` row, overridable per harness. `fno` never links `fno-agents`. The test `attach_argv_matches_the_mux_renderer` links both crates and pins the two doors byte-identical for every harness the contract declares.
 
@@ -176,10 +176,33 @@ Every duty a thread driver owes has a named RPC:
 | enumerate hosted | `thread/loaded/list` | separates threads this app-server hosts from `notLoaded` |
 | name a row | `thread/name/set`, `thread/metadata/update` | |
 | review | `review/start` | returns a `turnId` and a `reviewThreadId` to read findings from |
+| command approval | `item/commandExecution/requestApproval` | server-to-client request for a command started by `turn/start`; response carries `decision` |
+| file-change approval | `item/fileChange/requestApproval` | server-to-client request for a file change started by `turn/start` |
+| permission approval | `item/permissions/requestApproval` | response carries a granted `permissions` profile and `scope` |
 
 Also present: `thread/fork`, `thread/rollback`, `thread/compact/start`, `thread/archive`, `threadSection/*`, `hooks/list`, `model/list`.
 
 `turn/steer`'s `expectedTurnId` is worth dwelling on. A keystroke into a pane cannot assert which turn it steers. A driver can.
+
+## Approvals on the thread lane
+
+verdict: (a) Codex 0.167.0's shared app-server sent `item/commandExecution/requestApproval` to a thread client, and a JSON-RPC `accept` response resumed the turn.
+
+`codex app-server daemon version` in Rex reported `status: running`, `cliVersion: 0.167.0`, and `appServerVersion: 0.167.0`. A temporary client used the shared Unix socket and `codex_inject::connect_app_server`'s WebSocket initialize handshake. It started a `read-only:on-request` thread and captured the raw request below with a Python standard-library WebSocket client after the Rust example build stalled.
+
+```json
+{"method":"item/commandExecution/requestApproval","id":4,"params":{"kind":"command","threadId":"01a1b123-5dd2-7453-94b7-e3d9080874c0","turnId":"01a1b123-62ed-7cb2-858d-bed3d264ab78","itemId":"exec-b35e81a6-7dd4-4f78-8c68-f98a1df856ad","startedAtMs":1793973270443,"environmentId":"local","reason":"May I run the exact authorized touch command outside the read-only sandbox?","command":"/bin/zsh -lc 'touch /tmp/fno-codex-approval-probe-23365'","cwd":"/tmp","commandActions":[{"type":"unknown","command":"touch /tmp/fno-codex-approval-probe-23365"}],"proposedExecpolicyAmendment":["touch","/tmp/fno-codex-approval-probe-23365"],"availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["touch","/tmp/fno-codex-approval-probe-23365"]}},"cancel"]}}
+```
+
+The available decisions in this measured frame were `accept`, `acceptWithExecpolicyAmendment`, and `cancel`. `acceptForSession` and `decline` were not advertised for this command. Sending `{"id":4,"result":{"decision":"accept"}}` produced `serverRequest/resolved` with `requestId: 4`, then `turn/completed`. The marker file existed, and the attached viewer cleared its prompt.
+
+With no response, a second `item/commandExecution/requestApproval` (server id 5) remained unresolved for 300 seconds. The probe sent `decline`, though that value was absent from `availableDecisions`. The server emitted `serverRequest/resolved`, marked the item `declined`, and completed the turn as `interrupted`. The second marker did not exist. The daemon did not time out or auto-decline within the 300-second window.
+
+The vendor protocol declares file-change and additional-permissions approval requests in `app-server-protocol/src/protocol/common.rs:1882-1915`. Only command-execution approval was measured live. The response types are in `protocol/v2/item.rs:1684-1785` and `protocol/v2/permissions.rs:773-800`.
+
+The FNO user-path spawn was refused before launch: `fno agents spawn --name x89f1-approval-repro -H codex --as thread --cwd /tmp --permission-mode=read-only:on-request ...` returned `the codex thread lane has no carrier for --permission-mode; add --as pane`. No FNO worker hang was measured. Build node `x-461d` covers the thread approval answer path and the missing posture carrier.
+
+`ActorCtx::route_frame` at `crates/fno-agents/src/codex_thread.rs:2166-2177` stores every inbound frame with an integer `id` as a response and has no server-request branch. This probe did not create an in-flight fno request with id 4. The build node's regression test must cover that collision.
 
 ## The sandbox carrier, measured rather than read
 
