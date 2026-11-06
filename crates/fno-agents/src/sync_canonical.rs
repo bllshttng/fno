@@ -1341,12 +1341,34 @@ pub(crate) fn run_catchup(deps: &Deps, cwd: &Path) -> CatchupOut {
         let mut out = CatchupOut::bare("failed");
         out.exit = rc;
         out.stderr = so.into_iter().chain(se).collect();
+        // Name the real failure in the detail, read before the summary below
+        // appends: prefer the wrapped sync's own stderr line, else the newest
+        // diagnostic line. Without it the JSON detail reads a bare "exit N"
+        // and no log records why.
+        let diagnostics: Vec<String> = out
+            .stderr
+            .iter()
+            .rev()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with("post-merge sync"))
+            .cloned()
+            .collect();
+        let tail = diagnostics
+            .iter()
+            .find(|l| l.starts_with("stderr: "))
+            .cloned()
+            .or_else(|| diagnostics.first().cloned())
+            .unwrap_or_default();
         out.stderr.push(format!(
             "post-merge sync catch-up: sync of PR #{} failed (exit {rc}); markers withheld, will retry",
             newest.number
         ));
         out.pr_number = Some(newest.number);
-        out.detail = format!("exit {rc}");
+        out.detail = if tail.is_empty() {
+            format!("exit {rc}")
+        } else {
+            format!("exit {rc}: {tail}")
+        };
         out.stale = st.state == "stale";
         return out;
     }
@@ -1965,6 +1987,34 @@ mod tests {
         assert!(stderr.contains("post-merge sync: running in"), "{stderr}");
         assert!(
             stderr.contains("post-merge sync catch-up: synced PR #7"),
+            "{stderr}"
+        );
+    }
+
+    /// A failed catch-up sync names the wrapped sync's own stderr line in
+    /// `detail`, never a bare "exit N".
+    #[test]
+    fn catchup_failure_detail_names_the_sync_stderr_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_cfg(tmp.path(), CFG_BODY);
+        let shell: ShellRun = Rc::new(|_c, _d| ShellOutcome {
+            code: 1,
+            stdout: String::new(),
+            stderr: "fatal: could not read from remote repository".to_string(),
+            timed_out: false,
+        });
+        let rows = list_rows(&[(7, &iso_at_hours_before(1), SHA)]);
+        let deps = catchup_deps(ListStub::Rows(rows), shell, Rc::new(|_| json!({})));
+        let out = run_catchup(&deps, tmp.path());
+        assert_eq!(out.outcome, "failed");
+        assert_eq!(
+            out.detail,
+            "exit 1: fatal: could not read from remote repository"
+        );
+        // The summary line still trails the captured output.
+        let stderr = out.stderr.join("\n");
+        assert!(
+            stderr.contains("post-merge sync catch-up: sync of PR #7 failed (exit 1)"),
             "{stderr}"
         );
     }

@@ -747,15 +747,18 @@ impl Ritual {
         } else if errs > 0 || sync_outcome == Some("failed") {
             // reconcile exits 0 here (only unresolvable PRs exit 4), so the
             // leg is not failed - but cascade-close failures and a failed
-            // canonical sync must not read as a clean run.
+            // canonical sync must not read as a clean run. The catchup
+            // detail rides along ("exit 1: <tail>", "locked", ...): a bare
+            // sync=failed names nothing and no log records the cause.
             self.step(
                 "reconcile",
                 OK,
                 &format!(
-                    "closed={} contained-errors={} sync={}",
+                    "closed={} contained-errors={} sync={}{}",
                     closed.len(),
                     errs,
                     sync_outcome.unwrap_or("not-run"),
+                    Self::sync_catchup_detail(&obj),
                 ),
             );
         } else if !closed.is_empty()
@@ -778,6 +781,21 @@ impl Ritual {
         }
         // Step 2a: plan frontmatter. Idempotent.
         self.leg_plan_reconcile();
+    }
+
+    /// The catchup receipt's cause suffix: the sync leg's own detail text
+    /// when it carries one, empty otherwise, so a failed sync is readable at
+    /// the ritual without re-deriving it from a second spawn.
+    fn sync_catchup_detail(obj: &Value) -> String {
+        match obj
+            .get("sync_catchup")
+            .and_then(|s| s.get("detail"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+        {
+            Some(d) if !d.is_empty() => format!(" ({d})"),
+            _ => String::new(),
+        }
     }
 
     /// Plan-frontmatter stamp, independent of the backlog leg: run even when
@@ -1066,11 +1084,70 @@ impl Ritual {
             );
             return;
         }
-        let spawned = self.spawn_judgment(deferred, files, lines);
-        if spawned {
+        let r = self.spawn_judgment(deferred, files, lines);
+        if r.ok() {
             self.step("judgment", OK, &format!("spawned headless; {inputs}"));
         } else {
-            self.step("judgment", FAILED, &format!("spawn-failed; {inputs}"));
+            self.step(
+                "judgment",
+                FAILED,
+                &Self::judgment_failure_detail(&r, &inputs),
+            );
+        }
+    }
+
+    /// The judgment receipt on a failed spawn. The generic category alone
+    /// ("spawn-failed") names nothing, so the cause rides in the detail: the
+    /// refusal text, the timeout, or the exit code with the front door's own
+    /// diagnostic line.
+    fn judgment_failure_detail(run: &LegRun, inputs: &str) -> String {
+        let cause = if let Some(err) = &run.spawn_error {
+            err.clone()
+        } else if run.timed_out {
+            "timeout".to_string()
+        } else {
+            format!("exit={} {}", run.code, refusal_cause(run))
+        };
+        format!("spawn-failed: {cause}; {inputs}")
+    }
+
+    /// The spawn refusal's cause line: the last non-empty stderr line, minus
+    /// the front door's bare "refusing; no worker launched" conclusion when it
+    /// stands alone (the bare epilogue names nothing; a cause line that merely
+    /// ends with the epilogue keeps its cause and stays). Falls back to the
+    /// last stdout line, then to a named marker, so the detail never reads a
+    /// bare failure.
+    fn refusal_cause(run: &LegRun) -> String {
+        const BARE_EPILOGUE: &str = "fno agents spawn: refusing; no worker launched";
+        let mut lines: Vec<&str> = run
+            .stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if lines.last().is_some_and(|l| *l == BARE_EPILOGUE) {
+            lines.pop();
+        }
+        if let Some(last) = lines.pop() {
+            return last.to_string();
+        }
+        let out = run.last_line();
+        if out.is_empty() {
+            "no diagnostic printed".to_string()
+        } else {
+            out
+        }
+    }
+
+    /// A refusal that never reached a child process, shaped as a LegRun so
+    /// the receipt names it like any other spawn failure.
+    fn refused_leg(message: &str) -> LegRun {
+        LegRun {
+            code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            spawn_error: Some(message.to_string()),
         }
     }
 
@@ -1078,7 +1155,7 @@ impl Ritual {
     /// is the sole positional; `pm-r-<node>-pr-<n>` rides --name. A merged PR
     /// with no recovered node binding refuses the spawn rather than
     /// substituting the PR number as a fake node.
-    fn spawn_judgment(&self, deferred: i64, files: i64, lines: i64) -> bool {
+    fn spawn_judgment(&self, deferred: i64, files: i64, lines: i64) -> LegRun {
         let node_ids: Vec<String> = self
             .node_ids
             .iter()
@@ -1086,11 +1163,10 @@ impl Ritual {
             .cloned()
             .collect();
         let Some(node0) = node_ids.first() else {
-            eprintln!(
-                "post-merge judgment: skipped, PR {} binds no node; no pm-r worker spawned ",
+            return Self::refused_leg(&format!(
+                "PR {} binds no node; no pm-r worker spawned",
                 self.pr
-            );
-            return false;
+            ));
         };
         let qualifier = format!("pr-{}", self.pr);
         let name = match crate::naming::bridge_name(
@@ -1107,10 +1183,7 @@ impl Ritual {
             Err(_) => {
                 // A stale/missing binary must fail this leg, not abort the
                 // legs after it.
-                eprintln!(
-                    "post-merge judgment: skipped, worker name unmintable; no pm-r worker spawned"
-                );
-                return false;
+                return Self::refused_leg("worker name unmintable; no pm-r worker spawned");
             }
         };
         let prompt = self.judgment_prompt(deferred, files, lines);
@@ -1147,13 +1220,12 @@ impl Ritual {
             argv.push(prompt);
         }
         let cwd = self.canon_path();
-        let r = run_leg(
+        run_leg(
             &argv,
             &cwd,
             Duration::from_secs(JUDGMENT_TIMEOUT_SECS + 60),
             false,
-        );
-        r.ok()
+        )
     }
 
     fn judgment_prompt(&self, deferred: i64, files: i64, lines: i64) -> String {
@@ -1538,5 +1610,107 @@ mod tests {
             .find("self.leg_reap_rows();")
             .expect("reap-rows leg");
         assert!(archive < reap, "archive the worktree, then drop the row");
+    }
+
+    use serde_json::json;
+
+    use super::LegRun;
+    use super::Ritual;
+
+    /// Every judgment spawn failure names its cause in the receipt, never a
+    /// bare "spawn-failed": the front door's diagnostic line for a nonzero
+    /// exit, the timeout, the refusal text, or a named marker when nothing
+    /// printed.
+    #[test]
+    fn judgment_failure_detail_names_the_cause() {
+        let refusal = LegRun {
+            code: 2,
+            stdout: String::new(),
+            stderr: concat!(
+                "fno agents spawn: slot skip lane claude-opus-5-5 capacity=unknown (on_unknown=skip)\n",
+                "fno agents spawn: every configured lane reads capacity unknown (on_unknown=skip)\n",
+                "fno agents spawn: refusing; no worker launched\n",
+            )
+            .to_string(),
+            timed_out: false,
+            spawn_error: None,
+        };
+        let detail = Ritual::judgment_failure_detail(&refusal, "deferred=0 files=1 lines=250");
+        assert!(
+            detail.starts_with("spawn-failed: exit=2 "),
+            "detail: {detail}"
+        );
+        assert!(
+            detail.contains("every configured lane reads capacity unknown"),
+            "detail: {detail}"
+        );
+        assert!(
+            detail.ends_with("; deferred=0 files=1 lines=250"),
+            "detail: {detail}"
+        );
+        assert!(
+            !detail.contains("refusing; no worker launched"),
+            "the epilogue names nothing: {detail}"
+        );
+
+        let timed_out = LegRun {
+            code: 124,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: true,
+            spawn_error: None,
+        };
+        assert_eq!(
+            Ritual::judgment_failure_detail(&timed_out, "files=1"),
+            "spawn-failed: timeout; files=1"
+        );
+
+        let refused_leg_run = LegRun {
+            code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            spawn_error: Some("PR 42 binds no node; no pm-r worker spawned".to_string()),
+        };
+        assert_eq!(
+            Ritual::judgment_failure_detail(&refused_leg_run, "files=1"),
+            "spawn-failed: PR 42 binds no node; no pm-r worker spawned; files=1"
+        );
+
+        let silent = LegRun {
+            code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            spawn_error: None,
+        };
+        assert_eq!(
+            Ritual::judgment_failure_detail(&silent, "files=1"),
+            "spawn-failed: exit=1 no diagnostic printed; files=1"
+        );
+    }
+
+    /// A failed canonical sync carries the catchup's own detail text in the
+    /// receipt, so "sync=failed" never reads without a cause.
+    #[test]
+    fn sync_failed_receipt_carries_catchup_detail() {
+        let with_detail = json!({
+            "sync_catchup": {"outcome": "failed", "detail": "exit 1: fatal: cannot lock ref"}
+        });
+        assert_eq!(
+            Ritual::sync_catchup_detail(&with_detail),
+            " (exit 1: fatal: cannot lock ref)"
+        );
+        assert_eq!(
+            Ritual::sync_catchup_detail(&json!({"sync_catchup": {"outcome": "failed"}})),
+            ""
+        );
+        assert_eq!(
+            Ritual::sync_catchup_detail(&json!(
+                {"sync_catchup": {"outcome": "failed", "detail": "  "}}
+            )),
+            ""
+        );
+        assert_eq!(Ritual::sync_catchup_detail(&json!({})), "");
     }
 }
