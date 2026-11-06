@@ -684,6 +684,15 @@ tokens = ["agy"]
 kind = "session_flag"
 tokens = ["agy", "--conversation", "{session_id}"]
 
+# Attach is UNSUPPORTED, measured 2026-11-06 on agy 1.3.3: a second
+# `agy --conversation <id>` restores the transcript at open, prints agy's own
+# "Conversation already open ... Sending messages from both may cause
+# conflicts. Use /fork to continue here separately." warning, and NEVER shows
+# a turn the first process takes afterwards (48s, two captures) - a snapshot
+# rival, not a join. agy names no join protocol (remote-control's --help names
+# only a registration daemon), so fno must hold the pty. The typed-input log
+# (`history.jsonl`) still gives keeper mail a real receipt; see the agy arm in
+# mail_inject's resolve_confirm.
 [harness.agy.resume_strategy.forms.interactive_attach]
 kind = "unsupported"
 tokens = []
