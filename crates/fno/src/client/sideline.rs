@@ -819,7 +819,8 @@ impl View {
                         format!(
                             "{:>iw$}{}",
                             "",
-                            self.card_detail_text(a, now, text_w.saturating_sub(pad)),
+                            // One spare cell keeps the age off the rail border.
+                            self.card_detail_text(a, now, text_w.saturating_sub(pad + 1)),
                             iw = pad
                         )
                     },
@@ -836,7 +837,7 @@ impl View {
                                 self.card_graph,
                                 now,
                                 row_message_text(a).as_deref(),
-                                text_w.saturating_sub(pad),
+                                text_w.saturating_sub(pad + 1),
                             ),
                             iw = pad
                         )
@@ -1455,16 +1456,15 @@ impl View {
                     // The dashed rule rides between adjacent cards (the
                     // operator's 2026-10-04 spacing mockup): no rule before a
                     // header, a blank, or the section's end.
-                    // Grouped by lead, a blank row ends each lead's group
-                    // instead, so the cards need no indent to show where one stops.
+                    // Grouped by lead, a blank row follows the rule where a lead's
+                    // group ends, so the cards need no indent to show where it stops.
                     if matches!(rows_iter.peek(), Some(DisplayRow::Agent(_))) {
-                        let next_leads = self.group_by_lead && depths_peek.peek() == Some(&0);
-                        out_rows.push(if next_leads {
-                            DisplayRow::Blank
-                        } else {
-                            DisplayRow::CardRule
-                        });
+                        out_rows.push(DisplayRow::CardRule);
                         out_depths.push(0);
+                        if self.group_by_lead && depths_peek.peek() == Some(&0) {
+                            out_rows.push(DisplayRow::Blank);
+                            out_depths.push(0);
+                        }
                     }
                 }
                 DisplayRow::Blank => {
@@ -1637,7 +1637,8 @@ impl View {
                     .collect::<Vec<_>>()
                     .join(" ");
                 let w = crate::chrome::str_cols(&pairs);
-                let start = text_w.saturating_sub(w);
+                // One spare cell keeps the roll-up off the rail border.
+                let start = text_w.saturating_sub(w + 1);
                 // The strip yields to the surface that owns the line: the
                 // chosen fill's or the band's own fg there, dim only at
                 // rest (the composed contrast test pins 3:1 on both).
