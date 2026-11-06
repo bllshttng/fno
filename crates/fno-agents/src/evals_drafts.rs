@@ -51,7 +51,7 @@ fn draft_body(
     row: &Value,
     labels: Option<&crate::evals_labels::SessionLabels>,
 ) -> String {
-    let draft = json!({
+    let mut draft = json!({
         "id": format!("golden-draft-{hash}"),
         "draft_status": "needs_review",
         "tier": "capability",
@@ -73,12 +73,14 @@ fn draft_body(
             "ts_turn": row.get("ts_turn"),
             "node": row.pointer("/node/value"),
             "head_sha": row.pointer("/head_sha/value"),
-            "labels": labels.map(|l| json!({
-                "layer": l.layer,
-                "span_ref": l.span_ref,
-            })).unwrap_or(Value::Null),
         },
     });
+    if let Some(l) = labels {
+        draft["context"]["labels"] = json!({
+            "layer": l.layer,
+            "span_ref": l.span_ref,
+        });
+    }
     serde_yaml_ng::to_string(&draft).unwrap_or_default()
 }
 

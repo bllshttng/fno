@@ -305,9 +305,12 @@ fn evidence(
             Some(items) => Value::Array(
                 items
                     .iter()
-                    .map(|item| match item.get(key) {
-                        Some(inner) => json!(clip(&scrub(&inner.to_string()), TEXT_CHARS)),
-                        None => json!(clip(&scrub(&item.to_string()), TEXT_CHARS)),
+                    .map(|item| match item {
+                        Value::String(s) => json!(clip(&scrub(s), TEXT_CHARS)),
+                        other => match other.get(key) {
+                            Some(inner) => json!(clip(&scrub(&inner.to_string()), TEXT_CHARS)),
+                            None => json!(clip(&scrub(&other.to_string()), TEXT_CHARS)),
+                        },
                     })
                     .collect(),
             ),
@@ -710,13 +713,14 @@ pub(crate) fn calibration_rows(state: &Path) -> Vec<Value> {
 }
 
 fn since_ms(spec: &str) -> Option<i64> {
-    let (digits, unit) = spec.split_at(spec.len().saturating_sub(1));
-    let n: i64 = digits.parse().ok()?;
+    let mut chars = spec.chars();
+    let unit = chars.next_back()?;
+    let n: i64 = chars.as_str().parse().ok()?;
     let secs = match unit {
-        "d" => n * 86_400,
-        "h" => n * 3_600,
-        "m" => n * 60,
-        "s" => n,
+        'd' => n * 86_400,
+        'h' => n * 3_600,
+        'm' => n * 60,
+        's' => n,
         _ => return None,
     };
     Some(now_ms() - secs * 1000)
@@ -947,16 +951,15 @@ pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
     let proved_layer = calibration_rows(state)
         .iter()
         .any(|j| j["judge"] == json!("layer") && j["proved"] == json!(true));
-    let kind_of = |sid: &str| -> String {
-        by_session(&load_traces(state))
-            .iter()
-            .find(|(s, _)| s == sid)
-            .and_then(|(_, g)| g.last())
-            .and_then(|t| t.get("signal_kind"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string()
-    };
+    let kinds: BTreeMap<String, String> = by_session(&load_traces(state))
+        .into_iter()
+        .filter_map(|(sid, g)| {
+            g.last()
+                .and_then(|t| t.get("signal_kind"))
+                .and_then(Value::as_str)
+                .map(|k| (sid, k.to_string()))
+        })
+        .collect();
     let mut clusters: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for row in newest_rows(&read_rows(&labels_path(state))) {
         if row.get("judge").and_then(Value::as_str) != Some("layer") {
@@ -969,7 +972,8 @@ pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
             continue;
         }
         let sid = row.get("session_id").and_then(Value::as_str).unwrap_or("");
-        let key = (label.to_string(), kind_of(sid));
+        let kind = kinds.get(sid).map(String::as_str).unwrap_or("unknown");
+        let key = (label.to_string(), kind.to_string());
         clusters.entry(key).or_default().push(format!(
             "session {sid} span {}",
             row.get("span_ref").and_then(Value::as_str).unwrap_or("?")
