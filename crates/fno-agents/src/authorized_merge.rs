@@ -454,10 +454,10 @@ pub trait Probes {
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead;
     /// Does this head owe an evals/gate status it does not have? True when
     /// the diff touches a gated path or a `covers:` prefix of main's bank
-    /// and the worker seat has a baseline (a first install holds nobody on a
-    /// check it cannot run yet). Default false: an impl that cannot answer
-    /// never manufactures the missing-status hold, so pre-existing stubs
-    /// keep their behavior.
+    /// and gate state exists (a head grades on its own pass rate before any
+    /// baseline is seated, so gate state alone puts it on the hook). Default
+    /// false: an impl that cannot answer never manufactures the
+    /// missing-status hold, so pre-existing stubs keep their behavior.
     fn evals_gate_expected(&self, _cwd: &Path, _facts: &PrFacts) -> bool {
         false
     }
@@ -1028,13 +1028,13 @@ fn decide_observed<P: Probes>(
     // A gated head with no gate status holds: the daemon either never
     // reached this head (the tick never ran it) or its status was lost. The
     // expectation probe is fail-open: an unreadable file read never
-    // manufactures the hold. First install passes because the probe
-    // reads no baseline there.
+    // manufactures the hold. A machine with no gate state at all passes
+    // because the probe finds no state there.
     if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, &facts) {
         return Err(Outcome::Held {
             reason: format!(
                 "no evals/gate status at this gated head: the diff touches a gated path \
-                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 or a covered prefix, and gate state exists here, but no status \
                  was posted. Clear: fno-agents evals gate-retry {} \
                  (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
@@ -1354,7 +1354,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             "evals_gate_missing",
             format!(
                 "no evals/gate status at this gated head: the diff touches a gated path \
-                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 or a covered prefix, and gate state exists here, but no status \
                  was posted. Clear: fno-agents evals gate-retry {} \
                  (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
