@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn the_projection_stamps_the_served_store_and_leaves_the_unnumbered_alone() {
-        let (dir, graph, conn) = conn();
+        let (_dir, graph, conn) = conn();
         let store = current_store();
         mint_local(&conn, "x-aaaa", &store, "h").unwrap();
         drop(conn);
