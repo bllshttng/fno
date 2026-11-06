@@ -583,6 +583,14 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     cmd.env("FNO_PANE_EPOCH", epoch.to_string());
+    // The owner lease: the child carries the keeper's identity, so the
+    // shape-agnostic orphan sweep reaps the harness whose keeper died. The
+    // pty child is already its own session leader, so it also leads a group.
+    if let Some(env) = crate::process_owner::owner_lease_env(std::process::id(), &cfg.session) {
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+    }
     if cfg.cwd.is_dir() {
         cmd.cwd(&cfg.cwd);
     }

@@ -23,7 +23,12 @@ struct Keeper {
 
 impl Drop for Keeper {
     fn drop(&mut self) {
+        // Group kill, the fn-47ea driver pattern: the store keeper leads its
+        // own process group, so the kill takes its descendants.
+        let pid = self.child.id();
         let _ = self.child.kill();
+        // SAFETY: SIGKILL to the group of a keeper this test spawned.
+        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
         let _ = self.child.wait();
     }
 }
@@ -53,6 +58,7 @@ fn spawn_keeper(tag: &str, graph: &Path, sock: &Path) -> Keeper {
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .expect("spawn store keeper");
     Keeper { child }
@@ -74,6 +80,7 @@ fn spawn_keeper_with_env(tag: &str, graph: &Path, sock: &Path, key: &str, val: &
         .env(key, val)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .expect("spawn store keeper");
     Keeper { child }
