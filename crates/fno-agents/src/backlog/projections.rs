@@ -192,11 +192,31 @@ fn one_line(v: Option<&Value>) -> String {
         .to_string()
 }
 
-fn kanban_card(e: &Value, by_id: &BTreeMap<String, Value>, board: &Board) -> String {
+/// The board header's id text: the display number first when the backlog
+/// shows numbers and one exists, the hex id always beside it, so a typed
+/// token and a copy both still resolve.
+fn display_id(eid: &str, held: &std::collections::HashMap<String, String>) -> String {
+    match held.get(eid) {
+        Some(number) => format!("{number} ({eid})"),
+        None => eid.to_string(),
+    }
+}
+
+fn kanban_card(
+    e: &Value,
+    by_id: &BTreeMap<String, Value>,
+    board: &Board,
+    held: &std::collections::HashMap<String, String>,
+) -> String {
     let title = Some(one_line(e.get("title")))
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
     let eid = e.get("id").map(py_str).unwrap_or_else(|| "?".to_string());
+    let id_text = if crate::backlog::settings::id_display() == "number" {
+        display_id(&eid, held)
+    } else {
+        eid.clone()
+    };
     let priority = e
         .get("priority")
         .filter(|p| truthy(Some(p)))
@@ -205,7 +225,7 @@ fn kanban_card(e: &Value, by_id: &BTreeMap<String, Value>, board: &Board) -> Str
     let is_done = truthy(e.get("completed_at")) || get_str(e, "status") == Some("done");
     let marker = if is_done { "[x]" } else { "[ ]" };
     let mut header = format!(
-        "- {marker} **{title}** `{eid}` · {} · {priority}",
+        "- {marker} **{title}** `{id_text}` · {} · {priority}",
         project_key(e)
     );
     if board.is_orphan(&eid) {
@@ -406,6 +426,11 @@ pub(crate) fn render_graph_md(entries: &[Value], obsidian: bool) -> String {
         }
     }
     let mut lines: Vec<String> = Vec::new();
+    let held = if crate::backlog::settings::id_display() == "number" {
+        crate::numbers::labels()
+    } else {
+        std::collections::HashMap::new()
+    };
     if obsidian {
         lines.extend(["---", "kanban-plugin: board", "---", ""].map(String::from));
     }
@@ -415,7 +440,7 @@ pub(crate) fn render_graph_md(entries: &[Value], obsidian: bool) -> String {
         match columns.get(col) {
             Some(items) if !items.is_empty() => {
                 for e in items {
-                    lines.push(kanban_card(e, &by_id, &board));
+                    lines.push(kanban_card(e, &by_id, &board, &held));
                     lines.push(String::new());
                 }
             }
@@ -1945,6 +1970,19 @@ pub fn run_album(tail: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id_display_number_shows_the_number_first_with_the_hex_beside_it() {
+        let held = std::collections::HashMap::from([
+            ("go-1a2b".to_string(), "go-1".to_string()),
+            ("no-number-x".to_string(), "x-7".to_string()),
+        ]);
+        assert_eq!(display_id("go-1a2b", &held), "go-1 (go-1a2b)");
+        assert_eq!(
+            display_id("plain", &std::collections::HashMap::new()),
+            "plain"
+        );
+    }
 
     #[test]
     fn graph_md_cards_carry_lane_blockers_and_done_links() {
