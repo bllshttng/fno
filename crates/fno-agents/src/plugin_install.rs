@@ -1168,7 +1168,17 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         );
     } else if let Some(legacy) = legacy_parent.clone() {
         files += restage_profiles(&root, &legacy, &legacy_present)?;
-        drain_legacy_stage(&legacy, pre_flip_harness_processes(stage_parent))?;
+        repoint_legacy_harnesses(&legacy, &root);
+        let still_configured = legacy_harnesses(&legacy);
+        if still_configured.is_empty() {
+            drain_legacy_stage(&legacy, pre_flip_harness_processes(stage_parent))?;
+        } else {
+            println!(
+                "plugin stage: keeping legacy stage {}; harness configs still name it: {}",
+                legacy.display(),
+                still_configured.join(",")
+            );
+        }
     }
     if !full_stage.exists() {
         full_stage = legacy_parent
@@ -1221,6 +1231,15 @@ fn write_legacy_flip_stamp(parent: &Path) -> Result<(), String> {
 }
 
 fn repoint_legacy_harnesses(legacy: &Path, source: &Path) {
+    for harness in legacy_harnesses(legacy) {
+        match install_harness(harness, harness == "codex", source, Profile::Full) {
+            Ok(receipt) => println!("plugin stage: repointed {harness}: {receipt}"),
+            Err(error) => println!("plugin stage: repoint {harness} failed: {error}"),
+        }
+    }
+}
+
+fn legacy_harnesses(legacy: &Path) -> Vec<&'static str> {
     let home = dirs_home();
     let legacy_text = legacy.display().to_string();
     let mentions = |paths: &[PathBuf]| {
@@ -1259,12 +1278,7 @@ fn repoint_legacy_harnesses(legacy: &Path, source: &Path) {
     if link_points_at(home.join(".footnote/plugins/fno")) {
         configured.push("footnote");
     }
-    for harness in configured {
-        match install_harness(harness, harness == "codex", source, Profile::Full) {
-            Ok(receipt) => println!("plugin stage: repointed {harness}: {receipt}"),
-            Err(error) => println!("plugin stage: repoint {harness} failed: {error}"),
-        }
-    }
+    configured
 }
 
 fn pre_flip_harness_processes(parent: &Path) -> Result<Vec<u32>, String> {
@@ -3688,6 +3702,26 @@ mod tests {
                 .unwrap()
                 .trim(),
             new.join("fno").to_str().unwrap()
+        );
+        fs::write(new.join(".legacy-flip.at"), "0\n").unwrap();
+        restage_stage(&source, &new).unwrap();
+        assert!(
+            legacy.exists(),
+            "a harness config that still names legacy must keep it"
+        );
+        fs::write(
+            claude_dir.join("plugins/known_marketplaces.json"),
+            serde_json::to_vec(&json!({"fno": {
+                "installLocation": new.join("fno"),
+                "source": {"source": "directory", "path": new.join("fno")}
+            }}))
+            .unwrap(),
+        )
+        .unwrap();
+        restage_stage(&source, &new).unwrap();
+        assert!(
+            !legacy.exists(),
+            "drain completes after the config repoints"
         );
         match previous_root {
             Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
