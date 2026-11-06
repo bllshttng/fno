@@ -12,7 +12,7 @@
 # secrets left behind. No hit writes key material to a log file.
 paths-ignore:
   - "crates/*/tests/**"
-  - "cli/tests/**"
+  - "tests/py/**"
   - "**/fixtures/**"
 
 query-filters:

@@ -126,9 +126,6 @@ reap_stale_demos
 
 mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.fno/claims"
 # State under $ROOT/.fno: the mux board reads the graph from $HOME/.fno.
-# FNO_DEMO_PY_SOURCE pins the CLI the rust bootstrap provisions, so the
-# python leg matches the binary: a PyPI wheel older than the graph.db
-# claims store crashes on the migration tombstone the fresh root gets.
 {
   printf 'schema_version = 1\nstate_dir = "%s"\n' "$ROOT/.fno"
   # The two seeded teams lead configured projects: a live team's scope
@@ -174,17 +171,13 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY = "demo-placeholder" }' \
     'plan = "GLM Coding Plan Max"' \
     'priority = 40'
-  if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
-    printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
-  fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
     printf '[sideline]\nlayout = "%s"\n' "$FNO_DEMO_LAYOUT"
   fi
 } >"$ROOT/config.toml"
-# The bootstrap's dev-pin reader resolves HOME/.fno/config.toml and runs
-# before FNO_CONFIG is honored, so the pin has to live at the stock HOME
-# path too or the python leg provisions from PyPI and mismatches the binary.
+# Readers that resolve HOME/.fno/config.toml before FNO_CONFIG see the
+# same config at the stock HOME path.
 mkdir -p "$ROOT/.fno"
 cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
 export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/.fno/agents"

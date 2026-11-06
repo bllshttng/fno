@@ -319,9 +319,9 @@ jobs:
           sha="${SHA}"
           day="$(date -u +%Y%m%d)"
 
-          src="$(git show "${sha}:cli/src/fno/__init__.py" | sed -nE 's/^__version__[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
+          src="$(git show "${sha}:crates/fno/Cargo.toml" | sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
           if [ -z "$src" ]; then
-            echo "::error::cannot read __version__ from cli/src/fno/__init__.py at ${sha}"
+            echo "::error::cannot read the package version from crates/fno/Cargo.toml at ${sha}"
             exit 1
           fi
           echo "source version at ${sha}: ${src}"

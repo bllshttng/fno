@@ -20,11 +20,10 @@ on:
   push:
     branches: [main]
     paths: &cli_ci_paths
+      # The binaries read the setup assets and the control-plane scope here.
       - cli/**
-      # The python suite reads claim verdicts through the native batch door,
-      # so a crates-only change reaches these tests. Without this a rust-only
-      # PR merges without ever running them, and the breakage surfaces on the
-      # next PR that happens to touch cli/**, stamped with the wrong author.
+      # The tests/py contract suite drives the binaries, so a crates-only
+      # change must run it.
       - crates/**
       - .claude-plugin/**
       - agents/**
@@ -283,7 +282,7 @@ jobs:
   # never in front of it: only `smoke` satisfies the merge gate - a green here
   # means the selected packet passed and nothing more. Its one needs edge is
   # the sizer above, which runs no tests; nothing can make this job delay the
-  # gate. Coverage boundary: `smoke-pytest` and `smoke-rest` run as the
+  # gate. Coverage boundary: `tests-py` and `smoke-rest` run as the
   # full-gate shards on main, nightly, and PRs whose selector requires them.
   # `changed-smoke` is PR-only and is
   # skipped on main; its changed-subset selector never supplies main-branch
@@ -331,18 +330,6 @@ jobs:
         # native store binary, and the changed subset selects Python
         # emission tests that degrade to unrecorded without it.
         run: cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
-
-      - name: Install fno Python package
-        # The bash suites' FNO_PYTHON discovery refuses ("no python can import
-        # fno.cli") without an interpreter holding the CLI deps. The full
-        # smoke-rest shards never hit this: their graduation-probe step's
-        # `uv run --project cli` creates cli/.venv as a side effect before the
-        # shard runs. This lane had no such step, so any packet selecting one
-        # of those suites red at discovery (changed-smoke 3 on the sleep-1
-        # PR, 2026-10-30). Same provisioning the pytest shards get, named for
-        # the reason.
-        working-directory: cli
-        run: uv sync
 
       - name: Changed packet (CHANGED SUBSET)
         env:
@@ -420,126 +407,39 @@ jobs:
           fi
           bash scripts/ci/smoke-duration-report.sh changed-smoke-${{ matrix.shard }} "$elapsed" "$CAP_MINUTES" || true
 
-  # The suite outgrew two runners, so the pytest full-gate lane now runs as
-  # eight matrix shards and the rest lane as four. Read this before
-  # raising a ceiling again.
-  #
-  # History: 20 left no margin and cancelled green runs. Measured 2026-08-06,
-  # the test step alone was 995s on a warm main run and about 1140s on the cold
-  # uv/cargo cache that is the normal state for a new branch, which hit the cap
-  # with every test passing. Raised to 30. On 2026-08-21 it hit 30 too, and the
-  # comment then standing said that at 30 the suite is the thing to fix. It was
-  # raised to 45 anyway, as an unblock for a stalled fleet, on the condition
-  # that the suite got fixed. This is that fix. Ten pytest legs and four rest
-  # legs bring the measured work below the 12-minute step cap, not a higher
-  # ceiling.
-  #
-  # What was measured, so the next reader can re-measure rather than guess. One
-  # main-push job ran 2095 seconds: 64s of runner setup, 1036s in the single
-  # pytest step, and 995s in every step after it. Pytest already runs with
-  # `-n auto --maxprocesses=4` and this runner has 4 vCPU, so it was not short
-  # of workers. The 995s tail was simply serial behind it on the same machine.
-  # Splitting at that boundary gives two near-even halves and roughly halves
-  # wall clock, and 1036 against 995 is why the seam is here and not elsewhere.
-  #
-  # The seam is also the only clean cut in the registry. `fno doctor test smoke`
-  # deletes the fno-agents debug binary when pytest is selected, so the
-  # @requires_rust parity tests skip; a later step rebuilds it for the rust
-  # journey steps. The runner keeps pytest in every pytest matrix leg and adds
-  # the build step to every rest leg whose bin contains a later rust step.
-  #
-  # The two selections below must keep COVERING the registry. They are exact
-  # complements over one glob, so a step added later lands in smoke-rest on its
-  # own, and cli/tests/unit/test_smoke_shards.py fails if that ever stops being
-  # true. `Sync + build` deliberately runs in every leg: it costs about 3s and
-  # removes any question of whether pytest can rely on `uv build`.
-  #
-  # The 10-way run hit the 12-minute step cap at 724s with tests at 86%, so the
-  # lane went to thirteen legs. The suite then shrank: on 2026-10-22 the
-  # thirteen pytest steps ran 46 to 119s each (about 1000s in all), behind
-  # about 310s of provisioning and front build per leg. Every leg also holds
-  # a runner while the fleet queues, so the lane came back to four legs. A leg
-  # count pays its setup once per leg: split again only when a leg's step
-  # nears the cap, and merge legs when the steps fall far below it.
-  # If a shard approaches the step cap below, split again or cut work. Do not
-  # raise either cap.
-  # A hang must stay cheap: the per-test ceiling and every timeout marker stay
-  # at or under one fifth of the 12-minute step cap, enforced by
-  # cli/tests/unit/test_pytest_timeout_configured.py. Each shard lists tests over 30s.
-  smoke-pytest:
+  # The live-contract pytest files under tests/py drive the built binaries
+  # through tests/py/_bins.py. A hang must stay cheap: tests/py/pytest.ini
+  # holds the per-test timeout, and
+  # tests/py/unit/test_pytest_timeout_configured.py keeps it and every
+  # timeout marker at or under one fifth of the 12-minute step cap.
+  tests-py:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.python_full == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
     runs-on: ubuntu-24.04
-    # Keep the 12-minute shard cap and 15-minute job backstop.
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Builds fno-agents and fno debug and exports FNO_AGENTS_FRONT.
       - name: Provision the smoke runner
         uses: ./.github/actions/smoke-setup
 
-      - name: Build the fno front for the Python emission path
-        # append_event commits through the native store binary; without it
-        # every Python emission test degrades to unrecorded and the shard
-        # fails on setup, not on a real leak. The @requires_rust skip keys
-        # on the fno-agents binary this shard deliberately leaves absent,
-        # and the fno front is a different artifact, so building it here
-        # keeps both contracts intact. The shared cargo cache makes the
-        # relink seconds.
-        run: cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
-
-      - name: "Smoke shard: pytest (${{ matrix.shard }}/4)"
-        # The step carries its own cap so a hang dies on the clock that can
-        # name it: a step-level timeout-minutes kill reports `failure`, where a
-        # job-level kill reports `cancelled` - the same word a superseding push
-        # produces. Twelve is measured, not round: 40 passing shard steps
-        # sampled 2026-09-17..18 read min 246s, median 386s, p95 523s, max
-        # 528s, so 720s sits 36 percent above the widest passing step, and all
-        # three cap-killed steps (765s, 769s, 837s) sit above it. The job's 15
-        # below stays as the backstop for anything that hangs outside the step.
+      - name: pytest tests/py
         timeout-minutes: 12
-        # This shard throws away the fno-agents binary smoke-setup
-        # just built (the runner clears it so @requires_rust tests skip) and
-        # never rebuilds it, because the build step lives in the other shard.
-        # Both shards share one cargo cache key, so on a Cargo.lock change this
-        # shard can win the save race and store a target dir with fingerprints
-        # but no binary. Cargo relinks, so the ceiling is seconds of rebuild,
-        # never a wrong result. Upgrade path if it ever shows up in the
-        # numbers: give smoke-setup a flag to skip the fno-agents build, and
-        # pass it here.
-        #
-        # The test/lint steps live in the code-owned `fno doctor test smoke`
-        # runner (crates/fno-agents/src/test_smoke_registry.rs) so "run what CI runs" is one command
-        # and local/CI parity is structural. A bare `fno doctor test smoke` with
-        # no selector still runs every step; the shards are a CI concern only.
-        #
-        # Emit the duration on every exit path (trap, not a trailing echo: the
-        # runner's bash is -e, so a failing suite would skip a plain echo and
-        # the slow runs - the only ones worth trending - would be the ones that
-        # never reported). A timeout-minutes kill cancels the step, and the
-        # EXIT trap DOES run: the smoke-duration line prints on a cap kill
-        # like any other run, so read its seconds and verdict instead of
-        # looking for an absence. The key names the shard so two numbers are
-        # never read as one.
-        #
-        # The reporter READS that number rather than only printing it, warning
-        # at 80% of the cap so the next approach is visible before it is fatal.
-        # `|| true` is load-bearing: a failing suite must stay red and a missing
-        # script must not break the step. The cap is passed explicitly because
-        # GitHub does not expose timeout-minutes to a step, so it is duplicated
-        # from the step above; tests/ci/test_smoke_duration_report.sh asserts
-        # the two agree, because a raise applied to only one would move the
-        # warning away from the real ceiling.
         run: |
           start=$SECONDS
-          trap 'bash scripts/ci/smoke-duration-report.sh smoke-pytest-${{ matrix.shard }} "$(( SECONDS - start ))" 12 || true' EXIT
+          trap 'bash scripts/ci/smoke-duration-report.sh tests-py "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
+          uv run --with pytest --with pytest-timeout --with pyyaml \
+            pytest tests/py -m 'not slow_e2e and not smoke and not e2e'
+
+      # Positive probe over the checked-in graduation registry. Every decision
+      # it lists names a shipped enforcement; deleting that enforcement turns
+      # this red instead of silently un-retiring the ruling.
+      - name: Decision graduation probes
+        if: ${{ !cancelled() }}
+        run: uv run --with pytest --with pytest-timeout --with pyyaml python scripts/ci/check-decision-graduation.py
 
   smoke-rest:
     needs: [pr-affected]
@@ -572,16 +472,6 @@ jobs:
 
       - name: Provision the smoke runner
         uses: ./.github/actions/smoke-setup
-
-      # Positive probe over the checked-in graduation registry. Every decision
-      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
-      # this re-measures that claim, so deleting the enforcement a retired
-      # ruling rests on turns red here instead of silently un-retiring it.
-      # BEFORE the smoke shard: the probe's pytest drives the dev fno-agents
-      # binary, and the shard's pytest lane scrubs that binary by design - a
-      # post-smoke placement probed a dead path and red every shard.
-      - name: Decision graduation probes
-        run: uv run --project cli python scripts/ci/check-decision-graduation.py
 
       - name: "Smoke shard: everything except pytest (${{ matrix.shard }}/4)"
         # Same trap, same reason as the pytest shard above.
@@ -643,7 +533,7 @@ jobs:
           "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Build fno-agents debug binary*,Build the fno front door*,Scoped @requires_rust*,Keyless*,registry-miss heal*'
 
   # Keeps the required check named `smoke`. Branch protection and the review
-  # gate key on that exact name, so publishing only `smoke-pytest` and
+  # gate key on that exact name, so publishing only `tests-py` and
   # `smoke-rest` would make the required check stop appearing rather than fail
   # loudly.
   #
@@ -661,7 +551,7 @@ jobs:
   # Python lane. smoke-seam must pass whenever the selector chose it. Cancelled
   # and unexpected skipped results still block.
   smoke:
-    needs: [pr-affected, smoke-pytest, smoke-rest, smoke-seam]
+    needs: [pr-affected, tests-py, smoke-rest, smoke-seam]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # These result checks stay in a short aggregator. A cap this tight is a
@@ -687,8 +577,8 @@ jobs:
             echo "$1 outran the job-level timeout-minutes cap; the run was never cancelled."
             echo "Read the shard's smoke-duration line: the EXIT trap prints it on every exit, with seconds and verdict."
           }
-          echo "pr-affected=${{ needs.pr-affected.result }} smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }} smoke-seam=${{ needs.smoke-seam.result }}"
-          capped smoke-pytest "${{ needs.smoke-pytest.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} tests-py=${{ needs.tests-py.result }} smoke-rest=${{ needs.smoke-rest.result }} smoke-seam=${{ needs.smoke-seam.result }}"
+          capped tests-py "${{ needs.tests-py.result }}"
           capped smoke-rest "${{ needs.smoke-rest.result }}"
           # A cancelled selector (queue-storm cancellation, or its own job
           # cap) leaves every output empty: the shards skip on `== 'true'`,
@@ -696,8 +586,8 @@ jobs:
           # failures. An empty output alongside a cancelled pr-affected now
           # reads as lane-off. A FAILED selector stays red on purpose: it
           # broke, so nobody measured anything.
-          [ "${{ needs.smoke-pytest.result }}" = "success" ] || {
-            [ "${{ needs.smoke-pytest.result }}" = "skipped" ] \
+          [ "${{ needs.tests-py.result }}" = "success" ] || {
+            [ "${{ needs.tests-py.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
@@ -780,12 +670,8 @@ jobs:
           # in place and macOS SIGKILLs every launch. Pin a local build with
           # FNO_AGENTS_FRONT instead.
           if [ "$CI" = true ]; then cp crates/fno-agents/target/release/fno-agents "$HOME/.cargo/bin/"; fi
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-      - name: Build native fno (Python guard rows)
-        # The Python guards commit their guard_decision rows through the
+      - name: Build native fno (guard rows)
+        # The guards commit their guard_decision rows through the
         # native `fno doctor event emit-envelope` command. Without this binary
         # the rows are dropped (best-effort by contract) and the dispatch
         # fixture sees only the Rust guards' rows. The compiled deps come
@@ -907,25 +793,14 @@ jobs:
       - name: Set up Python (for flock_interop.rs cross-language test)
         # flock_interop.rs spawns a real python3 subprocess to verify that
         # Rust flock and Python fcntl.flock serialize correctly. ubuntu-latest
-        # ships with Python 3 on PATH; this step ensures a known version and
-        # installs the fno package so the parity check can also run.
+        # ships with Python 3 on PATH; this step pins a known version.
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Install uv + sync cli
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "latest"
-
-      - name: Install fno Python package
-        working-directory: cli
-        run: uv sync
-
       - name: Install PyYAML + psutil for the bare python3 (parity oracles)
         # verify_evidence.rs shells to a bare-PATH `python3 -c "import yaml,..."`
-        # for byte-parity with the deleted bash oracle. `uv sync` installs pyyaml
-        # only into cli/.venv, which the cargo-test step does not activate, so the
+        # for byte-parity with the deleted bash oracle. Without pyyaml the
         # resolved python3 lacks `yaml` and every valid fixture is falsely flagged
         # "settings.yaml unparseable". Install pyyaml onto the setup-python
         # interpreter (the one which_python3() resolves) so the parity check sees
@@ -981,7 +856,6 @@ jobs:
           crates/fno-agents/target/debug/fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
           git diff --exit-code -- \
             crates/fno/src/harness_capabilities.toml \
-            cli/src/fno/tombstones.toml \
             crates/fno-agents/src/events_limits.toml \
             docs/harnesses/capability-matrix.md
 
@@ -1093,9 +967,8 @@ jobs:
     # binary could not beat that one file. Split by name, each shard runs
     # about 7 minutes of tests after a 5 minute build.
     # Provisioning mirrors test-agents step for step: verify_evidence_parity
-    # and tests/common spawn bare python3 (yaml, psutil), the claim parity
-    # harness imports through cli/.venv, blueprint_judge shells rg, and the
-    # real-process tests spawn both built binaries. The aggregator reads
+    # and tests/common spawn bare python3 (yaml, psutil), blueprint_judge
+    # shells rg, and the real-process tests spawn both built binaries. The aggregator reads
     # the matrix as one verdict. On 2026-10-24 shard 1 ran 22 minutes of
     # tests after a 2.5 minute disk step, and the cache save after them
     # pushed it past a 30 minute cap with every test green. The cap leaves
@@ -1158,15 +1031,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Install uv + sync cli
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "latest"
-
-      - name: Install fno Python package
-        working-directory: cli
-        run: uv sync
 
       - name: Install PyYAML + psutil for the bare python3 (parity oracles)
         run: python3 -m pip install "pyyaml>=6" "psutil>=5"

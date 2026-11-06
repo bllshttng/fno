@@ -1,12 +1,6 @@
-"""Runtime dispatch proofs for the Phase 2 lowercase shorts (ab-e893ba6e, US2).
+"""Runtime dispatch proofs for the lowercase short flags.
 
-``test_short_flag_convention.py`` is a static AST scan: it proves the
-``typer.Option`` declarations exist but structurally cannot catch a Click
-registration failure, because every touched sub-app is lazily loaded
-(``cli/src/fno/cli.py`` ``LAZY_SUBCOMMANDS``) and the scan never
-imports the command tree. Registration of every lazy command is proved by
-``test_lazy_imports.py``'s whole-app build walk; this file keeps one
-short-vs-long parity proof per previously-untested risk:
+One short-vs-long parity proof per previously-untested risk:
 
 * ``backlog find`` short-vs-long parity (read-only graph path, native binary).
 
@@ -29,9 +23,6 @@ import pytest
 @pytest.fixture
 def tmp_graph(tmp_path, monkeypatch) -> Path:
     g = tmp_path / "graph.json"
-    # find routes through the guarded display reader, which resolves
-    # paths.graph_json at call time.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     # The native binary resolves the store through FNO_CONFIG's state_dir.
     (tmp_path / "config.toml").write_text(f'state_dir = "{tmp_path}"\n')
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "config.toml"))

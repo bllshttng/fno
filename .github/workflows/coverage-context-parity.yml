@@ -12,7 +12,6 @@ on:
   push:
     branches: [main]
     paths: &parity_paths
-      - cli/src/fno/pr/_reviews.py
       - crates/fno-agents/src/loopcheck/coverage_status.rs
       - scripts/ci/merge-ruleset.json
       - .github/workflows/review-coverage-gate.yml

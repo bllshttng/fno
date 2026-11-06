@@ -115,10 +115,10 @@ jobs:
           bun install --frozen-lockfile
           bun test
 
-      - name: Stop bridge suite (cli/tests/opencode)
+      - name: Stop bridge suite (tests/js/opencode)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
-        run: bun test cli/tests/opencode/footnote.plugin.test.js
+        run: bun test tests/js/opencode/footnote.plugin.test.js
 
   main-python-static:
     name: Python static correctness (495 sources)
@@ -587,7 +587,7 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-no-user-python.sh
 
-      # Every tracked .py outside cli/ has one verdict row in
+      # Every tracked .py file has one verdict row in
       # scripts/ci/python-ledger.tsv, and every row names a live file; keep
       # rows must sit inside check-file-budget.sh's PY_ALLOWED homes.
       - name: Python ledger is complete
@@ -596,19 +596,13 @@ jobs:
         run: bash scripts/ci/check-python-ledger.sh
 
       # A tracked source file over 5,000 lines is shrink-only relative to the
-      # merge base; the refusal names the module-per-question remedy. The
-      # waiver is read live from the PR that owns the checked commit, so push,
-      # pull_request, and re-run events all see the operator's current label.
+      # merge base; the refusal names the module-per-question remedy.
       - name: Oversized files are shrink-only
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         env:
           PR_BASE_REF: ${{ github.base_ref || 'main' }}
           FILE_BUDGET_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
-          # The PR that owns this commit carries the operator's waiver, read
-          # live: the head on a PR run, the merge commit on a push.
-          FILE_BUDGET_LABEL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/check-file-budget.sh
 
       - name: File budget gate selftest
@@ -727,15 +721,6 @@ jobs:
           bash scripts/ci/check-pack-profiles.sh --self-test
           bash scripts/ci/check-pack-profiles.sh
 
-      # From the installed-tree import crash: parents[N]/scripts joins in
-      # cli/src/fno escape the package root and the wheel never ships them.
-      - name: Package-root path escapes + self-test
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: |
-          bash scripts/ci/check-package-path-escapes.sh --self-test
-          bash scripts/ci/check-package-path-escapes.sh
-
       # A changed SKILL.md carries an eval case in skills/<name>/evals/, which
       # `fno doctor evals run` and `claude plugin eval` both read.
       - name: Changed skills carry an eval
@@ -784,19 +769,6 @@ jobs:
         run: |
           bash scripts/ci/check-tracker-partition.sh --self-test
           bash scripts/ci/check-tracker-partition.sh
-
-      # From uv-install-bytecode.yml.
-      - name: Bytecode gate + self-test
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: |
-          bash scripts/ci/check-uv-install-compiles-bytecode.sh --self-test
-          bash scripts/ci/check-uv-install-compiles-bytecode.sh
-
-      - name: uv install verify-wait pin (all four provisioning paths)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash tests/ci/test_uv_install_verify_wait.sh
 
       # Every install command README.md advertises must be proven by an
       # expect: pass row of the install-channel matrix. The proof runs here
