@@ -60,7 +60,6 @@ pub(crate) struct SessionMark {
 /// whose checkout names no session marks nothing.
 pub(crate) fn session_marks(cwd: &Path) -> Vec<SessionMark> {
     let build_lock = crate::claims::claim_path(crate::test_run::BUILD_SLOT_KEYS[0], None).ok();
-    let mut out = Vec::new();
     let mut seen = std::collections::HashMap::<String, SessionMark>::new();
     for job in crate::cargo_builds::collect_jobs(cwd) {
         let Some(session) = crate::cargo_builds::manifest_ids(&job.worktree).1 else {
