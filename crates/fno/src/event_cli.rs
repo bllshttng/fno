@@ -1786,7 +1786,10 @@ mod tests {
         );
         let mut a3 = base.to_vec();
         a3.extend(["--last", "0"]);
-        assert_eq!(run_find(&a3.iter().map(OsString::from).collect::<Vec<_>>()), 2);
+        assert_eq!(
+            run_find(&a3.iter().map(OsString::from).collect::<Vec<_>>()),
+            2
+        );
     }
 
     #[test]
