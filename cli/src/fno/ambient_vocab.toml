@@ -75,6 +75,8 @@ ambient_names = [
     "COLORFGBG",
     "EVENTS_FILE",
     "GLOBAL_EVENTS_PATH",
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
     "XDG_DATA_HOME",
     "XDG_BIN_HOME",
     "CARGO_BUILD_BUILD_DIR",
