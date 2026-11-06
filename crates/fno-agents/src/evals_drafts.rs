@@ -44,8 +44,14 @@ fn case_hash(quote: &str) -> String {
     blake3::hash(flat.as_bytes()).to_hex()[..12].to_string()
 }
 
-fn draft_body(hash: &str, id: &str, quote: &str, row: &Value) -> String {
-    let draft = json!({
+fn draft_body(
+    hash: &str,
+    id: &str,
+    quote: &str,
+    row: &Value,
+    labels: Option<&crate::evals_labels::SessionLabels>,
+) -> String {
+    let mut draft = json!({
         "id": format!("golden-draft-{hash}"),
         "draft_status": "needs_review",
         "tier": "capability",
@@ -55,9 +61,9 @@ fn draft_body(hash: &str, id: &str, quote: &str, row: &Value) -> String {
         "golden": {
             "source": {"kind": "correction", "ref": id},
             "quote": quote,
-            "expected": "",
+            "expected": labels.map(|l| l.expected.as_str()).unwrap_or(""),
             "rule": "",
-            "failure_type": "",
+            "failure_type": labels.map(|l| l.failure_type.as_str()).unwrap_or(""),
             "outcome": "failed",
         },
         "context": {
@@ -69,6 +75,12 @@ fn draft_body(hash: &str, id: &str, quote: &str, row: &Value) -> String {
             "head_sha": row.pointer("/head_sha/value"),
         },
     });
+    if let Some(l) = labels {
+        draft["context"]["labels"] = json!({
+            "layer": l.layer,
+            "span_ref": l.span_ref,
+        });
+    }
     serde_yaml_ng::to_string(&draft).unwrap_or_default()
 }
 
@@ -135,6 +147,12 @@ pub(crate) fn pass(journal: &Path, dir: &Path, now: SystemTime) -> Result<Value,
     let mut seen = lines_of(&seen_path);
     let mut new = 0u64;
     let mut last = after;
+    // The state root sits above the drafts folder; the label facts read
+    // only proved judges' rows, so an unproved table enriches nothing.
+    let facts: std::collections::BTreeMap<String, crate::evals_labels::SessionLabels> = journal
+        .parent()
+        .map(|state| crate::evals_labels::label_facts(state))
+        .unwrap_or_default();
     for event in &rows {
         last = last.max(Some(event.seq));
         let Ok(line) = serde_json::from_str::<Value>(&event.line) else {
@@ -148,8 +166,13 @@ pub(crate) fn pass(journal: &Path, dir: &Path, now: SystemTime) -> Result<Value,
         if !seen.insert(hash.clone()) {
             continue;
         }
+        let labels = facts.get(
+            data.get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
         let path = dir.join(format!("{hash}.yaml"));
-        std::fs::write(&path, draft_body(&hash, id, quote, data))
+        std::fs::write(&path, draft_body(&hash, id, quote, data, labels))
             .map_err(|e| format!("{}: {e}", path.display()))?;
         append_line(&seen_path, &hash)?;
         new += 1;
@@ -305,6 +328,31 @@ mod tests {
             replay,
             json!({"new": 0, "open": 0, "expired": 1}),
             "a lost watermark redrafts nothing"
+        );
+    }
+
+    #[test]
+    fn a_proved_label_enriches_a_draft_and_a_session_without_one_drafts_bare() {
+        let row =
+            json!({"session_id": "s1", "harness": "claude", "kind": "correct", "ts_turn": "t1"});
+        let labels = crate::evals_labels::SessionLabels {
+            expected: "run the check first".into(),
+            failure_type: "user_correction".into(),
+            layer: "model".into(),
+            span_ref: "trace-9/ev:2".into(),
+        };
+        let enriched = draft_body("abc123", "corr:1", "no, prove it", &row, Some(&labels));
+        assert!(enriched.contains("run the check first"), "{enriched}");
+        assert!(
+            enriched.contains("failure_type: user_correction"),
+            "{enriched}"
+        );
+        assert!(enriched.contains("layer: model"), "{enriched}");
+        assert!(enriched.contains("trace-9/ev:2"), "{enriched}");
+        let bare = draft_body("abc123", "corr:1", "no, prove it", &row, None);
+        assert!(
+            !bare.contains("labels:") && bare.contains("failure_type: ''"),
+            "{bare}"
         );
     }
 }
