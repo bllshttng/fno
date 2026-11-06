@@ -594,6 +594,8 @@ pub enum RestartError {
     ForceNoTarget,
     #[error("daemon status response missing daemon.pid")]
     StatusMissingPid,
+    #[error("daemon answered agent.status with an error: {message}")]
+    DaemonStatusError { message: String },
     #[error(transparent)]
     Client(#[from] ClientError),
 }
@@ -677,15 +679,31 @@ fn send_signal(pid: u32, sig: i32) -> SignalResult {
 }
 
 /// Read the serving daemon's pid via `agent.status` (already-running path).
+/// An ERROR reply is its own verdict, not a missing field: the daemon is
+/// alive and named a cause, so that text surfaces instead of a generic
+/// "missing daemon.pid".
 async fn read_daemon_pid(home: &AgentsHome) -> Result<u32, RestartError> {
     let req = Request::new(1, "agent.status", json!({}));
     let resp = call_if_running(home, &req).await?;
-    resp.result()
-        .and_then(|r| r.get("daemon"))
+    let result = status_result(resp)?;
+    result
+        .get("daemon")
         .and_then(|d| d.get("pid"))
         .and_then(Value::as_u64)
         .map(|p| p as u32)
         .ok_or(RestartError::StatusMissingPid)
+}
+
+/// Split an `agent.status` response into its success value or the daemon's
+/// typed error. A live daemon that answers with an error is a named fault
+/// (`DaemonStatusError`), never a status payload that happens to lack fields.
+fn status_result(resp: Response) -> Result<Value, RestartError> {
+    match resp.payload {
+        crate::protocol::ResponsePayload::Ok(v) => Ok(v),
+        crate::protocol::ResponsePayload::Err(e) => {
+            Err(RestartError::DaemonStatusError { message: e.message })
+        }
+    }
 }
 
 /// Terminate, escalate, verify (the house pattern `stop_worker_confirmed`
@@ -744,7 +762,7 @@ pub enum DaemonStop {
 pub async fn stop_daemon(home: &AgentsHome) -> Result<DaemonStop, RestartError> {
     let status = Request::new(1, "agent.status", json!({}));
     let result = match call_if_running(home, &status).await {
-        Ok(resp) => resp.result().cloned(),
+        Ok(resp) => Some(status_result(resp)?),
         Err(ClientError::DaemonNotRunning) => None,
         Err(e) => return Err(RestartError::Client(e)),
     };
@@ -913,6 +931,10 @@ fn restart_transition_error(error: &RestartError) -> bool {
 
     match error {
         RestartError::Client(ClientError::DaemonNotRunning) => true,
+        // A just-booted daemon can error its first status reads; the budget
+        // bounds the retry, and a daemon that never stops erroring fails with
+        // its own text.
+        RestartError::DaemonStatusError { .. } => true,
         RestartError::Client(ClientError::Io(error)) => transient_io(error),
         RestartError::Client(ClientError::Protocol(ProtocolError::UnexpectedEof)) => true,
         RestartError::Client(ClientError::Protocol(ProtocolError::Io(error))) => {
@@ -1043,10 +1065,16 @@ pub async fn restart_daemon(
     }
 
     // Probe the running daemon for its pid + start time. A down daemon just
-    // starts fresh.
+    // starts fresh. An ERROR reply also falls to the fresh-start arm: the
+    // daemon is up but refused the read (a just-booted one does this while
+    // its handlers warm up), and `start_fresh` retries the status read
+    // within its budget before failing, so the boot race heals here.
     let status = Request::new(1, "agent.status", json!({}));
     let result = match call_if_running(home, &status).await {
-        Ok(resp) => resp.result().cloned(),
+        Ok(resp) => match resp.payload {
+            crate::protocol::ResponsePayload::Ok(v) => Some(v),
+            crate::protocol::ResponsePayload::Err(_) => None,
+        },
         Err(ClientError::DaemonNotRunning) => None,
         Err(e) => return Err(RestartError::Client(e)),
     };
@@ -1397,5 +1425,96 @@ mod drift_restart_tests {
             err.to_string().contains("listening, not serving"),
             "the error itself teaches the --force remedy"
         );
+    }
+}
+
+/// A daemon that answers `agent.status` with an ERROR response is a live
+/// daemon naming a cause. Its text surfaces (2026-11-06: an error reply
+/// seconds after `fno update` rebound the daemon read as "missing
+/// daemon.pid", then as "not running build 80081dd" for the build the daemon
+/// was actually serving). Only a SUCCESS payload missing `daemon.pid` is
+/// `StatusMissingPid`.
+#[cfg(test)]
+mod status_error_tests {
+    use super::*;
+    use crate::protocol::{write_response, ErrorCode, Response};
+    use tokio::net::UnixListener;
+
+    fn temp_home(tag: &str) -> (AgentsHome, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "fno-agents-status-err-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        (AgentsHome::at(root.clone()), root)
+    }
+
+    /// Answer every probe with one error response carrying `message`.
+    async fn serve_status_error(
+        sock: PathBuf,
+        message: &'static str,
+    ) -> tokio::task::JoinHandle<()> {
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            for _ in 0..8 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let resp = Response::err(1, ErrorCode::InvalidParams, message);
+                let _ = write_response(&mut stream, &resp).await;
+                let _ = stream.shutdown().await;
+            }
+        })
+    }
+
+    /// `read_daemon_pid` surfaces the daemon's error text; only a SUCCESS
+    /// payload without a pid stays `StatusMissingPid`.
+    #[tokio::test]
+    async fn error_reply_to_agent_status_surfaces_its_text() {
+        let (home, root) = temp_home("read");
+        let server =
+            serve_status_error(home.supervisor_sock(), "handlers warming up; retry shortly").await;
+        let err = read_daemon_pid(&home).await.unwrap_err();
+        server.abort();
+        match err {
+            RestartError::DaemonStatusError { message } => {
+                assert_eq!(message, "handlers warming up; retry shortly");
+            }
+            other => panic!("expected DaemonStatusError, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `stop_daemon` must not read an error reply as `WasDown`: the daemon is
+    /// provably alive (it answered), so a stop that "found nothing" would be
+    /// a false stop receipt.
+    #[tokio::test]
+    async fn stop_daemon_refuses_to_call_an_erroring_daemon_down() {
+        let (home, root) = temp_home("stop");
+        let server = serve_status_error(home.supervisor_sock(), "status handler wedged").await;
+        let err = stop_daemon(&home).await.unwrap_err();
+        server.abort();
+        match err {
+            RestartError::DaemonStatusError { message } => {
+                assert_eq!(message, "status handler wedged");
+            }
+            other => panic!("expected DaemonStatusError, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The boot race heals: a daemon that errors its first status read and
+    /// then answers is retried inside `start_fresh`'s budget, so the
+    /// update-then-restart sequence survives the race.
+    #[test]
+    fn a_status_error_is_a_transition_error_the_budget_can_retry() {
+        assert!(restart_transition_error(&RestartError::DaemonStatusError {
+            message: "warming up".into(),
+        }));
+        assert!(!restart_transition_error(&RestartError::StatusMissingPid));
+        assert!(!restart_transition_error(&RestartError::DidNotDie {
+            pid: 1
+        }));
     }
 }
