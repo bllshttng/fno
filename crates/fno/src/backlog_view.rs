@@ -390,10 +390,17 @@ pub fn board_scope_from_spawn_env() -> (BoardScope, String) {
 /// the id alone. Every client paint site folds through this so the rows
 /// cannot drift apart.
 pub fn card_label(c: &crate::proto::BacklogCard) -> String {
+    // The number leads when the store minted one: `x-5166 (x-6b06)`, the
+    // shape `fno backlog get` prints as `_number`. The hash stays; it is the
+    // handle every command takes.
+    let id = match &c.number {
+        Some(number) => format!("{number} ({})", c.id),
+        None => c.id.clone(),
+    };
     if c.slug.is_empty() {
-        c.id.clone()
+        id
     } else {
-        format!("{} {}", c.id, c.slug)
+        format!("{id} {}", c.slug)
     }
 }
 
@@ -744,6 +751,10 @@ pub fn derive_queue(
                 lane: Some(lane.to_string()),
                 plan_path: e
                     .get("plan_path")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                number: e
+                    .get("_number")
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
                 // The node tap's middle leg: no vault plan opens the stored
@@ -1309,6 +1320,36 @@ mod tests {
 
     fn graph(nodes: &str) -> String {
         format!(r#"{{"entries": [{nodes}]}}"#)
+    }
+
+    #[test]
+    fn a_numbered_row_leads_the_card_label_with_the_number() {
+        let raw = graph(
+            r#"{"id":"x-6b06","slug":"seq","priority":"p2","status":"ready","_number":"x-5166"}"#,
+        );
+        let queue = derive_queue(&raw, None, &BoardScope::All).unwrap();
+        let card = queue.cards.iter().find(|c| c.id == "x-6b06").unwrap();
+        assert_eq!(card.number.as_deref(), Some("x-5166"));
+        assert_eq!(card_label(card), "x-5166 (x-6b06) seq");
+        let bare = graph(r#"{"id":"x-aaaa","slug":"s","priority":"p2","status":"ready"}"#);
+        let card = derive_queue(&bare, None, &BoardScope::All)
+            .unwrap()
+            .cards
+            .remove(0);
+        assert_eq!(card.number, None);
+        assert_eq!(card_label(&card), "x-aaaa s");
+
+        // The projected read keeps the number: BOARD_FIELDS names `_number`,
+        // so the server's projected rows derive the same queue as full rows.
+        let mut doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for row in doc["entries"].as_array_mut().unwrap() {
+            row.as_object_mut()
+                .unwrap()
+                .retain(|key, _| crate::board_reader::BOARD_FIELDS.contains(&key.as_str()));
+        }
+        let narrow_raw = serde_json::to_string(&doc).unwrap();
+        let narrow = derive_queue(&narrow_raw, None, &BoardScope::All).unwrap();
+        assert_eq!(narrow, queue);
     }
 
     #[test]

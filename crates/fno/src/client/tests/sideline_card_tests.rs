@@ -376,6 +376,7 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: None,
     };

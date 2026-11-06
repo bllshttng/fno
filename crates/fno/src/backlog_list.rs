@@ -75,6 +75,7 @@ impl Hit<'_> {
         };
         json!({
             "id": self.card.id,
+            "number": self.row.and_then(|r| r.get("_number")).cloned().unwrap_or(Value::Null),
             "slug": self.card.slug,
             "title": self.card.title,
             "status": self.card.status,
@@ -96,9 +97,15 @@ impl Hit<'_> {
 
     fn tsv_row(&self) -> String {
         let stale = self.stale.as_ref().map(|(v, _e)| v.as_str()).unwrap_or("-");
+        let number = self
+            .row
+            .and_then(|r| r.get("_number"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.card.id,
+            number,
             self.card.status.as_deref().unwrap_or("?"),
             self.card.priority.as_deref().unwrap_or("-"),
             self.card.column,
@@ -526,6 +533,7 @@ mod tests {
     fn clone_card() -> crate::backlog_model::Card {
         crate::backlog_model::Card {
             id: "x-1".to_string(),
+            number: None,
             slug: None,
             title: "t".to_string(),
             column: "Ready",
@@ -573,13 +581,33 @@ mod tests {
         );
         let tsv = marked.tsv_row();
         let cols: Vec<&str> = tsv.split('\t').collect();
-        assert_eq!(cols.len(), 7);
-        assert_eq!(cols[6], "partly_shipped");
+        assert_eq!(cols.len(), 8);
+        assert_eq!(cols[7], "partly_shipped");
         let unmarked = mk(None);
         assert!(unmarked.json_row()["stale"].is_null());
         let tsv_un_row = unmarked.tsv_row();
         let tsv_un: Vec<&str> = tsv_un_row.split('\t').collect();
-        assert_eq!(tsv_un[6], "-");
+        assert_eq!(tsv_un[7], "-");
+    }
+
+    #[test]
+    fn a_rows_number_prints_in_json_and_tsv() {
+        let row = json!({"id": "x-1", "_number": "x-5166"});
+        let numbered = Hit {
+            card: clone_card(),
+            row: Some(&row),
+            stale: None,
+        };
+        assert_eq!(numbered.json_row()["number"], json!("x-5166"));
+        let cols: Vec<&str> = numbered.tsv_row().split('\t').collect();
+        assert_eq!(cols[1], "x-5166");
+        let bare = Hit {
+            card: clone_card(),
+            row: None,
+            stale: None,
+        };
+        assert!(bare.json_row()["number"].is_null());
+        assert_eq!(bare.tsv_row().split('\t').nth(1), Some("-"));
     }
 
     #[test]

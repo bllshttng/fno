@@ -738,6 +738,7 @@ async fn compose_rows() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: Some("linear:x-24c8".into()),
     }];

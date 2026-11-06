@@ -414,6 +414,32 @@ pub fn labels() -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// The numbers map for one store's db file: the served store, not the
+/// machine default. A missing file or table reads as no numbers, so a
+/// keeper serving a store with no `fno_numbers` still answers.
+pub fn labels_at(graph: &Path) -> HashMap<String, String> {
+    let db = crate::backlog::database_path(graph);
+    match open_read_at(&db) {
+        Some(conn) => labels_in(&conn, &current_store()),
+        None => Default::default(),
+    }
+}
+
+/// Stamp `_number` onto every numbered row, before the field projection.
+/// Unnumbered rows stay without the key, so a reader's null falls back to
+/// the hash.
+pub fn attach_numbers(rows: &mut [Value], held: &HashMap<String, String>) {
+    for row in rows.iter_mut() {
+        let id = row.get("id").and_then(Value::as_str).map(str::to_string);
+        let Some(obj) = row.as_object_mut() else {
+            continue;
+        };
+        if let Some(number) = id.as_deref().and_then(|id| held.get(id)) {
+            obj.shift_insert(0, "_number".to_string(), Value::String(number.clone()));
+        }
+    }
+}
+
 /// Put the number beside every hash a text cites: `q-aae5187b` reads
 /// `Q87 (q-aae5187b)`. A hash already in that form, or one with no number,
 /// stays as it is. Machine text keeps the hash, so a reader can still copy it.
@@ -777,5 +803,23 @@ mod tests {
         let conn = open_read_at(&graph).unwrap();
         assert_eq!(label_in(&conn, "q-1", "local"), None);
         assert!(labels_in(&conn, "local").is_empty());
+    }
+
+    #[test]
+    fn the_projection_stamps_the_served_store_and_leaves_the_unnumbered_alone() {
+        let (dir, graph, conn) = conn();
+        let store = current_store();
+        mint_local(&conn, "x-aaaa", &store, "h").unwrap();
+        drop(conn);
+        let held = labels_at(&graph);
+        assert_eq!(held.get("x-aaaa").map(String::as_str), Some("x-1"));
+        let mut rows = vec![json!({"id": "x-aaaa"}), json!({"id": "x-bbbb"})];
+        attach_numbers(&mut rows, &held);
+        assert_eq!(rows[0]["_number"], json!("x-1"));
+        assert!(rows[1].get("_number").is_none());
+        // A store file with no numbers table reads as no numbers.
+        let bare = tempfile::tempdir().unwrap();
+        let bare_graph = bare.path().join("graph.json");
+        assert!(labels_at(&bare_graph).is_empty());
     }
 }

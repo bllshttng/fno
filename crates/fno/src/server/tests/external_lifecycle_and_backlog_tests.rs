@@ -193,6 +193,7 @@ fn routed_backlog_joins_attach_then_hint_and_leaves_ready_alone() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: None,
     };
@@ -272,6 +273,7 @@ fn inflight_route_resolves_by_id_or_slug_and_fails_closed() {
             project: None,
             lane: None,
             plan_path: None,
+            number: None,
             head: false,
             link: None,
         },
@@ -286,6 +288,7 @@ fn inflight_route_resolves_by_id_or_slug_and_fails_closed() {
             project: None,
             lane: None,
             plan_path: None,
+            number: None,
             head: false,
             link: None,
         },
@@ -328,6 +331,7 @@ fn inflight_hint_names_session_then_holder_then_default() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: None,
     }];
@@ -371,6 +375,7 @@ fn plan_refusal_names_only_an_in_flight_node() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: None,
     }];
@@ -434,6 +439,7 @@ fn card_ready_gate_only_passes_ready_cards() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: None,
     };

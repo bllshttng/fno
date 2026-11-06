@@ -152,6 +152,9 @@ pub struct Lead {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Card {
     pub id: String,
+    /// The store-minted short number (`x-5166`), served as `_number`. `None`
+    /// while the primary has not numbered the node yet.
+    pub number: Option<String>,
     pub slug: Option<String>,
     /// Falls back to the slug when the row carries no title.
     pub title: String,
@@ -646,6 +649,7 @@ pub(crate) fn card_of(
     .unwrap_or(OFF_BOARD);
     let (encounters, encounters_operator, encounters_external) = encounter_counts(e);
     Some(Card {
+        number: e.get("_number").and_then(Value::as_str).map(str::to_string),
         order: order.get(&id).copied().unwrap_or(usize::MAX),
         rank: e.get("rank").and_then(Value::as_f64),
         priority: e
