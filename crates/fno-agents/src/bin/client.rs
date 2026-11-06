@@ -332,10 +332,7 @@ fn main() {
     let mut spawn_timing = fno_agents::spawn_seam::SpawnTiming::for_spawn(&args);
     let args = match fno_agents::spawn_seam::admit_spawn(args) {
         Ok(args) => args,
-        Err(code) => {
-            fno_agents::spawn_seam::settle_name(code);
-            std::process::exit(code)
-        }
+        Err(code) => std::process::exit(code),
     };
     if let Some(timing) = spawn_timing.as_mut() {
         timing.record_seam();
@@ -347,7 +344,6 @@ fn main() {
         Err(code) => std::process::exit(code),
     };
     let code = rt.block_on(run(args, spawn_timing));
-    fno_agents::spawn_seam::settle_name(code);
     std::process::exit(code);
 }
 

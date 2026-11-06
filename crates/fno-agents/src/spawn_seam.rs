@@ -148,12 +148,13 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     Ok(argv)
 }
 
-/// Reserve a worker name for the launch window. The registry holds no row
-/// until the child boots (p50 8 s), so two spawns of one seed both read a
-/// name free; a claim decides the race. Its TTL covers spawn to first
-/// report, and the row keeps the name taken after that. The key is not
-/// `name:`, which marks a lead's drawn person name used forever. A broken
-/// claims store fails open to the registry read. `Err` names the holder.
+/// Reserve a worker name while this spawn client runs. The registry holds no
+/// row until the child boots (p50 8 s), so two concurrent spawns of one seed
+/// both read a name free; a claim decides the race. The claim names this
+/// process's pid and takes no TTL, so it reads stale the moment the client
+/// exits and needs no release. The key is not `name:`, which marks a lead's
+/// drawn person name used forever. A broken claims store fails open to the
+/// registry read. `Err` names the holder.
 pub(crate) fn reserve_name(name: &str, root: Option<&Path>) -> Result<(), String> {
     let key = format!("spawn-name:{}", name.to_ascii_lowercase());
     let holder = format!(
@@ -162,8 +163,6 @@ pub(crate) fn reserve_name(name: &str, root: Option<&Path>) -> Result<(), String
         std::process::id()
     );
     let opts = crate::claims::AcquireOpts {
-        pid_unavailable: true,
-        ttl_ms: Some(crate::spawn_guard::HANDOVER_TTL_MS),
         reason: Some(format!("spawn launch window for worker {name}")),
         root: root.map(Path::to_path_buf),
         ..Default::default()
@@ -174,32 +173,7 @@ pub(crate) fn reserve_name(name: &str, root: Option<&Path>) -> Result<(), String
             eprintln!("spawn note: {key} could not be reserved ({e}); the registry read decides");
             Ok(())
         }
-        crate::claims::AcquireOutcome::Acquired(_) => {
-            if let Ok(mut held) = RESERVED_NAME.lock() {
-                *held = Some((name.to_string(), key, holder, root.map(Path::to_path_buf)));
-            }
-            Ok(())
-        }
-    }
-}
-
-type HeldName = (String, String, String, Option<PathBuf>);
-static RESERVED_NAME: std::sync::Mutex<Option<HeldName>> = std::sync::Mutex::new(None);
-
-/// Release this process's name reservation once the registry decides the
-/// name: the spawn failed, or its row already exists. A launch whose row
-/// is still owed keeps the claim for its TTL.
-pub fn settle_name(exit: i32) {
-    let Some((name, key, holder, root)) = RESERVED_NAME.lock().ok().and_then(|mut h| h.take())
-    else {
-        return;
-    };
-    let row_exists = || {
-        let registry = crate::paths::AgentsHome::from_env().registry_json();
-        crate::state::load_registry(&registry).is_ok_and(|r| r.find(&name).is_some())
-    };
-    if exit != 0 || row_exists() {
-        let _ = crate::claims::release(&key, &holder, root.as_deref(), root.as_deref());
+        crate::claims::AcquireOutcome::Acquired(_) => Ok(()),
     }
 }
 
@@ -437,27 +411,27 @@ mod tests {
     #[test]
     fn a_name_another_spawn_reserved_refuses_and_names_its_holder() {
         let tmp = tempfile::tempdir().unwrap();
-        let rival = crate::claims::AcquireOpts {
-            pid_unavailable: true,
-            ttl_ms: Some(60_000),
+        let rival = |pid: u32| crate::claims::AcquireOpts {
+            pid: Some(pid),
             root: Some(tmp.path().to_path_buf()),
             ..Default::default()
         };
-        let _ = crate::claims::acquire("spawn-name:t-second-pass", "spawn-cli:1", rival);
+        // A live rival client holds the name: the race refuses and names it.
+        let _ = crate::claims::acquire(
+            "spawn-name:t-second-pass",
+            "spawn-cli:1",
+            rival(std::process::id()),
+        );
         assert_eq!(
             reserve_name("t-Second-Pass", Some(tmp.path())),
             Err("spawn-cli:1".to_string())
         );
-        assert_eq!(reserve_name("t-second-pass-2", Some(tmp.path())), Ok(()));
-        let (state, _) = crate::claims::status("spawn-name:t-second-pass-2", Some(tmp.path()));
-        assert_eq!(state, crate::claims::ClaimState::Live);
-        settle_name(1);
-        let (state, _) = crate::claims::status("spawn-name:t-second-pass-2", Some(tmp.path()));
-        assert_eq!(
-            state,
-            crate::claims::ClaimState::Free,
-            "a failed spawn frees its name"
-        );
+        // A rival client that exited frees the name with no release.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let _ = crate::claims::acquire("spawn-name:t-gone", "spawn-cli:2", rival(dead));
+        assert_eq!(reserve_name("t-gone", Some(tmp.path())), Ok(()));
     }
 
     #[test]
