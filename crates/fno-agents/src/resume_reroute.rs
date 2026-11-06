@@ -394,6 +394,8 @@ mod tests {
         let home_dir = temp_home("ac3");
         let saved_home = std::env::var_os("HOME");
         std::env::set_var("HOME", &home_dir);
+        let saved_agents_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", &home_dir);
         let reg_path = home_dir.join("registry.json");
         let sid = "77770021-2222-3333-4444-555555555555";
         let entry = seed_row(&reg_path, sid, &old, &home_dir.as_path());
@@ -423,6 +425,10 @@ mod tests {
         match &saved_home {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
+        }
+        match &saved_agents_home {
+            Some(h) => std::env::set_var("FNO_AGENTS_HOME", h),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
         assert_eq!(plan.mechanism, "bg-resume");
         for token in ["--bg", "--resume", sid, "--settings", new.as_str()] {
@@ -480,6 +486,8 @@ mod tests {
         let home_dir = temp_home("ac5");
         let saved_home = std::env::var_os("HOME");
         std::env::set_var("HOME", &home_dir);
+        let saved_agents_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", &home_dir);
         let reg_path = home_dir.join("registry.json");
         let sid = "77770023-2222-3333-4444-555555555555";
         let entry = seed_row(&reg_path, sid, &old, &home_dir.as_path());
@@ -490,6 +498,10 @@ mod tests {
         match &saved_home {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
+        }
+        match &saved_agents_home {
+            Some(h) => std::env::set_var("FNO_AGENTS_HOME", h),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
         std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
         assert!(err.contains("no-such-lane-x"), "{err}");
