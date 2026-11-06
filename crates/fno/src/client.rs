@@ -3839,6 +3839,7 @@ impl View {
         // pull the newly-focused row into view once the catalog settles.
         let focus_prev = self.layout.focus;
         self.layout = layout;
+        self.restamp_asking_badges();
         // Selector re-anchors to a live, actionable row on catalog change
         // (AC6-FR): clamp into the unified rows, then step off an inert Header
         // so the cursor never rests on a label. A pending J/K reorder
@@ -5865,20 +5866,14 @@ fn pane_state(badge: Option<AgentBadge>, seen: bool, activity: Option<ShellActiv
         Some(AgentBadge::Done) if seen => PaneState::Idle,
         Some(AgentBadge::Done) => PaneState::DoneUnseen,
         None => match activity {
-            // ACCEPTED COST, ruled 2026-08-26, do not relitigate: a bare shell
-            // running `less`, `nvim` or a long build also lands here, so it
-            // reads `Working` and holds an attention row it does not need.
-            // That is the cheaper error by design. This epic's founding
-            // measurement was four codex panes carrying `fno_id=-` while
-            // running `cargo test`, `fno doctor test` and `fno do pr wait`.
-            // Over-surfacing a shell costs one row; under-surfacing a working
-            // agent is the defect this branch ships to delete.
+            // ACCEPTED COST, do not relitigate: a bare shell running `less`,
+            // `nvim` or a long build also lands here, and over-surfacing a
+            // shell costs one row while under-surfacing a working agent is
+            // the founding defect this branch shipped to delete. A quiet
+            // shell reads `Idle` (the user's ruling: a shell tab is live,
+            // not a mystery to measure).
             Some(ShellActivity::Running) => PaneState::Working,
             Some(ShellActivity::Idle) => PaneState::Idle,
-            // The user's 2026-10-06 ruling: a user's shell tab is live. The
-            // `empty` and unmeasured marks are dropped - a quiet shell reads
-            // `Idle` like any live row, superseding the marked-absence
-            // ruling (a shell tab is not a mystery to measure).
             Some(ShellActivity::Empty) => PaneState::Idle,
             Some(ShellActivity::Unmeasured) | None => PaneState::Idle,
         },
