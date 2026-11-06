@@ -49,6 +49,7 @@ If `fno backlog get <scope>` finds no node, this machine's backlog does not hold
 ## On titling
 
 - `fno agents org init --scope <scope> --harness-session-id <full session id>`. Read the full id with `printenv CLAUDE_CODE_SESSION_ID` on claude, or `printenv CODEX_THREAD_ID` on codex. The stop hook matches the manifest id to the transcript name. So the 8-character handle from `fno agents registry whoami --json` does not work. Print level, scope, mail handle. The output can carry a settled-findings section. Those titles are what this epic already established. Read them before the first check-in. Never re-derive them.
+- Read the canon doc before the first check-in. On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds). Only a changed-blocks beat prints again.
 - Session id changed under a live role? Run `fno agents org init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
@@ -98,6 +99,7 @@ Every status update to the user is the `lineup:` table `fno agents org checkin` 
 
 Then run `fno agents org checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The board read inside it defaults to this role's manifest, so its rows are your scope. It prints, one line each, and this is the command's documented output contract:
 
+- `Handoff orders (canon doc):` the canon doc's `fno:session` blocks, verbatim. Prints on this holder's first beat and whenever the blocks changed since its last beat. When the blocks are unchanged, the doc is absent, or every block is still the writer's placeholder, nothing prints.
 - `User notes:` the canon doc's user block (read through `fno config paths handoff --scope <scope>`), verbatim. Never summarized or paraphrased. Nothing when the block is empty or placeholder-only.
 - `board:` the open PR count, the PRs with a free claim and no driver, and the blocked rows with what they are blocked on.
 - `blueprint:` the blueprint subagents this session runs against the ceiling. The ceiling is two per lead, and a provider subagent budget can only lower it. Then one `start` line per node to plan and one `skip` line per node left, each with its reason. Sometimes the unplanned queue is empty and nothing runs. The skip line then names the idea children of the scope's epics. It reads `skip - : no dispatchable unplanned node in scope: 3 idea children ride their contained epics`. Read that as an idle scope, not a clean one. Up to two starts print while plans ready are fewer than the lead's worker slots. When none runs, one start still prints, so a lead always has a blueprint going. Slots is the lead's worker share from the spawn gate. The command journals the same starts and skips in `lead_checkin`.

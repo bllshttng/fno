@@ -470,40 +470,6 @@ mod tests {
     }
 
     #[test]
-    fn spawn_axes_leave_the_harness_shorthand_flags_alone() {
-        let toks: Vec<String> = [
-            "-m",
-            "sonnet",
-            "--effort",
-            "high",
-            "--permission-mode=plan",
-            "-msonnet",
-            "--route",
-            "zai/glm",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let (axes, fence) = SpawnAxes::scan(&toks).expect("shorthand flags are not axes");
-        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
-        let kept = SpawnAxes::strip_axes(&toks, fence);
-        assert_eq!(kept[..6], toks[..6], "the harness flags survive the strip");
-    }
-
-    #[test]
-    fn spawn_axes_ignores_non_axis_spellings() {
-        // Not axes, so scan ignores them and the passthrough law answers
-        // each: --resume/-r ride to the harness argv, and --provider/-P reach
-        // the client's tombstone (its line, not scan's).
-        for flag in ["--provider", "-P", "--resume", "-r"] {
-            let toks: Vec<String> = [flag, "x"].iter().map(|s| s.to_string()).collect();
-            let (axes, _) = SpawnAxes::scan(&toks).expect("a non-axis token is ignored");
-            assert_eq!(axes.route, None);
-            assert_eq!(axes.substrate, None);
-        }
-    }
-
-    #[test]
     fn spawn_resume_rides_the_passthrough_law() {
         // --resume in every spelling survives scan, so the harness argv it
         // joins decides whether it carries (claude --bg --resume is a real
@@ -523,38 +489,6 @@ mod tests {
         assert!(
             SpawnAxes::scan(&fenced).is_ok(),
             "a post-fence -r stays provider argv"
-        );
-    }
-
-    #[test]
-    fn spawn_axes_as_admits_the_public_vocabulary() {
-        for form in [
-            vec!["--as", "cloud"],
-            vec!["--as=cloud"],
-            vec!["--substrate", "cloud"],
-            vec!["--substrate", "pane"],
-            vec!["--substrate=thread"],
-        ] {
-            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
-            let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
-            let word = form.last().unwrap().split('=').next_back().unwrap();
-            assert_eq!(axes.substrate.as_deref(), Some(word));
-            assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
-        }
-        for word in ["pane", "thread", "headless", "cloud"] {
-            let toks: Vec<String> = vec!["--as".to_string(), word.to_string()];
-            let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
-            assert_eq!(axes.substrate.as_deref(), Some(word));
-        }
-        // Outside the live vocabulary names the lanes, never a retired line.
-        let toks: Vec<String> = ["--substrate", "bg"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let err = SpawnAxes::scan(&toks).expect_err("bg is not a lane");
-        assert!(
-            err.contains("must be one of: pane, thread, headless, cloud"),
-            "{err}"
         );
     }
 

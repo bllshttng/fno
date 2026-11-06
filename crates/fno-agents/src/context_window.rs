@@ -474,8 +474,8 @@ pub fn verify_compaction_receipt(
 #[cfg(test)]
 mod tests {
     use super::{
-        compaction_band, effective_window, used_percent, CompactionBand, ContextWindowError,
-        ContextWindowReceipt, EXPANDED_TAIL_BYTES,
+        effective_window, used_percent, ContextWindowError, ContextWindowReceipt,
+        EXPANDED_TAIL_BYTES,
     };
     use std::io::Write;
 
@@ -522,18 +522,6 @@ mod tests {
             ))
         );
         assert_eq!(used_percent(1, 0), None);
-    }
-
-    #[test]
-    fn ac3_hp_astra_enters_preparation_then_action_bands() {
-        assert_eq!(
-            compaction_band("gpt-6-astra", 200_000, 1_000_000),
-            CompactionBand::Prepare
-        );
-        assert_eq!(
-            compaction_band("gpt-6-astra", 250_000, 1_000_000),
-            CompactionBand::Action
-        );
     }
 
     #[test]

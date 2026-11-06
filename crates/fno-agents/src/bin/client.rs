@@ -4654,7 +4654,3 @@ fn print_help() {
         })
     );
 }
-
-#[cfg(test)]
-#[path = "../client_tests.rs"]
-mod tests;

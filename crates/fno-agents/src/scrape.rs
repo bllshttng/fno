@@ -11,18 +11,12 @@
 //! provider's detection manifest ([`crate::manifest`]) against it, and stores
 //! the verdict as [`state::ScreenStateReport`] on the row.
 //!
-//! Arbitration is per-capability, not per-moment (no two competing sources of
-//! truth): a row that carries ANY `inside_leg` report - live or
-//! TTL-lapsed - is never scraped, UNLESS its harness wiring names no blocked
-//! producer (`blocked = "none"`): the hook lane of such a harness reports
-//! working/done but structurally cannot report blocked (no PermissionRequest
-//! payload was ever captured for codex), so the screen owns that rung for
-//! its rows and the sweep keeps scraping them. A harness that DOES wire a
-//! blocked event keeps the old whole-row rule; its TTL lapse degrades to
-//! liveness-only exactly as before. The inside-leg store path clears
-//! `screen_state` on the capability flip, and the sweep's write closure
-//! re-checks under the registry lock, so a scrape verdict can never shadow a
-//! hook that can state the blocked rung.
+//! Arbitration follows the harness capability declaration: hookless rows
+//! are scraped, and rows with a hook report remain scrapable when their
+//! wiring declares `screen_backstop` or no blocked producer. Readers merge
+//! only a fresh blocked verdict over the hook's working/done state. The
+//! locked write re-checks that declaration and the pane binding, so a stale
+//! scrape cannot land on a re-homed row or a row without a backstop.
 //!
 //! Registry writes are change-gated: a verdict is written when the detected
 //! state differs from the stored one, or when the stored stamp is due a
@@ -70,17 +64,8 @@ pub fn scrape_targets(reg: &Registry) -> Vec<ScrapeTarget> {
     reg.entries
         .iter()
         .filter(|e| {
-            // ANY inside-leg report (live or lapsed) marks the row
-            // hook-capable: the hook owns the signal, TTL lapse degrades to
-            // liveness-only, never to a scrape (no authority flapping).
-            // ONE carve-out: a harness whose wiring names no blocked
-            // producer (`blocked = "none"`) can never state blocked through
-            // the hook, so its rows stay scrapable and the screen owns that
-            // rung (the codex pane at a permission prompt must read
-            // blocked). Non-live statuses are excluded too: Orphaned
-            // (failed reachability probe) and Failed (panicked task)
-            // already say the backend is not live, so scraping their last
-            // screen would badge a dead pane (codex P2).
+            // A declared screen backstop covers missing blocked hook events.
+            // Non-live rows never badge from their last rendered screen.
             (e.inside_leg.is_none()
                 || crate::harness_capabilities::session_state_names_no_blocked_producer(
                     e.harness_name(),
@@ -788,8 +773,8 @@ mod tests {
             pane_id: 7,
         });
         reg.entries.push(ok);
-        // Hook-capable (even a lapsed report): never scraped.
-        let mut hooked = entry("hooked", "claude");
+        // Undeclared hook wiring stays fail-closed, even with a lapsed report.
+        let mut hooked = entry("hooked", "unknown");
         hooked.mux = Some(state::MuxRef {
             session: "main".into(),
             pane_id: 8,
@@ -832,45 +817,47 @@ mod tests {
         assert_eq!(targets[0].pane_id, 7);
     }
 
-    // A no-blocked-producer harness (wiring `blocked = "none"`, codex) with a
-    // live inside_leg report IS a scrape target: the hook lane cannot state
-    // blocked, so the screen owns that rung. The claude-still-excluded case
-    // is the test above (`hooked`, wiring `blocked = "Notification"`).
+    // A parked screen remains observable on each wired harness, even when
+    // its last hook report said working. The locked write admits it too.
     #[test]
-    fn scrape_targets_scrapes_no_blocked_producer_rows_despite_hook_report() {
-        let mut reg = Registry::default();
-        let mut codex_row = entry("codex-at-prompt", "codex");
-        codex_row.mux = Some(state::MuxRef {
-            session: "main".into(),
-            pane_id: 11,
-        });
-        codex_row.inside_leg = Some(state::InsideLegReport {
-            state: state::InsideLegState::Working,
-            seq: 1,
-            reason: None,
-            received_at: NOW_STAMP.into(),
-            ttl_ms: Some(120_000),
-            posture: None,
-        });
-        reg.entries.push(codex_row);
+    fn parked_prompts_are_scraped_despite_hook_reports() {
+        for harness in ["claude", "opencode", "codex", "agy", "pi"] {
+            let mut reg = Registry::default();
+            let mut codex_row = entry("parked", harness);
+            codex_row.mux = Some(state::MuxRef {
+                session: "main".into(),
+                pane_id: 11,
+            });
+            codex_row.inside_leg = Some(state::InsideLegReport {
+                state: state::InsideLegState::Working,
+                seq: 1,
+                reason: None,
+                received_at: NOW_STAMP.into(),
+                ttl_ms: Some(120_000),
+                posture: None,
+            });
+            reg.entries.push(codex_row);
 
-        let targets = scrape_targets(&reg);
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].name, "codex-at-prompt");
-        assert_eq!(targets[0].provider, "codex");
-        assert_eq!(targets[0].pane_id, 11);
+            let targets = scrape_targets(&reg);
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].name, "parked");
+            assert_eq!(targets[0].provider, harness);
+            assert_eq!(
+                write_disposition(&reg.entries[0], &("main".into(), 11)),
+                WriteDisposition::Apply
+            );
+            assert_eq!(targets[0].pane_id, 11);
+        }
     }
 
     #[test]
     fn write_disposition_rechecks_hook_flip_and_mux_ref() {
-        // The locked-write re-checks against the row's CURRENT state, not the
-        // snapshot the sweep read. The harness is claude on purpose: its
-        // wiring wires a blocked event, so an inside_leg report means the
-        // hook owns the row whole (a scrape verdict can never shadow it).
+        // Undeclared wiring retains the hook-flip guard. A moved pane must
+        // never receive the old pane's verdict.
         let scraped = ("main".to_string(), 7u64);
 
         // Row still on the scraped pane -> Apply.
-        let mut row = entry("r", "claude");
+        let mut row = entry("r", "unknown");
         row.mux = Some(state::MuxRef {
             session: "main".into(),
             pane_id: 7,
@@ -910,29 +897,6 @@ mod tests {
             write_disposition(&unhosted, &scraped),
             WriteDisposition::Skip
         );
-    }
-
-    // A no-blocked-producer row with an inside_leg report is ADMITTED by the
-    // locked-write guard (Apply, not HookFlip): the guard exists so a scrape
-    // verdict can never shadow a hook that can state blocked, and this
-    // harness's hook cannot. The mux-ref check above it is untouched.
-    #[test]
-    fn scrape_write_disposition_applies_for_no_blocked_producer_rows() {
-        let scraped = ("main".to_string(), 12u64);
-        let mut row = entry("codex-at-prompt", "codex");
-        row.mux = Some(state::MuxRef {
-            session: "main".into(),
-            pane_id: 12,
-        });
-        row.inside_leg = Some(state::InsideLegReport {
-            state: state::InsideLegState::Working,
-            seq: 1,
-            reason: None,
-            received_at: NOW_STAMP.into(),
-            ttl_ms: Some(120_000),
-            posture: None,
-        });
-        assert_eq!(write_disposition(&row, &scraped), WriteDisposition::Apply);
     }
 
     // -- detect explain ---------------------------------------------------

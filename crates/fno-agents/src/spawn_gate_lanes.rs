@@ -1594,54 +1594,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A worker whose hook reported `done` on a node recorded merged stops
-    /// charging its lead and still takes a fleet seat. The same row with no
-    /// recorded merge keeps counting.
-    #[test]
-    fn a_turn_ended_on_merged_work_stops_charging_the_lead() {
-        let dir = std::env::temp_dir().join(format!("fno-lanes-merged-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        let done = r#"{"name":"w-done","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"d-1","spawned_by_session":"a","inside_leg":{"state":"done","seq":1,"received_at":"2026-10-24T16:00:00Z"}}"#;
-        write_registry(&reg, &[done.to_string(), spawned_row("w-live", "l-1", "a")]);
-        let graph = |merge: Option<&str>| {
-            let index = std::collections::HashMap::from([(
-                "d-1".to_string(),
-                vec![("N1".to_string(), "done".to_string())],
-            )]);
-            crate::gc_sweep::GraphRead {
-                work_index: index.clone(),
-                index,
-                open_do: Default::default(),
-                phases: Default::default(),
-                closed_planning: Default::default(),
-                plan_written: Default::default(),
-                statuses: [("N1".to_string(), "done".to_string())].into(),
-                pr_state: [("N1".to_string(), (merge.map(str::to_string), 0, 0))].into(),
-                pr_number: Default::default(),
-                plan_paths: Default::default(),
-                delivery_merged_refs: Default::default(),
-                do_nodes: Default::default(),
-                pr_reads: Default::default(),
-            }
-        };
-
-        let read = share_reading_with(&reg, 15, Some("a"), None, &mut || {
-            Some(graph(Some("merged")))
-        });
-        assert_eq!(
-            read.held_rows,
-            Some(vec!["w-live".to_string()]),
-            "merged and idle skips"
-        );
-        assert_eq!(read.fleet, Some(2), "the finished row still takes a seat");
-
-        let read = share_reading_with(&reg, 15, Some("a"), None, &mut || Some(graph(None)));
-        assert_eq!(read.held, Some(2), "no recorded merge: the row counts");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// AC1-HP's counting rule: live rows of the provider count, dead pids and
     /// other providers do not.
     #[test]

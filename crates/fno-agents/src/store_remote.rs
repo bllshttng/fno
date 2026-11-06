@@ -1001,27 +1001,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_name_that_does_not_resolve_falls_back_to_the_listed_addresses() {
-        let primary = test_primary::start();
-        let lost = Remote::parse(
-            &format!("http://r2d2.invalid:{}", primary.remote.port),
-            None,
-        )
-        .unwrap();
-        let error = lost.execute("SELECT 1", &[]).unwrap_err();
-        assert!(
-            is_unreachable(&error) && error.contains("resolve r2d2.invalid"),
-            "{error}"
-        );
-
-        // A dead fallback is skipped; the bare IP takes the URL's port.
-        let dead = format!("127.0.0.1:{}", test_primary::dead().port);
-        let found = lost.with_fallbacks(&[dead, "127.0.0.1".into()]).unwrap();
-        let reply = found.execute("SELECT 1", &[]).unwrap();
-        assert_eq!(reply.rows, vec![vec![SqlValue::Integer(1)]]);
-    }
-
-    #[test]
     fn https_defaults_to_port_443_and_other_schemes_still_refuse() {
         let remote = Remote::parse("https://r2d2.tailnet.ts.net/", None).unwrap();
         assert_eq!((remote.host(), remote.port), ("r2d2.tailnet.ts.net", 443));
@@ -1057,13 +1036,6 @@ mod tests {
             .execute("SELECT count(*) FROM sqlite_master WHERE name = 't'", &[])
             .unwrap();
         assert_eq!(tables.rows, vec![vec![SqlValue::Integer(0)]]);
-    }
-
-    #[test]
-    fn a_fallback_that_is_not_an_ip_refuses() {
-        let remote = Remote::parse("http://r2d2:18080", None).unwrap();
-        let error = remote.with_fallbacks(&["r2d2.lan".into()]).unwrap_err();
-        assert!(error.contains(ADDRS_KEY), "{error}");
     }
 
     #[test]

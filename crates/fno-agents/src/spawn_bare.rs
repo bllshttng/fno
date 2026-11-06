@@ -645,6 +645,24 @@ mod tests {
 
     #[test]
     fn flags_parse_and_the_substrate_settles() {
+        let contract = HarnessContract::packaged().unwrap();
+        let chips: Vec<String> = [
+            "--model",
+            "gpt-5.6-luna",
+            "--effort",
+            "high",
+            "--permission-mode",
+            "read-only:never",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert_eq!(
+            thread_refusal(&contract, "codex", &chips),
+            None,
+            "the implemented codex chip carriers must be admitted"
+        );
+
         let mut p = Map::new();
         let mut rest = vec!["5m".to_string()].into_iter();
         take_flag("--wait", &mut rest, &mut p).unwrap();

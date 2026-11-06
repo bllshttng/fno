@@ -2,11 +2,13 @@
 //!
 //! `agy` (Google's Antigravity CLI) is a one-shot `agy -p <prompt>` subprocess
 //! (like gemini/codex, NOT a daemon PTY pane on this path). The cleavage from
-//! gemini is the OUTPUT SHAPE: agy v1.0.x has **no `--output-format json`**, so
-//! stdout is the model's reply as PLAIN TEXT. There is no session id in the
-//! output, so this path is STATELESS — `dispatch_agy_once` runs one prompt and
-//! returns the reply; there is no registry row and no `ask`-by-id resume (agy's
-//! own `--continue`/`--conversation` resume is a daemon/interactive concern, not
+//! gemini is the OUTPUT SHAPE: since the 1.1.x line agy emits JSON
+//! (`agy -p --output-format json` returned a conversation_id in its envelope,
+//! measured 2026-09-03 on 1.1.24), and 1.3.3 adds `--input-format/
+//! --output-format stream-json` for the headless lane. This one-shot path
+//! stays STATELESS - `dispatch_agy_once` runs one prompt and returns the
+//! reply; there is no registry row and no `ask`-by-id resume (agy's own
+//! `--continue`/`--conversation` resume is a daemon/interactive concern, not
 //! this headless one-shot).
 //!
 //! Battle-tested gotchas baked into the delegate wrapper this one-shot lane

@@ -132,6 +132,8 @@ environment = [
     "__CFBundleIdentifier",
     "PYTHONPATH",
     "PYTEST_CURRENT_TEST",
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
     "CI",
     "INVOCATION_ID",
     "CRON_JOB",

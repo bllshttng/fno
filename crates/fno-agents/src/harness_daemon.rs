@@ -1,5 +1,4 @@
 use std::fmt;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// The state needed to prove that a provider owns the thread outside the
@@ -153,11 +152,11 @@ pub trait HarnessDaemonAdapter {
 pub fn ensure_harness_daemon<A: HarnessDaemonAdapter>(
     adapter: &A,
 ) -> Result<EnsureResult, EnsureError> {
-    let _lock = acquire_lock(adapter.lock_path()).ok_or_else(|| {
-        EnsureError::new(format!(
-            "harness={} observed=unreadable cannot lock daemon state {}; remedy=repair permissions or remove the lock",
+    let _lock = acquire_lock(adapter.lock_path()).map_err(|refused| {
+        EnsureError::new(lock_refusal_message(
             adapter.harness(),
-            adapter.lock_path().display()
+            adapter.lock_path(),
+            &refused,
         ))
     })?;
 
@@ -251,28 +250,43 @@ fn success(harness: &str, state: DaemonState, reused: bool) -> EnsureResult {
     }
 }
 
-pub(crate) fn acquire_lock(path: &Path) -> Option<crate::chokepoint::Held> {
-    crate::chokepoint::take(&crate::chokepoint::HARNESS_DAEMON, path).ok()
+/// The ensure-refusal body for a lock take that failed. A held lock names its
+/// stamped holder; a file that cannot even open keeps the permissions remedy.
+fn lock_refusal_message(
+    harness: &str,
+    lock_path: &Path,
+    refused: &crate::chokepoint::Refused,
+) -> String {
+    if refused.io_error.is_some() {
+        return format!(
+            "harness={harness} observed=unreadable cannot lock daemon state {}; {refused}; remedy=repair permissions",
+            lock_path.display()
+        );
+    }
+    format!(
+        "harness={harness} observed=lock-held cannot lock daemon state {}; {refused}; remedy=wait for the holder to release the lock or stop that holder process",
+        lock_path.display()
+    )
+}
+
+/// The blocking take the ensure path uses: up to the chokepoint's wait bound,
+/// then a refusal that names the stamped holder.
+pub(crate) fn acquire_lock(
+    path: &Path,
+) -> Result<crate::chokepoint::Held, crate::chokepoint::Refused> {
+    crate::chokepoint::take(&crate::chokepoint::HARNESS_DAEMON, path)
 }
 
 /// Non-blocking variant: `None` = someone else holds it, try again later.
 /// The upgrade transaction takes this so a busy lock reads lock-busy instead
-/// of parking the restart command behind another transaction.
-pub(crate) fn try_acquire_lock(path: &Path) -> Option<std::fs::File> {
-    lock_with(path, libc::LOCK_EX | libc::LOCK_NB)
-}
-
-fn lock_with(path: &Path, flags: libc::c_int) -> Option<std::fs::File> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok()?;
-    }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(path)
-        .ok()?;
-    let rc = unsafe { libc::flock(file.as_raw_fd(), flags) };
-    (rc == 0).then_some(file)
+/// of parking the restart command behind another transaction. Held through
+/// the chokepoint so the hold is stamped and a waiter's refusal can name it.
+pub(crate) fn try_acquire_lock(path: &Path) -> std::io::Result<Option<crate::chokepoint::Held>> {
+    crate::chokepoint::try_take(
+        &crate::chokepoint::HARNESS_DAEMON,
+        path,
+        "codex-daemon-upgrade",
+    )
 }
 
 fn write_state(path: &Path, contents: &str) -> Result<(), String> {
@@ -295,7 +309,10 @@ fn reap_owned_process(state: &DaemonState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_harness_daemon, DaemonState, HarnessDaemonAdapter};
+    use super::{
+        ensure_harness_daemon, lock_refusal_message, try_acquire_lock, DaemonState,
+        HarnessDaemonAdapter,
+    };
     use std::path::{Path, PathBuf};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -377,5 +394,68 @@ mod tests {
 
         assert!(error.contains("observed=unreadable"), "{error}");
         assert_eq!(boots.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_lock_refusal_names_the_holder_not_the_removal_remedy() {
+        let path = Path::new("/x/fno-harness-daemon.lock");
+        let held = crate::chokepoint::Refused {
+            row: "harness-daemon",
+            path: PathBuf::from(path),
+            waited: std::time::Duration::from_secs(10),
+            holder_pid: Some(59801),
+            holder_alive: true,
+            hold_age_secs: Some(372),
+            holder_op: Some("harness-daemon".to_string()),
+            waiter_pid: 42,
+            io_error: None,
+        };
+        let message = lock_refusal_message("codex", path, &held);
+        assert!(message.contains("holder pid 59801"), "{message}");
+        assert!(message.contains("held 372s"), "{message}");
+        assert!(
+            !message.contains("repair permissions"),
+            "a held lock is not a permissions problem: {message}"
+        );
+        let unopenable = crate::chokepoint::Refused {
+            io_error: Some("permission denied".to_string()),
+            holder_pid: None,
+            holder_alive: false,
+            hold_age_secs: None,
+            holder_op: None,
+            ..held
+        };
+        let message = lock_refusal_message("codex", path, &unopenable);
+        assert!(
+            message.contains("repair permissions"),
+            "only an unopenable file is a permissions problem: {message}"
+        );
+    }
+
+    #[test]
+    fn the_upgrade_try_lock_stamps_its_holder_so_a_refusal_can_name_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fno-harness-daemon.lock");
+        let held = try_acquire_lock(&path)
+            .expect("lock file opens")
+            .expect("an unheld lock is taken");
+        let stamp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            stamp.get("pid"),
+            Some(&serde_json::json!(std::process::id())),
+            "the holder must be stamped for a waiter to name: {stamp}"
+        );
+        assert_eq!(
+            stamp.get("name"),
+            Some(&serde_json::json!("codex-daemon-upgrade")),
+            "the stamp names the op that held it: {stamp}"
+        );
+        drop(held);
+        let stamp = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            stamp.trim().is_empty(),
+            "releasing clears the stamp: {stamp:?}"
+        );
     }
 }
