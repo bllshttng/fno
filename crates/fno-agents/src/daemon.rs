@@ -37,6 +37,7 @@ mod fleet_arms;
 mod lifecycle;
 mod removal_audit;
 use self::removal_audit::RemovalAuditContext;
+mod rm;
 mod rm_codex_rollback;
 mod rm_refusal_detail;
 mod rm_teardown;
@@ -1831,7 +1832,7 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         Some("review-start") => handle_review_start(ctx, req).await,
         Some("switchboard") | Some("switchboard_v2") => handle_switchboard(ctx, req).await,
         Some("stop") => handle_stop(ctx, req).await,
-        Some("rm") => handle_rm(ctx, req).await,
+        Some("rm") => rm::handle_rm(ctx, req).await,
         Some("list") => run_blocking(ctx, req, handle_list).await,
         // The subscription command: version-gated full document,
         // so a subscriber pays a stat per idle tick and a read per write.
@@ -4045,19 +4046,6 @@ fn pane_provably_absent(
     }
 }
 
-async fn handle_rm(ctx: &Ctx, req: &Request) -> Response {
-    handle_rm_with(
-        ctx,
-        req,
-        &crate::claude_roster::read_all_agents_union,
-        &run_claude_rm,
-        &rm_teardown::confirmed_claude_stop,
-        &run_mux_pane_kill,
-        &run_mux_pane_probe,
-    )
-    .await
-}
-
 fn cleanup_lead_manifest(entry: &state::RegistryEntry) {
     let Some(scope) = entry.role_scope.as_deref() else {
         return;
@@ -4137,6 +4125,14 @@ async fn handle_rm_with(
             Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
         };
     let name = entry.name.clone();
+    let (own_session_id, _) = crate::claims::resolve_identity();
+    if let Some(detail) = rm_refusal_detail::self_removal(
+        &name,
+        entry.harness_session_id.as_deref(),
+        own_session_id.as_deref(),
+    ) {
+        return Response::err(req.id, ErrorCode::InvalidStatus, detail);
+    }
     let audit = RemovalAuditContext::from_request(req, &entry);
     if let Some(held) = audit.pin_hold(&ctx.home, &entry) {
         return Response::err(req.id, ErrorCode::InvalidStatus, held);
