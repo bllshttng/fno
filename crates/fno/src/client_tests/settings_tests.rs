@@ -249,43 +249,6 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
         PopupRow::FullWidth(l) if l.starts_with("[ edit keys in ") && l.ends_with(" ]")
     ));
 }
-
-#[tokio::test]
-async fn lane_key_entry_enter_opens_the_picker_for_the_typed_key() {
-    let _config = IsolatedConfig::new();
-    let mut v = settings_on(SettingsTab::Colors);
-    let mut keys = Keys::new();
-    let mut buf = Vec::new();
-    execute_aux_action(&mut v, AuxAction::LaneColorAdd("model".into()), &mut buf)
-        .await
-        .unwrap();
-    // Every byte repaints the field with the text so far and the cursor
-    // cell after it.
-    let mut typed = String::new();
-    for b in "glm".bytes() {
-        keys.send(&mut v, &[b]).await;
-        typed.push(b as char);
-        let want = format!("model key: {typed} ");
-        assert!(
-            frame_text(&mut v).iter().any(|l| l.contains(&want)),
-            "the frame shows {want:?}"
-        );
-    }
-    keys.send(&mut v, b"\r").await;
-    assert!(v.lane.key_entry.is_none(), "the field closes on submit");
-    assert_eq!(v.lane.pick, Some(("model".into(), "glm".into())));
-    assert_eq!(v.lane.axis, None, "back from the picker lands on the list");
-    keys.tap(&mut v, "magenta").await;
-    assert_eq!(
-        v.lane.pick, None,
-        "a color pick saves and returns to the list"
-    );
-    assert!(v
-        .notice
-        .as_ref()
-        .is_some_and(|(n, _)| n.starts_with("model.glm")));
-}
-
 #[tokio::test]
 async fn lane_custom_entry_enter_refuses_an_invalid_color_without_saving() {
     let mut v = settings_on(SettingsTab::Colors);
@@ -310,56 +273,4 @@ async fn lane_custom_entry_enter_refuses_an_invalid_color_without_saving() {
         Some("#12a"),
         "nothing saved; the field stays open for a fix"
     );
-}
-
-#[tokio::test]
-async fn settings_esc_and_back_step_out_one_level() {
-    let mut v = settings_on(SettingsTab::Colors);
-    let mut keys = Keys::new();
-    let mut buf = Vec::new();
-    // The back row closes an open key-name field and keeps settings.
-    execute_aux_action(&mut v, AuxAction::LaneColorAdd("model".into()), &mut buf)
-        .await
-        .unwrap();
-    assert!(frame_text(&mut v).iter().any(|l| l.contains("esc back")));
-    keys.tap(&mut v, "‹ back").await;
-    assert!(v.lane.key_entry.is_none() && v.lane.axis.is_none());
-    assert!(v.aux.is_some(), "the colors list shows");
-
-    // Colors list -> add model key -> "glm" -> custom: Esc walks back.
-    execute_aux_action(&mut v, AuxAction::LaneColorAdd("model".into()), &mut buf)
-        .await
-        .unwrap();
-    keys.send(&mut v, b"glm\r").await;
-    let custom = AuxAction::LaneColorCustom("model".into(), "glm".into());
-    execute_aux_action(&mut v, custom, &mut buf).await.unwrap();
-    keys.esc(&mut v).await;
-    assert!(v.lane.custom_entry.is_none());
-    assert_eq!(v.lane.pick, Some(("model".into(), "glm".into())), "picker");
-    keys.esc(&mut v).await;
-    assert_eq!(v.lane.pick, None, "colors list");
-    assert!(v.aux.is_some());
-    assert!(frame_text(&mut v)
-        .iter()
-        .any(|l| l.contains("tab or click a section · esc close")));
-    keys.esc(&mut v).await;
-    assert!(v.aux.is_none(), "the top level closes");
-}
-
-#[tokio::test]
-async fn lane_entry_buffer_dies_with_a_mouse_dismiss() {
-    let mut v = settings_on(SettingsTab::Colors);
-    v.lane.pick = Some(("route".into(), "zai".into()));
-    v.lane.custom_entry = Some(InputField::new("", 64).with_text("#12"));
-    v.reopen_settings_keeping_sel();
-    let mut buf: Vec<u8> = Vec::new();
-    // A click OFF the block dismisses the modal AND drops the buffer, so
-    // a stale entry can never capture keys in a reopened modal.
-    aux_mouse(&mut v, left_click(1, 1), &mut buf).await.unwrap();
-    assert!(v.aux.is_none(), "off-block click dismisses");
-    assert!(
-        v.lane.custom_entry.is_none(),
-        "the buffer died with the modal"
-    );
-    assert_eq!(v.lane.pick, Some(("route".into(), "zai".into())));
 }

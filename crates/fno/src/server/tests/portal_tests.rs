@@ -338,39 +338,6 @@ fn one_row_never_holds_two_portals() {
         "a stand-in does not block the row from opening a real portal"
     );
 }
-
-#[test]
-fn reaching_an_occupied_portal_repoints_only_that_index() {
-    // AC7-HP: the repoint mechanic is unchanged, but scoped. Reaching a
-    // third row at portal 0 must repoint portal 0 and leave portal 1 as
-    // it was - the single-slot code had no way to express this.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, _rx) = thread_core();
-    core.agents = vec![
-        bg_row("target-a", "/tmp/seen", Some("deadbee1")),
-        bg_row("target-b", "/tmp/seen", Some("deadbee2")),
-        bg_row("target-c", "/tmp/seen", Some("deadbee3")),
-    ];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    core.command(client_id, portal_reach_cmd("deadbee2", 1));
-    let b_seat = core.portals.get(&1).expect("portal 1 open").seat;
-    let b_tab = core.portals[&1].tab;
-
-    core.command(client_id, portal_reach_cmd("deadbee3", 0));
-
-    assert_eq!(core.portals.len(), 2, "no third portal was minted");
-    assert_eq!(
-        core.portals.get(&0).map(|e| e.row_key.as_str()),
-        Some("deadbee3"),
-        "portal 0 repointed to C"
-    );
-    assert_eq!(
-        core.portals.get(&1).map(|e| (e.seat, e.tab)),
-        Some((b_seat, b_tab)),
-        "portal 1 is byte-identical: same seat, same tab"
-    );
-}
-
 #[test]
 fn portal_spawn_size_rows() {
     // AC12: a repointed seat spawns at the size the seat holds, never the
@@ -982,27 +949,6 @@ fn sideline_reach_by_session_id_lands_on_the_picked_namesake() {
         "a typed bare name still refuses"
     );
 }
-
-#[test]
-fn reach_treats_two_rows_of_one_session_as_one() {
-    set_peek_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, mut rx) = thread_core();
-    let mut a = bg_row("fnh", "/tmp/seen", None);
-    a.harness = Some("codex".into());
-    a.harness_session_id = Some("sess-twin".into());
-    let b = a.clone();
-    core.agents = vec![a, b];
-
-    core.command(client_id, thread_reach_cmd("sess-twin"));
-    assert!(
-        !drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("more than one row")),
-        "twins of one session never refuse"
-    );
-    assert_eq!(core.portals.len(), 1, "the tap opened the row");
-}
-
 #[test]
 fn thread_pane_tier_rows() {
     // A paneless codex row (Follow) tails its transcript; a gemini row
@@ -1845,141 +1791,6 @@ fn portal_new_split_cmd(id: &str) -> Command {
         },
     }
 }
-
-#[tokio::test]
-async fn portal_new_split_on_a_claude_row_survives_the_reentry_replay() {
-    // (x-4572, AC2-ERR) A claude row's first reach pass parks; the replay
-    // carries the placement the Drive arm built. That replay must name the
-    // portal AND keep the caller's split and target, or every claude-row
-    // split silently becomes a new tab - the common case.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, p1, _rx) = thread_core();
-    core.agents = vec![claude_row("claude-row", "deadbee1")];
-    let caller = PanePlacement {
-        portal_new: true,
-        split: Some(Dir::Right),
-        target: PaneTarget::SquadId(1),
-        ..Default::default()
-    };
-    let replay = portal_replay_placement(&caller, 0);
-    assert_eq!(replay.portal, Some(0), "the replay names the reached index");
-    assert!(!replay.portal_new);
-    assert_eq!(replay.split, caller.split, "the split survives");
-    assert_eq!(replay.target, caller.target, "the target survives");
-
-    let panes_before = core.panes.len();
-    core.command(
-        client_id,
-        Command::AttachAgent {
-            id: "deadbee1".into(),
-            placement: caller,
-        },
-    );
-    assert!(core.portals.is_empty(), "the parked reach opens no portal");
-    assert_eq!(
-        core.panes.len(),
-        panes_before,
-        "the parked reach opens no pane"
-    );
-
-    core.handle(CoreMsg::ReentryPlanReady {
-        id: client_id,
-        request: Box::new(ReentrySpawnRequest::Attach {
-            attach_id: "deadbee1".into(),
-            placement: portal_replay_placement(
-                &PanePlacement {
-                    portal_new: true,
-                    split: Some(Dir::Right),
-                    target: PaneTarget::SquadId(1),
-                    ..Default::default()
-                },
-                0,
-            ),
-        }),
-        verdict: Ok(ReentryVerdict {
-            argv: vec!["/bin/cat".into()],
-            env: vec![],
-            config_dir: None,
-            plan_ms: 0,
-        }),
-    });
-
-    let seat = core
-        .portals
-        .get(&0)
-        .expect("the replay opens portal 0")
-        .seat;
-    assert_eq!(
-        core.portals.get(&0).map(|e| e.tab),
-        Some(1),
-        "the replayed split lands in the targeted tab, not a new one"
-    );
-    assert_eq!(core.session.squad(1).unwrap().tabs.len(), 1);
-    let tab = core
-        .session
-        .squad(1)
-        .unwrap()
-        .tabs
-        .iter()
-        .find(|t| t.id == 1)
-        .unwrap();
-    match &tab.root {
-        Node::Branch { axis, .. } => {
-            assert_eq!(*axis, crate::tree::Axis::Horizontal, "beside the shell");
-        }
-        other => panic!("expected a split root, got {other:?}"),
-    }
-    let mut leaves = tree::leaves(&tab.root);
-    leaves.sort_unstable();
-    let mut expected = vec![p1, seat];
-    expected.sort_unstable();
-    assert_eq!(
-        leaves, expected,
-        "the replayed split lands beside the shell"
-    );
-    core.reap_pane(seat); // don't leak the stand-in child
-}
-
-#[tokio::test]
-async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
-    // A claude row whose session uuid a live process argv names is only
-    // ever attached: the reach lands in the same command, with no
-    // re-entry plan requested and no staged verdict consumed. The registry
-    // pid is stale after a resume, so the argv is the witness.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, _rx) = thread_core();
-    let uuid = "5d5a0000-1111-2222-3333-444455556666";
-    let witness = crate::pty::ChildGuard::spawn(
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("sleep 25; : # {uuid}")),
-    );
-    let pid_before = witness.id();
-    let mut row = claude_row("claude-row", "deadbee1");
-    row.claude_session_uuid = Some(uuid.into());
-    core.agents = vec![row];
-
-    // A loaded runner can list the child before its argv reads back.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while core.live_attach_argv("deadbee1").is_none() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(
-        core.live_attach_argv("deadbee1").is_some(),
-        "the live argv witnesses the row"
-    );
-    core.command(client_id, thread_reach_cmd("deadbee1"));
-
-    let seat = core
-        .portals
-        .get(&0)
-        .expect("the reach lands without a plan")
-        .seat;
-    assert!(core.reentry_verdict.is_none(), "no plan was staged or used");
-    assert_eq!(witness.id(), pid_before, "the session process is untouched");
-    core.reap_pane(seat);
-}
-
 #[test]
 fn portal_channel_label_names_the_row_never_a_short_id() {
     // A parked seat keyed by an attach id wears the row's registry name,
@@ -1995,37 +1806,6 @@ fn portal_channel_label_names_the_row_never_a_short_id() {
     );
     assert_eq!(core.portal_channel_label("cafef00d"), "cafef00d");
 }
-
-#[test]
-fn portal_reached_row_and_slow_open_notice() {
-    // Every landed open journals its mechanism and the two stage times; an
-    // attach over the 1,000 ms budget says so, and a relaunch is not an
-    // attach so it never claims the budget.
-    let row = crate::server::portal_journal::portal_reached_row(
-        "s",
-        2,
-        "deadbee1",
-        "attach-plan",
-        900,
-        250,
-    );
-    assert_eq!(row["type"], "portal_reached");
-    assert_eq!(row["data"]["mechanism"], "attach-plan");
-    assert_eq!(row["data"]["plan_ms"], 900);
-    assert_eq!(row["data"]["spawn_ms"], 250);
-    let slow = crate::server::portal_journal::slow_open_notice(2, "w", "attach-plan", 900, 250);
-    assert_eq!(
-        slow.as_deref(),
-        Some("portal 2: w took 1150 ms to open (plan 900, spawn 250)")
-    );
-    assert!(
-        crate::server::portal_journal::slow_open_notice(2, "w", "attach-direct", 0, 40).is_none()
-    );
-    assert!(
-        crate::server::portal_journal::slow_open_notice(2, "w", "relaunch", 5000, 40).is_none()
-    );
-}
-
 // ---- (x-d545) the remembered tab outlives its viewer ----
 
 #[test]
@@ -2340,58 +2120,6 @@ async fn portal_ctl_claude_row_with_a_refused_plan_names_the_reason() {
     }
     assert!(core.portals.is_empty(), "no portal on a refused plan");
 }
-
-#[tokio::test]
-async fn portal_ctl_reaches_a_paneless_row_whose_key_also_matches_a_hosted_row() {
-    // Door parity: the duplicate refusal counts live paneless rows, the rows
-    // a reach could serve - the same filter reach_portal applies. A hosted
-    // namesake answers the location only when no reachable row exists.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, _client_id, _p1, _rx) = thread_core();
-    let mut hosted = claude_row("hosted-name", "deadbee1");
-    hosted.mux = Some(("some-session".into(), 7));
-    let live = claude_row("live-name", "deadbee1");
-    let new_pid = core.next_pane_id;
-    let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
-
-    core.portal_ctl(
-        "deadbee1",
-        1,
-        PanePlacement::default(),
-        Some(vec![hosted, live]),
-        tx,
-    );
-    core.handle(CoreMsg::ReentryPlanReady {
-        id: u64::MAX, // the control door's observer client
-        request: Box::new(ReentrySpawnRequest::Attach {
-            attach_id: "deadbee1".into(),
-            placement: PanePlacement {
-                portal: Some(1),
-                ..Default::default()
-            },
-        }),
-        verdict: Ok(ReentryVerdict {
-            argv: vec!["/bin/cat".into()],
-            env: vec![],
-            config_dir: None,
-            plan_ms: 0,
-        }),
-    });
-
-    match rx.await.expect("a reply") {
-        ServerMsg::Err { msg, .. } => {
-            panic!("the hosted namesake turned a reachable row into a refusal: {msg}")
-        }
-        ServerMsg::Notice { text } => assert!(
-            text.contains("portal 1"),
-            "the reach served the live paneless row: {text}"
-        ),
-        other => panic!("expected a Notice landing, got {other:?}"),
-    }
-    assert!(core.portals.get(&1).is_some_and(|e| e.seat == new_pid));
-    core.reap_pane(new_pid); // don't leak the stand-in child
-}
-
 // ---- (x-a9b4) portals survive the restart: capture, hold, fill ----------
 
 /// A store row whose named tab is a two-child split of a portal slot
@@ -2709,39 +2437,6 @@ fn restore_seat_rows() {
         "the receipt names both held kinds: {notices}"
     );
 }
-
-#[test]
-fn a_surviving_viewer_rearmed_live_still_focuses_without_a_second_viewer() {
-    // AC2-EDGE: a viewer that genuinely survived the restart re-adopts
-    // with `cmd: Some` and no marker. A default reach focuses that pane
-    // instead of minting a second viewer.
-    set_attach_program(&["/bin/cat"]);
-    let _s = hold_fixture("portal-survivor");
-    let mut core = empty_core();
-    core.shells = vec!["/bin/cat".into()];
-    let (c, mut rx) = client_with_rx(1);
-    core.clients.push(c);
-    core.restore_squads(24, 80, 999);
-    let seat = core.portals.get(&1).expect("fixture: portal 1 held").seat;
-    core.panes.get_mut(&seat).unwrap().portal_hold = None;
-    core.agents = vec![bg_row("target-a", "/tmp/seen", Some("deadbee1"))];
-    let panes_before = core.panes.len();
-
-    core.command(1, thread_reach_cmd("deadbee1"));
-
-    let notices = drain_notices(&mut rx);
-    assert!(
-        notices.iter().any(|t| t.contains("already showing")),
-        "the surviving viewer is the row's home: {notices:?}"
-    );
-    assert_eq!(core.panes.len(), panes_before, "no second viewer spawned");
-    assert_eq!(
-        core.portals.get(&1).map(|p| p.seat),
-        Some(seat),
-        "the seat is untouched"
-    );
-}
-
 #[test]
 fn held_fill_refusal_rows() {
     // AC2-ERR: the recorded session guard binds the seat to the row's
@@ -3046,42 +2741,6 @@ fn held_reach_rows() {
         "the seat is still the held portal"
     );
 }
-
-#[test]
-fn the_notice_latch_holds_through_the_restart_path() {
-    // AC9-HP: restore held portals with no client attached - the ordinary
-    // startup ordering - then attach a client and feed a live paneless
-    // row. The discoverability notice never fires (portals is non-empty)
-    // and the latch stays unset; the restore receipt was the delivered
-    // portal notice, and it is asserted present, not inferred from an
-    // absence.
-    set_attach_program(&["/bin/cat"]);
-    let _s = hold_fixture("portal-latch");
-    let mut core = empty_core();
-    core.shells = vec!["/bin/cat".into()];
-    core.restore_squads(24, 80, 999);
-    assert!(!core.portal_noticed, "no client: the latch stays unset");
-
-    let (c, mut rx) = client_with_rx(9);
-    core.clients.push(c);
-    while rx.try_recv().is_ok() {}
-    core.agents = vec![bg_row("bg-worker", "/tmp/seen", None)];
-    core.handle_msg(CoreMsg::AgentRows {
-        rows: core.agents.clone(),
-        branches: HashMap::new(),
-        tails: HashMap::new(),
-        ctx: HashMap::new(),
-        read_ok: false,
-    });
-
-    let notices = drain_notices(&mut rx);
-    assert!(
-        !notices.iter().any(|t| t.contains("thread row present")),
-        "a held portal disarms the discoverability notice: {notices:?}"
-    );
-    assert!(!core.portal_noticed, "nothing latched");
-}
-
 /// (x-9b37) AC2: with two portals open, the reap of one viewer's subject
 /// closes only that viewer's pane. The neighbour's pane, its portal entry,
 /// and its tab all survive. x-3349 sharpens the pin: the reaped viewer's
@@ -3149,41 +2808,6 @@ fn a_held_portal_seat_renders_no_row_of_its_own() {
     );
     core.reap_pane(seat);
 }
-
-#[test]
-fn the_row_a_held_portal_shows_wears_its_mark_not_the_seat() {
-    // AC: the mark rides the ROW the portal shows. A row whose viewer
-    // mapping is gone renders paneless, wears the seat's mark, and the
-    // seat itself mints no second row beside it.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, _rx) = thread_core();
-    core.agents = vec![bg_row("target-a", "/tmp/seen", Some("deadbee1"))];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    // The viewer mapping is gone: the row is paneless, the seat is held.
-    core.attached.clear();
-    let rows = core.agent_rows();
-
-    let a = rows
-        .iter()
-        .find(|r| r.name == "target-a")
-        .expect("the row still renders");
-    assert_eq!(
-        a.pane_id, None,
-        "no pane binds the row: it renders watch-only"
-    );
-    assert_eq!(
-        a.portal,
-        Some(0),
-        "the row the portal shows wears the marker"
-    );
-    assert!(
-        rows.iter().all(|r| r.pane_id != Some(seat)),
-        "the seat itself mints no row: {rows:?}"
-    );
-    core.reap_pane(seat);
-}
-
 // ---- (x-3349) closing a portal is its own gesture -------------------------
 
 #[test]

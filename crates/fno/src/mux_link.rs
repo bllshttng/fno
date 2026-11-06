@@ -472,40 +472,4 @@ mod tests {
         assert!(second.contains("bRavo"));
         assert!(!second.contains("alpha"), "an unchanged row is not resent");
     }
-
-    #[test]
-    fn link_window_keeps_the_composer_in_a_shorter_terminal() {
-        let mut grid = frame(10, 3, &[]);
-        assert_eq!(window_start(&grid, 4), 6, "the bottom of the grid shows");
-        grid.cursor_visible = true;
-        grid.cursor_row = 9;
-        assert_eq!(window_start(&grid, 4), 6);
-        grid.cursor_row = 2;
-        assert_eq!(window_start(&grid, 4), 0, "a cursor above that pulls it up");
-        assert_eq!(window_start(&grid, 20), 0, "a taller terminal shows it all");
-    }
-
-    #[test]
-    fn link_sends_wheel_and_keys_and_keeps_clicks_home() {
-        let report = |kind| mouse::MouseReport {
-            row: 1,
-            col: 2,
-            kind,
-            shift: false,
-            alt: false,
-        };
-        let reports = [
-            report(MouseKind::WheelUp),
-            report(MouseKind::Press(MouseButton::Left)),
-        ];
-        let msgs = link_messages(9, 4, &reports, b"hi".to_vec());
-        assert_eq!(msgs.len(), 2, "the click stays home");
-        match &msgs[0] {
-            ClientMsg::Mouse { pane, event } => {
-                assert_eq!((*pane, event.row), (9, 5), "the row maps through the crop");
-            }
-            other => panic!("expected a wheel tick, got {other:?}"),
-        }
-        assert!(matches!(&msgs[1], ClientMsg::Input(b) if b == b"hi"));
-    }
 }

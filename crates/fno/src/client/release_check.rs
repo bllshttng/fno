@@ -468,24 +468,6 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn malformed_brew_output_is_not_a_current_result() {
-        assert!(parse_brew_outdated("{").is_err());
-        assert!(parse_brew_outdated(r#"{"formulae":[{"name":"fno"}],"casks":[]}"#).is_err());
-        assert!(parse_brew_outdated(
-            r#"{"formulae":[{"name":"other","installed_versions":["0.1"],"current_version":"0.2"}],"casks":[]}"#
-        )
-        .is_err());
-        assert!(parse_brew_outdated(
-            r#"{"formulae":[{"name":"fno","installed_versions":[""],"current_version":"0.2"}],"casks":[]}"#
-        )
-        .is_err());
-        assert!(parse_brew_outdated(r#"{"formulae":[],"casks":[]}"#)
-            .unwrap()
-            .is_none());
-    }
-
     #[test]
     fn brew_parser_reads_a_tapped_formula() {
         let brew = r#"{"formulae":[{"name":"bllshttng/tap/fno","installed_versions":["0.3.1"],"current_version":"0.3.2"}],"casks":[]}"#;

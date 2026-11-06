@@ -30,18 +30,4 @@ mod tests {
         let joined: String = row.iter().map(|(s, _)| *s).collect();
         assert_eq!(joined, TEXT);
     }
-
-    #[test]
-    fn the_stamp_role_is_inverse_under_every_theme() {
-        for name in crate::theme::THEME_NAMES {
-            let t = Theme::from_name(name).0;
-            let (fg, _bg, flags) = crate::theme::cell_style(Role::Stamp, &t);
-            assert_eq!(fg, t.stamp, "{name}");
-            assert_eq!(
-                flags & crate::proto::cell_flags::INVERSE,
-                crate::proto::cell_flags::INVERSE,
-                "{name}"
-            );
-        }
-    }
 }

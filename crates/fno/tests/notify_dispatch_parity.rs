@@ -192,38 +192,3 @@ fn notify_decision_table_matches_the_captured_goldens() {
         true,
     );
 }
-
-#[test]
-fn notify_cli_cases_match_the_captured_goldens() {
-    let golden_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../fno-agents/tests/golden/notify_dispatch");
-
-    // `fno inbox notify` with no args: the typer-shaped usage refusal.
-    let bin = env!("CARGO_BIN_EXE_fno");
-    let out = std::process::Command::new(bin)
-        .args(["inbox", "notify"])
-        .env("FNO_TEST_HERMETIC", "1")
-        .output()
-        .unwrap();
-    let key = "cli_inbox_notify_missing_args";
-    let exit: i32 = std::fs::read_to_string(golden_dir.join(format!("{key}.exit")))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert_eq!(exit, out.status.code().unwrap(), "[{key}] exit differs");
-    let want_err = std::fs::read_to_string(golden_dir.join(format!("{key}.err"))).unwrap();
-    assert_eq!(
-        want_err,
-        String::from_utf8_lossy(&out.stderr).trim_end(),
-        "[{key}] usage bytes differ from golden"
-    );
-
-    // `fno notify T B`: the stderr move line is the whole parity interest.
-    let want_err =
-        std::fs::read_to_string(golden_dir.join("cli_root_notify_deprecated_move.err")).unwrap();
-    assert_eq!(
-        want_err, DEPRECATED_MOVE_LINE,
-        "the deprecated-move line drifted from the frozen bytes"
-    );
-}

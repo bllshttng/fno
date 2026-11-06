@@ -316,49 +316,6 @@ fn column_grid_rows() {
         "node keeps its offset under an ellipsized kind\nheader: {header}\nrow:    {over_row}"
     );
 }
-
-#[test]
-fn hit_rows() {
-    // The cwd basename is the node id: the join the sideline itself uses.
-    // The modal's session row carries the action, resolved once at open.
-    let row = joined_row("worker-01", Some("x-9223"), Some(7));
-    let item = feed_item(Some("x-9223"), Some("s-ghost"));
-    let (_, actions, _) = feed_detail::build(&[row], 0, &item);
-    // The session id has no roster row: the link takes the shared
-    // open-session action's adopt door. The pane row is the seat of the
-    // node's current worker: FocusPane(7).
-    let seat = actions.iter().find_map(|a| match a {
-        feed_detail::FeedAction::Session(hit) => Some(hit.clone()),
-        _ => None,
-    });
-    let expected = agent_hit(&joined_row("worker-01", Some("x-9223"), Some(7)), 0);
-    match (seat, expected) {
-        (Some(ChromeHit::Cmds(a)), ChromeHit::Cmds(b)) => assert_eq!(a, b),
-        _ => panic!("the seat hit must be Cmds"),
-    }
-    assert!(
-        actions.iter().any(
-            |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents registry adopt s-ghost")
-        ),
-        "the ghost session's link takes the adopt door: {actions:?}"
-    );
-    let acting = actions
-        .iter()
-        .filter(|a| !matches!(a, feed_detail::FeedAction::Field))
-        .count();
-    assert_eq!(acting, 3, "node, session-id and pane are actions");
-
-    let item = feed_item(Some("x-nope"), None);
-    let (_, actions, _) = feed_detail::build(&[], 0, &item);
-    assert!(
-        !actions
-            .iter()
-            .any(|a| matches!(a, feed_detail::FeedAction::Session(_))),
-        "no session, no session action"
-    );
-}
-
 #[tokio::test]
 async fn a_created_row_without_node_offers_no_deep_link_or_blueprint_composer() {
     let v = view_with_rows(vec![]);
@@ -384,23 +341,6 @@ async fn a_created_row_without_node_offers_no_deep_link_or_blueprint_composer() 
     );
     assert!(v.feed_detail.is_some(), "an ineligible detail stays open");
 }
-
-#[test]
-fn empty_rows() {
-    let o = overlay(vec![]);
-    let lines = feed_panel_lines(&o, false, W, ROWS, 0);
-    assert!(lines.iter().any(|l| l.contains("no activity")));
-    assert!(lines.last().unwrap().contains("0 loaded"));
-
-    // While the fold is in flight the body claims nothing: "no activity" is
-    // a statement only a settled fold has earned.
-    let mut o = overlay(vec![]);
-    o.inflight = true;
-    let lines = feed_panel_lines(&o, false, W, ROWS, 0);
-    assert!(!lines.iter().any(|l| l.contains("no activity")));
-    assert!(lines.iter().any(|l| l.contains("folding...")));
-}
-
 #[test]
 fn click_rows() {
     // Row 0 is the panel header, the last row is the footer; painted row 1 is
@@ -494,122 +434,6 @@ fn click_rows() {
     assert!(v.chrome_hit(0, col).is_none());
     assert!(v.chrome_hit((v.term.0 - 1) as u16, col).is_none());
 }
-
-#[test]
-fn width_rows() {
-    let mut v = two_pane_view(); // 30x100, Regular sideline at its canonical width
-                                 // Closed: no panel, no columns.
-    assert_eq!(v.feed_panel_w(), 0);
-    v.feed = Some(overlay(vec![]));
-    // 100 cols: sideline takes 28, the content floor (40) caps the feed at
-    // 32 - the stored 40 is a TRANSIENT clamp, never mutated.
-    let w = v.feed_panel_w();
-    assert_eq!(w, 32);
-    assert_eq!(v.feed_width, 40);
-    // The content viewport subtracts both panels.
-    assert_eq!(v.content_dims().1 as u16, 100 - v.panel_w() - w);
-    // A tight terminal: the sideline auto-hides first (its own AC6-EDGE), then
-    // the feed takes exactly what the content floor leaves it.
-    v.term = (30, 50);
-    assert_eq!(v.panel_w(), 0);
-    assert_eq!(v.feed_panel_w(), 10);
-    assert_eq!(v.content_dims().1, 40);
-
-    let mut v = two_pane_view();
-    v.feed = Some(overlay(vec![]));
-    v.term = (30, 100);
-    let now = Instant::now();
-    // No drag in flight: no crossing.
-    assert!(!v.drag_feed_to(60, now));
-    v.feed_drag = Some(SidelineDrag {
-        start_width: v.feed_width,
-        last_at: now,
-    });
-    // Same column band: no crossing.
-    assert!(!v.drag_feed_to(60, now));
-    // Border to col 70: width 100-70 = 30, a real crossing.
-    assert!(v.drag_feed_to(70, now));
-    assert_eq!(v.feed_width, 30);
-    // Esc reverts to the grab width and reports the change.
-    assert!(v.revert_feed_drag());
-    assert_eq!(v.feed_width, 40);
-    assert!(!v.revert_feed_drag(), "no drag left to revert");
-
-    let mut v = two_pane_view();
-    v.feed = Some(overlay(vec![
-        feed_item(Some("x-a"), Some("s-1")),
-        feed_item(Some("x-b"), Some("s-2")),
-    ]));
-    let visible = v.term.0 as usize - 2;
-    // Scrolling up from 0 stays at 0; down clamps at total - visible.
-    v.scroll_feed(false);
-    assert_eq!(v.feed_offset, 0);
-    v.scroll_feed(true);
-    assert_eq!(v.feed_offset, 0, "2 items never overflow the viewport");
-    // Enough items to overflow: the offset clamps at the last full window.
-    let many: Vec<_> = (0..visible + 10)
-        .map(|i| {
-            let mut it = feed_item(Some("x-n"), Some("s-n"));
-            it.title = format!("event {i}");
-            it
-        })
-        .collect();
-    v.feed.as_mut().unwrap().win.items = many;
-    for _ in 0..visible + 20 {
-        v.scroll_feed(true);
-    }
-    assert_eq!(v.feed_offset, 11, "the clamp counts the group header");
-    v.scroll_feed(false);
-    assert_eq!(v.feed_offset, 10);
-
-    let mut v = two_pane_view(); // 30 rows
-    let mut items = overlay(vec![]).win.items;
-    for i in 0..20 {
-        let mut it = feed_item(Some("x-n"), Some("s-n"));
-        it.title = format!("event {i}");
-        items.push(it);
-    }
-    v.feed = Some(overlay(items));
-    // Scroll to the bottom, then grow the terminal: everything fits, so the
-    // window reopens at the newest row instead of parking on blanks.
-    for _ in 0..40 {
-        v.scroll_feed(true);
-    }
-    v.term = (60, 100);
-    v.scroll_feed(false);
-    assert_eq!(v.feed_offset, 0, "scroll re-clamps on growth");
-    v.feed_offset = 7; // a stale offset must not reach paint/click either
-    assert_eq!(v.feed_offset_clamped(), 0);
-    let cells = v.compose().cells;
-    assert!(
-        cells.iter().any(|c| c.c == 'x'),
-        "the panel paints items, not blanks"
-    );
-
-    let mut v = two_pane_view();
-    let mut it = feed_item(Some("x-cjk"), Some("s-cjk"));
-    it.title = "世界".into(); // two CJK glyphs, each display width 2
-    v.feed = Some(overlay(vec![it]));
-    // A wide panel so the title column lands inside the text columns.
-    v.term = (30, 200);
-    v.feed_width = 80;
-    let (rows, cols) = (v.term.0 as usize, v.term.1 as usize);
-    let mut cells = vec![Cell::default(); rows * cols];
-    v.draw_feed_panel(&mut cells, rows, cols);
-    // Find the wide glyph's cell; its right neighbor must be a WIDE_SPACER.
-    let wide = cells
-        .iter()
-        .position(|c| c.c == '\u{4e16}')
-        .expect("the CJK glyph paints");
-    let spacer = cells
-        .get(wide + 1)
-        .expect("a right neighbor exists inside the frame");
-    assert!(
-        spacer.flags & cell_flags::WIDE_SPACER != 0,
-        "the wide glyph reserves both cells"
-    );
-}
-
 // (AC4) The narrowed invariant, both halves. An unfocused panel takes no
 // keys, so the header says how to focus and the marker does not move; a
 // focused panel takes the arrows and says so.

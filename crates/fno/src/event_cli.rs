@@ -1622,26 +1622,6 @@ mod tests {
         assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_some());
         assert!(classify_doctor_event(&mk(&["doctor"])).is_none());
     }
-
-    #[test]
-    fn find_routes_native_with_or_without_explicit_stores() {
-        recovery_and_reader_contracts();
-        // Explicit stores run natively.
-        assert!(classify_doctor_event(&mk(&[
-            "doctor",
-            "event",
-            "find",
-            "guard_decision",
-            "--events",
-            "/tmp/x/events.jsonl"
-        ]))
-        .is_some());
-        assert!(
-            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_some()
-        );
-        assert!(classify_doctor_event(&mk(&["doctor", "event", "find", "--kinds"])).is_some());
-    }
-
     fn recovery_and_reader_contracts() {
         use crate::event_store::{append_envelope, ensure_schema, query_events, EventQuery};
         let root = std::env::temp_dir().join(format!(

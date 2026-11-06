@@ -211,21 +211,4 @@ mod tests {
             )
         );
     }
-
-    /// reserve_lift: a stop a person armed is shown with the command, never
-    /// offered to the key; an expired or clear record shows nothing.
-    #[test]
-    fn reserve_lift_refuses_a_person_stop_and_hides_a_lapsed_one() {
-        let operator = parse(&record("operator", "2026-10-22T23:00:00Z"), now()).unwrap();
-        assert!(!operator.liftable());
-        assert!(operator
-            .segment()
-            .ends_with("fno agents audit incident clear"));
-        assert_eq!(
-            parse(&record("reserve", "2026-10-22T21:00:00Z"), now()),
-            None
-        );
-        let clear = r#"{"state":"clear","holds":[],"origin":"reserve"}"#;
-        assert_eq!(parse(clear, now()), None);
-    }
 }

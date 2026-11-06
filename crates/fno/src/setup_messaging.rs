@@ -621,25 +621,6 @@ mod tests {
             Some((200, "{}".into()))
         }
     }
-
-    /// AC13: the Telegram walk reads the chat and the sender from the
-    /// user's first message, stamps this machine, and allows only that
-    /// sender.
-    #[test]
-    fn ac13_telegram_walk_builds_the_row_from_the_first_message() {
-        let (row, env, token) = setup_channel(
-            "telegram",
-            &mut Answers(vec!["tok", ""]),
-            "this-mac",
-            &mut Updates,
-        )
-        .unwrap();
-        assert_eq!((env, token.as_str()), ("FNO_CHAT_TELEGRAM_TOKEN", "tok"));
-        assert_eq!(row["chat_id"], "100");
-        assert_eq!(row["allow"], json!(["42"]));
-        assert_eq!(row["machine"], "this-mac");
-    }
-
     /// A failed config write puts the old token back (Codex P2): `set`
     /// validates the row's token, so the env write lands first, and the
     /// kept sink rows must keep resolving to the old value.

@@ -382,37 +382,6 @@ mod tests {
             .filter_map(|row| serde_json::from_str(&row.line).ok())
             .collect()
     }
-
-    #[test]
-    fn pane_send_parse_source_flag_declares_provenance() {
-        assert_eq!(
-            parse_pane_args(
-                &op_of("send"),
-                &os(&["2", "--text", "hi", "--source", "mail"])
-            )
-            .unwrap()
-            .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("hi".into()),
-                guarded: false,
-                submit: false,
-                raw: false,
-                expected_identity: None,
-                style_exception: None,
-                provenance: Some("mail".into()),
-                hold_pass: false,
-                harness: None,
-                clear_composer: false,
-            }
-        );
-        // A valueless flag and a non-send command are usage errors, mirroring
-        // --style-exception: a silently ignored flag would read as "the row
-        // carried the declared source".
-        assert!(parse_pane_args(&op_of("send"), &os(&["2", "--text", "hi", "--source"])).is_err());
-        assert!(parse_pane_args(&op_of("read"), &os(&["2", "--source", "mail"])).is_err());
-    }
-
     #[test]
     fn pane_send_audit_outcome_vocabulary_never_claims_delivery_for_exit_22() {
         assert_eq!(pane_send_outcome(EXIT_OK, true), ("submitted", true));

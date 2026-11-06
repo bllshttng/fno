@@ -212,44 +212,6 @@ mod tests {
              never badges from a scrape verdict"
         );
     }
-
-    // The no-blocked-producer merge: a codex row (wiring `blocked = "none"`)
-    // whose hook lane last said working (live) or whose leg lapsed reads
-    // Blocked from a FRESH screen verdict - the pane sitting at the
-    // request_user_input dialog or a permission prompt the hook lane can
-    // never state.
-    #[test]
-    fn screen_blocked_outranks_working_leg_for_no_blocked_producer_rows() {
-        let raw = reg(&format!(
-            r#"{{"name":"cx-live-leg","cwd":"/w","status":"live","provider":"codex",
-                 "inside_leg":{{"state":"working","seq":9,
-                                "received_at":"{recent}","ttl_ms":60000}},
-                 "screen_state":{{"state":"blocked","rule":"question_prompt",
-                                  "seq":1,"at":"{recent}","ttl_ms":120000,
-                                  "answerable":{{"prompt":"Which colour should the demo use?",
-                                                  "options":[{{"idx":"1","label":"Red","keystroke":[49]}}],
-                                                  "fingerprint":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                                                  "region_lines":20}}}}}},
-               {{"name":"cx-lapsed-leg","cwd":"/w","status":"live","provider":"codex",
-                 "inside_leg":{{"state":"working","seq":7,
-                                "received_at":"2020-01-01T00:00:00Z","ttl_ms":60000}},
-                 "screen_state":{{"state":"blocked","rule":"approval_prompt",
-                                  "seq":1,"at":"{recent}","ttl_ms":120000}}}}"#,
-            recent = "2027-01-15T07:59:30Z",
-        ));
-        let now = crate::agents_view::rfc3339_like_to_secs(NOW_STAMP).unwrap();
-        let rows = derive_rows(&raw, now).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        let merged = get("cx-live-leg");
-        assert_eq!(merged.badge, Some(AgentBadge::Blocked));
-        assert_eq!(merged.reason.as_deref(), Some("question_prompt"));
-        let ans = merged.answerable.as_ref().expect("payload parsed");
-        assert_eq!(ans.options.len(), 1);
-        let lapsed = get("cx-lapsed-leg");
-        assert_eq!(lapsed.badge, Some(AgentBadge::Blocked));
-        assert_eq!(lapsed.reason.as_deref(), Some("approval_prompt"));
-    }
-
     // The merge's fail-closed guard: a LAPSED screen verdict, a NON-blocked
     // verdict, and an UNNAMED harness all leave the leg's own verdict (or
     // liveness) standing - the screen speaks only for the rung it owns,

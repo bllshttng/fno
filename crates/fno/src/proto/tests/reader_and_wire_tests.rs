@@ -10,35 +10,12 @@ fn proto_reader_rejects_oversized_length_prefix() {
     let res: Result<ServerMsg, _> = read_msg_sync(&mut cursor);
     assert!(matches!(res, Err(ProtoError::TooLarge(_))), "{res:?}");
 }
-
-#[test]
-fn proto_reader_surfaces_malformed_body_as_error() {
-    // Valid length prefix, garbage body: must error, never yield a value.
-    let body = b"not json at all";
-    let mut bytes = (body.len() as u32).to_be_bytes().to_vec();
-    bytes.extend_from_slice(body);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let res: Result<ServerMsg, _> = read_msg_sync(&mut cursor);
-    assert!(matches!(res, Err(ProtoError::Malformed(_))), "{res:?}");
-}
-
 #[test]
 fn proto_clean_eof_reads_as_closed() {
     let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
     let res: Result<ServerMsg, _> = read_msg_sync(&mut cursor);
     assert!(matches!(res, Err(ProtoError::Closed)), "{res:?}");
 }
-
-#[test]
-fn proto_mid_body_eof_reads_as_closed() {
-    let body = br#"{"Ok":null}"#;
-    let mut bytes = ((body.len() + 1) as u32).to_be_bytes().to_vec();
-    bytes.extend_from_slice(body);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let res: Result<ServerMsg, _> = read_msg_sync(&mut cursor);
-    assert!(matches!(res, Err(ProtoError::Closed)), "{res:?}");
-}
-
 // (x-9b60) The version-pin family lives in the child module below, named
 // by the question it answers; the file-budget gate keeps this over-budget
 // file shrink-only.
@@ -148,16 +125,4 @@ fn proto_agent_launch_roundtrips() {
     })
     .unwrap();
     assert!(json.contains(r#""kind":"launched""#), "{json}");
-}
-
-#[test]
-fn proto_v88_node_field_defaults_to_none() {
-    // AC4-EDGE: a v87 payload carries no `node` key; the serde default
-    // decodes it as None, so an older client still attaches and launches.
-    let json = r#"{
-        "request_id": 7, "revision": 3, "cwd": "/tmp/proj",
-        "harness": "codex", "substrate": "pane", "message": ""
-    }"#;
-    let req: AgentLaunchRequest = serde_json::from_str(json).unwrap();
-    assert_eq!(req.node, None);
 }

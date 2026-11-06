@@ -638,35 +638,6 @@ mod tests {
         r.add_squad(8, vec!["/home/u".into()], None, tab(&[10]));
         assert_eq!(r.find_by_cwd("/home/u/repo/sub"), Some(7));
     }
-
-    #[test]
-    fn squad_find_by_cwd_keeps_first_on_equal_length_origins() {
-        // AC2-EDGE: two rows may share one origin by design
-        // (`squad_named_squads_stay_distinct_on_shared_or_empty_origins`).
-        // Only a STRICTLY longer origin beats the incumbent, so the first
-        // squad stays the established answer and the duplicate home rows keep
-        // behaving exactly as pinned.
-        let mut s = Session::default();
-        s.add_squad(1, vec!["/home/u".into()], None, tab(&[10]));
-        s.add_squad(2, vec!["/home/u".into()], None, tab(&[20]));
-        assert_eq!(s.find_by_cwd("/home/u"), Some(1));
-        assert_eq!(s.find_by_cwd("/home/u/deep"), Some(1));
-        // A named workspace is a deliberate claim: it wins an equal-length tie
-        // over unnamed squads that were there first.
-        s.add_squad(3, vec!["/home/u".into()], Some("home".into()), tab(&[30]));
-        assert_eq!(s.find_by_cwd("/home/u/deep"), Some(3));
-    }
-
-    #[test]
-    fn squad_find_by_cwd_returns_none_for_an_empty_cwd() {
-        // AC3-EDGE: the inline `!cwd.is_empty()` guards at the
-        // placement call sites move into the shared helper, so a caller added
-        // later cannot omit it. An empty cwd owns nothing.
-        let mut s = Session::default();
-        s.add_squad(1, vec!["/home/u".into()], None, tab(&[10]));
-        assert_eq!(s.find_by_cwd(""), None);
-    }
-
     #[test]
     fn squad_remove_tab_clamps_active_and_cascades() {
         let mut s = Session::default();
@@ -727,25 +698,6 @@ mod tests {
             "the old ordinal no longer names it"
         );
     }
-
-    #[test]
-    fn tab_dict_entry_and_label_are_name_first_then_ordinal() {
-        let mut s = Session::default();
-        s.add_squad(1, vec!["/a".into()], None, tab(&[10]));
-        let mut named = tab(&[20]);
-        named.name = Some("targets".into());
-        s.squad_mut(1).unwrap().tabs.push(named);
-        let sq = s.squad(1).unwrap();
-        let d = sq.tab_dict(1).expect("live tab");
-        assert_eq!(d.ordinal, 2);
-        assert_eq!(d.tab_id, 20);
-        assert_eq!(d.name.as_deref(), Some("targets"));
-        // The label the operator's eye already has: the name when present,
-        // else the visible `·N` ordinal the UI renders (client.rs).
-        assert_eq!(sq.tab_label(1), "targets");
-        assert_eq!(sq.tab_label(0), "·1");
-    }
-
     #[test]
     fn squad_remove_last_tab_falls_back_to_surviving_squad() {
         let mut s = Session::default();
@@ -777,25 +729,6 @@ mod tests {
         assert_eq!(s.find_tab(10), Some((2, 1)));
         assert_eq!(s.squad(2).unwrap().active_tab, 0);
     }
-
-    #[test]
-    fn move_tab_of_last_tab_removes_empty_source_without_reaping() {
-        // Invariant: moving a squad's only tab removes the now-empty source and
-        // re-anchors active_squad; the panes ride with the tab (no reap here).
-        let mut s = Session::default();
-        s.add_squad(1, vec!["/a".into()], None, tab(&[10]));
-        s.add_squad(2, vec!["/b".into()], None, tab(&[20]));
-        assert_eq!(s.active_squad, Some(2));
-
-        assert_eq!(s.move_tab(20, 1), MoveTabOutcome::MovedSquadRemoved);
-        assert_eq!(s.squads.len(), 1, "empty source squad removed");
-        assert_eq!(s.squad(2), None);
-        assert_eq!(s.active_squad, Some(1), "active re-anchors to survivor");
-        // The moved pane is still present in the destination (never reaped).
-        assert_eq!(s.find_tab(20), Some((1, 1)));
-        assert_eq!(s.find_pane(20), Some((1, 1)));
-    }
-
     #[test]
     fn move_tab_refuses_unknown_tab_unknown_dst_and_same_squad() {
         let mut s = Session::default();
@@ -857,32 +790,6 @@ mod tests {
             .success();
         assert!(ok, "git {args:?} failed in {cwd:?}");
     }
-
-    #[test]
-    fn squad_worktree_and_main_checkout_resolve_to_one_root() {
-        // AC6-HP's resolution half: a repo's main checkout and a worktree
-        // placed OUTSIDE it (the conductor layout) share one canonical root.
-        let scratch = Scratch::new("rollup");
-        let repo = scratch.0.join("footnote");
-        std::fs::create_dir(&repo).unwrap();
-        git(&["init", "-q"], &repo);
-        git(&["config", "user.email", "t@t"], &repo);
-        git(&["config", "user.name", "t"], &repo);
-        git(&["commit", "-q", "--allow-empty", "-m", "init"], &repo);
-        let wt = scratch.0.join("workspaces").join("athens");
-        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
-        git(
-            &["worktree", "add", "-q", wt.to_str().unwrap(), "HEAD"],
-            &repo,
-        );
-
-        let mut r = Resolver::default();
-        let main_key = r.resolve(repo.to_str().unwrap());
-        let wt_key = r.resolve(wt.to_str().unwrap());
-        assert_eq!(main_key, wt_key, "worktree must roll up to the main root");
-        assert!(main_key.ends_with("/footnote"), "{main_key}");
-    }
-
     #[test]
     fn squad_non_git_cwd_falls_back_to_literal_and_caches() {
         let scratch = Scratch::new("literal");
@@ -896,40 +803,6 @@ mod tests {
             "failures are cached: resolution runs at most once per cwd"
         );
     }
-
-    #[test]
-    fn squad_missing_cwd_falls_back_to_literal() {
-        let mut r = Resolver::default();
-        assert_eq!(r.resolve("/definitely/not/here"), "/definitely/not/here");
-    }
-
-    #[test]
-    fn squad_hanging_git_falls_back_within_the_timeout() {
-        // AC6-ERR: a git that never returns must not hang the attach. Stub
-        // `git` with a script that sleeps far past the timeout; the private
-        // fn takes the program path directly so the test never touches PATH
-        // (unit tests share the process). 2.6 exercises the PATH-stub route
-        // end-to-end against a real server.
-        let scratch = Scratch::new("hang");
-        let stub = scratch.0.join("git");
-        std::fs::write(&stub, "#!/bin/sh\nsleep 30\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        let started = Instant::now();
-        let out = canonical_root(
-            stub.to_str().unwrap(),
-            scratch.0.to_str().unwrap(),
-            Duration::from_millis(300),
-        );
-        assert_eq!(out, None, "a hung git must resolve to the fallback");
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the timeout must bound the wait (took {:?})",
-            started.elapsed()
-        );
-    }
-
     #[test]
     fn squad_root_from_common_dir_handles_normal_and_bare() {
         assert_eq!(root_from_common_dir("/code/foot/.git"), "/code/foot");

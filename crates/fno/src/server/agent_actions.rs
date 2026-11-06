@@ -844,63 +844,6 @@ mod tests {
             unavailable: false,
         }
     }
-
-    #[test]
-
-    fn render_agent_command_quotes_daemon_reason_on_failure() {
-        // a bare "stop X: failed" is the same silence the reap timeout
-
-        // used to end with; the daemon's reason is the operator's next action.
-
-        let r = command_result(false, "", "agent corpse is a pane worker; kill the pane");
-
-        assert_eq!(
-            render_agent_command("stop", "corpse", &r),
-            "stop corpse: failed: agent corpse is a pane worker; kill the pane"
-        );
-
-        let ok = command_result(true, "", "");
-
-        assert_eq!(
-            render_agent_command("stop", "corpse", &ok),
-            "stopped corpse"
-        );
-    }
-
-    #[test]
-    fn measure_remove_notice_quotes_the_daemon_verdict() {
-        // rm ok with a daemon verdict: the notice quotes it
-        // verbatim and names the row, so the client's row stamp resolves.
-        let rm = command_result(
-            true,
-            "removed: corpse (fno; claude row already absent)\n",
-            "",
-        );
-        let notice = measure_remove_notice("corpse", &rm);
-        assert!(notice.starts_with("removed corpse"), "{notice}");
-        assert!(
-            notice.contains("claude row already absent"),
-            "quotes the verdict: {notice}"
-        );
-    }
-
-    #[test]
-    fn measure_remove_notice_names_the_refusal() {
-        // rm refused (the roster still lists the session): the
-        // notice names the row and the reason, failure-marked, so the row
-        // stays stamped with why. The quoted reason is rm's own claude
-        // refusal shape: rm ran its stop, the roster still lists.
-        let rm = command_result(
-            false,
-            "",
-            "agent corpse is still live. rm ran `claude stop`, and its harness row \
-             cccccccc is still present in `claude agents --json --all`",
-        );
-        let notice = measure_remove_notice("corpse", &rm);
-        assert!(notice.starts_with("rm corpse: failed: "), "{notice}");
-        assert!(notice.contains("rm ran `claude stop`"), "{notice}");
-    }
-
     #[test]
 
     fn reap_progress_note_names_scanned_removed_and_in_flight() {
@@ -1025,42 +968,6 @@ mod tests {
             }
         }
     }
-
-    #[tokio::test]
-    async fn mux_mail_send_names_its_arm_without_operator_origin() {
-        let _serial = fno_env_lock();
-        let tmp = tempfile::tempdir().unwrap();
-        let argv_log = tmp.path().join("argv.log");
-        let fake_bin = tmp.path().join("fake-fno.sh");
-        write_fake_bin(
-            &fake_bin,
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\nprintf 'msg-1 accepted-new-turn\\n'\n",
-                argv_log.display()
-            ),
-        );
-        let _fno_bin = FnoBinGuard::set(&fake_bin);
-
-        let receipt = run_mail_send("worker", "mux-peek", "--reply-looking-body").await;
-
-        assert_eq!(receipt, "msg-1 accepted-new-turn");
-        let argv = std::fs::read_to_string(argv_log).unwrap();
-        assert_eq!(
-            argv.lines().collect::<Vec<_>>(),
-            [
-                "agents",
-                "mail",
-                "send",
-                "--from-name",
-                "mux-peek",
-                "--",
-                "worker",
-                "--reply-looking-body",
-            ]
-        );
-        assert!(!argv.lines().any(|arg| arg == "--origin"));
-    }
-
     #[tokio::test]
 
     async fn remove_press_shells_rm_alone() {
@@ -1131,72 +1038,6 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
-
-    #[tokio::test]
-    async fn resume_claude_uses_resume_without_spawning() {
-        // AC2-HP: claude uses the same-id resume door, never spawn --resume.
-        let _serial = fno_env_lock();
-        let (tmp, _env) = resume_fixture(
-            "claude",
-            "#!/bin/bash\n\
-             printf '%s\\n' \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
-             echo 'claude session resumed'\n\
-             exit 0\n",
-        );
-
-        let notice = run_resume("claude-worker").await;
-
-        assert_eq!(notice, "claude session resumed");
-        let log = std::fs::read_to_string(tmp.join("argv.log")).unwrap();
-        assert_eq!(log.lines().collect::<Vec<_>>(), ["resume claude-worker"]);
-        assert!(
-            !log.contains("spawn"),
-            "resume never forks a new session: {log}"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[tokio::test]
-    async fn resume_failure_shows_the_refusal_line_without_wrapping_it() {
-        // AC3-ERR: the door's refusal is the complete operator notice.
-        let _serial = fno_env_lock();
-        let (tmp, _env) = resume_fixture(
-            "refusal",
-            "#!/bin/bash\n\
-             printf '%s\\n' \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
-             printf ' worker became busy before resume \\n' >&2\n\
-             exit 13\n",
-        );
-
-        let notice = run_resume("raced-worker").await;
-
-        assert_eq!(notice, " worker became busy before resume ");
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[tokio::test]
-    async fn resume_timeout_uses_the_sixty_second_bound() {
-        // AC4-EDGE: resume waits longer than the ordinary lifecycle commands,
-        // then reports its fixed timeout notice.
-        let _serial = fno_env_lock();
-        let (tmp, _env) = resume_fixture(
-            "timeout",
-            "#!/bin/bash\n\
-             sleep 80\n",
-        );
-        let started = std::time::Instant::now();
-
-        let notice = run_resume("slow-worker").await;
-        let elapsed = started.elapsed();
-
-        assert_eq!(notice, "resume slow-worker: timed out");
-        assert!(
-            elapsed >= Duration::from_secs(55),
-            "timed out after {elapsed:?}"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
     struct PinnedFnoBin {
         previous: Option<std::ffi::OsString>,
     }

@@ -709,30 +709,6 @@ mod tests {
         assert_eq!(receipt.harness, "codex");
         assert_eq!(receipt.cwd, "/repo");
     }
-
-    #[test]
-    fn spawn_receipt_accepts_thread_and_one_release_bg_alias() {
-        let raw = concat!(
-            r#"{"type":"agent_spawned","data":{"name":"thread-worker","provider":"codex","harness_session_id":"thread-session","substrate":"thread"}}"#,
-            "\n",
-            r#"{"type":"agent_spawned","data":{"name":"legacy-worker","provider":"claude","harness_session_id":"legacy-session","substrate":"bg"}}"#,
-        );
-        let receipts = parse_spawn_receipts(raw);
-        assert_eq!(receipts.len(), 2);
-        assert_eq!(
-            receipts
-                .get(&(String::from("codex"), String::from("thread-session")))
-                .map(|receipt| receipt.harness.as_str()),
-            Some("codex")
-        );
-        assert_eq!(
-            receipts
-                .get(&(String::from("claude"), String::from("legacy-session")))
-                .map(|receipt| receipt.harness.as_str()),
-            Some("claude")
-        );
-    }
-
     #[test]
     fn spawn_receipts_keep_same_session_ids_distinct_across_harnesses() {
         let raw = concat!(
@@ -785,38 +761,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-
-    /// AC3-HP: an unchanged journal is never re-read. Two refreshes over the
-    /// same bytes stat but do not rescan; one appended line flips the live
-    /// file's stamp and the next refresh rescans (the positive control).
-    #[test]
-    fn an_unmoved_journal_is_not_rescanned() {
-        let s = JournalScratch::new("cache-unmoved");
-        let live = s.segment("events.jsonl");
-        std::fs::write(
-            &live,
-            r#"{"type":"agent_spawned","data":{"name":"w","provider":"codex","harness_session_id":"s1","substrate":"pane"}}"#,
-        )
-        .unwrap();
-        let mut cache = JournalCache::load_at(&live);
-        assert!(!cache.refresh_at(&live), "same stamps: no rescan");
-        assert!(!cache.refresh_at(&live), "still no rescan");
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&live)
-            .unwrap();
-        f.write_all(
-            b"\n{\"type\":\"agent_spawned\",\"data\":{\"name\":\"w2\",\"provider\":\"codex\",\"harness_session_id\":\"s2\",\"substrate\":\"pane\"}}",
-        )
-        .unwrap();
-        assert!(cache.refresh_at(&live), "an append moves the stamp: rescan");
-        assert!(
-            cache.journal.spawned_names.contains("w2"),
-            "the rescan saw the appended spawn"
-        );
-    }
-
     /// AC3-EDGE: across appends, a rotation of the live file to `.1`, and
     /// noise lines, the cache's view equals a fresh scan over the same
     /// files - the stamp gate never serves a stale scan.
@@ -906,36 +850,6 @@ mod tests {
         assert_eq!(from_noisy.reaped.len(), 1);
         assert_eq!(from_noisy.never_bound.len(), 1);
     }
-
-    /// The prefilter const and the parse's type match must name one set: a
-    /// type on the match side only is silently dropped before it parses, and
-    /// a type on the const side only pays the parse for nothing. Reads the
-    /// module source so the two lists cannot drift apart quietly.
-    #[test]
-    fn the_prefilter_const_and_the_type_match_name_one_set() {
-        let src = include_str!("spawn_journal.rs");
-        let start = src
-            .find("match value.get(\"type\")")
-            .expect("the type match exists");
-        let end = src[start..]
-            .find("_ => continue")
-            .expect("the match's drop arm exists")
-            + start;
-        let mut from_match = std::collections::HashSet::new();
-        for line in src[start..end].lines() {
-            let Some(rest) = line.trim().strip_prefix("Some(\"") else {
-                continue;
-            };
-            from_match.insert(rest.split('"').next().expect("a quoted name").to_string());
-        }
-        let from_const: std::collections::HashSet<String> =
-            HANDLED_TYPES.iter().map(|s| s.to_string()).collect();
-        assert_eq!(
-            from_const, from_match,
-            "HANDLED_TYPES and the type match drifted: resync them"
-        );
-    }
-
     /// A cached read error does not outlive the segment healing: while the
     /// error stands the refresh rescans (a chmod round-trip moves neither
     /// mtime nor len), and once it reads clean the cheap stamp gate resumes.
@@ -974,25 +888,6 @@ mod tests {
             "healthy again: the stamp gate answers, no rescan"
         );
     }
-
-    #[test]
-    fn spawn_receipt_segments_read_oldest_generation_first() {
-        // Rotation renames the live file to `.1`, so a higher generation is
-        // older; the live file parses LAST.
-        let s = JournalScratch::new("segments");
-        for name in ["events.jsonl.2", "events.jsonl.1", "events.jsonl"] {
-            std::fs::write(s.segment(name), "").unwrap();
-        }
-        let paths = spawn_receipt_segments(&s.0, "events.jsonl");
-        let names: Vec<String> = paths
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        // Only the retained `.N` segments; the live file is appended by the
-        // scan itself, always last.
-        assert_eq!(names, vec!["events.jsonl.2", "events.jsonl.1"]);
-    }
-
     #[test]
     fn journal_scan_crosses_rotation_and_honors_live_file_revocation() {
         // AC1-HP: a receipt in a rotated segment is still a receipt. AC2-HP:

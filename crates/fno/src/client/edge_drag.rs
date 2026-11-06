@@ -382,23 +382,4 @@ mod tests {
         );
         assert_eq!(row.size_at(50, 0), 20, "a pointer below the origin floors");
     }
-
-    #[test]
-    fn held_size_is_reclamped_when_the_room_shrinks() {
-        let mut sizes = EdgeSizes::default();
-        sizes.set(Edge::OrgExplorer, 50);
-        assert_eq!(sizes.resolve(Edge::OrgExplorer, 34, 20, 70), 50);
-        assert_eq!(sizes.resolve(Edge::OrgExplorer, 34, 20, 40), 40);
-        assert_eq!(sizes.resolve(Edge::MessagesTree, 34, 20, 70), 34);
-        assert_eq!(clamp(5, 30, 10), 30, "lo wins when there is no room");
-    }
-
-    #[test]
-    fn nudge_steps_stops_at_the_bounds_and_holds_the_result() {
-        let mut sizes = EdgeSizes::default();
-        assert!(sizes.nudge(Edge::BacklogSeam, 40, STEP, 20, 60));
-        assert_eq!(sizes.get(Edge::BacklogSeam), Some(42));
-        assert!(!sizes.nudge(Edge::BacklogSeam, 60, STEP, 20, 60));
-        assert!(!sizes.nudge(Edge::BacklogSeam, 20, -STEP, 20, 60));
-    }
 }

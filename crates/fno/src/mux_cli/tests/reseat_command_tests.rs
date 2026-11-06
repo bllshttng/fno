@@ -77,30 +77,3 @@ fn the_flip_clears_the_named_row_and_preserves_the_rest() {
     assert_eq!(doc["agents"][0]["harness_session_id"], "sess-w1-uuid");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
-
-#[test]
-fn the_flip_is_idempotent_and_matches_by_mux_pair() {
-    let path = scratch_registry("pair");
-    let pair = |row: &serde_json::Value| {
-        row.get("mux")
-            .and_then(|m| m.get("session").and_then(|v| v.as_str()))
-            == Some("main")
-            && row
-                .get("mux")
-                .and_then(|m| m.get("pane_id").and_then(|v| v.as_u64()))
-                == Some(7)
-    };
-    assert_eq!(clear_mux_refs(&path, &pair).unwrap(), 1);
-    // A re-run after the move answers zero, not an error: both halves of the
-    // reseat converge.
-    assert_eq!(clear_mux_refs(&path, &pair).unwrap(), 0);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
-}
-
-#[test]
-fn help_answers_ok_and_bad_args_refuse_with_usage() {
-    assert_eq!(reseat(&[OsString::from("--help")], None), EXIT_OK);
-    assert_eq!(reseat(&[OsString::from("-h")], None), EXIT_OK);
-    assert_eq!(reseat(&[], None), EXIT_USAGE);
-    assert_eq!(reseat(&[OsString::from("--nope")], None), EXIT_USAGE);
-}

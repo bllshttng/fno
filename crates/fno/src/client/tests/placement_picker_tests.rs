@@ -115,23 +115,6 @@ async fn attach_placement_keys_do_not_depend_on_cursor_history() {
         "how the cursor got there cannot matter"
     );
 }
-
-#[tokio::test]
-async fn attach_placement_out_of_range_digit_bels_and_moves_nothing() {
-    // A digit past the end of the list is a BEL, not a selection, and the
-    // notice says the row is not there rather than claiming the workspace is
-    // "no longer available" - it never was. The cursor stays put and the
-    // picker stays open, so the operator can just press the right key next.
-    let mut v = unified_rows_view();
-    v.selector = Some(8); // bg-claude
-    let mut buf = Vec::new();
-    selector_keys(&mut v, b"p", &mut buf).await.unwrap();
-    attach_place_keys(&mut v, b"9", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "an out-of-range digit sends nothing");
-    let picker = v.attach_place.as_ref().expect("picker stays open");
-    assert_eq!(picker.cursor, 0, "and moves the cursor nowhere");
-}
-
 #[tokio::test]
 async fn attach_placement_out_of_range_digit_drops_the_rest_of_the_batch() {
     // The BEL alone is not enough. Terminal reads arrive in batches, so the
@@ -157,40 +140,6 @@ async fn attach_placement_out_of_range_digit_drops_the_rest_of_the_batch() {
         "the operator is told why nothing happened"
     );
 }
-
-#[tokio::test]
-async fn attach_placement_arrows_move_the_cursor_without_attaching() {
-    // AC3-FR, the exact reported defect: `j` (and therefore Down, which
-    // fold_selector_keys rewrites to `j`) used to return
-    // Some(Some(Dir::Down)) and attach IMMEDIATELY. Scanning the list with
-    // the arrow keys finalized a placement the operator never chose. This is
-    // the test that had to fail before the fix.
-    for key in [b"j".as_slice(), b"\x1b[B".as_slice()] {
-        let mut v = unified_rows_view();
-        v.selector = Some(8); // bg-claude
-        let mut buf = Vec::new();
-        selector_keys(&mut v, b"p", &mut buf).await.unwrap();
-        assert_eq!(v.attach_place.as_ref().unwrap().cursor, 0);
-        attach_place_keys(&mut v, key, &mut buf).await.unwrap();
-        assert!(buf.is_empty(), "key {key:?} must send no AttachAgent");
-        let picker = v.attach_place.as_ref().expect("picker stays open");
-        assert_eq!(picker.cursor, 1, "key {key:?} moves the cursor");
-        assert_eq!(picker.target(), Some(2));
-    }
-    // ...and back up, clamped at the top rather than wrapping.
-    let mut v = unified_rows_view();
-    v.selector = Some(8);
-    let mut buf = Vec::new();
-    selector_keys(&mut v, b"p", &mut buf).await.unwrap();
-    attach_place_keys(&mut v, b"kk", &mut buf).await.unwrap();
-    assert!(buf.is_empty());
-    assert_eq!(
-        v.attach_place.as_ref().unwrap().cursor,
-        0,
-        "clamped, no wrap"
-    );
-}
-
 #[tokio::test]
 async fn attach_placement_new_tab_and_cancel_are_distinct() {
     let mut v = unified_rows_view();

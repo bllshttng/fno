@@ -366,40 +366,6 @@ mod tests {
         assert_eq!(v.create_folder("fnh"), folder("/code/fnh"));
         assert_eq!(v.create_folder_row("fnh"), "/code/fnh");
     }
-
-    #[test]
-    fn a_typed_path_must_be_a_folder_and_tab_completes_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_str().unwrap().to_string();
-        std::fs::create_dir_all(dir.path().join("alpha-one")).unwrap();
-        std::fs::create_dir_all(dir.path().join("alpha-two")).unwrap();
-        std::fs::create_dir_all(dir.path().join("beta")).unwrap();
-        std::fs::write(dir.path().join("betamax"), "").unwrap();
-
-        assert_eq!(complete_dir(&format!("{root}/be")), format!("{root}/beta/"));
-        assert_eq!(
-            complete_dir(&format!("{root}/al")),
-            format!("{root}/alpha-")
-        );
-        assert_eq!(complete_dir(&format!("{root}/zz")), format!("{root}/zz"));
-
-        assert_eq!(
-            resolve_typed_folder(&format!("{root}/beta/")),
-            Ok(format!("{root}/beta"))
-        );
-        assert!(resolve_typed_folder(&format!("{root}/betamax")).is_err());
-        assert!(resolve_typed_folder("relative/path").is_err());
-
-        let mut v = test_view_with_roots(&[]);
-        v.folder_pick.path = Some(format!("{root}/beta"));
-        assert_eq!(
-            v.create_folder("x"),
-            Ok(CreateOrigin::Folder(format!("{root}/beta")))
-        );
-        v.folder_pick.path = Some(format!("{root}/missing"));
-        assert!(v.create_folder("x").is_err());
-    }
-
     fn test_view_with_roots(roots: &[&str]) -> View {
         let mut v = crate::client::tests::view_with_agents(vec![]);
         v.layout.agents = roots

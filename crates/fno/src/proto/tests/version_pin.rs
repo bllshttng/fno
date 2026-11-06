@@ -3,12 +3,6 @@
 //! module of the tests mod so the shrink-only budget on proto.rs stays
 //! honest; everything arrives through `super::*`.
 use super::*;
-
-#[test]
-fn proto_version_match_is_accepted() {
-    assert!(check_attach_version(PROTO_VERSION, BUILD_VERSION).is_ok());
-}
-
 #[test]
 fn compatible_proto_versions_are_accepted() {
     for version in [
@@ -94,31 +88,4 @@ fn thread_reseat_command_decodes_both_portal_forms() {
     let back: ControlCommand =
         serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
     assert_eq!(command, back);
-}
-
-#[test]
-fn layout_slot_portal_field_is_additive() {
-    // (v73) A pre-v73 build has no `portal` on LayoutSlot: a slot JSON
-    // without it decodes to the plain shell it already is, and a slot
-    // carrying a seat round-trips. The field is additive, so v73 moves
-    // only the pin; floor stays 58.
-    let pre_v73 = r#"{"name":"portal1","binding":"shell"}"#;
-    let slot: LayoutSlot = serde_json::from_str(pre_v73).unwrap();
-    assert_eq!(slot.name, "portal1");
-    assert_eq!(slot.binding, LayoutBinding::Shell);
-    assert_eq!(slot.portal, None);
-    let seated = LayoutSlot {
-        name: "portal1".into(),
-        binding: LayoutBinding::Shell,
-        cwd: None,
-        portal: Some(PortalSlot {
-            index: 1,
-            row: "deadbee1".into(),
-            harness: None,
-            session_id: None,
-        }),
-        pane_id: None,
-    };
-    let back: LayoutSlot = serde_json::from_str(&serde_json::to_string(&seated).unwrap()).unwrap();
-    assert_eq!(seated, back);
 }

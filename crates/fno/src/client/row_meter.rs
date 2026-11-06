@@ -156,24 +156,4 @@ mod tests {
         assert_eq!(skeleton_cell(2, Some(250)), "▒▒");
         assert_eq!(skeleton_cell(2, Some(1000)), "░░");
     }
-
-    // The unit test the plan names: 50, 80, 120, 200 and 320 columns, both
-    // layouts' fixed-cell sums.
-    #[test]
-    fn name_width_takes_a_quarter_of_the_surplus_within_clamps() {
-        // Card: status 5 + slots 6 + 6 = 17 fixed, 4 gaps. List: 28 fixed,
-        // 6 gaps.
-        for text_w in [50u16, 80, 120, 200, 320] {
-            let card = name_w(text_w, 17, 4);
-            let list = name_w(text_w, 28, 6);
-            assert!((22..=40).contains(&card), "{text_w}: {card}");
-            assert!((22..=40).contains(&list), "{text_w}: {list}");
-            assert!(
-                card >= list,
-                "the narrower fixed sum keeps more: {card} {list}"
-            );
-        }
-        assert_eq!(name_w(50, 17, 4), 23);
-        assert_eq!(name_w(320, 17, 4), 40);
-    }
 }

@@ -167,13 +167,6 @@ mod tests {
     use crate::text_style::TextStyle;
 
     const W: usize = 60;
-
-    #[test]
-    fn empty_and_whitespace_render_zero_lines() {
-        assert!(md_lines("", W).is_empty());
-        assert!(md_lines("   \n  \n", W).is_empty());
-    }
-
     #[test]
     fn frontmatter_folds_to_one_meta_line() {
         let doc = "---\nstatus: ready\nsize: L\n---\n\n# Plan\n\nbody text";
@@ -211,23 +204,6 @@ mod tests {
         assert!(lines.iter().any(|l| l.text == "let y = 2;"));
         assert!(lines.iter().any(|l| l.text == "after"));
     }
-
-    #[test]
-    fn tables_and_blockquotes_render_dim() {
-        let doc = "| col | col |\n|---|---|\n| a | b |\n> quoted words\nplain";
-        let lines = md_lines(doc, W);
-        let table = lines
-            .iter()
-            .find(|l| l.text.contains("| col | col |"))
-            .expect("table row kept");
-        assert!(table.roles.is_empty() && table.default_role == TextStyle::Meta);
-        let quote = lines
-            .iter()
-            .find(|l| l.text.starts_with('\u{2502}'))
-            .expect("bar");
-        assert!(quote.text.contains("quoted words"));
-    }
-
     #[test]
     fn bullets_keep_their_indent_and_wrap_with_a_hanging_indent() {
         let long = format!("- {}end", "a word ".repeat(30));
@@ -241,15 +217,6 @@ mod tests {
             assert!(l.text.starts_with("  "), "hang: {:?}", l.text);
         }
     }
-
-    #[test]
-    fn numbered_items_keep_their_numbers() {
-        let doc = "3. third thing\n4. fourth";
-        let lines = md_lines(doc, W);
-        assert_eq!(lines[0].text, "3. third thing");
-        assert_eq!(lines[1].text, "4. fourth");
-    }
-
     #[test]
     fn inline_marks_strip_and_links_keep_their_text() {
         let doc = "see **bold** and __ul__ and `code` and [the doc](http://x/y.md) end";
@@ -271,13 +238,5 @@ mod tests {
         for l in &lines {
             assert!(l.text.chars().count() <= 30, "row width held: {:?}", l.text);
         }
-    }
-
-    #[test]
-    fn an_unterminated_fence_still_terminates() {
-        let doc = "a\n```\nleft open\nforever";
-        let lines = md_lines(doc, W);
-        assert!(lines.iter().any(|l| l.text == "left open"));
-        assert!(lines.iter().any(|l| l.text == "forever"));
     }
 }

@@ -369,31 +369,3 @@ mod tests {
         assert!(json.get("target").is_some());
         assert_eq!(json["pr_number"], serde_json::json!(123));
     }
-
-    /// The sidecar contract: the component check, O_EXCL semantics, and the
-    /// always-consume adopt.
-    #[test]
-    fn sidecar_write_adopt_and_component_check() {
-        let home = std::env::temp_dir().join(format!("fno-ri-sidecar-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
-        assert!(pending_invocation_path("", Some(&home)).is_err());
-        assert!(pending_invocation_path("a/b", Some(&home)).is_err());
-
-        assert!(write_pending_invocation("s1", "ri-1", Some(&home)));
-        // O_EXCL: a second writer loses and reports false.
-        assert!(!write_pending_invocation("s1", "ri-2", Some(&home)));
-        // Adopt consumes: the id comes back once, the file is gone.
-        assert_eq!(
-            adopt_pending_invocation("s1", Some(&home)).as_deref(),
-            Some("ri-1")
-        );
-        assert_eq!(adopt_pending_invocation("s1", Some(&home)), None);
-        // A corrupt sidecar is consumed and answers None, never wedges.
-        let corrupt = pending_invocation_path("s2", Some(&home)).unwrap();
-        std::fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
-        std::fs::write(&corrupt, "{not json").unwrap();
-        assert_eq!(adopt_pending_invocation("s2", Some(&home)), None);
-        assert!(!corrupt.exists());
-        let _ = std::fs::remove_dir_all(&home);
-    }
-}

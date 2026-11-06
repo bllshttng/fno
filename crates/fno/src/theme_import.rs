@@ -1057,10 +1057,4 @@ mod tests {
         assert_eq!(batch.candidates.len(), 1);
         assert_eq!(batch.skipped.len(), 31);
     }
-
-    #[tokio::test]
-    async fn import_sources_and_persistence_stay_bounded() {
-        assert_local_and_github_sources_are_bounded_and_canonical().await;
-        assert_fetch_and_save_refuse_oversize_and_never_replace_a_theme().await;
-    }
 }

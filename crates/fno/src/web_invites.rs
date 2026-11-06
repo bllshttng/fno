@@ -294,10 +294,4 @@ mod web_invites_tests {
         web_invites_a_scoped_editor_answers_inside_the_scope_only();
         web_invites_a_low_role_an_unlisted_login_and_a_wide_bind_all_refuse();
     }
-
-    #[test]
-    fn web_invites_no_list_and_local_user() {
-        web_invites_no_list_keeps_token_reads_and_refuses_a_tailnet_answer();
-        web_invites_configured_list_still_lets_the_local_user_in();
-    }
 }

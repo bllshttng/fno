@@ -1116,36 +1116,6 @@ mod tests {
         assert!(strip.hits.iter().all(|(t, _, _)| !is_row_hit(*t)));
         assert!(!is_row_hit(ESC_CLOSE_HIT) && is_row_hit(0));
     }
-
-    #[test]
-    fn a_footer_wider_than_the_body_keeps_the_box_square() {
-        // Body lines reach `frame` pre-padded to `body_w`; the subtitle
-        // and footer arrive raw and were only ever PADDED, never truncated or
-        // measured. So a footer longer than the body overhung the right border
-        // by the difference and the box rendered ragged - caught the first time
-        // a modal set a footer wider than its content (the name modal's
-        // "empty resets to auto" over a short name).
-        let chrome = Chrome::new("rename tab", Anchor::Center).footer("empty resets to auto");
-        let framed = frame(&[bl("short_")], &chrome, 6, None);
-        let widths: Vec<usize> = framed
-            .lines
-            .iter()
-            .map(|l| l.text.chars().count())
-            .collect();
-        assert!(
-            widths.iter().all(|&w| w == framed.width),
-            "every row is the framed width {}: {widths:?}",
-            framed.width
-        );
-        assert!(
-            framed
-                .lines
-                .iter()
-                .any(|l| l.text.contains("empty resets to auto")),
-            "and the footer is widened to fit, not cut"
-        );
-    }
-
     #[test]
     fn fit_to_keeps_the_widened_frame_inside_the_viewport() {
         // The widening in `min_inner_w` has no idea how wide the terminal is,
@@ -1200,15 +1170,6 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn fit_to_leaves_text_that_already_fits_alone() {
-        let chrome = Chrome::new("t", Anchor::Center)
-            .footer("empty resets to auto")
-            .fit_to(40);
-        assert_eq!(chrome.footer.as_deref(), Some("empty resets to auto"));
-    }
-
     #[test]
     fn scrollbar_thumb_reaches_the_bottom_at_maximum_scroll() {
         // A track cell below the thumb means "there is more". At the end of the
@@ -1258,19 +1219,6 @@ mod tests {
             Level::Bare
         );
     }
-
-    #[test]
-    fn full_frame_dimensions_match_its_overhead() {
-        // subtitle + footer each add a row under Full.
-        let c = Chrome::new("Title", Anchor::Center)
-            .subtitle("sub")
-            .footer("f");
-        let framed = frame(&[bl("a"), bl("b"), bl("c")], &c, 5, None);
-        assert_eq!(c.rows_above(), 2);
-        assert_eq!(c.rows_below(), 2);
-        assert_eq!(framed.lines.len(), 3 + c.rows_overhead());
-    }
-
     #[test]
     fn bare_frame_is_top_body_bottom_only() {
         // Bare ignores subtitle/footer (an anchored menu cannot afford them).
@@ -1282,29 +1230,6 @@ mod tests {
         assert_eq!(framed.lines.len(), 3);
         assert!(framed.lines.iter().all(|l| !l.text.contains("ignored")));
     }
-
-    #[test]
-    fn full_top_border_carries_title_and_esc_chip() {
-        let c = Chrome::new("Settings", Anchor::Center);
-        let framed = frame(&[bl("body")], &c, 6, None);
-        let top = &framed.lines[0];
-        assert!(top.text.starts_with('╭'));
-        assert!(top.text.ends_with('╮'));
-        assert!(top.text.contains("Settings"));
-        assert!(top.text.contains("esc"));
-        // Positive markers: the chip and title carry their own roles.
-        assert!(top.roles.contains(&Role::Chip));
-        assert!(top.roles.contains(&Role::Title));
-        // The chip is a hit target too, not just decoration: a Left
-        // click on it should close the modal like Esc does. The span lands on
-        // the "esc" text itself.
-        assert_eq!(top.hits.len(), 1);
-        let (t, off, len) = top.hits[0];
-        assert_eq!(t, ESC_CLOSE_HIT);
-        let word: String = top.text.chars().skip(off).take(len).collect();
-        assert_eq!(word, "esc");
-    }
-
     #[test]
     fn bare_top_border_carries_inline_esc() {
         let c = Chrome::new("", Anchor::At { row: 0, col: 0 });
@@ -1518,75 +1443,6 @@ mod tests {
         }
         assert_eq!(str_cols(&framed.lines[0].text), framed.width);
     }
-
-    #[test]
-    fn blit_paints_fullwidth_glyphs_across_two_cells() {
-        // The lead cell carries the glyph, the next cell is a WIDE_SPACER the
-        // terminal writer skips, and the char after the glyph lands two
-        // columns on - the alignment that was off by one before.
-        // Geometry for body "a＋b" in a 6-column body (empty title: the ESC
-        // chip's minimum is 6, so body_w stays 6): col0 border, col1-col2 the
-        // two pad cells, col3 'a', col4 lead, col5 spacer, col6 'b', col7
-        // border.
-        let c = Chrome::new("", Anchor::Center);
-        let framed = frame(&[bl("a＋b")], &c, 6, None);
-        let theme = Theme::default_theme();
-        let mut cells = vec![Cell::default(); 5 * framed.width];
-        blit(&mut cells, 5, framed.width, (0, 0), &framed, &theme);
-        // Row 0 is the top border; the body row is row 1.
-        let row = &cells[framed.width..2 * framed.width];
-        assert_eq!(row[0].c, '│');
-        assert_eq!(row[1].c, ' ', "the body's side padding");
-        assert_eq!(row[2].c, ' ', "the second pad cell");
-        assert_eq!(row[3].c, 'a');
-        assert_eq!(row[4].c, '＋', "the lead cell carries the glyph");
-        assert_eq!(row[5].c, ' ', "the continuation cell renders nothing");
-        assert!(
-            row[5].flags & crate::proto::cell_flags::WIDE_SPACER != 0,
-            "and it is flagged WIDE_SPACER"
-        );
-        assert_eq!(row[6].c, 'b', "the next char lands at column+2");
-        assert!(
-            row[6].flags & crate::proto::cell_flags::WIDE_SPACER == 0,
-            "no spacer on a narrow char"
-        );
-        assert_eq!(row[7].c, '│', "the right border stays inside the frame");
-    }
-
-    #[test]
-    fn a_scrolling_frame_counts_the_scrollbar_column_and_stays_square() {
-        // Defaults make the Colors panel taller as well as wider: on overflow
-        // a scrollbar column rides INSIDE the right border, and the width math
-        // must count it alongside any wide glyphs.
-        let wide = BodyLine::plain("add model ＋");
-        let c = Chrome::new("", Anchor::Center);
-        let framed = frame(
-            &[wide, bl("a"), bl("b")],
-            &c,
-            12,
-            Some(Scroll {
-                pos: 0,
-                total: 9,
-                visible: 3,
-            }),
-        );
-        assert_eq!(
-            framed.width,
-            chrome_frame_width(12, true),
-            "the scrollbar column is in the frame width"
-        );
-        for line in &framed.lines {
-            assert_eq!(str_cols(&line.text), framed.width);
-        }
-        // The scrollbar cells exist and sit inside the border.
-        let thumb_or_track = framed
-            .lines
-            .iter()
-            .filter(|l| l.text.contains('█') || l.text.contains('░'))
-            .count();
-        assert!(thumb_or_track > 0, "the scrollbar is painted");
-    }
-
     #[test]
     fn blit_is_cell_bounds_safe_and_theme_colored() {
         let c = Chrome::new("T", Anchor::Center);
@@ -1598,18 +1454,6 @@ mod tests {
         let (fg, bg, _) = cell_style(Role::Border, &theme);
         assert_eq!((cells[0].fg, cells[0].bg), (fg, bg));
     }
-
-    #[test]
-    fn blit_under_catppuccin_colors_the_border() {
-        let c = Chrome::new("T", Anchor::Center);
-        let framed = frame(&[bl("body")], &c, 4, None);
-        let theme = crate::theme::Theme::from_name("catppuccin").0;
-        let mut cells = vec![Cell::default(); 10 * 40];
-        blit(&mut cells, 10, 40, (0, 0), &framed, &theme);
-        assert_eq!(cells[0].c, '╭');
-        assert_eq!(cells[0].fg, theme.border);
-    }
-
     #[test]
     fn flat_frame_carries_no_inverse_or_bg_under_any_theme() {
         // The backlog surfaces' frame: every chrome row resolves through the

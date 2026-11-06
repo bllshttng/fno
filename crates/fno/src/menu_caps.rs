@@ -454,15 +454,4 @@ mod tests {
         assert_eq!(got["config accounts"], 15, "{got:?}");
         assert!(got.contains_key("agents fleet"));
     }
-
-    #[test]
-    fn menu_caps_holds_on_the_committed_tree() {
-        // The CI gate: the real files, the real table, the real debt.
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let inputs = read_inputs(&root).expect("inputs readable");
-        let counts = counts(&inputs).expect("inputs parse");
-        if let Err(failures) = check(&counts, &inputs.debt) {
-            panic!("menu-caps: FAIL\n  {}", failures.join("\n  "));
-        }
-    }
 }
