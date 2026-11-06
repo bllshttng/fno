@@ -875,6 +875,69 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
+/// The proved-label facts for one session.
+#[derive(Default, Debug)]
+pub(crate) struct SessionLabels {
+    pub expected: String,
+    pub failure_type: String,
+    pub layer: String,
+    pub span_ref: String,
+}
+
+/// The proved-label enrichment for each session with at least one proved
+/// row: expected from the judgment reason (user_corrected, then
+/// did_what_asked), layer from the layer judge, failure_type from the
+/// newest trace's signal kind, and the anchor span. Only proved judges'
+/// rows feed it, so an unproved judge never enriches a draft.
+pub(crate) fn label_facts(state: &Path) -> BTreeMap<String, SessionLabels> {
+    let proved: Vec<String> = calibration_rows(state)
+        .iter()
+        .filter(|j| j["proved"] == json!(true))
+        .filter_map(|j| j["judge"].as_str().map(str::to_string))
+        .collect();
+    let rows = newest_rows(&read_rows(&labels_path(state)));
+    let kinds: BTreeMap<String, String> = by_session(&load_traces(state))
+        .into_iter()
+        .filter_map(|(sid, g)| {
+            g.last()
+                .and_then(|t| t.get("signal_kind"))
+                .and_then(Value::as_str)
+                .map(|k| (sid, k.to_string()))
+        })
+        .collect();
+    let mut out: BTreeMap<String, SessionLabels> = BTreeMap::new();
+    for row in rows {
+        let judge = row.get("judge").and_then(Value::as_str).unwrap_or("");
+        let sid = row.get("session_id").and_then(Value::as_str).unwrap_or("");
+        if judge.is_empty() || sid.is_empty() || !proved.contains(judge) {
+            continue;
+        }
+        let reason = row.get("reason").and_then(Value::as_str).unwrap_or("");
+        let label = row.get("label").and_then(Value::as_str).unwrap_or("");
+        let span = row.get("span_ref").and_then(Value::as_str).unwrap_or("");
+        let entry = out.entry(sid.to_string()).or_default();
+        match judge {
+            "user_corrected" if entry.expected.is_empty() => {
+                entry.expected = clip(&scrub(reason), 200)
+            }
+            "did_what_asked" if entry.expected.is_empty() => {
+                entry.expected = clip(&scrub(reason), 200)
+            }
+            "layer" => entry.layer = label.to_string(),
+            _ => {}
+        }
+        if !span.is_empty() {
+            entry.span_ref = span.to_string();
+        }
+    }
+    for (sid, kind) in &kinds {
+        if let Some(entry) = out.get_mut(sid) {
+            entry.failure_type = kind.clone();
+        }
+    }
+    out
+}
+
 /// The go-N fixer: proved layer rows cluster by (layer, the newest trace's
 /// signal kind) and file one go node per cluster carrying the sessions and
 /// span refs, or append new evidence to the open node for that cluster. A
