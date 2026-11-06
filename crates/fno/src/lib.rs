@@ -231,6 +231,8 @@ pub mod restore_liveness;
 #[cfg(feature = "full")]
 pub mod review_invocation;
 #[cfg(feature = "full")]
+pub mod review_prior_head;
+#[cfg(feature = "full")]
 pub mod role_migration;
 pub mod rules;
 #[cfg(feature = "full")]

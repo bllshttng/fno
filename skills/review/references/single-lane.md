@@ -129,14 +129,7 @@ For every kept finding, open the cited `file:line` and check the finding's verba
 
 An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
 
-Read it with one plain argv jq call, with the three values written in literally: `jq -Rrn --arg branch <branch> --arg head <head-sha> -f <filter-file> <events-path>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md). So write the filter below to a file in a gitignored state directory, such as `.fno/tmp/`, and never inline it. `<events-path>` is the events journal, `.fno/events.jsonl`, linked to canonical from every worktree. When the environment names `FNO_EVENTS_PATH`, read the path with `printenv FNO_EVENTS_PATH`. Empty output means no prior round.
-
-```jq
-[inputs | select(contains("review_attestation")) | fromjson? | (.data // {})
-  | select(.verdict == "pass" and .branch == $branch)
-  | (.head_sha // "") | select(. != "" and . != $head)]
-| last // ""
-```
+Read it with the named command, branch and head written in literally: `fno do review prior-head --branch <branch> --head <head-sha>`. The command reads the default journal set (pass `--events <path>` to read one journal). It prints the prior head sha on stdout, or nothing when no prior round exists; `--json` wraps the same answer in one object. An exit 3 names a store that refused the read: that is never a first-round answer, re-run or investigate before narrowing. A worktree session's Bash isolation refuses command substitution, so read the printed sha and write it into the decision below literally.
 
 With `PRIOR_HEAD` resolved, read it into the scope decision with the same file-based shape (write any multi-step decision as a script, run it plainly):
 
