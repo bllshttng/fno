@@ -15,9 +15,9 @@ Under the standing freeze on local test runs, no cargo check or test ran locally
 | Measure | Before | After |
 |---|---:|---:|
 | Declarations, Rust (the whole G3 scope is Rust) | 2,448 | 2,345 |
-| Collected, unit nextest --lib --bins, fno-agents crate (cli-ci run 42170252779 at the base) | 4,368 | pending: same read from this PR's first green run |
-| Collected, G3 integration shards, per-binary union (cli-ci run 42170252779 at the base) | 592 | pending: same read from this PR's first green run |
-| Rust job minutes at the base | pending | pending |
+| Collected, unit nextest --lib --bins, fno-agents crate (base cli-ci run 42170252779, this PR's first green run 42202406409) | 4,368 | 4,289 |
+| Collected, G3 integration shards, per-binary union (same two runs) | 592 | 567 |
+| Rust job minutes (unit suite seconds, then cli-ci wall minutes) | 175.5 and 21.6 | 176.3 and 25.0 |
 
 The unit slice reports collected equal to declarations: libtest collects one case per `#[test]`. The integration shards report per-binary collected from the four shard logs. The shard union misses ignored and separately-scheduled binaries, so the G3 integration figure 592 is the measured floor of the shard lane, not the file count.
 
