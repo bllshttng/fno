@@ -1,31 +1,10 @@
-cli/tests/_native_door.py::run_native::pytest.skip  # on main before this ratchet
-cli/tests/conftest.py::native_backlog_door::pytest.skip  # on main before this ratchet
-cli/tests/conftest.py::pytest_collection_modifyitems::mark.skip  # on main before this ratchet
-cli/tests/conftest.py::pytest_collection_modifyitems::mark.skip  # the dev_build marker's hook-applied skip: the smoke pytest legs delete the dev build on purpose, so a marked test skips there (tests/test-dev-build-suites.sh runs it with the build present)
-cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # on main before this ratchet
-cli/tests/events/test_producer_equivalence.py::test_a_non_empty_findings_report_attests_fail_with_the_record::mark.skipif  # the hook classifies through the Rust front now the Python leaf retired; without a built front the producer cannot run and a silent no-event pass proves nothing
-cli/tests/events/test_producer_equivalence.py::test_producer_emits_review_attestation_with_no_second_call::pytest.skip  # only the code-review param drives the hook, whose classify runs through the Rust front; peer and declare emit through fno-py and still run without it
-cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # second site, added with the front pin: the drive leg needs the front, the resolver leg the door
-cli/tests/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/integration/test_install_frontdoor_journey.py::_run_fno::pytest.skip  # the journey requires the Rust front door to route backlog commands
-cli/tests/integration/test_install_frontdoor_journey.py::_run_native_backlog::pytest.skip  # the journey requires the compiled Rust backlog door
-cli/tests/integration/test_install_frontdoor_journey.py::clean_machine::pytest.skip  # the isolated native journey requires a development build
-cli/tests/integration/test_install_frontdoor_journey.py::test_authorized_target_init_journey::pytest.skip  # smoke-pytest builds the front; local checkouts may lack it
-cli/tests/integration/test_marketplace_lint.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/integration/test_rank_operator_only.py::_binary::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::_wire_real_reapable::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::test_apply_removal_emits_event_row::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch::marker.requires_gate  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_keyless_smoke.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_effect_sequence::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_resolve_canonical_worktree.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_backlog_intake_door.py::_intake::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
-cli/tests/conftest.py::run_native_create::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/unit/test_backlog_capture_tombstone.py::_cap_native::pytest.skip  # native capture door: same dev-build dependency as run_native_create, same smoke-shard deletion
-cli/tests/goldens/_door.py::door::pytest.skip  # native door: the golden receipts drive the fno-agents binary; without a dev build there is no door to pin
-cli/tests/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_only_remedies_the_commands_support::pytest.skip  # front-binary probe: CI builds crates/fno, a bare checkout has none
-cli/tests/unit/test_backlog_decompose_door.py::_door::pytest.skip  # the decompose door drives the native fno-agents binary, and the smoke shard deletes that target on purpose
+tests/py/_native_door.py::run_native::pytest.skip  # on main before this ratchet
+tests/py/conftest.py::native_backlog_door::pytest.skip  # on main before this ratchet
+tests/py/conftest.py::pytest_collection_modifyitems::mark.skip  # the dev_build marker's hook-applied skip: the smoke pytest legs delete the dev build on purpose, so a marked test skips there (tests/test-dev-build-suites.sh runs it with the build present)
+tests/py/goldens/_door.py::door::pytest.skip  # native door: the golden receipts drive the fno-agents binary; without a dev build there is no door to pin
+tests/py/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
+tests/py/integration/test_marketplace_lint.py::<module>::mark.skipif  # on main before this ratchet
+tests/py/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_only_remedies_the_commands_support::pytest.skip  # front-binary probe: CI builds crates/fno, a bare checkout has none
+tests/py/unit/test_skill_bundles.py::<module>::mark.skipif  # on main before this ratchet
+tests/py/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
+tests/py/unit/test_unknown_subcommand_exit.py::test_unknown_command_exits_nonzero_with_diagnostic::pytest.skip  # a checkout with no built fno front door has nothing to run; the tests-py CI job builds it first

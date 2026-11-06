@@ -1,7 +1,6 @@
 # Distribution
 
-How the `fno-agents` Rust supervisor reaches users, and how the Python `fno`
-package finds it. Authored in Phase 6 W6.
+How the four Rust binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) reach users.
 
 > **Three channels.** The nightly publishes itself. An rc or a stable release is a
 > deliberate act behind the `release` environment approval click (runbook at the
@@ -11,8 +10,8 @@ package finds it. Authored in Phase 6 W6.
 
 | Artifact | Built by | Installed by | Audience |
 |----------|----------|--------------|----------|
-| Platform wheel (binaries bundled) | `release-wheels.yml` (cibuildwheel-style matrix) | `pip install fno` / `uv tool install fno` | Python users of the `fno` CLI |
-| Standalone binary tarball (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) | `release-binaries.yml` | `gh release download` / unpack to `~/bin` | non-Python users |
+| Standalone binary tarball (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) | `release-binaries.yml` | `curl -fsSL fno.sh \| sh` into `~/.fno/install/bin`, or Homebrew | every user |
+| Bridge wheel (the same four binaries, no Python code) | `release-wheels.yml` | `pip install fno` / `uv tool install fno` | old wheel installs on their way to the tarball |
 | `fno-agents` crate | `release.yml` (stable promotion) | `cargo install fno-agents` / `cargo add fno-agents` | other Rust projects |
 
 Target platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. Windows is
@@ -23,48 +22,15 @@ exercised for the Phase 7+ deferral.
 ### Crate names
 
 `fno-agents` (crates.io) and `fno` (PyPI) are the real publish targets. They live in
-**separate registries** and do not collide with each other. The Rust supervisor crate
-stays named `fno-agents` (not `fno`): naming a Rust binary `fno` would collide on PATH
-with the Python `fno` console script. (`fno` on crates.io is reserved separately as a
-thin bootstrapper crate; see the install-channel notes.)
+**separate registries** and do not collide with each other. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno`.
 
-## How `pip install fno` lands the Rust binaries on PATH
+## The bridge wheel
 
-The `fno` wheel is normally pure-Python (`py3-none-any`). The release CI builds the
-Rust crate first (`cargo build --bins`), stages **all three** binaries
-(`fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) under `cli/src/fno/_bin/`,
-then builds the wheel. A hatchling build hook (`cli/hatch_build.py`) detects the
-staged binaries and:
-
-- ships each as a wheel **script** (`*.data/scripts/<binary>`), which pip installs into
-  the environment's `bin/` (`Scripts/` on Windows) — i.e. on PATH, so daemon-backed
-  commands work with no second install (US6); and
-- tags the wheel `py3-none-<platform>` rather than `cp3XX-cp3XX-<platform>`, because a
-  standalone executable is interpreter-agnostic. One wheel serves every Python 3.x on
-  the platform, so there is no per-version build explosion and no sdist fallback on
-  newer Pythons.
-
-Staging is **all-or-nothing**: zero binaries staged → a pure-Python wheel (a valid
-variant); a partial set (1–2 of 3) **hard-fails** the build — a release wheel must be
-binary-complete, so a staging defect never reaches PyPI. The same hook also
-force-includes the **LICENSE + NOTICE** texts (under `fno/_licenses/`), required: a
-license-less wheel hard-fails rather than ship silently (US5). The events schema
-(`fno/events/schema.yaml`) ships as ordinary package data — it lives inside the
-`src/fno` package, so it needs no force-include. The CI runs a clean-machine smoke
-(`cli/tests/smoke/clean_machine_smoke.sh`) against the freshly built wheel — all three
-binaries on PATH, the internalized commands run, the clone-only commands degrade — failing the
-release on any miss.
-
-When no binary is staged (local dev, `pip install -e`, sdist) the hook no-ops the binary
-bundling and the ordinary pure-Python wheel builds — **the Python package never requires
-a Rust toolchain to build.** On Linux the CI sets
-`FNO_AGENTS_WHEEL_PLATFORM=manylinux_2_17_*` because PyPI rejects plain `linux_*` tags and
-`auditwheel` cannot repair a wheel whose only native payload is a scripts-dir executable
-(not a `.so`); the binaries are built with the musl target so the manylinux claim holds.
+PyPI keeps an `fno` wheel for good, so an old wheel install can always update. The wheel holds no Python package. `packaging/pypi/pyproject.toml` builds it: the four release binaries ride as wheel shared scripts, plus the LICENSE and NOTICE texts. `uv tool install fno` or `pip install fno` therefore puts a working `fno` front door on PATH. On first run that front door moves the install to `~/.fno/install/bin`, and the uv tool is retired once the installed binary is at least 0.4.7. `release-wheels.yml` builds one wheel per platform and runs one bridge smoke against it.
 
 ## Rust runtime for `fno agents` (default)
 
-`fno agents <word>` execs the installed `fno-agents` binary. The route lives in `crates/fno/src/agents_client_route.rs`. No Python process starts, except that `agents claim` hands over to the claims CLI.
+`fno agents <word>` execs the installed `fno-agents` binary. The route lives in `crates/fno/src/agents_client_route.rs`. No Python process starts.
 
 ```bash
 fno agents spawn --name worker-A --harness codex
@@ -81,7 +47,7 @@ Three channels ship through `release.yml`. The nightly is automatic, and each gr
 
 - The schedule fires daily. To run it now: `gh workflow run release.yml -f channel=nightly`. The workflow picks the newest default-branch commit whose `rust-ci` push run is green. Its newest ancestor `cli-ci` push run must also be green. The run then replaces the rolling GitHub pre-release named `nightly`. Version: `0.4.0.devYYYYMMDD`. No `v*` tag and no commit on main.
 - Each scheduled nightly publish also dispatches the day's rc candidate at the same commit (below). A day where the nightly skips (nothing new since the last nightly) opens no candidate.
-- Install: `FNO_INSTALL_WHEEL=<wheel asset url> sh fno.sh`. The release notes print the per-platform lines. Tomorrow's nightly replaces it. An install run from inside a nightly tree reads the tree's channel and installs the same wheel unprompted. Run standalone, `fno.sh` stays stable-channel.
+- Install: `FNO_INSTALL_TARBALL=<tarball asset url> sh fno.sh`. The release notes print the per-platform lines. Tomorrow's nightly replaces it. An install run from inside a nightly tree reads the tree's channel and installs the same tarball unprompted. Run standalone, `fno.sh` stays stable-channel.
 
 ### Release candidate (one click a day)
 
@@ -121,6 +87,6 @@ Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The reh
 
 Version lockstep is no longer hand-maintained: `scripts/release/sync-version.sh` is the
 single propagation point, and `--check` is the drift guard that fails when any surface
-lags the wheel.
+lags the release version.
 
 The one exception is `buddy`: it versions on its own (0.0.1 today). Its marketplace entry tracks `main`, not the `stable` ref. A buddy release is a PR that bumps `plugins/buddy/.claude-plugin/plugin.json`, never an fno stable promotion.

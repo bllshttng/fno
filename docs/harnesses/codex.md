@@ -164,7 +164,7 @@ global arms row, daemon acceptance, or a user-shaped message proves only its
 own layer. The consumer proof must join the full thread id, turn id,
 correlation id, continuation owner, action hash, and exactly one user message.
 
-Every Codex `Stop` handler must exit 0 with empty stdout or one Stop JSON object. Exit 2 with non-empty stderr is a block. Plain text fails the hook, and `cli/tests/hooks/test_codex_stop_output_contract.py` enforces it.
+Every Codex `Stop` handler must exit 0 with empty stdout or one Stop JSON object. Exit 2 with non-empty stderr is a block. Plain text fails the hook, and `tests/py/hooks/test_codex_stop_output_contract.py` enforces it.
 
 Raw mail to an app-server Codex thread is not a prompt-line transport. Declared
 native non-review commands such as `/compact`, `/model`, and `/status` are

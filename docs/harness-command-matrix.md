@@ -280,14 +280,14 @@ The command reaches the same destination with none of that exposure.
 ```bash
 repo=$(git rev-parse --show-toplevel)
 sid="<full UUID from the disposable seed receipt>"
-probe=$(uv run --project cli fno-py agents watchdog --only recoverable --since 24h --cwd "$repo" --session-id "$sid" --json)
+probe=$(fno agents watchdog --only recoverable --since 24h --cwd "$repo" --session-id "$sid" --json)
 jq -e '.complete == true and .recoverable_count == 1 and .usable_recoverable_count == 1' <<<"$probe"
-apply=$(uv run --project cli fno-py agents watchdog --only recoverable --since 24h --cwd "$repo" --session-id "$sid" --apply --json)
+apply=$(fno agents watchdog --only recoverable --since 24h --cwd "$repo" --session-id "$sid" --apply --json)
 jq -e --arg sid "$sid" '.results | length == 1 and .[0].session_id == $sid and .[0].outcome == "applied" and .[0].transcript_usable == true and .[0].registry_row_count == 1' <<<"$apply"
 marker="RECOVERY-RESUME-OK-$(uuidgen | tr -d '-')"
-reply=$(uv run --project cli fno-py agents ask "$sid" "Reply exactly $marker")
+reply=$(fno agents ask "$sid" "Reply exactly $marker")
 test "$reply" = "$marker"
-uv run --project cli fno-py agents list --json | jq -e --arg sid "$sid" '.agents | any(.harness == "codex" and .harness_session_id == $sid and .last_message_at != null)'
+fno agents list --json | jq -e --arg sid "$sid" '.agents | any(.harness == "codex" and .harness_session_id == $sid and .last_message_at != null)'
 ```
 - **agy** emits plain text with no parseable session ID, so it is **stateless**: the live pane works while attached, but there is nothing to re-enter after it settles. `ask`-by-name is refused; use a fresh `--once`.
 - **opencode** is pane-hostable with a readiness detector and badge manifest. Its `ses_` session id is captured at spawn through a best-effort store lookup. An ambiguous or missed capture leaves the row live-only. The row is probed for store membership and resumable via `opencode --session <id>`. The fno install registers the footnote commands as `fno:<command>.md` command files in opencode's global config dir. The names appear in the command palette AND headlessly. Dispatch renders the native `/fno:command`, not a prose brief. The headless spawn routes it through `opencode run --command fno:command <args>`. A bare `run <message>` treats a leading slash as prose (verified against opencode v1.14.50). The routing makes a rendered slash command actually invoke the command.

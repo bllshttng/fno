@@ -8,7 +8,7 @@ This is a different thing from the environment preflight (`fno do target` Step 3
 
 ### `fno doctor test smoke` - the step registry
 
-One ordered list of the cli-ci smoke job's test and lint steps is code-owned in `crates/fno-agents/src/test_smoke_registry.rs` (`STRUCTURAL_STEPS`) plus auto-discovered owned shell harnesses. The workflow calls `fno-agents test-run doctor smoke` from eight full-gate matrix legs: four `smoke-pytest` legs and four `smoke-rest` legs. A third job named `smoke` aggregates both matrices into the required check. `fno doctor test smoke` is the same runner locally, so there is no second list to drift. Environment provisioning (checkout, Python/uv setup, the Rust toolchain install, the cargo cache, the system PyYAML install) stays in the workflow yaml. Those are CI-runner concerns, and that divergence is deliberate. Everything a test needs at run time (the `uv sync` / `uv build`, the `fno-agents` debug build) lives in the runner.
+One ordered list of the cli-ci smoke job's test and lint steps is code-owned in `crates/fno-agents/src/test_smoke_registry.rs` (`STRUCTURAL_STEPS`) plus auto-discovered owned shell harnesses. The workflow calls `fno-agents test-run doctor smoke` from eight full-gate matrix legs: four `smoke-pytest` legs and four `smoke-rest` legs. A third job named `smoke` aggregates both matrices into the required check. `fno doctor test smoke` is the same runner locally, so there is no second list to drift. Environment provisioning (checkout, Python/uv setup, the Rust toolchain install, the cargo cache, the system PyYAML install) stays in the workflow yaml. Those are CI-runner concerns, and that divergence is deliberate. Everything a test needs at run time (the `fno-agents` debug build) lives in the runner.
 
 Coverage boundary: the `smoke-pytest` and `smoke-rest` matrices are the full-gate shards on main and pull requests. `changed-smoke` has `if: github.event_name == 'pull_request'`, so it is skipped on main and its changed-subset selector never supplies main-branch coverage.
 
@@ -42,7 +42,7 @@ Selection is deterministic and every hit names the rule that produced it, so a b
 | Rule | Changed path | Selects |
 |---|---|---|
 | `test-file-self` | a test file | itself |
-| `python-source-stem` | `cli/src/**.py` | `test_<stem>.py` and the `test_<stem>_*.py` family |
+| `python-source-stem` | a `.py` file outside the test trees | `test_<stem>.py` and the `test_<stem>_*.py` family |
 | `shell-harness-self` | a discovered harness | itself |
 | `shell-helper-reverse` | a sourced helper | every harness that sources it |
 | `registry-step` | any path a registry step names by hand, or an orchestrated subtree | that step |
@@ -50,7 +50,7 @@ Selection is deterministic and every hit names the rule that produced it, so a b
 | `infra-broad` | the runner, the selector, shared test config, a workflow | the selector's own contract tests |
 
 Anything else is listed as `unmapped` and selects nothing.
-Inference is best effort: roughly 40% of `cli/src` modules have a conventionally-named test, and the full gate, not the selector, is the completeness backstop.
+Inference is best effort, and the full gate, not the selector, is the completeness backstop.
 
 Three mechanisms keep a partial green from reading as a full one.
 The header says `CHANGED SUBSET` and never `FULL`.
@@ -69,9 +69,9 @@ Every executing run (not `--list`, which is a dry run) writes `.fno/changed-last
 
 ### Full-gate sharding and the changed-smoke boundary
 
-The full gate uses four pytest legs and four rest legs. `smoke-pytest` selects `Sync + build` and the pytest registry step in every leg, and exports `FNO_PYTEST_SHARD=I/4` only while that pytest step runs. `smoke-rest` selects the complementary non-pytest registry and splits it by measured weight: each step, heaviest first, goes to the lightest leg. The weights live in `scripts/ci/smoke-step-seconds.tsv`, and an unlisted step counts 2 seconds. `cli/tests/unit/test_smoke_shards.py` refuses a split whose widest rest leg estimates over 600 seconds. The runner repeats `Sync + build` in every leg. It adds `Build fno-agents debug binary (for journey tests)` to legs with later Rust steps, preserving binary-absent ordering before that build.
+The full gate uses four pytest legs and four rest legs. `smoke-pytest` selects `Sync + build` and the pytest registry step in every leg, and exports `FNO_PYTEST_SHARD=I/4` only while that pytest step runs. `smoke-rest` selects the complementary non-pytest registry and splits it by measured weight: each step, heaviest first, goes to the lightest leg. The weights live in `scripts/ci/smoke-step-seconds.tsv`, and an unlisted step counts 2 seconds. The runner repeats `Sync + build` in every leg. It adds `Build fno-agents debug binary (for journey tests)` to legs with later Rust steps, preserving binary-absent ordering before that build.
 
-The `smoke` aggregator is the required check. It asserts that every matrix lane result is `success`, with one exception. When the lane was off or the selector itself was cancelled, a skipped leg on a pull request passes. In both cases the shards skip with nothing real to aggregate. A single failed, cancelled, or missing leg otherwise keeps the required check non-green. `cli/tests/unit/test_smoke_shards.py` reads the selectors, shard denominator, matrix indices, and registry from the checked-in workflow and fails on a missing leg or uncovered step.
+The `smoke` aggregator is the required check. It asserts that every matrix lane result is `success`, with one exception. When the lane was off or the selector itself was cancelled, a skipped leg on a pull request passes. In both cases the shards skip with nothing real to aggregate. A single failed, cancelled, or missing leg otherwise keeps the required check non-green.
 
 `changed-smoke` remains early, partial feedback for pull requests only. It is skipped on main. No test reached only through its `--changed` selector is counted as main coverage. Widening that selector can widen the existing out-of-tree coverage hole. Main coverage comes from all `smoke-pytest` and `smoke-rest` matrix legs through the `smoke` aggregator.
 
@@ -88,14 +88,14 @@ nothing or cannot trust its diff falls through to the full gate instead of
 reporting a verdict it did not earn, and `--retry-failed` skips it as a
 different subset mode. Only the full legs can mint `mode=FULL`.
 
-Why use a separate worktree with a scrubbed environment? Otherwise, canonical `.fno/config.toml` leaks into the candidate chain and produces local-only failures. Those failures push agents toward selective `-k` runs that miss CI-only failures. The runner resets a dedicated worktree to your HEAD. It uses a temporary `HOME`, scrubs `FNO_*`, and unsets ambient harness markers. It also exports `FNO_NO_CANONICAL_CONFIG=1`, pins `PYTHONPATH`, and enables the pytest spawn-leak guard. Cache directories (`CARGO_HOME`, `RUSTUP_HOME`, `UV_CACHE_DIR`) are re-exported to keep builds warm. The worktree's `target/` and `cli/.venv` persist across runs. Hermeticity comes from environment isolation plus a hard reset, not worktree disposal.
+Why use a separate worktree with a scrubbed environment? Otherwise, canonical `.fno/config.toml` leaks into the candidate chain and produces local-only failures. Those failures push agents toward selective `-k` runs that miss CI-only failures. The runner resets a dedicated worktree to your HEAD. It uses a temporary `HOME`, scrubs `FNO_*`, and unsets ambient harness markers. It also exports `FNO_NO_CANONICAL_CONFIG=1`, pins `PYTHONPATH`, and enables the pytest spawn-leak guard. Cache directories (`CARGO_HOME`, `RUSTUP_HOME`, `UV_CACHE_DIR`) are re-exported to keep builds warm. The worktree's `target/` persists across runs. Hermeticity comes from environment isolation plus a hard reset, not worktree disposal.
 
 **Two ambient leaks a bare `FNO_*` scrub misses, and how they are sealed.** A
 temp `HOME` cannot hide either, because both travel through channels other than
 `HOME`/`cwd`. Both are sealed by preflight-internal seams set only by
 `run_hermetic`, so default and real-worktree behavior is byte-for-byte unchanged:
 
-1. **Ambient harness identity.** Preflight runs inside a live harness. Its canonical and legacy session markers can resolve the real model instead of the fresh-CI `"unknown"` floor. `run_hermetic` unsets every name from both marker tuples before starting tests. The Python tuples are authoritative and fall back to a hardcoded list with a warning. Both are required because `CLAUDE_SESSION_ID` exists only in the legacy tuple and remains readable through the current-session helpers. If derivation drops that tuple or fallback drifts, `cli/tests/smoke/test_preflight_hermetic.sh` fails. The pytest suite seals the same leak independently in `cli/tests/conftest.py`, because a bare `pytest` skips preflight entirely.
+1. **Ambient harness identity.** Preflight runs inside a live harness. Its canonical and legacy session markers can resolve the real model instead of the fresh-CI `"unknown"` floor. `run_hermetic` unsets every name from both marker tuples before starting tests. The `identity_markers` list in `crates/fno-agents/src/ambient_vocab.toml` is authoritative, and preflight falls back to a hardcoded list with a warning. Both are required because `CLAUDE_SESSION_ID` exists only in the legacy tuple and remains readable through the current-session helpers. If derivation drops that tuple or fallback drifts, `tests/smoke/test_preflight_hermetic.sh` fails. The pytest suite seals the same leak independently in `tests/py/conftest.py`, because a bare `pytest` skips preflight entirely.
 
 2. **The canonical config candidate chain.** A worktree reaches the canonical
    checkout's `.fno/config.toml` through the shared git-common-dir, leaking
@@ -146,7 +146,7 @@ Preflight runs before a push only at the policy's request. The single decision p
 On a stock config the pre-push obligation is the focused checks below, each taking seconds. There is deliberately no wrapper script for them. A new mandatory local runner rebuilds the gate this contract removes, one rung smaller.
 
 - `cargo fmt --check` for rust changes. `fno do pr push` runs it for you on each of `crates/fno-agents` and `crates/fno` that the push touches, with the CI-pinned rustfmt. A red check exits 1 with nothing pushed, and the receipt reads `preflight=fmt`.
-- `bash scripts/ci/check-file-budget.sh` for source changes. It is the CI gate itself, so its number cannot disagree with CI. It prints the `cli/src/fno` net lines against the allowance, and a line for each over-budget file you touched. Run it after the commit that grows code, not at ship. A cut is cheap before review and expensive after a red check. It counts commits only, and it names any uncommitted change it did not count.
+- `bash scripts/ci/check-file-budget.sh` for source changes. It is the CI gate itself, so its number cannot disagree with CI. It prints a line for each over-budget file you touched and refuses a new `.py` file outside the allowed homes. Run it after the commit that grows code, not at ship. A cut is cheap before review and expensive after a red check. It counts commits only, and it names any uncommitted change it did not count.
 - The tests covering the diff's blast radius.
 
 `fno doctor lint style` remains available for voluntary hand runs. For Markdown, run `fno doctor lint style --surface markdown --files <changed .md> --diff-base origin/main`. It is not part of the stock pre-push or CI gate.

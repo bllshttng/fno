@@ -9,14 +9,10 @@ The release qualification matrix is declared once in `evals/fixtures/product-del
 Every command runs from the repository root with no paid model in the loop.
 
 ```bash
-cd cli && uv run pytest tests/unit/test_product_qualification_manifest.py tests/unit/test_product_qualification_report.py tests/integration/test_product_delivery_journey.py -q
+uv run --with pytest --with pytest-timeout --with pyyaml pytest tests/py/unit/test_product_qualification_manifest.py -q
 ```
 
-The pack journey uses the real verify, activate, evaluate, upgrade and deactivate entry points on a pack source that lives outside the core checkout:
-
-```bash
-cd cli && uv run pytest tests/integration/test_product_delivery_journey.py -q
-```
+The pack journey and the report test were pytest files under the deleted Python tree. They have no native replacement yet, so the pack journey is not measured.
 
 Or run the scenarios as bank tasks, which writes history rows the report can fold:
 
@@ -43,10 +39,10 @@ Exit 0 means every conformance scenario completed with no failed or unsupported 
 
 | Claim | Reproducible command | Evidence status |
 |---|---|---|
-| Coherent install | `cd cli && uv run pytest tests/integration/test_install_frontdoor_journey.py -q` | measured, deterministic |
-| Context retained across restart | `cd cli && uv run pytest tests/unit/test_task_context_binding.py -q` | measured, deterministic |
+| Coherent install | `bash tests/smoke/fno_sh_smoke.sh` against a release tarball (runs in `release-binaries.yml`) | measured on release builds |
+| Context retained across restart | `cargo test --manifest-path crates/fno-agents/Cargo.toml --test task_context_journey` | measured, deterministic |
 | Honest delivery evidence | `cargo test --manifest-path crates/fno-agents/Cargo.toml --test acceptance_evidence_journey` | measured, deterministic |
-| Pack extensibility | `cd cli && uv run pytest tests/integration/test_product_delivery_journey.py -q` | measured, deterministic |
+| Pack extensibility | no supported runner since the Python journey was deleted | not measured |
 | Less operator effort per outcome | complete the demonstration in [task-to-verified-pr-demo.md](task-to-verified-pr-demo.md) | not measured |
 | Superior to any external product | no supported runner exists | not measured |
 

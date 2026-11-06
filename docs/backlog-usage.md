@@ -206,10 +206,8 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 Blockers: `blocked_by=`, `blocked_by+=`, `blocked_by-=` on `update`.
 A node with an open blocker derives to `status: blocked` automatically.
 
-**Every transition here has a correction, and that is enforced.**
-`cli/tests/unit/test_lifecycle_pairs.py` fails on a command that changes a node's state or existence and ships without an inverse.
-It fails just as hard on an inverse that nothing a caller reads ever names.
-That second half is the one that bit us.
+**Every transition here has a correction.**
+An inverse that nothing a caller reads ever names is as bad as a missing one.
 `fno backlog remove` existed and worked for a long time while nothing mentioned it.
 An agent therefore ruled that no delete command existed, and another project kept 23 nodes it believed un-file-able.
 

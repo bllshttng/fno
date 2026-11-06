@@ -55,13 +55,13 @@ All test scripts follow the same convention:
 
 `fno doctor test smoke` is the one-command gate, but it has two layers and a gap that a command-surface change falls straight through.
 
-- A pytest step (unit + integration under `cli/tests/`).
+- A pytest step over `tests/py/`, the dev-only live-contract suite. Run it by hand with `uv run --with pytest --with pytest-timeout --with pyyaml pytest tests/py`.
 - Auto-included shell steps from `HARNESS_GLOBS` in `crates/fno-agents/src/test_smoke_registry.rs`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
 - The pytest step is fail-fast: while it is red, the shell steps never run.
 
-Two shell trees are NOT in the smoke globs and never run unless invoked directly: `cli/tests/smoke/*.sh` and `cli/tests/scenarios/*.sh`. These call commands (`fno backlog new`, `fno agents mail send`, and friends) that the pytest suite does not exercise.
+The `tests/smoke/` tree runs through its own orchestrator, `bash tests/smoke/run-all.sh`, not the root globs. The install smokes beside it (`fno_sh_smoke.sh`, `brew_formula_smoke.sh`, `channel_matrix_smoke.sh`) need a release tarball and run in the release workflows.
 
-When you kill, rename, or nest a CLI command, run the shell layer explicitly: `bash cli/tests/smoke/*.sh`, `bash cli/tests/scenarios/*.sh`, and root `tests/*.sh`. When a command surface changes, a green `fno doctor test smoke` does not prove the shell layer still resolves. A red pytest step can stop fail-fast before shell steps. This happened on a PR that passed 12525 pytest cases while two shell tests still invoked removed commands.
+When you kill, rename, or nest a CLI command, run the shell layer explicitly: `bash tests/smoke/run-all.sh` and root `tests/*.sh`. When a command surface changes, a green `fno doctor test smoke` does not prove the shell layer still resolves. A red pytest step can stop fail-fast before shell steps. This happened on a PR that passed 12525 pytest cases while two shell tests still invoked removed commands.
 
 ### Validation Scripts
 
@@ -501,7 +501,7 @@ Before resetting a `COMPLETE` or `BLOCKED` state file, the helper checks the `cr
 - Enforces the interactive spend cap
 - Checks the routed model against the attested one
 
-**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs` and exposed through the Python bridge `cli/src/fno/context_probe.py`; the skill-local probe is a shim over the command):**
+**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs`; the skill-local probe is a shim over the command):**
 
 - Counts tokens from the transcript and reports `used_pct` against a per-family window
 
@@ -715,13 +715,13 @@ exit $FAILURES
 - The hook detected a build/start command without a recent `.fno/.last-test-run` marker
 - Run your test suite first, then retry the build command
 
-### A `Timeout (>300.0s) from pytest-timeout` failure
+### A `Timeout (>120.0s) from pytest-timeout` failure
 
-A test exceeded the 300-second per-test ceiling in `cli/pyproject.toml`'s pytest ini table, and pytest-timeout raised inside it. The failure IS the hang being named. Before the ceiling existed, a blocked test stalled its smoke shard until the CI cap killed it with no test name in the log.
+A test exceeded the 120-second per-test ceiling in `tests/py/pytest.ini`, and pytest-timeout raised inside it. The failure IS the hang being named. Before the ceiling existed, a blocked test stalled its smoke shard until the CI cap killed it with no test name in the log.
 
 The stack in the failure report (the `~~ Stack of MainThread ~~` block) is the evidence. It points at the call the test was blocked in, usually a wait on a subprocess, a lock, or a keeper process. Read the stack before touching the test. A rerun tells you nothing the hang did not.
 
-File what the stack shows as its own finding. Two known consumers wait on exactly this evidence. One is the open node about a leaked `fno-agents-worker` keeper process surviving job cleanup. The other is the pr-watch work that classifies a pytest red as rerunnable. A named pytest failure is an input that classifier already parses. The ceiling itself is guarded by `cli/tests/unit/test_pytest_timeout_configured.py`, so a `uv sync` cannot quietly drop it.
+File what the stack shows as its own finding. Two known consumers wait on exactly this evidence. One is the open node about a leaked `fno-agents-worker` keeper process surviving job cleanup. The other is the pr-watch work that classifies a pytest red as rerunnable. A named pytest failure is an input that classifier already parses. The ceiling itself is guarded by `tests/py/unit/test_pytest_timeout_configured.py`, so an edit to `pytest.ini` cannot quietly drop it.
 
 ### Debug Mode
 

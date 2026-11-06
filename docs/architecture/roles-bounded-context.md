@@ -94,11 +94,10 @@ An approval floor is a declarative minimum only; role resolution does not implem
 
 ## Verification
 
-The contracts characterize through the Rust parity suites and the surviving journey suites:
+The contracts characterize through the Rust parity suites:
 
 ```bash
 cargo test -p fno-agents --test roles_ls_parity --test roles_show_parity --test roles_resolve_parity --test roles_context_parity --test roles_routing_parity
-fno doctor test cli/tests/journeys/test_growth_studio_pack.py cli/tests/journeys/test_company_function_conformance.py cli/tests/unit/agents/test_model_routing_roles.py
 ```
 
 Run `fno doctor lint menu-caps` to prove the integration adds no command over the cap. A hidden command counts.

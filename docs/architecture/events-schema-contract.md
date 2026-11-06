@@ -426,7 +426,7 @@ Provenance keys are reserved and writer-stamped from ambient identity at the min
    Builders use keyword-only args.
 
    A type written only by Rust ships no Python builder. It names its Rust writer in the description: `attention_answer`, written by the daemon arm in `crates/fno-agents/src/attention_arm.rs`. Rust emits the envelope directly and the parity corpus keeps both languages honest.
-4. Add fixture rows to `cli/tests/events/parity_corpus.jsonl` covering
+4. Add fixture rows to `tests/py/events/parity_corpus.jsonl` covering
    happy path + at least one rejection case. The parity test runs
    both validators against every row and fails on any disagreement.
 5. Update `__all__` in the events module if exporting new symbols.

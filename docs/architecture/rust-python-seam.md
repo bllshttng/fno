@@ -2,11 +2,13 @@
 
 Where the boundary between the Rust runtime and the Python CLI belongs, what a crossing is, and how to score moving one. The companion page [dual-implementation-inventory.md](dual-implementation-inventory.md) holds the dual set and the port protocol. This page holds the boundary rule and the budget a port must satisfy.
 
+**Status: the Python CLI is deleted.** `cli/src/fno` and the wheel's Python package are gone, and `fno` on PATH is the Rust front door. The process-only ruling and the two-axis budget still bind every crossing between the `fno` front door and `fno-agents`. A row below that names a Python owner records where a decision lived before the deletion. Its port is done, and it is not a live crossing.
+
 ## The FFI ruling
 
 **Locked Decision. The seam stays process-only. No in-process channel comes on the table.**
 
-The measured evidence: the tree contains zero FFI. No `pyo3`, no `maturin`, no `cpython`, no `cbindgen` appears in either crate manifest or in `cli/pyproject.toml`. Every crossing in both directions is a process boundary today, and this ruling keeps it that way.
+The measured evidence: the tree contains zero FFI. No `pyo3`, no `maturin`, no `cpython`, no `cbindgen` appears in either crate manifest. Every crossing in both directions is a process boundary today, and this ruling keeps it that way.
 
 The reasoning. A `maturin` build step couples the Python wheel to a compiled artifact on every platform. The install contract of a pure-Python package becomes a build matrix. The repo already ships one generated cross-language artifact, `harness_capabilities.toml`, and its freshness needs its own CI tripwire. Adding an ABI to that surface buys fine-grained ownership at the price of a per-platform build. The seam's traffic does not pay for it: the crossing sites are low-frequency command shells and bounded reads, not hot in-process calls.
 
@@ -18,13 +20,13 @@ The consequence, and it is arithmetic, not preference. A subprocess has no cheap
 
 Reproduce every number below on a clean checkout with `crates/fno/target/debug/fno doctor lint seam-crossings` (build the front door first). It prints, for each baselined set, the measured count beside the baseline count.
 
-Rust reaches the `fno` porcelain through **126 baselined crossing sites in both crates**. The lint also ratchets **32 resolver functions**, every function whose body resolves the porcelain path. The Python direction runs through one door. `cli/src/fno/rust_binary.py` is the only production Python file allowed to exec the literal `fno-agents` binary. 15 production files import it.
+Rust reaches the `fno` porcelain through **133 baselined crossing sites in both crates**. The lint also ratchets **25 resolver functions**, every function whose body resolves the porcelain path. The Python direction is gone: no production Python execs the binaries.
 
 The counting rule, in words, so a reader can audit it without reading the lint. A crossing site is a production Rust line that launches `Command::new("fno")` or calls a baselined resolver helper name. A resolver function is a production Rust function with a line reading the `FNO_BIN` or `FNO_LOOPCHECK_FNO_BIN` env key, or constructing the porcelain path with `join("fno")`. Inline test modules, `crates/*/tests/`, and comment lines are out of scope. The baseline keys on `(rule, path, line content)` as a multiset, never on the line number. A moved line does not churn it. A removed site still fails.
 
 A resolver is detected by shape, never by name. Three helpers carry obvious spellings: `fno_bin` in `crates/fno/src/server.rs:2247`, `fno_bin` in `crates/fno-agents/src/scrape.rs:174`, and `loopcheck_fno_bin` in `crates/fno-agents/src/loopcheck.rs:3091`. Twenty-three more functions resolve the porcelain inline, among them `fno_cmd` in `loop_dispatch.rs:136`, `durable_session_pid` in `claims.rs:2670`, and `best_effort_notify` in `loopcheck.rs:3109`. A historical first count that grepped one literal and four helper names reported 29 sites across 10 files. The full scan then found 56 across 18. That 48 percent shortfall shows why the resolver rule matches the env-key shape instead of a name list.
 
-The write path is the asymmetry that matters, and the store port moved where it lives. The durable store `graph.db` has one writer: the store publish pipeline in `crates/fno-agents/src/graph_store.rs`. The pipeline runs inside the keeper process and serializes every publish under the store's bounded lock. It writes the backup file together with the bytes. The Python porcelain commands stay the only mutation surface on the CLI side. They reach the pipeline over the keeper socket (`cli/src/fno/graph/store.py` is the client). The mux used to shell the porcelain for its reorder commands and read the verdict. Now the native store client (`crates/fno/src/store_client.rs`) speaks the same socket protocol, and the write itself adds no seam crossing. The one crossing a native write pays is the detached `fno backlog render-views` replay: graph.md is still Python-owned, so the write crosses back once for it. The board pages crossed the other way (2026-09-30): the Python HTML renderer is deleted, and the board render is native (`fno board-render` writes the served page with the rows embedded), so the Python replay resolves the configured targets and hands them to the front binary. Reads keep one deliberately duplicated leg. `crates/fno/src/backlog_view.rs` parses the file itself for its read-only snapshots. The direction law forbids linking the store, and a socket round-trip per snapshot read costs more than the duplicate. The seam is no longer duplicated reads on both sides with writes held by Python. It is one store, two socket clients, and one native read mirror.
+The write path is the asymmetry that matters, and the store port moved where it lives. The durable store `graph.db` has one writer: the store publish pipeline in `crates/fno-agents/src/graph_store.rs`. The pipeline runs inside the keeper process and serializes every publish under the store's bounded lock. It writes the backup file together with the bytes. The `fno backlog` commands are the only mutation surface on the CLI side. They reach the pipeline over the keeper socket. The mux used to shell the porcelain for its reorder commands and read the verdict. Now the native store client (`crates/fno/src/store_client.rs`) speaks the same socket protocol, and the write itself adds no seam crossing. The one crossing a native write pays is the detached `fno backlog render-views` replay: graph.md is still Python-owned, so the write crosses back once for it. The board pages crossed the other way (2026-09-30): the Python HTML renderer is deleted, and the board render is native (`fno board-render` writes the served page with the rows embedded), so the Python replay resolves the configured targets and hands them to the front binary. Reads keep one deliberately duplicated leg. `crates/fno/src/backlog_view.rs` parses the file itself for its read-only snapshots. The direction law forbids linking the store, and a socket round-trip per snapshot read costs more than the duplicate. The seam is no longer duplicated reads on both sides with writes held by Python. It is one store, two socket clients, and one native read mirror.
 
 Two interpreter spawns retired with the plan-doc writer port (2026-09-22). `finalize` used to shell `python3 -m` twice per ship, once to stamp the plan and once to graduate it. The writer's whole fact set is the graph rows plus the doc bytes. So the port moved the codec, the projection, and the stamp commands into `crates/fno-agents/src/plan_doc` behind the keeper's `plan_docs` method. `finalize` stamps in process, the Python commands are clients of the same method, and the crossings are gone rather than rebaselined. The plan-doc sidecar lock stays shared vocabulary with the surviving Python body-append writer. The two still serialize on one path scheme.
 
@@ -103,11 +105,10 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `server.rs:10818` | conforming | touch telemetry through the event emit path |
 | `server.rs:10912` | conforming | pane counters through the same emit path |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
-| `doctor/report/collectors.rs installed_pkg_dir` | conforming | installed package dir resolved by the interpreter that owns it, so source-vs-deployed comparison never guesses a site-packages layout |
-| `doctor/report/ops.rs run_session_cost` | conforming | session cost computed by the cost module's own `python3 -m` entry point; the billing arithmetic stays single-implementation in Python |
-| `doctor/mod.rs context_audit_run` | conforming | the context census runs as `python -m fno.context_audit` on the wheel's interpreter, all its inputs in one JSON argument; the census stays Python until its family ports |
+| `doctor/report/ops.rs run_session_cost` | conforming | session cost through `fno-agents context-run --session-cost --json`, one answer per spawn |
+| `doctor/mod.rs context_audit_run` | conforming | the context census through `fno-agents context-run --audit`, all its inputs in one spawn |
 
-The last four rows are the interpreter direction, new with the doctor family port. They exec the wheel's interpreter or `python3`, never the literal porcelain. `report::wheel_python` reads that interpreter from the `fno-py` shebang. So the lint above is silent on them and these rows are the record. Each carries the whole fact set in one spawn: one answer, parsed, no decision split across the boundary. The hook probe's interpreter list in `doctor/report/hooks_probe.rs` launches plugin hook scripts, not facts, so it is no crossing.
+The interpreter direction is retired. The doctor rows that once exec'd the wheel's interpreter now exec `fno-agents`, and the installed-package probe is gone with the wheel.
 
 ## The refusal of consumer-driven scoping
 
@@ -138,152 +139,4 @@ The remaining violating site is `provider.rs:544`, which waits for the plan-path
 
 ### Port order
 
-The outside-in order. Ports run leaves-first: a module nothing imports moves first, then low fan-in, then low churn, then low use. A dependency still outranks the score, per this section's opening paragraph. A port whose landing needs another module's fact set waits for that port whatever the score says. The plan-path resolution port gates the violating crossing named above. A port raises neither budget axis, so a row moving up this order never justifies a new crossing or a new dual.
-
-The table is generated by `bash scripts/metrics/port-order.sh` from a checkout, dated 2026-09-24. Regenerate it there whenever a fresh ranking is needed. The numbers are a dated snapshot, not a freshness gate: churn and use move daily by design, and nothing in CI re-checks them.
-
-The counting rule, in words, so a reader can audit a row without reading the script. One row per top-level module under `cli/src/fno`: a subpackage directory, or a top-level `.py` file. `lines` sums `wc -l` over the module's `.py` files. `fan-in` counts distinct files outside the module importing it, absolute or relative, at any indentation, so function-level imports count. `churn` is commits in the trailing 30 days on `origin/main` touching the module, then open-PR touched files after the slash. A dash means no open PR touches the module. If `gh` is absent the sweep is skipped with a note. `use` counts `fno <command-group>` occurrences in this machine's 30-day agent transcripts plus `"verb"` rows in the event journal. It reads zero on a fresh clone. It counts prose mentions, so it is the loosest of the five numbers. `crossing edges` is the module's degree in the import graph: distinct other modules it imports or is imported by. `leaf` marks fan-in zero. Test-only modules and `conftest` rank as leaves but are not port targets on their own. They move with the production surface they exercise, never ahead of it. The floating single-port backlog nodes link to the port-order backlog node as related entries and carry board ranks in this table's order.
-| # | module | lines | fan-in | churn (30d, commits/prs) | use | crossing edges |
-|---|---|---:|---:|---|---:|---:|
-| 1 | test_cost (leaf) | 484 | 0 | 0/- | 0 | 2 |
-| 2 | test_dispatch_target (leaf) | 198 | 0 | 0/- | 0 | 1 |
-| 3 | test_target_init_blast (leaf) | 276 | 0 | 0/- | 0 | 2 |
-| 4 | test_turn_attribution (leaf) | 222 | 0 | 0/- | 0 | 1 |
-| 5 | do_cli (leaf) | 74 | 0 | 1/- | 0 | 14 |
-| 6 | test_target_init_plan_backfill (leaf) | 353 | 0 | 1/- | 0 | 2 |
-| 7 | plugins (leaf) | 2436 | 0 | 1/- | 39 | 4 |
-| 8 | executor (leaf) | 658 | 0 | 1/- | 145 | 0 |
-| 9 | verify_advise (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 346 | 0 | 2/- | 0 | 2 |
-| 10 | test_dispatch_flags (leaf) | 153 | 0 | 3/- | 0 | 1 |
-| 11 | project (leaf) | 182 | 0 | 4/- | 997 | 2 |
-| 12 | conftest (leaf) | 85 | 0 | 5/- | 0 | 3 |
-| 13 | test_worktree_paths (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 248 | 0 | 5/- | 0 | 1 |
-| 14 | workspace (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 70 | 0 | 5/- | 5453 | 4 |
-| 15 | paths_testing (leaf) | 75 | 0 | 6/- | 0 | 2 |
-| 16 | __init__ (leaf) | 279 | 0 | 7/- | 0 | 0 |
-| 17 | paths_cli (leaf) | 187 | 0 | 7/- | 0 | 5 |
-| 18 | plugin_install_cli (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 79 | 0 | 7/- | 0 | 2 |
-| 19 | worker (leaf) | 795 | 0 | 8/1 | 439 | 6 |
-| 20 | autonomy_cli (leaf) | 362 | 0 | 12/- | 0 | 5 |
-| 21 | doctor_cli (leaf) | 136 | 0 | 22/1 | 0 | 22 |
-| 22 | restart (leaf) | 49 | 0 | 24/- | 3688 | 1 |
-| 23 | paths_verify | 38 | 1 | 0/- | 0 | 2 |
-| 24 | context_audit (ported to Rust and deleted 2026-10, gone on next regen) | 952 | 1 | 1/- | 0 | 2 |
-| 25 | hook_config | 104 | 1 | 1/- | 0 | 1 |
-| 26 | lint_shellout_drift | 499 | 1 | 1/- | 0 | 1 |
-| 27 | worktree_gate (ported to Rust and deleted 2026-10, gone on next regen) | 62 | 1 | 1/- | 0 | 2 |
-| 28 | mcp | 1726 | 1 | 1/- | 17 | 2 |
-| 29 | phase | 91 | 1 | 1/- | 128 | 5 |
-| 30 | bundle | 159 | 1 | 1/- | 262 | 2 |
-| 31 | state_fence | 138 | 1 | 2/- | 0 | 1 |
-| 32 | delivery | 1788 | 1 | 2/- | 30 | 5 |
-| 33 | yard | 125 | 1 | 2/- | 379 | 1 |
-| 34 | doctor_reclaim (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 29 | 1 | 3/- | 0 | 3 |
-| 35 | lint_command_ratchet | 739 | 1 | 3/- | 0 | 4 |
-| 36 | scratch_cli (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 71 | 1 | 3/- | 0 | 3 |
-| 37 | test_runner | 110 | 1 | 3/- | 0 | 2 |
-| 38 | lint_seam_crossings | 419 | 1 | 4/- | 0 | 1 |
-| 39 | review_level (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 209 | 1 | 4/- | 0 | 4 |
-| 41 | post_merge_route | 740 | 1 | 5/- | 0 | 10 |
-| 42 | doctor_bash_census (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 33 | 1 | 6/- | 0 | 3 |
-| 43 | skill_diff | 1360 | 1 | 5/1 | 0 | 6 |
-| 44 | context_probe (ported to Rust and deleted 2026-10, gone on next regen) | 85 | 1 | 7/- | 0 | 3 |
-| 45 | annotate | 56 | 1 | 10/- | 28 | 2 |
-| 46 | status_fanout | 900 | 1 | 11/- | 0 | 9 |
-| 47 | done | 967 | 1 | 11/- | 2607 | 4 |
-| 48 | agent | 1127 | 1 | 14/- | 247 | 12 |
-| 49 | think_inspect | 616 | 1 | 16/1 | 0 | 7 |
-| 50 | route_cli | 646 | 1 | 24/- | 0 | 6 |
-| 51 | worktree_cli (ported to Rust and deleted 2026-10, gone on next regen) | 1092 | 1 | 29/- | 0 | 9 |
-| 52 | test_cmd | 2397 | 1 | 70/- | 0 | 5 |
-| 53 | env_file | 33 | 2 | 0/- | 0 | 2 |
-| 54 | fleet_state | 220 | 2 | 0/- | 0 | 3 |
-| 55 | projects | 359 | 2 | 0/- | 70 | 3 |
-| 56 | research | 860 | 2 | 1/- | 27 | 6 |
-| 57 | setup_cli (ported to Rust and deleted 2026-10, gone on next regen) | 882 | 2 | 2/- | 0 | 5 |
-| 58 | schemas | 406 | 2 | 2/- | 9 | 3 |
-| 59 | stub_manifest | 356 | 2 | 3/- | 0 | 3 |
-| 60 | wake | 158 | 2 | 3/- | 20 | 3 |
-| 61 | health_monitor | 895 | 2 | 4/- | 0 | 3 |
-| 62 | control_plane | 47 | 2 | 5/- | 0 | 4 |
-| 63 | ledger_show | 178 | 2 | 5/- | 0 | 7 |
-| 64 | worktree_status (ported to Rust and deleted 2026-10, gone on next regen) | 165 | 2 | 5/- | 0 | 3 |
-| 65 | relay | 1862 | 2 | 5/- | 810 | 9 |
-| 66 | runtime | 415 | 2 | 6/- | 439 | 5 |
-| 68 | config_readback | 280 | 2 | 8/- | 0 | 5 |
-| 69 | worktree (ported to Rust and deleted 2026-10, gone on next regen) | 596 | 2 | 9/- | 791 | 6 |
-| 70 | doctor_graph | 86 | 2 | 14/1 | 0 | 4 |
-| 71 | resume | 1075 | 2 | 15/- | 228 | 8 |
-| 72 | law | 189 | 2 | 22/- | 2654 | 5 |
-| 73 | doctor_lanes (ported to Rust and deleted 2026-10, gone on next regen) | 542 | 2 | 28/- | 0 | 5 |
-| 74 | observer | 2574 | 2 | 34/1 | 72 | 12 |
-| 75 | lint_cli | 2165 | 2 | 42/- | 0 | 13 |
-| 76 | update | 1662 | 2 | 62/- | 7478 | 8 |
-| 77 | config_cli | 1723 | 2 | 73/- | 0 | 16 |
-| 78 | llm | 72 | 3 | 0/- | 0 | 2 |
-| 79 | approvals | 1703 | 3 | 0/- | 65 | 7 |
-| 80 | turn_attribution | 153 | 3 | 1/- | 0 | 3 |
-| 81 | ledger_join | 122 | 3 | 2/- | 0 | 4 |
-| 82 | terminals | 18 | 3 | 2/- | 0 | 3 |
-| 83 | drive_authority | 133 | 3 | 3/- | 0 | 5 |
-| 84 | command_moves | 167 | 3 | 4/- | 0 | 3 |
-| 85 | active_backlog | 108 | 3 | 11/- | 0 | 5 |
-| 86 | target | 2216 | 3 | 15/- | 9616 | 11 |
-| 87 | route_slot_client | 30 | 3 | 17/- | 0 | 4 |
-| 88 | footprint (ported to Rust and deleted 2026-10, gone on next regen) | 480 | 3 | 23/- | 8 | 3 |
-| 89 | doctor_footprint (ported to Rust and deleted 2026-10, gone on next regen) | 1194 | 3 | 68/- | 0 | 8 |
-| 90 | _lazy_group | 502 | 4 | 2/- | 0 | 7 |
-| 91 | user | 62 | 4 | 3/- | 588 | 5 |
-| 92 | loops | 202 | 4 | 4/- | 42 | 8 |
-| 93 | worktree_stranded (ported to Rust and deleted 2026-10, gone on next regen) | 419 | 4 | 16/- | 0 | 8 |
-| 94 | cli | 933 | 4 | 17/- | 1183 | 13 |
-| 95 | recovery | 1438 | 4 | 30/1 | 0 | 8 |
-| 96 | evals | 1557 | 4 | 64/- | 97 | 12 |
-| 97 | mutex | 245 | 5 | 1/- | 7 | 5 |
-| 98 | notify | 223 | 5 | 7/- | 260 | 7 |
-| 99 | style | 741 | 5 | 10/- | 18 | 5 |
-| 100 | retro | 4236 | 5 | 16/- | 238 | 15 |
-| 101 | hermetic | 623 | 5 | 46/- | 6 | 5 |
-| 102 | target_cli | 3810 | 5 | 69/- | 0 | 30 |
-| 103 | doctor | 4599 | 5 | 111/1 | 275486 | 23 |
-| 104 | time_budget | 19 | 6 | 0/- | 0 | 3 |
-| 105 | outstanding | 1794 | 6 | 47/- | 6451 | 18 |
-| 106 | text_or_file | 34 | 7 | 4/- | 0 | 5 |
-| 107 | review_capability | 1096 | 7 | 18/- | 0 | 9 |
-| 108 | handoff | 153 | 8 | 1/- | 2 | 8 |
-| 109 | cost | 2774 | 8 | 16/1 | 58 | 15 |
-| 110 | harness_names | 76 | 8 | 18/- | 0 | 5 |
-| 111 | review (the review family ported to Rust and deleted 2026-10, gone on next regen) | 2373 | 8 | 49/- | 31086 | 14 |
-| 112 | roles | 2025 | 9 | 0/- | 7 | 6 |
-| 113 | state | 922 | 9 | 12/- | 3396 | 13 |
-| 114 | worktree_paths (ported to Rust and deleted 2026-10, gone on next regen) | 487 | 9 | 17/- | 0 | 11 |
-| 115 | scoreboard | 3116 | 9 | 29/1 | 68 | 13 |
-| 116 | pr_watch | 6345 | 9 | 191/1 | 0 | 26 |
-| 117 | dispatch_flags | 203 | 10 | 10/- | 0 | 7 |
-| 118 | inbox | 2950 | 10 | 24/- | 156599 | 19 |
-| 119 | lead | 2302 | 10 | 143/1 | 1342 | 14 |
-| 120 | tombstones | 145 | 11 | 2/- | 0 | 10 |
-| 121 | _flag_aliases | 123 | 11 | 3/- | 0 | 9 |
-| 122 | decide | 3080 | 11 | 60/- | 3062 | 21 |
-| 123 | config_io | 310 | 12 | 9/- | 0 | 7 |
-| 124 | route_resolve | 792 | 12 | 71/- | 0 | 11 |
-| 125 | bus | 918 | 13 | 15/- | 16 | 9 |
-| 126 | carveout | 1235 | 14 | 5/- | 338 | 14 |
-| 127 | setup | 4816 | 14 | 55/1 | 253 | 20 |
-| 128 | mail | 8480 | 14 | 147/1 | 14932 | 24 |
-| 129 | pr | 15558 | 15 | 283/2 | 5861 | 25 |
-| 130 | backlog | 10985 | 15 | 335/2 | 581738 | 30 |
-| 131 | company | 1148 | 16 | 1/- | 0 | 7 |
-| 132 | adapters | 28642 | 18 | 96/- | 0 | 15 |
-| 133 | plan | 6935 | 19 | 60/1 | 10200 | 19 |
-| 134 | provenance | 2984 | 23 | 26/- | 18 | 23 |
-| 135 | _subprocess_util | 89 | 33 | 4/- | 0 | 25 |
-| 136 | tracker | 582 | 36 | 8/- | 27 | 23 |
-| 137 | claims | 7393 | 58 | 188/1 | 84 | 34 |
-| 138 | harness_identity | 1307 | 61 | 43/- | 0 | 27 |
-| 139 | events | 4519 | 66 | 268/3 | 374 | 42 |
-| 140 | graph | 37715 | 83 | 689/4 | 364 | 59 |
-| 141 | agents | 67376 | 84 | 1388/1 | 579514 | 74 |
-| 142 | config | 8388 | 102 | 325/1 | 106736 | 57 |
-| 143 | rust_binary | 300 | 103 | 13/- | 0 | 42 |
-| 144 | paths | 1844 | 190 | 45/2 | 442 | 74 |
+The port-order table ranked the modules under `cli/src/fno`. That tree is deleted, so the table is retired. A future port between the two crates still runs leaves-first, and a dependency still outranks the score.

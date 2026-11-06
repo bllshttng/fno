@@ -1,6 +1,6 @@
 # Known command surface held by the CI ratchet.
-# Every invocable leaf command, one per line, sorted: the fno-py registry (visible
-# AND hidden, recursed to leaves) plus the Rust front's mux + version surface.
+# Every invocable leaf command, one per line, sorted: the pinned registry rows
+# (visible AND hidden, recursed to leaves) plus the Rust front's mux + version surface.
 # Remove or add a line only in the same PR that removes or adds the command.
 #
 # ALLOCATE THE ACTION FIRST. A new action must have a row in
@@ -31,7 +31,7 @@
 #   flag-exception: <rationale>
 # (same shape as `command-exception:`; removals are free and need no line).
 #
-# Scope: the hidden-option coverage is fno-py only. The Rust front's COMMANDS are
+# Scope: the hidden-option coverage reads the pinned registry rows only. The Rust front's COMMANDS are
 # read from its dispatchers and cross-checked against the live binary, but its
 # FLAGS are not enumerated, so a hidden flag on a mux command is invisible to this
 # gate. The lint output names that boundary on every green run.

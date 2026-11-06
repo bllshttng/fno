@@ -66,7 +66,7 @@ The drift this section used to warn about is now closed, and it is worth knowing
 
 - **Rust const vs Rust call sites:** `every_production_emit_kind_is_registered` (`crates/fno-agents/src/lib.rs`) scans every production `.emit(` and fails on an unregistered kind. It truncates each file at the first `#[cfg(test)]` so test fixtures do not register themselves.
 - **Rust const vs `schema.yaml`:** step 6 of `scripts/check-event-schema-parity.sh` asserts `KNOWN_EVENT_KINDS` is a subset of the documented `event_types`. Subset, not equality, because `schema.yaml` also carries Python types and loop-runtime `type` events that never get a const entry. It needs the built binary, so it runs on the `rust-ci.yml` leg.
-- **The Python-side view of the const:** `cli/tests/events/test_rust_events_documented.py` parses the const out of `lib.rs` rather than mirroring it. It previously kept a hand-written copy, which drifted 16 entries behind and stayed green for six weeks, because every assertion there is additive-only: a kind missing from the copy was a kind nothing asserted about. A `>= 40`-entry floor makes a broken parse loud instead of vacuous.
+- **The Python-side view of the const:** `tests/py/events/test_rust_events_documented.py` parses the const out of `lib.rs` rather than mirroring it. It previously kept a hand-written copy, which drifted 16 entries behind and stayed green for six weeks, because every assertion there is additive-only: a kind missing from the copy was a kind nothing asserted about. A `>= 40`-entry floor makes a broken parse loud instead of vacuous.
 
 A hand-maintained list with a comment asking the next person to remember is the thing all three of these replaced.
 

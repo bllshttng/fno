@@ -44,7 +44,7 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install bllshttng/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use.
+`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agents` binaries. `brew install bllshttng/fno/fno` installs the same tarball. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It carries the same four binaries and no Python code. An update moves it to the tarball install. `cargo install fno` is the source route. It builds the front door with your Rust toolchain.
 
 ### Local clone
 
@@ -56,7 +56,7 @@ cd footnote
 bash scripts/setup.sh
 ```
 
-The setup checks the prerequisites (`bash`, `git`, `gh`, `jq`, and `python3` 3.11+ or `uv`). It registers the global `~/.fno` state dir and scaffolds `.fno/config.toml` in the clone. When no `fno` answers, it installs the CLI through the same `fno.sh` the curl one-liner uses. Afterwards `fno`, `fno-agents`, and the mux all answer. Per-path overrides live in the `config.paths.*` keys: see [path configuration](path-config.md).
+The setup checks the prerequisites (`bash`, `git`, `gh` and `jq`). It registers the global `~/.fno` state dir and scaffolds `.fno/config.toml` in the clone. When no `fno` answers, it installs the CLI through the same `fno.sh` the curl one-liner uses. Afterwards `fno`, `fno-agents`, and the mux all answer. Per-path overrides live in the `config.paths.*` keys: see [path configuration](path-config.md).
 
 ### Windows (WSL2)
 
@@ -68,7 +68,7 @@ One-time setup, from PowerShell as Administrator:
 wsl --install        # installs WSL2 + Ubuntu; reboot if prompted
 ```
 
-Then open the Ubuntu shell and work from there. Install `gh`, Python 3.11+, and `jq`. Run Claude Code inside WSL2, and follow the install steps above. Keep your repos on the Linux filesystem (under `~/`), not `/mnt/c/...`. On the Windows mount, file locking and file watches are slow and unreliable.
+Then open the Ubuntu shell and work from there. Install `gh` and `jq`. Run Claude Code inside WSL2, and follow the install steps above. Keep your repos on the Linux filesystem (under `~/`), not `/mnt/c/...`. On the Windows mount, file locking and file watches are slow and unreliable.
 
 ## Verify it worked
 
@@ -76,7 +76,7 @@ Then open the Ubuntu shell and work from there. Install `gh`, Python 3.11+, and 
 fno --version          # prints a version
 ```
 
-If `fno` is "command not found", your install predates the complete payload or is a source/editable dev build (those are development artifacts and carry no binaries). Every supported channel ships the Rust **`fno` front door**: the wheel, the plugin's first-session installer, `fno.sh`, and Homebrew. The front door owns the mux and bootstraps the Python CLI. Repair: upgrade to a current release through your channel, or install the front door directly with `cargo install fno` (needs a **Rust toolchain**, `rustup`). When the front door is missing, a Claude Code session also reminds you. Until it is installed, reach the CLI directly as `fno-py`. When even `fno-py` is missing, run the zero-binary doctor from the installed plugin tree: `bash ~/.claude/plugins/cache/footnote/fno/*/scripts/install/bootstrap.sh`. It prints every prerequisite's state and exact fix as JSON. `--repair` runs the plugin's own installer and never edits shell rc files. `--from-source <checkout>` builds and installs from a clone.
+If `fno` is "command not found", your install predates the complete payload or is a source/editable dev build (those are development artifacts and carry no binaries). Every supported channel ships the Rust **`fno` front door**: the bridge wheel, the plugin's first-session installer, `fno.sh`, and Homebrew. Repair: run `curl -fsSL fno.sh | sh`, or install the front door directly with `cargo install fno` (needs a **Rust toolchain**, `rustup`). When the front door is missing, a Claude Code session also reminds you. To see what is missing, run the zero-binary doctor from the installed plugin tree: `bash ~/.claude/plugins/cache/footnote/fno/*/scripts/install/bootstrap.sh`. It prints every prerequisite's state and exact fix as JSON. `--repair` runs the plugin's own installer and never edits shell rc files. `--from-source <checkout>` builds and installs from a clone.
 
 Inside Claude Code, type `/fno:` and skill autocomplete appears (`target`, `think`, `blueprint`, ...).
 

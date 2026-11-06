@@ -8,9 +8,11 @@ The operator ruling. When any trigger fires, port a Python behavior to Rust.
 
 The first two triggers do not reach a shared-vocabulary or a generated-artifact guard. Those stay excluded regardless of benefit, because porting them retires nothing and a generated-artifact tripwire is correct as built. The parity-guard trigger applies only when the guard pins two implementations of one decision, not when it checks shared vocabulary or generated data.
 
+**Status: the Python leg is deleted.** `cli/src/fno` is gone, so every dual-logic row below whose second leg lived there has lost that leg. Its guard is a characterization test or is gone. The rows keep their file:line citations as the record of each port. Do not read a `cli/src/fno` path below as live code. The protocol and the discriminator still bind any duplicate that remains between a skill, hook or script and the Rust crates.
+
 This page answers four questions. Which cross-tree guards mark a real second implementation. What the procedure is for retiring one. Why most of these guards are not port candidates at all. When a port is justified without duplication.
 
-**The registry skew write.** Dual, disposition dual-logic. Under schema skew, `cli/src/fno/agents/registry.py::update_registry` delegates to `crates/fno-agents/src/registry_commit.rs` under the shared registry lock; the Rust door merges unknown row and top-level fields before atomic publish. Python retains its strict writer at or below its own schema until those writers port.
+**The registry skew write.** Single leg now. `crates/fno-agents/src/registry_commit.rs` is the one registry writer. It holds the shared registry lock and merges unknown row and top-level fields before the atomic publish.
 
 ## The discriminator
 

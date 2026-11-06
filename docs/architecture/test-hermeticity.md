@@ -28,7 +28,7 @@ A sixth entry on an allowlist facing a surface that size is the same defect with
 
 ## Move 1: deny by default
 
-`cli/src/fno/hermetic.py` owns the surface and two operations over it.
+`crates/fno-agents/src/test_env.rs` owns the surface and two operations over it (`neutralise` and `poison`). `fno-agents test-run env` serves them to the shell and pytest trees.
 
 `FNO_*` and `TARGET_*` are swept as **classes**. A 125th `FNO_*` var added to source neutralises without editing the module.
 `TARGET_*` earns the same treatment because a live `/target` session exports `TARGET_INPUT`, `TARGET_PLAN_PATH`, `TARGET_SIZE` and more, so a suite run inside one inherits that session's parameters.
@@ -36,7 +36,7 @@ A sixth entry on an allowlist facing a surface that size is the same defect with
 Session identity is **read** from `identity_markers` in `crates/fno-agents/src/ambient_vocab.toml`, never retyped.
 That tuple is already derived from `HARNESS_SESSION_MARKERS` because a hand-maintained copy had previously lost `CLAUDE_SESSION_ID`.
 
-Everything else is a short, justified list, and `cli/tests/unit/test_ambient_surface.py` is what keeps it from rotting: it walks every env read in `cli/src` and `crates`, and fails on a name classified neither `ambient` nor `environment`, naming the file that reads it.
+Everything else is a short, justified list in `crates/fno-agents/src/ambient_vocab.toml`. The walker that failed on an unclassified env read was a pytest file, and it went with the Python tree. No gate walks the `crates` env reads against that list today, so a new read must be classified by hand.
 Writing the decision down is the whole job; both answers are fine.
 On its first run it caught `$CLI` in `loop_dispatch.rs`, which nothing had scrubbed.
 
@@ -55,7 +55,7 @@ Reading them from `$HOME` would make them differ between the two lanes below, an
 ### The channel an env fixture cannot close
 
 `_carveout_ledger_root` resolves from the caller's **CWD** via `git worktree list`.
-No environment variable bounds that, so the carve-out channel is closed at the reader (`_hermetic_promise_carveout_gate` in `cli/tests/conftest.py`) for the pytest tree, and by running from a non-worktree directory for a shell test.
+No environment variable bounds that, so the carve-out channel is closed at the reader (`_hermetic_promise_carveout_gate` in `tests/py/conftest.py`) for the pytest tree, and by running from a non-worktree directory for a shell test.
 This is a real limit of the env-level cure, stated here rather than papered over.
 
 ### The channel a pin cannot reach: a hand-built path
@@ -64,25 +64,23 @@ An env pin only reaches a reader that consults it. A module that composes `<root
 
 Two moves close it, and the pair is the point: fix the caller, then make the next one impossible.
 
-1. **Every journal path resolves through one function.** Python callers use `fno.paths.project_events_json`. Rust loop callers use `ProjectJournalPath::for_repo`. The shell uses `scripts/lib/events.sh`, and claim audits use `claims::claim_events_path`. All four implement the same precedence: an explicitly named journal, then the pin, then the resolved repo root. A caller that holds its own root still wins. One sandbox journal serves a whole pytest process. Honouring the pin there replaces that caller's file with a shared bucket.
+1. **Every journal path resolves through one function.** Rust loop callers use `ProjectJournalPath::for_repo`. The shell uses `scripts/lib/events.sh`, and claim audits use `claims::claim_events_path`. All three implement the same precedence: an explicitly named journal, then the pin, then the resolved repo root. A caller that holds its own root still wins. One sandbox journal serves a whole pytest process. Honouring the pin there replaces that caller's file with a shared bucket.
 2. **`append_event` refuses a write that leaves the sandbox.** `FNO_TEST_HERMETIC` was a receipt nothing read. It is now the key this guard turns on. Under it, a resolved path outside `TMPDIR` or an absolute pin raises `HermeticEscapeError`. A relative pin is not a root, or `.` resolves to the checkout and the guard turns itself off. The refusal names the path and both ways to fix the call. Almost every event write in the tree funnels through that function. A hand-built path is stopped rather than landing in production. Two writers do not pass here and never did. `events/log.py` writes under its own filelock, `agents/events.py` through a bare append. Each is protected by resolving its path correctly instead. `log.py` carried the same cwd-relative literal and is fixed with the rest. Stopped, not always loud. An event emit is best-effort by contract across this codebase. A best-effort caller catches the refusal and prints a stderr warning, which pytest hides on a green run. The write never happens either way. Two details the guard earns its comments for. Only the RESOLVED path is judged. Judge the raw form too and a symlink inside the sandbox passes while resolving to a live journal. That is the exact worktree shape this guard exists to stop. `HOME` is not an allowed root either. A test that restores the real one widens the sandbox to the whole home directory.
 
 The same rule covers the operator's screen. The notify dispatch owner (`crates/fno-agents/src/notify_dispatch.rs`, generated into `crates/fno`) checks the stamp at each channel. The `osascript` / `notify-send` dispatch skips, the mux one-shot spawn skips, and the journal row is not written. The daemon chokepoint (`operator_notice.rs`) refuses under `cargo test` unless a test pins `FNO_BIN`, and spawned children carry the stamp through `test_run::self_owner_env`. The check sits at the dispatch, not at the top of `send_notification`. That keeps the no-notifier degrade (AC2-FR) answering non-zero, so a caller that escalates on it is never fed a false "delivered". A test that asserts a dispatch happens opts out with `monkeypatch.setenv("FNO_TEST_HERMETIC", "0")`, the ambient declaration. Deleting the pin is not the opt-out: an absent pin declares nothing, and under a test runner that now refuses.
 
-## Move 2: one boundary, four trees
+## Move 2: one boundary, three trees
 
-`crates/fno-agents/src/test_env.rs::neutralise` (via the native command, or the `test-env` door for the pytest roots) builds the environment for all four test trees:
+`crates/fno-agents/src/test_env.rs::neutralise` (via the native command, or the `test-env` door for the pytest roots) builds the environment for all three test trees:
 
-- pytest over `cli/tests/**`
-- pytest over `cli/src/fno/**/test_*.py` (a separate pytest root with its own conftest)
+- pytest over `tests/py/**`
 - every `bash tests/*.sh` step in the smoke registry, via `_smoke_env`
 - `cargo nextest` / `cargo test`, per crate
 
-One `neutralise` call there covers all four.
+One `neutralise` call there covers all three.
 No shell mirror and no Rust mirror exist, so none can drift: a guard placed on one of N reachable paths is decorative.
 
-Both conftests additionally call `neutralise(os.environ)` **at module load**, which covers a developer running a bare `pytest cli/tests/...`.
-Module load rather than a fixture because `fno.graph` freezes its path constants at import time, so a fixture is already too late.
+`tests/py/conftest.py` additionally applies the `fno-agents test-run env` answer **at module load**, which covers a developer running a bare `pytest tests/py`. Module load rather than a fixture, because a helper can freeze a path at import time, and a fixture is already too late.
 
 ## Move 3: the dirty lane
 
@@ -96,19 +94,19 @@ Neutralising alone cannot detect a test that reads ambient state, because afterw
 - If the surface missed a name, that name survives the copy into the child, a test that reads it sees an `fno-poison-*` sentinel, and it fails **naming itself**.
 
 A green clean lane beside a red dirty lane on the same commit is the divergence; no diffing machinery is needed, and the failing test id is the attribution.
-The invariant this rests on is asserted directly in `cli/tests/unit/test_hermetic.py`, not inferred from a green suite.
+The invariant this rests on is asserted directly by the unit tests in `crates/fno-agents/src/test_env.rs`, not inferred from a green suite.
 
-The poison profile (`cli/tests/fixtures/ambient-poison/`) is derived from the three measured specimens.
+The poison profile (`tests/py/fixtures/ambient-poison/`) is derived from the three measured specimens.
 Values are sentinels rather than plausible data: a leak has to fail loudly, and a realistic value might quietly pass and teach nobody anything.
 
 ### The positive control is mandatory
 
 A dirty lane that is green because it never poisons anything is an absence-only success condition: it cannot distinguish "no leaks" from "the instrument never ran".
 
-`AMBIENT_LEAK_CANARY` carries no `FNO_` prefix and is not a session marker, so nothing in `hermetic.py` scrubs it.
+`AMBIENT_LEAK_CANARY` carries no `FNO_` prefix and is not a session marker, so nothing in `test_env.rs` scrubs it.
 That is the point: it simulates the channel the inventory has not thought of yet.
 
-`cli/tests/unit/test_ambient_canary.py` reads it, and `tests/ci/test_hermetic_lanes.sh` asserts **both** halves:
+`tests/ci/canaries/ambient-canary.sh` reads it, and `tests/ci/test_hermetic_lanes.sh` asserts **both** halves:
 
 ```
 clean lane -> canary unset -> the canary test PASSES
@@ -122,7 +120,7 @@ A dirty-lane failure of the canary is never something to fix by pinning it.
 
 Ambient neutralisation cannot close readers that derive answers from Git, config files, registries, claims, or cached path decisions. The state command runs the Python smoke step twice. It uses an empty profile and a populated profile. It compares JUnit testcase verdicts by node ID.
 
-The populated profile contains a graph node named `STATE_LEAK_CANARY`, a config profile, an agent registry role, a session identity, and one claim. The canary reads the graph through `fno.paths.graph_json()`. Clean passes because the marker is absent. Populated fails because the marker is present. `tests/ci/test_state_lanes.sh` asserts both outcomes. An empty diff cannot read as green. Neither can an unpopulated profile.
+The populated profile contains a graph node named `STATE_LEAK_CANARY`, a config profile, an agent registry role, a session identity, and one claim. The canary, `tests/ci/canaries/state-canary.sh`, searches the step's `~/.fno` for the marker. Clean passes because the marker is absent. Populated fails because the marker is present. `tests/ci/test_state_lanes.sh` asserts both outcomes. An empty diff cannot read as green. Neither can an unpopulated profile.
 
 The profile is a discovery instrument, not a completeness proof. A populated run proves the listed profile reached the reader. It proves the changed testcase list is real. It does not prove every possible state store was represented. The execution summary must record named escapes.
 
@@ -130,15 +128,11 @@ The final populated full smoke run completed with 18,789 passed, 127 skipped, an
 
 ## Cached declared state
 
-The R5 guard walks every `lru_cache` and `cache` decorator under `cli/src/fno`. Each cached declared-state reader has one of two recorded answers. A declared root argument is part of its cache key. Or a recorded reason explains why the cache is not a state reader. `fleet_has_role_at(registry_path)` and `_load_settings_at` (keyed on the full declaration) are the keyed precedents. The zero-arg caches over `load_settings`, `_settings`, `resolve_repo_root`, and the graph status map are retired. Their keyed replacements need no clear registry. Tool discovery and machine-identity caches are recorded as non-state caches with reasons.
-
-`cli/tests/unit/test_cached_state_surface.py` contains a positive control that fails on an unregistered zero-argument cache and passes on a root-keyed cache. A zero-hit scan without that positive control is not evidence that the decorator walk ran.
+The R5 guard walked every `lru_cache` and `cache` decorator under `cli/src/fno`, so a cached declared-state reader could not outlive a test's root. That tree is deleted, and the guard went with it. A Rust reader that caches declared state keys the cache on the declared root, and the reader's own unit test pins that.
 
 ## State accessor fence
 
-When `FNO_TEST_HERMETIC=1`, the `fno.paths` state accessors pass their resolved paths through the existing events hermetic fence. A path outside the temporary allowed roots raises `HermeticEscapeError` with the path and remediation. The check judges the resolved path, so a symlink inside the sandbox cannot redirect a write to a live journal.
-
-The shell appender carries the same fence. When `FNO_TEST_HERMETIC=1`, `_append_bounded_event` in `scripts/lib/events.sh` refuses a journal write outside the allowed roots. It names the path on stderr and returns non-zero. Three hooks build a `${REPO_ROOT}/.fno/events.jsonl` path themselves, so `FNO_EVENTS_PATH` never reaches them. In a worktree that file is a symlink to the canonical journal. That is how 33 fixture questions reached the operator's live queue on 2026-08-20. The refusal judges the physical directory, so it follows the symlink before it decides. Both guards run before the mutex. Acquiring the mutex creates a writer directory beside the journal, which touches the file the guard refuses.
+The shell appender carries the events hermetic fence. When `FNO_TEST_HERMETIC=1`, `_append_bounded_event` in `scripts/lib/events.sh` refuses a journal write outside the allowed roots. It names the path on stderr and returns non-zero. Three hooks build a `${REPO_ROOT}/.fno/events.jsonl` path themselves, so `FNO_EVENTS_PATH` never reaches them. In a worktree that file is a symlink to the canonical journal. That is how 33 fixture questions reached the operator's live queue on 2026-08-20. The refusal judges the physical directory, so it follows the symlink before it decides. Both guards run before the mutex. Acquiring the mutex creates a writer directory beside the journal, which touches the file the guard refuses.
 
 ## The project journal is opt-in
 
@@ -156,11 +150,11 @@ The rule names the directory, not a state root. `STATE_DIR` cannot be read here.
 
 ## A declared root or a refusal
 
-`FNO_TEST_HERMETIC` has three states and `fno.hermetic.declared_root` reads all three. `1` declares a sandboxed process root. `0` is ambient on purpose, and is set PER TEST by the handful of tests asserting production behavior. No lane runs on it. `--ambient dirty` builds its child env as `neutralise(poison(E))`. `poison` never touches the pin, and `neutralise` stamps `1` unconditionally. So the dirty lane runs pinned, like the clean one. Absent means nothing was declared. Under a test runner that refuses with `UndeclaredStateRootError`, naming the path, its root class and the three ways to declare. The marker for "under a test runner" is `pytest` in `sys.modules`, because the runner itself produces it and it is true at import time, which `PYTEST_CURRENT_TEST` is not. Both pytest trees declare a process root in-process already, at `cli/tests/conftest.py` and `cli/src/fno/conftest.py`, so the refusal only meets a lane that skipped the conftest chain. Production never meets it.
+`FNO_TEST_HERMETIC` has three states and `crates/fno-agents/src/test_env.rs` reads all three. `1` declares a sandboxed process root. `0` is ambient on purpose, and is set PER TEST by the handful of tests asserting production behavior. No lane runs on it. `--ambient dirty` builds its child env as `neutralise(poison(E))`. `poison` never touches the pin, and `neutralise` stamps `1` unconditionally. So the dirty lane runs pinned, like the clean one. Absent means nothing was declared. Under a test runner that refuses with `UndeclaredStateRootError`, naming the path, its root class and the three ways to declare. The marker for "under a test runner" is `pytest` in `sys.modules`, because the runner itself produces it and it is true at import time, which `PYTEST_CURRENT_TEST` is not. Both pytest trees declare a process root in-process already, at `tests/py/conftest.py` and `cli/src/fno/conftest.py`, so the refusal only meets a lane that skipped the conftest chain. Production never meets it.
 
 The Rust runtime carries the same rule inside the lib crate, and only there. `AgentsHome::from_env` and `durable_spaces_root` refuse the ambient `$HOME` fallback under `cfg!(test)` unless a root is declared, because `cargo test` sandboxes no `HOME`. A test declares one with `paths::DeclaredRoot`, which pins `FNO_SPACES_DIR` and `FNO_AGENTS_HOME` under `std::env::temp_dir()` and restores them on drop.
 
-The fno porcelain follows the same rule. Under `cfg!(test)`, `scrape::fno_bin`, `scrape::fno_py` and `loopcheck::loopcheck_fno_bin` answer only a declared `FNO_BIN` / `FNO_PY` / `FNO_LOOPCHECK_FNO_BIN`; undeclared, each answers a path that cannot exec. A raw `cargo test` inherits the calling session's identity, and the installed fno's parent push would mail that session a false `[fno:blocked]` alarm, which is exactly what two distress lib tests did to a lead session on 2026-09-21.
+The fno porcelain follows the same rule. Under `cfg!(test)`, `scrape::fno_bin` and `loopcheck::loopcheck_fno_bin` answer only a declared `FNO_BIN` / `FNO_LOOPCHECK_FNO_BIN`; undeclared, each answers a path that cannot exec. A raw `cargo test` inherits the calling session's identity, and the installed fno's parent push would mail that session a false `[fno:blocked]` alarm, which is exactly what two distress lib tests did to a lead session on 2026-09-21.
 
 Two resolvers, not every resolver. `claims::global_claims_root` carries the same `$HOME` fallback and is unfenced, so a bare `cargo test --lib` still creates `$HOME/.fno/claims`. That was measured on 2026-09-07. The poisoned-HOME canary is what catches it, so this page names the gap instead of claiming it closed.
 
@@ -202,7 +196,7 @@ Hermeticity is applied by the **runner**. `bash tests/whatever.sh` skips it and 
 
 ## Session tripwire
 
-The ceiling bounds where config is READ from. It cannot stop a writer. The write-side guard is the session tripwire in `cli/tests/prod_tripwire.py`. At module load, `conftest.py` snapshots the live roots under the REAL env. It runs on the xdist controller only. The roots: the real `~/.fno` at depth 2, `~/.claude` at depth 1, and the real plans dir at depth 1. The two checkouts follow at depth 1: the canonical checkout and the running checkout's toplevel. The Rust binary resolves the plans dir, so the copy cannot drift from the answer tests actually read.
+The ceiling bounds where config is READ from. It cannot stop a writer. The write-side guard is the session tripwire in `tests/py/prod_tripwire.py`. At module load, `conftest.py` snapshots the live roots under the REAL env. It runs on the xdist controller only. The roots: the real `~/.fno` at depth 2, `~/.claude` at depth 1, and the real plans dir at depth 1. The two checkouts follow at depth 1: the canonical checkout and the running checkout's toplevel. The Rust binary resolves the plans dir, so the copy cannot drift from the answer tests actually read.
 
 When the session finishes, `pytest_sessionfinish` re-walks the roots and re-judges every new entry. A name matching the session's basetemp slug is a leak. The slug is parent-name + basetemp-name. It is never the bare `pytest-of-` prefix every other pytest run shares. File bytes containing the basetemp or sandbox path are a leak. The hook prints one line per leak and fails the run with `pytest.ExitCode.TESTS_FAILED`. A new `fno-probe-` entry warns and does not fail. A live codex spawn writes that name too. Entries under `worktrees/`, `cargo-build/`, `target/` and `.git/` are never walked. The tripwire reports and never deletes.
 

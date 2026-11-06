@@ -21,7 +21,7 @@ Lead responses with the next action, number multi-step work, give concrete time 
 6. **Comments earn their place.** Match the surrounding file's comment density and idiom; add one only for a non-obvious invariant, race, or why-not-the-obvious. Never ticket/PR/node IDs. `scripts/ci/check-no-internal-refs.sh` fails on node IDs, prose and code alike; bare ticket and PR numbers still have no gate.
 7. **Reproduce before you fix.** Reproduce a bug end-to-end on the real user path before editing; the repro is also the proof the fix landed. When a UI is in the loop, exercise it and be picky (see #4).
 8. **Quality outweighs cost.** Prefer quality, simplicity and robustness over effort; never overrides #2.
-9. **Delete a leg, never a harness forcing two to agree.** Protocol: [dual-implementation-inventory](docs/architecture/dual-implementation-inventory.md). Plans here audit Python (`cli/src/fno`) and Rust (`crates/`) per surface by file:line or rg-absent, check the inventory, and explain one-leg fixes.
+9. **Delete a leg, never a harness forcing two to agree.** Protocol: [dual-implementation-inventory](docs/architecture/dual-implementation-inventory.md). The Python runtime is gone, so `crates/` is the one leg. Plans check the inventory for any surface a skill, hook or script still duplicates, cite it by file:line or rg-absent, and explain one-leg fixes.
 
 ## Pitfalls corpus (capped)
 
@@ -45,8 +45,9 @@ footnote/
 ├── commands/         # Slash commands
 ├── hooks/            # Stop hooks, session-start, context monitor
 ├── scripts/          # Validation, metrics, orchestration, diagnostics
-├── cli/              # `fno` CLI (Python + uv) + tests
-├── crates/           # Rust runtime (fno-agents)
+├── cli/              # Data the binaries read by path (setup assets, scope)
+├── crates/           # Rust runtime: fno front door + fno-agents
+├── tests/            # Shell tests, tests/py (dev-only pytest), tests/smoke
 └── internal ->       # Obsidian vault symlink (not git-tracked)
 ```
 
@@ -56,7 +57,7 @@ footnote/
 - **Search:** prefer `rg` / Grep over `grep -r` (descends into nested worktrees). Scope any `grep -r` to a path. Load-bearing sweep: `RIPGREP_CONFIG_PATH= rg -uu`, never a bare `rg -uu` (`-u` ignores files, not globs).
 - **Prose style:** a paragraph is ONE physical line. A newline starts the next block. House style, and the gate: [docs/style-rules.md](docs/style-rules.md).
 - **Flags, not env prefixes:** agents invoke `fno do <command> --flag`, never `ENV_VAR=x fno do <command>`. A knob with only an env var gets its missing flag filed.
-- **File budget:** a file over 5,000 lines is shrink-only. `cli/src/fno` bars new Python (use `crates/`); an edit is a port, deletion or lead-approved blocking-bug fix, no new surface, enforced by `scripts/ci/check-file-budget.sh` at push.
+- **File budget:** a file over 5,000 lines is shrink-only. A new `.py` file lands only in an allowed home such as `tests/py`. Product code goes in `crates/`. `scripts/ci/check-file-budget.sh` enforces both at push.
 - **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
 - **Test value:** Run only changed-file tests. Push and let CI gate. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 6 (`fno-agents test-delta --max-net 6`). pr create refuses a code PR with no cut and no `Audited owners:` line.
 - **Multi-CLI:** skills are portable. Orchestration needs per-CLI hook config. See `docs/HARNESSES.md`, `docs/architecture/multi-cli-hooks.md`, `docs/SKILL-COMPAT-MATRIX.md`.
@@ -119,7 +120,7 @@ NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / 
 | `<space>/worktrees/<name>/STATE.md` / `SUMMARY.md` / `00-INDEX.md` | repo space | Wave progress / completion / strategy | /execute, operator, /blueprint |
 | `{plan_path}.artifacts/` | plan-relative | Quick-plan sidecar | target stop hook |
 
-Paths resolve via `fno.paths`; override under `config.paths.*`; check with `fno config doctor`. [path-config](docs/path-config.md). A state-root TOP-LEVEL write needs an owner + lifetime in [state-root-inventory](docs/state-root-inventory.md); session-keyed files go in a subfolder.
+Paths resolve via `crates/fno-agents/src/paths.rs`; override under `config.paths.*`; check with `fno config doctor`. [path-config](docs/path-config.md). A state-root TOP-LEVEL write needs an owner + lifetime in [state-root-inventory](docs/state-root-inventory.md); session-keyed files go in a subfolder.
 
 ### Ship vocabulary
 
