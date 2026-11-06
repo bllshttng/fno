@@ -111,6 +111,8 @@ fn extract_session_blocks(text: &str) -> Vec<String> {
 /// True when the block text is only one of the writer's seed defaults
 /// (hooks/precompact-canon-doc.sh DEFAULT_*): those carry no orders, and
 /// printing them every handoff would train the reader to skip the section.
+/// A captured block carries its `##` heading first, so that line is dropped
+/// before the comparison.
 fn is_session_placeholder(text: &str) -> bool {
     const PLACEHOLDERS: [&str; 4] = [
         "_Merge order and the reason for it. Nothing external knows this. The session fills it at full context._",
@@ -118,8 +120,12 @@ fn is_session_placeholder(text: &str) -> bool {
         "_Gaps and open thinking only this team holds. Nothing external knows this. The session fills it at full context._",
         "_Workarounds in force only this team is running. Nothing external knows this. The session fills it at full context._",
     ];
+    let body = match text.strip_prefix("## ") {
+        Some(rest) => rest.split_once('\n').map(|(_, b)| b).unwrap_or(""),
+        None => text,
+    };
     let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
-    let stripped = strip(text);
+    let stripped = strip(body);
     PLACEHOLDERS.iter().any(|p| stripped == strip(p))
 }
 
@@ -284,7 +290,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("handoffs");
         std::fs::create_dir_all(&dir).unwrap();
-        let doc = dir.join("canon-x-test.md");
+        // The doc name carries the reader's `role-` key: team_handoff_doc
+        // matches files ending "-role-x-test.md" for scope "x test".
+        let doc = dir.join("canon-role-x-test.md");
         let placeholder = "_Merge order and the reason for it. Nothing external knows this. The session fills it at full context._";
         std::fs::write(
             &doc,
