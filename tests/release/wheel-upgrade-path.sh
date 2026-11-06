@@ -70,6 +70,16 @@ VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*'
 TGT="$(readlink -f "$HOME/.local/bin/fno")"
 [[ "$TGT" == "$HOME/.fno/install/bin/"* ]] || { echo "leg A: $TGT is not under the binary install"; exit 1; }
 [[ "$(cat "$HOME/.fno/install/channel")" == "binary" ]] || { echo "leg A: channel marker is not binary"; exit 1; }
+# The 0.4.5 state root reads and runs on the moved binary: a backlog read
+# answers and the daemon survives its start pass against the old root
+# (no stepping stone; the layout folds self-heal at daemon start).
+"$HOME/.fno/install/bin/fno" backlog list >/dev/null
+"$HOME/.fno/install/bin/fno-agents-daemon" >/dev/null 2>&1 &
+DPID=$!
+sleep 6
+kill -0 "$DPID" || { echo "leg A: the daemon did not survive start on the 0.4.5 state root"; exit 1; }
+kill "$DPID" 2>/dev/null
+wait "$DPID" 2>/dev/null
 echo '{"leg_a": 1}' > /host/A.result
 LEGA
   fi
@@ -95,6 +105,13 @@ TGT="$(readlink -f "$HOME/.local/bin/fno")"
 "$HOME/.local/bin/fno" --version >/dev/null
 VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
 [[ "$VER" == "$CANDIDATE" ]] || { echo "leg B: fno --version printed $VER, want $CANDIDATE"; exit 1; }
+"$HOME/.fno/install/bin/fno" backlog list >/dev/null
+"$HOME/.fno/install/bin/fno-agents-daemon" >/dev/null 2>&1 &
+DPID=$!
+sleep 6
+kill -0 "$DPID" || { echo "leg B: the daemon did not survive start on the 0.4.5 state root"; exit 1; }
+kill "$DPID" 2>/dev/null
+wait "$DPID" 2>/dev/null
 echo '{"leg_b": 1}' > /host/B.result
 LEGB
   fi
