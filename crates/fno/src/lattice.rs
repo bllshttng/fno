@@ -168,24 +168,25 @@ pub(crate) fn build_frame(elapsed_ms: u64) -> char {
 /// The build mark's status-cell override. Only a Working row carries it: a
 /// blocked row needs a human (the accent outranks build info), an idle row
 /// runs no cargo, and the mark never fights the lattice. Compiling renders
-/// the BRAILLE_SIX frame IN PLACE OF the working spin frame - never both.
-/// Waiting renders the static hourglass with the queue position when the
-/// lane read can name it.
+/// the BRAILLE_SIX frame IN PLACE OF the working cell - never both. The
+/// waiting arm renders the static hourglass with the queue position when
+/// the lane read can name it. Both stay within the 5-column status cell.
 pub(crate) fn build_status_cell(
     mark: Option<crate::proto::BuildMark>,
     s: LatticeState,
-    word: &str,
 ) -> Option<String> {
     if !matches!(s, LatticeState::Working) {
         return None;
     }
     let mark = mark?;
     match mark.stage {
-        // The frame REPLACES the working glyph; the word the mode carries
-        // stays, so only the glyph tells compiling from working.
+        // The frame REPLACES the working cell: the status column is
+        // Constraint::Length(5) and its words are shortened to fit it, so
+        // the glyph alone carries the state (the card line's own
+        // still-glyph convention).
         crate::proto::BuildStage::Compiling => Some(match spin_epoch() {
-            Some(t0) => format!("{}{word}", build_frame(t0.elapsed().as_millis() as u64)),
-            None => format!("{}{word}", build_rest_glyph()),
+            Some(t0) => build_frame(t0.elapsed().as_millis() as u64).to_string(),
+            None => build_rest_glyph().to_string(),
         }),
         crate::proto::BuildStage::Waiting => Some(match mark.position {
             Some(n) => format!("{HOURGLASS}{n}"),

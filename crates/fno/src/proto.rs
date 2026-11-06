@@ -403,7 +403,10 @@ fn default_true() -> bool {
 /// `Command::ReachRemote`, a remote row opened in a portal; floor stays 58.
 /// v122: `AgentLaunchRequest.host` (serde default), the composer's target
 /// machine; older servers must never ignore a remote destination.
-pub const PROTO_VERSION: u32 = 122;
+/// v123: `AgentRow.build` (serde default), the daemon-pushed cargo build
+/// mark behind the sideline's compiling throbber and waiting hourglass;
+/// floor stays 58.
+pub const PROTO_VERSION: u32 = 123;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1144,7 +1147,7 @@ pub struct AgentRow {
     /// lineage, so no reaper removes it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
-    /// (v121) The cargo build mark the daemon pushes for the session's
+    /// (v123) The cargo build mark the daemon pushes for the session's
     /// checkout: compiling, or waiting with its queue position. Additive
     /// like `dnd`: an older wire defaults None, which paints no mark.
     #[serde(default, skip_serializing_if = "Option::is_none")]

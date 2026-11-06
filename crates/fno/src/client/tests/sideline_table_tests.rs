@@ -688,8 +688,12 @@ fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     let text = frame_text(&v.compose());
     let builder_row = text.lines().find(|line| line.contains("builder")).unwrap();
     assert!(
-        builder_row.contains('\u{283f}') && builder_row.contains("Work"),
-        "compiling paints the braille rest frame beside the working word: {builder_row:?}"
+        builder_row.contains('\u{283f}') && !builder_row.contains('\u{25cf}'),
+        "compiling paints the braille frame in place of the working cell: {builder_row:?}"
+    );
+    assert!(
+        !builder_row.contains("Work"),
+        "the status word drops so the cell stays within its 5 columns: {builder_row:?}"
     );
     assert!(
         !builder_row.contains('\u{25cf}'),
