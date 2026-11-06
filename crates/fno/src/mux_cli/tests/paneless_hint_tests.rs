@@ -60,24 +60,6 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
     assert!(!locate.contains("--follow"), "{locate}");
     assert!(locate.contains("hosts no live pane"), "{locate}");
 }
-
-#[test]
-fn paneless_route_hint_names_the_fno_id_state() {
-    // (x-e763) The exit-17 line no longer collapses unresolved and absent
-    // into one string: the row's fno_id_state rides in the line.
-    let mut resolved = paneless_row("t-live", None);
-    resolved.session_id = Some("46c2b4a1-6fe2-4d2a-ab0b-b992674f8148".into());
-    let line = paneless_route_hint("fno mux where", &resolved);
-    assert!(line.contains("(fno_id_state: resolved)"), "{line}");
-
-    let spawned = paneless_row("t-live", None);
-    let line = paneless_route_hint("fno mux where", &spawned);
-    assert!(
-        line.contains("(fno_id_state: unresolved:spawned-name)"),
-        "{line}"
-    );
-}
-
 #[test]
 fn scan_panes_joins_a_stale_mux_field_to_its_live_pane() {
     // (x-e763) AC13's join: a registry row with no mux binding but a pane

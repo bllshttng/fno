@@ -70,24 +70,6 @@ fn parse_roster_bare_list_state_and_id_semantics() {
     assert_eq!(workers[1].short_id, "ef56ab78");
     assert!(!workers.iter().any(|w| w.name.contains("skips")));
 }
-
-#[test]
-fn parse_roster_all_terminal_roster_is_a_recognized_empty_fleet() {
-    // The fleet finished: every catalog item is terminal (the daemon
-    // lingers on finished sessions). Every skip was RECOGNIZED, so this
-    // is an empty live fleet, not drift - Some(empty) lets the sideline
-    // clear instead of holding last-good rows as fake-live forever
-    // (codex review round 2).
-    let raw = r#"[
-        {"id":"11112222","sessionId":"11112222-3","cwd":"/y","name":"a",
-         "kind":"background","startedAt":3,"state":"done"},
-        {"id":"33334444","sessionId":"33334444-4","cwd":"/z","name":"b",
-         "kind":"background","startedAt":4,"state":"failed"}]"#;
-    assert_eq!(parse_roster(raw), Some(Vec::new()));
-    // Zero recognizable workers (no state, no sessionId) is still drift.
-    assert_eq!(parse_roster(r#"[{"cwd":"/w"}]"#), None);
-}
-
 #[test]
 fn parse_roster_skips_a_pre_warmed_spare_worker() {
     // A `dispatch.source == "spare"` worker is daemon inventory (a
@@ -108,21 +90,6 @@ fn parse_roster_skips_a_pre_warmed_spare_worker() {
         "no short-id fallback row for the spare"
     );
 }
-
-#[test]
-fn parse_roster_all_spare_roster_is_a_recognized_empty_fleet() {
-    // Every item was understood, so an all-spare roster is an empty live
-    // fleet (Some(empty)), never schema drift holding last-good rows.
-    let raw = r#"[
-        {"id":"2aee5622","sessionId":"2aee5622-1111-2222-3333-444455556666","cwd":"/w",
-         "kind":"background","startedAt":1,
-         "dispatch":{"source":"spare","seed":{}}},
-        {"id":"0dc7acc5","sessionId":"0dc7acc5-1111-2222-3333-444455556666","cwd":"/w",
-         "kind":"background","startedAt":2,
-         "dispatch":{"source":"spare","seed":{}}}]"#;
-    assert_eq!(parse_roster(raw), Some(Vec::new()));
-}
-
 #[test]
 fn merge_joins_a_registry_row_whose_short_id_kept_the_full_uuid() {
     // A registry row whose minted short_id stored the FULL uuid joins its

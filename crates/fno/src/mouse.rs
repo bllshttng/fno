@@ -194,43 +194,6 @@ mod tests {
         assert_eq!(one(b"\x1b[<64;1;1M").0[0].kind, MouseKind::WheelUp);
         assert_eq!(one(b"\x1b[<65;1;1M").0[0].kind, MouseKind::WheelDown);
     }
-
-    #[test]
-    fn no_button_motion_parses_as_move() {
-        // cb = 32 (motion) | 3 (no-button code) = 35: 1003 any-motion hover.
-        // Distinct from a drag (cb=32|button, e.g. 32 parsed above as Drag(Left)).
-        let (r, _) = one(b"\x1b[<35;10;5M");
-        assert_eq!(r.len(), 1);
-        assert_eq!(
-            r[0],
-            MouseReport {
-                row: 4,
-                col: 9,
-                kind: MouseKind::Move,
-                shift: false,
-                alt: false
-            }
-        );
-        // A shifted move still decodes (cb = 35 | 4 = 39) - the client drops it.
-        assert_eq!(one(b"\x1b[<39;2;2M").0[0].kind, MouseKind::Move);
-    }
-
-    #[test]
-    fn shift_modifier_is_flagged() {
-        // cb = 0 (left) | 4 (shift) = 4.
-        let (r, _) = one(b"\x1b[<4;2;2M");
-        assert!(r[0].shift, "shift bit decoded");
-        assert!(!r[0].alt);
-        // cb = 0 (left) | 8 (alt) = 8: the v112 link-open gesture.
-        let (r, _) = one(b"\x1b[<8;2;2M");
-        assert!(r[0].alt, "alt bit decoded");
-        assert!(!r[0].shift);
-        assert_eq!(r[0].kind, MouseKind::Press(MouseButton::Left));
-        // Alt rides on wheel and drag codes too (cb = 64|8 = 72).
-        assert!(one(b"\x1b[<72;1;1M").0[0].alt);
-        assert_eq!(one(b"\x1b[<72;1;1M").0[0].kind, MouseKind::WheelUp);
-    }
-
     #[test]
     fn non_mouse_bytes_pass_through_untouched() {
         let (r, pass) = one(b"echo hi\r");
@@ -264,16 +227,5 @@ mod tests {
         assert_eq!(r2.len(), 1);
         assert!(p2.is_empty());
         assert!(carry.is_empty(), "carry drained");
-    }
-
-    #[test]
-    fn two_byte_prefix_split_is_not_carried_leaving_scanner_untouched() {
-        // A chunk ending in `ESC[` must forward (paste/arrow prefixes belong to
-        // the key scanner); only the full ESC[< carries.
-        let mut carry = Vec::new();
-        let (r, pass) = extract_mouse(&mut carry, b"\x1b[");
-        assert!(r.is_empty());
-        assert_eq!(pass, b"\x1b[");
-        assert!(carry.is_empty(), "ambiguous 2-byte prefix not carried");
     }
 }

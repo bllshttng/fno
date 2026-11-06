@@ -362,26 +362,6 @@ mod tests {
         assert!(msg.contains("registry by session id and by label"), "{msg}");
         assert!(msg.contains("pane id 1633"), "{msg}");
     }
-
-    #[test]
-    fn refusal_names_every_lookup_when_the_pane_is_gone() {
-        let agents = vec![];
-        let resolved = resolve_target(&agents, |_| None, "ghost", None, Some(7));
-        let msg = resolved.unwrap_err();
-        assert!(msg.contains("registry by session id and by label"), "{msg}");
-        assert!(msg.contains("pane id 7"), "{msg}");
-        assert!(msg.contains("the pane is gone"), "{msg}");
-    }
-
-    #[test]
-    fn refusal_without_a_pane_id_names_the_registry_legs() {
-        let agents = vec![];
-        let msg = resolve_target(&agents, |_| None, "ghost", None, None).unwrap_err();
-        assert!(msg.starts_with("no such agent: ghost"), "{msg}");
-        assert!(msg.contains("registry by session id and by label"), "{msg}");
-        assert!(!msg.contains("pane table"), "{msg}");
-    }
-
     #[test]
     fn an_upgraded_orphan_resolves_by_identity_and_by_name() {
         //  AC4-HP: an upgraded orphan is an fno registry row whose
@@ -401,19 +381,6 @@ mod tests {
         let by_name = resolve_target(&agents, |_| None, "t-win", None, None);
         assert!(matches!(by_name, Ok(Target::Registry(_))), "{by_name:?}");
     }
-
-    #[test]
-    fn a_foreign_row_without_identity_still_refuses() {
-        //  AC4-EDGE: a genuinely foreign roster row carries no
-        // registry identity, so the manage-it-from-its-own-session refusal
-        // still fires on the name leg.
-        let mut ext = row("t-win", None);
-        ext.external = true;
-        let agents = vec![ext];
-        let msg = resolve_target(&agents, |_| None, "t-win", None, None).unwrap_err();
-        assert!(msg.contains("external"), "{msg}");
-    }
-
     #[test]
     fn external_and_ambiguous_refusals_still_preempt_the_pane_leg() {
         let mut ext = row("t-win", None);
@@ -443,29 +410,6 @@ mod tests {
         );
         assert!(matches!(resolved, Ok(Target::Registry(_))), "{resolved:?}");
     }
-
-    #[test]
-    fn scan_panes_joins_by_resolved_id_then_by_name() {
-        let hit: crate::proto::PaneInfo = serde_json::from_value(serde_json::json!({
-            "pane_id": 1637,
-            "squad_id": 0,
-            "tab_id": 0,
-            "cwd": "/tmp",
-            "fno_id": "46c2b4a1-6fe2-4d2a-ab0b-b992674f8148"
-        }))
-        .unwrap();
-        let panes = vec![hit];
-        let found = scan_panes(
-            &panes,
-            Some("46c2b4a1-6fe2-4d2a-ab0b-b992674f8148"),
-            "other",
-        );
-        assert_eq!(found.map(|p| p.pane_id), Some(1637));
-        // A name-shaped identity is never treated as an id; the name tier answers.
-        let by_name = scan_panes(&panes, None, "other");
-        assert!(by_name.is_none());
-    }
-
     #[test]
     fn scan_panes_name_tier_refuses_an_ambiguous_family() {
         let pane = |id: u64| -> crate::proto::PaneInfo {

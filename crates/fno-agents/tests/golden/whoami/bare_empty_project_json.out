@@ -8,7 +8,6 @@
   "project_root": "<FIXTURE>/project",
   "session": null,
   "visitor": null,
-  "walker": null,
   "warnings": [
     "not a git repo, using cwd"
   ]

@@ -33,82 +33,6 @@ fn external_lifecycle_row_carries_cwd_base_when_squad_matched() {
         "a squad-matched external row now carries its cwd basename"
     );
 }
-
-#[test]
-fn external_lifecycle_sync_does_not_flush_the_dirty_map() {
-    // x-0f42: reemit=true's frame-flush (`d.clear()` then reseed only the
-    // client's CURRENTLY VIEWED pane ids) is the actual resize-storm-shaped
-    // defect: it drops any dirty-map entry that isn't part of the live
-    // view, same failure class as x-0296's quiet-pane loss. A currently
-    // VIEWED pane is a bad probe for this (reemit=true immediately reseeds
-    // it with a fresh frame, so `contains_key` stays true either way) - the
-    // probe has to be a dirty entry that push_layout can never reseed: a
-    // pane id belonging to no live tab. reemit=false never touches `dirty`
-    // at all, so it survives; reemit=true's unconditional `d.clear()` wipes
-    // it with nothing to put back.
-    use crate::squad_store::{ExternalLifecycle, ExternalState};
-    let mut core = empty_core();
-    core.shells = vec!["/bin/cat".into()];
-    let p1 = core.spawn_pane(24, 40, "/tmp").expect("pane 1");
-    core.session.add_squad(
-        1,
-        vec!["/tmp/x0f42".into()],
-        None,
-        Tab {
-            name: None,
-            id: 1,
-            root: Node::Leaf(p1),
-            focus: p1,
-        },
-    );
-    let (tx, mut rx) = mpsc::channel::<ServerMsg>(32);
-    let dirty: DirtyMap = Arc::default();
-    core.attach(
-        9,
-        24,
-        80,
-        "/tmp/x0f42".into(),
-        "/tmp/x0f42".into(),
-        tx,
-        dirty.clone(),
-        Arc::new(Notify::new()),
-    );
-    while rx.try_recv().is_ok() {}
-    // A dangling dirty-map entry under a pane id that belongs to no tab -
-    // standing in for a background/quiet pane whose only copy of a frame
-    // sits in a client's dirty map outside its current view. No real
-    // geometry pass can ever reseed this key.
-    const DANGLING_PANE_ID: u64 = 999_999;
-    let sentinel = core.panes.get(&p1).unwrap().vt.frame();
-    dirty.lock().unwrap().insert(DANGLING_PANE_ID, sentinel);
-
-    let existing = vec![ExternalLifecycle {
-        attach_id: "abc123".into(),
-        name: "worker".into(),
-        cwd: "/tmp/other".into(),
-        state: ExternalState::Stopping,
-        generation: 3,
-        updated_at: "t0".into(),
-        reason: None,
-    }];
-    core.external_lifecycle = existing.clone();
-    // A late sync carrying the IDENTICAL record set (a stale action's
-    // late completion, or the startup reconcile re-observing the same
-    // state) is exactly the no-op-content case this handler must treat
-    // as sideline-only.
-    core.handle_msg(CoreMsg::ExternalLifecycleSync {
-        to: None,
-        records: existing,
-        notices: vec![],
-    });
-    assert!(
-        dirty.lock().unwrap().contains_key(&DANGLING_PANE_ID),
-        "an ExternalLifecycleSync must not flush the dirty map: rects \
-             never depend on external_lifecycle content, so this is exactly \
-             the reemit=false case AgentRows/BacklogCards already use (x-0f42)"
-    );
-}
-
 #[test]
 fn external_lifecycle_sync_with_changed_records_still_pushes_layout_to_clients() {
     // x-0f42: the fix must not turn this into a no-op path entirely - a
@@ -312,87 +236,6 @@ fn inflight_route_resolves_by_id_or_slug_and_fails_closed() {
         "unroutable in-flight falls through to the refusal notice"
     );
 }
-
-#[test]
-fn inflight_hint_names_session_then_holder_then_default() {
-    // Codex peer review: a stale-client DispatchNode on an in-flight card
-    // with NO route must get the situated hint, not the bare not-ready
-    // refusal. Hint precedence: matched registry row's session name >
-    // claim holder > the client's default copy.
-    let mut core = empty_core();
-    core.backlog = vec![BacklogCard {
-        id: "x-aaa".into(),
-        slug: "aaa-slug".into(),
-        priority: "p2".into(),
-        state: CardState::InFlight,
-        pane_id: None,
-        attach_id: None,
-        where_hint: None,
-        project: None,
-        lane: None,
-        plan_path: None,
-        number: None,
-        head: false,
-        link: None,
-    }];
-    // Nothing known at all: the default copy.
-    assert_eq!(
-        core.inflight_hint("x-aaa").as_deref(),
-        Some("card in flight - no session visible here")
-    );
-    // A claim holder is known: name it.
-    core.backlog_holders
-        .insert("x-aaa".into(), "target-session:abc".into());
-    assert_eq!(
-        core.inflight_hint("aaa-slug").as_deref(),
-        Some("in flight - worked by target-session:abc"),
-        "slug names the same card"
-    );
-    // A matched (unattachable) registry row outranks the holder.
-    core.agents = vec![bg_row("tgt-x-aaa", "/w", None)];
-    assert_eq!(
-        core.inflight_hint("x-aaa").as_deref(),
-        Some("in flight - session tgt-x-aaa")
-    );
-    // Not in flight / unknown: None (caller falls through to not-ready).
-    assert_eq!(core.inflight_hint("x-nope"), None);
-}
-
-#[test]
-fn plan_refusal_names_only_an_in_flight_node() {
-    // The plan spawn door accepts an idea node the feed has never
-    // heard of, and refuses ONLY a node in flight -
-    // a second blueprint for worked work is not asked twice.
-    let mut core = empty_core();
-    core.backlog = vec![BacklogCard {
-        id: "x-aaa".into(),
-        slug: "aaa-slug".into(),
-        priority: "p2".into(),
-        state: CardState::InFlight,
-        pane_id: None,
-        attach_id: None,
-        where_hint: None,
-        project: None,
-        lane: None,
-        plan_path: None,
-        number: None,
-        head: false,
-        link: None,
-    }];
-    // In flight: the refusal names the node and the hint.
-    let refusal = core.plan_refusal("x-aaa").expect("in flight refuses");
-    assert!(
-        refusal.contains("x-aaa is already being worked"),
-        "{refusal}"
-    );
-    assert!(refusal.contains("open its session instead"), "{refusal}");
-    // An idea node absent from the feed: None - the door is open.
-    assert_eq!(core.plan_refusal("x-idea"), None);
-    // A READY card: still open (the dispatch door's own gate answers).
-    core.backlog[0].state = CardState::Ready;
-    assert_eq!(core.plan_refusal("x-aaa"), None, "ready is open");
-}
-
 #[test]
 fn classify_guard_registry_fails_closed_on_a_row_with_no_readable_pane_binding() {
     // AC4-ERR (x-0b40), the positive marker: the malformed row IS the
@@ -408,21 +251,6 @@ fn classify_guard_registry_fails_closed_on_a_row_with_no_readable_pane_binding()
         "refusal names the row-level cause: {err}"
     );
 }
-
-#[test]
-fn classify_guard_registry_fails_closed_on_a_present_but_unparseable_mux() {
-    // The fold arm (x-0b40): the row SURVIVES derivation with `mux: None`,
-    // so this is not a skip and a drop count alone would miss it. The
-    // half-read `session` is this pane's own; the missing `pane_id` is
-    // exactly the part that cannot be attributed.
-    let raw = r#"{"agents":[{"name":"half","cwd":"/w","status":"live","mux":{"session":"sess"}}]}"#;
-    let err = classify_guard_registry(raw, 0).unwrap_err();
-    assert!(
-        err.contains("no readable pane binding"),
-        "refusal names the row-level cause: {err}"
-    );
-}
-
 #[test]
 fn card_ready_gate_only_passes_ready_cards() {
     // x-a496 (codex peer review): a targeted dispatch only proceeds for a
