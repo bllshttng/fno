@@ -546,6 +546,10 @@ pub(crate) fn score(
         "failed": failed.len(),
         "failed_sample": failed.iter().rev().take(5).cloned().collect::<Vec<_>>(),
         "cap": max_sessions,
+        "fixer": match fixer(state) {
+            Ok(v) => v,
+            Err(e) => json!({"error": clip(&e, 120)}),
+        },
     }))
 }
 
@@ -871,6 +875,191 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
+/// The go-N fixer: proved layer rows cluster by (layer, the newest trace's
+/// signal kind) and file one go node per cluster carrying the sessions and
+/// span refs, or append new evidence to the open node for that cluster. A
+/// cluster never opens a PR and never dispatches; a person reads it. With
+/// no proved layer judge it files nothing and names what it would file.
+pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
+    let proved_layer = calibration_rows(state)
+        .iter()
+        .any(|j| j["judge"] == json!("layer") && j["proved"] == json!(true));
+    let kind_of = |sid: &str| -> String {
+        by_session(&load_traces(state))
+            .iter()
+            .find(|(s, _)| s == sid)
+            .and_then(|(_, g)| g.last())
+            .and_then(|t| t.get("signal_kind"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string()
+    };
+    let mut clusters: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for row in newest_rows(&read_rows(&labels_path(state))) {
+        if row.get("judge").and_then(Value::as_str) != Some("layer") {
+            continue;
+        }
+        let Some(label) = row.get("label").and_then(Value::as_str) else {
+            continue;
+        };
+        if !matches!(label, "model" | "harness") {
+            continue;
+        }
+        let sid = row.get("session_id").and_then(Value::as_str).unwrap_or("");
+        let key = (label.to_string(), kind_of(sid));
+        clusters.entry(key).or_default().push(format!(
+            "session {sid} span {}",
+            row.get("span_ref").and_then(Value::as_str).unwrap_or("?")
+        ));
+    }
+    let names: Vec<String> = clusters
+        .keys()
+        .map(|(l, k)| format!("layer={l} kind={k}"))
+        .collect();
+    if !proved_layer {
+        return Ok(json!({"filed": 0, "would_file": names}));
+    }
+    let graph = crate::backlog::settings::graph_path();
+    let parent = crate::agents_config::config_value_deep(
+        &crate::evals::canonical_repo_root(),
+        &["evals", "labels", "go_parent"],
+    )
+    .and_then(|v| v.as_str().map(str::to_string));
+    let mut filed = 0usize;
+    let mut appended: Vec<String> = Vec::new();
+    for ((label, kind), lines) in &clusters {
+        if lines.is_empty() {
+            continue;
+        }
+        let marker = format!("cluster: layer={label} kind={kind}");
+        let body = format!("{marker}\n{}", lines.join("\n"));
+        let open = crate::graph_store::read_rows(&graph)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|r| {
+                r.get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with("go-"))
+                    && r.get("completed_at").is_none_or(Value::is_null)
+                    && r.get("details")
+                        .and_then(Value::as_str)
+                        .is_some_and(|d| d.contains(&marker))
+            });
+        if let Some(node) = open {
+            let id = node
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if id.is_empty() {
+                continue;
+            }
+            crate::graph_store::mutate_rows(
+                &graph,
+                crate::graph_store::DEFAULT_LOCK_TIMEOUT,
+                None,
+                None,
+                |rows| {
+                    if let Some(row) = rows
+                        .iter_mut()
+                        .find(|r| r.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                    {
+                        let existing = row
+                            .get("details")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        if let Some(next) =
+                            crate::backlog::update_ops::append_text(existing.as_deref(), &body)
+                        {
+                            row["details"] = json!(next);
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            appended.push(id);
+            continue;
+        }
+        let here = std::env::current_dir().unwrap_or_default();
+        let mut minted = String::new();
+        crate::graph_store::mutate_rows(
+            &graph,
+            crate::graph_store::DEFAULT_LOCK_TIMEOUT,
+            None,
+            None,
+            |rows| {
+                let known: BTreeSet<String> = rows
+                    .iter()
+                    .filter_map(|r| r.get("id").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect();
+                let id = crate::backlog::create_cli::mint_node_id_prefixed(&known, "go")
+                    .map_err(crate::graph_store::StoreError::Invalid)?;
+                let now = crate::graph_store::now_isoformat();
+                let (origin, evidence, _) =
+                    crate::backlog::create_cli::stamp_request_origin("organic", "eval_fixer", None);
+                let (sid, harness, scwd, snode, splan, _dropped) =
+                    crate::backlog::create_cli::session_provenance(&here, None, Some(&known));
+                let node = json!({
+                    "id": id,
+                    "parent": parent.clone(),
+                    "tags": [],
+                    "title": format!("go: fix {label} layer {kind} failures"),
+                    "type": "bug",
+                    "project": None::<String>,
+                    "cwd": None::<String>,
+                    "status": "idea",
+                    "priority": "p2",
+                    "blocks_everything": false,
+                    "difficulty": "low",
+                    "difficulty_history": [{"value": "low", "source": "eval_fixer", "ts": now}],
+                    "domain": "code",
+                    "blocked_by": [],
+                    "session_id": null,
+                    "locked_at": null,
+                    "completed_at": null,
+                    "has_brief": false,
+                    "roadmap_id": null,
+                    "vision_path": null,
+                    "details": body,
+                    "size": null,
+                    "batch": null,
+                    "cost_usd": null,
+                    "cost_sessions": [],
+                    "plan_path": null,
+                    "pr_number": null,
+                    "pr_url": null,
+                    "merge_status": null,
+                    "created_at": now,
+                    "source": null,
+                    "source_kind": "organic",
+                    "source_project": null,
+                    "source_inbox_msg": null,
+                    "artifact_url": null,
+                    "completion_note": null,
+                    "source_session_id": sid,
+                    "source_harness": harness,
+                    "source_cwd": scwd,
+                    "source_node_id": snode,
+                    "source_plan_path": splan,
+                    "request_origin": origin,
+                    "origin_evidence": evidence,
+                });
+                minted = id;
+                rows.push(node);
+                Ok(true)
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        if !minted.is_empty() {
+            filed += 1;
+        }
+    }
+    Ok(json!({"filed": filed, "appended": appended, "clusters": names}))
+}
+
 #[derive(Default)]
 pub struct Arm {
     next: Arc<Mutex<Option<Instant>>>,
@@ -1126,5 +1315,147 @@ mod tests {
             .collect();
         assert_eq!(judges["layer"]["hand_n"], 1);
         assert_eq!(judges["layer"]["proved"], json!(false));
+    }
+
+    /// Pins FNO_STATE_DIR for the duration of one test and restores it on
+    /// drop, so the fixer's graph writes land in the test's tempdir.
+    struct PinState(PathBuf, Option<std::ffi::OsString>);
+    impl PinState {
+        fn new(path: &Path) -> Self {
+            let prior = std::env::var_os("FNO_STATE_DIR");
+            std::env::set_var("FNO_STATE_DIR", path);
+            Self(path.to_path_buf(), prior)
+        }
+    }
+    impl Drop for PinState {
+        fn drop(&mut self) {
+            match &self.1 {
+                Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+                None => std::env::remove_var("FNO_STATE_DIR"),
+            }
+        }
+    }
+
+    fn stamp_hand(state: &Path, id: &str, hand: &str) {
+        let path = state
+            .join("evals")
+            .join("traces")
+            .join(format!("{id}.json"));
+        let mut t =
+            serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        t["layer_verdict"] = json!({"value": hand, "basis": "user_set"});
+        std::fs::write(&path, t.to_string()).unwrap();
+    }
+
+    fn label_row(sid: &str, label: &str, digest: &str) -> Value {
+        json!({
+            "session_id": sid, "judge": "layer", "judge_version": "v1",
+            "label": label, "reason": "test", "span_ref": format!("t-{sid}/ev"),
+            "traces_digest": digest, "created_at": "2026-11-02T00:00:00+00:00",
+            "model": "glm-5.3-flash",
+        })
+    }
+
+    fn go_nodes() -> Vec<Value> {
+        let graph = crate::backlog::settings::graph_path();
+        crate::graph_store::read_rows(&graph)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| {
+                r.get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with("go-"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_fixer_files_nothing_while_the_layer_judge_is_unproved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let state = state.as_path();
+        let _pin = PinState::new(&state);
+        for sid in ["ha-one", "ha-two"] {
+            trace_file(state, sid, "no_progress", "2026-11-01T00:00:00+00:00", "q");
+        }
+        append_rows(
+            &labels_path(state),
+            &[
+                label_row("ha-one", "harness", "d1"),
+                label_row("ha-two", "harness", "d1"),
+                label_row("mo-one", "model", "d1"),
+            ],
+        )
+        .unwrap();
+        let receipt = fixer(state).unwrap();
+        assert_eq!(receipt["filed"], 0, "{receipt}");
+        assert_eq!(receipt["would_file"].as_array().unwrap().len(), 2);
+        assert!(go_nodes().is_empty());
+    }
+
+    #[test]
+    fn the_fixer_files_one_go_node_per_cluster_and_appends_on_a_rerun() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let state = state.as_path();
+        let _pin = PinState::new(&state);
+        for (sid, kind, hand) in [
+            ("mo-one", "user_correction", "model"),
+            ("mo-two", "user_correction", "model"),
+            ("ha-one", "no_progress", "harness"),
+            ("ha-two", "no_progress", "harness"),
+        ] {
+            let id = trace_file(state, sid, kind, "2026-11-01T00:00:00+00:00", "q");
+            stamp_hand(state, &id, hand);
+        }
+        append_rows(
+            &labels_path(state),
+            &[
+                label_row("mo-one", "model", "d1"),
+                label_row("mo-two", "model", "d1"),
+                label_row("ha-one", "harness", "d1"),
+                label_row("ha-two", "harness", "d1"),
+            ],
+        )
+        .unwrap();
+        let receipt = fixer(state).unwrap();
+        assert_eq!(receipt["filed"], 2, "{receipt}");
+        assert_eq!(go_nodes().len(), 2);
+        // A rerun with identical evidence appends nothing.
+        let again = fixer(state).unwrap();
+        assert_eq!(again["filed"], 0);
+        assert_eq!(again["appended"], json!([]));
+        assert_eq!(go_nodes().len(), 2);
+        // A new session in one cluster joins the open node.
+        let _id3 = trace_file(
+            state,
+            "ha-three",
+            "no_progress",
+            "2026-11-02T00:00:00+00:00",
+            "q",
+        );
+        append_rows(
+            &labels_path(state),
+            &[label_row("ha-three", "harness", "d2")],
+        )
+        .unwrap();
+        let third = fixer(state).unwrap();
+        assert_eq!(third["filed"], 0, "{third}");
+        assert_eq!(go_nodes().len(), 2);
+        let details = go_nodes()
+            .iter()
+            .find(|r| {
+                r.get("details")
+                    .and_then(Value::as_str)
+                    .is_some_and(|d| d.contains("kind=no_progress"))
+            })
+            .and_then(|r| r.get("details"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            details.contains("ha-three") && details.contains("ha-one"),
+            "{details}"
+        );
     }
 }

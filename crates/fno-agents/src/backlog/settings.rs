@@ -112,6 +112,24 @@ pub fn node_id_prefix() -> String {
     "ab-".to_string()
 }
 
+/// The board's id display: `hex` (default) or `number`. `number` shows a
+/// node's sequential display number first on the board with the hex id
+/// still beside it.
+pub fn id_display() -> String {
+    for path in candidates() {
+        let doc = read_flat(&path);
+        let mode = doc
+            .get("backlog")
+            .and_then(|b| b.get("id_display"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !mode.is_empty() {
+            return mode.to_string();
+        }
+    }
+    "hex".to_string()
+}
+
 /// Yield `(name, path)` pairs from one file's work map: the multi-workspace
 /// shape first, then the legacy flat shape, in declaration order.
 fn work_pairs(doc: &Value) -> Vec<(String, String)> {
