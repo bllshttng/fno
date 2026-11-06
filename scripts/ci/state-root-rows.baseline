@@ -51,8 +51,6 @@ nudge-cursors
 rules-seen
 observer-reports
 providers
-cargo-build
-plugin-stage
 relay-claude
 sessions
 spaces

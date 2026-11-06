@@ -132,7 +132,7 @@ attest	state/attest	dir	daemon
 backups	backups	dir	daemon
 bin	install/bin	dir	daemon
 bus	db/mail/bus	dir	daemon
-cargo-build	cargo-build	dir	daemon
+cargo-build	cache/cargo-build	dir	daemon
 chats	db/mail/chats	dir	daemon
 claim-aux	state/claim-aux	dir	daemon
 context-cache	cache/context	dir	daemon
@@ -150,7 +150,7 @@ migrations	install/migrations	dir	daemon
 notice-route	state/notice-route	dir	daemon
 operator-capture	db/operator-capture	dir	daemon
 pages	cache/pages	dir	daemon
-plugin-stage	plugin-stage	dir	daemon
+plugin-stage	install/plugin-stage	dir	daemon
 postmortems	db/postmortems	dir	daemon
 push-stamps	state/push-stamps	dir	daemon
 reclaim	state/reclaim	dir	daemon
