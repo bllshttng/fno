@@ -367,7 +367,7 @@ fn human_tokens(used: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity_segment, human_tokens, memory_segment, parse_macmon_sample};
+    use super::{capacity_segment, human_tokens, parse_macmon_sample};
     use serde_json::json;
 
     #[test]

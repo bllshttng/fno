@@ -1,7 +1,7 @@
 use super::*;
 // The drain-fold tests kept here use the routing module's step constant and
 // burst cap; server.rs itself no longer imports these two names.
-use crate::proto::{AgentRow, TemplateName};
+use crate::proto::TemplateName;
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};
 use crate::server::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
@@ -1217,15 +1217,6 @@ mod pane_run_receipt_tests;
 // The fit placement tests (x-ae47) moved out for the same reason.
 #[path = "server/tests/placement_fit_tests.rs"]
 mod placement_fit_tests;
-/// A client with a LIVE reliable receiver, so `push_layout` never drops it
-/// as dead mid-test (the bare `client()` helper drops its receiver). Returns
-/// the receiver to keep in scope for the test's lifetime.
-fn live_client(id: u64, view_tab: TabId) -> (Client, mpsc::Receiver<ServerMsg>) {
-    let (tx, rx) = mpsc::channel::<ServerMsg>(RELIABLE_CAP);
-    let mut c = client(id, view_tab, (24, 80), false);
-    c.reliable_tx = tx;
-    (c, rx)
-}
 #[test]
 fn tab_create_and_rename_sanitize_names() {
     // codex P2: control bytes stripped and length capped at the wire

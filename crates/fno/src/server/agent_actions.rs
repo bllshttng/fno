@@ -831,19 +831,6 @@ mod tests {
 
     // -- corpse-safe stop + honest reap timeout -----------------------
 
-    fn command_result(ok: bool, stdout: &str, stderr: &str) -> AgentCommandResult {
-        AgentCommandResult {
-            ok,
-
-            stdout: stdout.into(),
-
-            stderr: stderr.into(),
-
-            timed_out: false,
-
-            unavailable: false,
-        }
-    }
     #[test]
 
     fn reap_progress_note_names_scanned_removed_and_in_flight() {
@@ -950,24 +937,6 @@ mod tests {
         (tmp, env)
     }
 
-    struct FnoBinGuard(Option<std::ffi::OsString>);
-
-    impl FnoBinGuard {
-        fn set(path: &std::path::Path) -> Self {
-            let previous = std::env::var_os("FNO_BIN");
-            std::env::set_var("FNO_BIN", path);
-            Self(previous)
-        }
-    }
-
-    impl Drop for FnoBinGuard {
-        fn drop(&mut self) {
-            match self.0.take() {
-                Some(value) => std::env::set_var("FNO_BIN", value),
-                None => std::env::remove_var("FNO_BIN"),
-            }
-        }
-    }
     #[tokio::test]
 
     async fn remove_press_shells_rm_alone() {

@@ -435,7 +435,7 @@ fn link_paint(frame: &Frame, size: (u16, u16), painted: &mut Vec<Vec<u8>>) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::{Cell, MouseButton};
+    use crate::proto::Cell;
 
     fn frame(rows: u16, cols: u16, text: &[&str]) -> Frame {
         let mut cells = vec![Cell::default(); rows as usize * cols as usize];
