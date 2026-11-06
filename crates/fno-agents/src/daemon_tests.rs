@@ -313,12 +313,6 @@ async fn rm_keeps_registry_row_when_claude_refuses_without_force() {
 
 /// A temp dir whose `.git` is a FILE: linked-worktree shape, no real repo
 /// behind it (the gate and the removal are injected, so none is needed).
-fn fake_worktree(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fno-rm-wt-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(".git"), "gitdir: /elsewhere/worktrees/x.git\n").unwrap();
-    dir
-}
 
 #[test]
 fn output_with_timeout_bounds_a_stalled_subprocess() {
