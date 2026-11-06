@@ -1458,8 +1458,18 @@ mod tests {
                 &[],
                 true,
             );
-            // The first pass stamped the guard window; backdate it or the
-            // proceed pass is refused before its body ever runs.
+            // The first pass stamped the guard window, and its body may
+            // still hold the in-flight gate while the listing read fails
+            // over. Wait for the drop and backdate, or the proceed pass is
+            // refused before its body ever runs.
+            let free = Instant::now() + Duration::from_secs(30);
+            while in_flight.load(std::sync::atomic::Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < free,
+                    "the held pass never released the in-flight gate"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
             last = Instant::now() - Duration::from_secs(301);
             crate::gc::maybe_retirement_sweep(
                 &mut last,
