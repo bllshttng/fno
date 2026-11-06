@@ -102,6 +102,7 @@ semver="$(pep_to_semver "$ver")"
 # 0. The bridge wheel's VERSION file: one PEP 440 line, read by
 #    hatchling's regex version source. Sits first so every surface below is
 #    stamped from the same call.
+mkdir -p packaging/pypi
 printf '%s\n' "$ver" > packaging/pypi/VERSION
 
 # 1. Python wheel (the source of truth; cli/pyproject.toml reads it dynamically).

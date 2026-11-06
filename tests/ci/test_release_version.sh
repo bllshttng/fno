@@ -42,9 +42,10 @@ run() { # run <outfile> <errfile> <cmd...>
 
 # ---------------------------------------------------------------- sync-version
 sync="$work/sync"
-mkdir -p "$sync/scripts/release" "$sync/cli/src/fno" "$sync/crates/fno/src" "$sync/crates/fno-agents/src"
+mkdir -p "$sync/scripts/release" "$sync/cli/src/fno" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/packaging/pypi"
 cp scripts/release/sync-version.sh "$sync/scripts/release/"
 printf '# test skeleton\n__version__ = "0.3.2"\n' > "$sync/cli/src/fno/__init__.py"
+printf '0.3.2\n' > "$sync/packaging/pypi/VERSION"
 printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno/Cargo.toml"
 printf '[package]\nname = "fno-agents"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-agents/Cargo.toml"
 # cargo metadata refuses a manifest with no targets; give each crate one so
@@ -83,6 +84,8 @@ grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
 check "crates/fno-agents/Cargo.toml reads 0.4.0-rc.1" $?
 grep -q '"version": "0.4.0rc1"' "$sync/.claude-plugin/plugin.json"
 check "plugin.json reads 0.4.0rc1" $?
+grep -qx '0.4.0rc1' "$sync/packaging/pypi/VERSION"
+check "packaging/pypi/VERSION reads 0.4.0rc1" $?
 run "$work/o" "$work/e" sv --check
 rc=$?
 check_rc "--check agrees after an rc bump (exit 0)" "$rc" "0"
