@@ -551,14 +551,37 @@ def chats_command(args: "list[str]", payload: dict) -> dict:
 
 
 def resolve_front_binary() -> Optional[Path]:
-    """The native ``fno`` front binary: this checkout's build, then ``PATH``."""
+    """The ``fno`` front binary: checkout build, ``fno-agents`` sibling, then ``PATH``."""
     import shutil
 
     root = Path(__file__).resolve().parents[3] / "crates" / "fno" / "target"
     for profile in ("debug", "release"):
         if (root / profile / "fno").exists():
             return root / profile / "fno"
+    # One install ships the pair in one bin dir, so the sibling answers even
+    # where a task PATH resolves the bare name to an fno-py shim.
+    if (agents := resolve_binary()) is not None:
+        sibling = agents.parent / "fno"
+        if sibling.is_file() and os.access(sibling, os.X_OK):
+            return sibling
     return Path(found) if (found := shutil.which("fno")) else None
+
+
+def front_door_handoff(tail: Sequence[str], family: str) -> Optional[int]:
+    """Hand a native-family call to the door; None when no runnable door exists or the door is this launcher (an fno-py shim re-enters)."""
+    import subprocess
+
+    door = resolve_front_binary()
+    if door is None or (sys.argv and door.resolve() == Path(sys.argv[0]).resolve()):
+        return None
+    # Lazy import: stdlib-only sibling, legal for the bare interpreters too.
+    from fno._subprocess_util import propagate_returncode
+
+    try:
+        proc = subprocess.run([str(door), family, *tail], check=False)
+    except OSError:
+        return None
+    return propagate_returncode(proc.returncode)
 
 
 def _update_signpost() -> None:
@@ -577,13 +600,16 @@ def _update_signpost() -> None:
 
 def _native_family_signpost(name: str, command: str):
     """The no-front-door spelling for a family the Rust front door owns: the
-    menu keeps the name advertised, and this leaf only names what installs
-    the door that answers it."""
+    menu keeps the name advertised, and this leaf hands the call to the door
+    when one is installed, keeping the refusal for the no-door case."""
     # Lazy click/typer imports: same reason as _update_signpost.
     import click
     import typer
 
-    def _cb(**_kwargs: object) -> None:
+    def _cb(argv: Sequence[str] = ()) -> None:
+        handed = front_door_handoff([str(a) for a in argv], name)
+        if handed is not None:
+            raise typer.Exit(code=handed)
         typer.echo(
             f"fno: the {name} family is native to the Rust front door; install it from the source checkout with "
             f"`cargo install --locked --path <src>/crates/fno`, then re-run `{command}`."
