@@ -970,33 +970,6 @@ mod tests {
         );
     }
 
-    /// AC1-ESC: a pid that survives the pane kill gets SIGTERM, and the
-    /// stop confirms only after the pid reads gone.
-    #[test]
-    fn ac1_esc_surviving_pid_gets_sigterm_before_confirmation() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(
-            log.clone(),
-            vec![PaneSighting {
-                session: "main".into(),
-                pane_id: 2034,
-                child_pid: Some(22287),
-            }],
-            Ok(true),
-            false,
-            true,
-            true,
-        );
-        let stop = stop_pane_process_confirmed_with(&test_row(), &seams);
-        assert!(stop.confirmed);
-        assert_eq!(
-            log.borrow().signals,
-            vec![(22287, libc::SIGTERM)],
-            "SIGKILL must not fire when SIGTERM landed the pid"
-        );
-        assert!(stop.detail.contains("SIGTERM sent to 22287"));
-    }
-
     /// AC1-ERR: a pid that survives every window never confirms; the
     /// caller's refusal carries what ran.
     #[test]

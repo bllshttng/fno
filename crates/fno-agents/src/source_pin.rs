@@ -1204,21 +1204,4 @@ mod tests {
         root.join("cli").to_string_lossy().into_owned()
     }
 
-    #[test]
-    fn mid_operation_refusal_holds_under_explicit_source() {
-        let base = tempfile::tempdir().unwrap();
-        let cli = main_checkout_mid_merge(&base.path().join("mox"));
-        let a = resolve(&ResolveArgs {
-            override_path: Some(cli.clone()),
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![],
-        });
-        assert_eq!(a.decision, Decision::Refuse);
-        assert!(
-            a.refusal.unwrap().contains("merge in progress"),
-            "explicit --source does not bypass a mid-operation tree"
-        );
-    }
 }

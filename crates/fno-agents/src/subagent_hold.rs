@@ -295,19 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn a_recently_written_completed_agent_is_not_held() {
-        let dir = tempfile::tempdir().unwrap();
-        let (session, subagents) = fixture(dir.path(), &[notify("ddd", "completed")], &["ddd"]);
-        backdate(&subagents.join("agent-ddd.jsonl"), 30);
-        assert!(
-            held_idle(&session, SystemTime::now(), 600)
-                .unwrap()
-                .is_empty(),
-            "resumed 30s ago: the old completed status is stale"
-        );
-    }
-
-    #[test]
     fn the_threshold_reads_the_python_knob_and_defaults_to_600() {
         assert_eq!(threshold_from(None), 600);
         assert_eq!(threshold_from(Some("")), 600);

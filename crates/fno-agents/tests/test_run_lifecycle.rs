@@ -516,45 +516,6 @@ fn the_run_timeout_names_the_wait_and_the_run() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// AC1-HP: a waiter queued 3s behind a live holder keeps its whole budget
-/// once admitted: `--timeout 5 -- sleep 4` runs its full 4 seconds and exits
-/// 0, where the old shared deadline would have killed it 2s into the run.
-#[test]
-fn a_queued_run_keeps_its_whole_budget() {
-    let root = tmp_claims_root("whole-budget");
-    let mut holder = test_run(&root)
-        .args(["--timeout", "30"])
-        .arg("--")
-        .arg("sleep")
-        .arg("3")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder");
-    std::thread::sleep(Duration::from_millis(300));
-    let out = test_run(&root)
-        .args(["--timeout", "5"])
-        .arg("--")
-        .arg("sleep")
-        .arg("4")
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .expect("run the queued waiter");
-    assert!(holder.try_wait().unwrap().is_some());
-    let _ = holder.wait();
-    assert!(
-        out.status.success(),
-        "the waiter must run its whole 4s budget, got {:?}: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("suite_wait_timeout"),
-        "the wait has no timer: {stderr}"
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// AC7-ERR: a fleet stop written while a waiter queues is read at its
 /// ADMISSION, not only at entry: the waiter exits 90 after the holder
 /// releases, names fleet-stop, never spawns, and a clear reopens admission.

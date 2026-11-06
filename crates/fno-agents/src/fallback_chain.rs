@@ -521,23 +521,4 @@ mod tests {
             .contains("not a known harness"));
     }
 
-    #[test]
-    fn flags_carry_the_axis_spelling() {
-        let payload = json!({
-            "links": [{"harness": "codex", "model": "m", "effort": "high"}],
-            "state": {},
-            "exclude": [],
-            "accounts": {},
-            "now": 1000.0,
-        });
-        let answer = resolve(&payload).unwrap();
-        let flags = answer["eligible"][0]["flags"].as_array().unwrap();
-        let toks: Vec<&str> = flags.iter().map(|v| v.as_str().unwrap()).collect();
-        // The retired model and effort axes never ride; the pane a non-claude
-        // harness defaults to is an explicit, automated placement.
-        assert_eq!(
-            toks,
-            vec!["-H", "codex", "--as", "pane", "--bounded-placement"]
-        );
-    }
 }

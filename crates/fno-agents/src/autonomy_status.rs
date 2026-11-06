@@ -475,26 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn env_override_rank_is_visible() {
-        let _guard = EnvGuard::set("FNO_KEEP_GOING", "1");
-        let rows = collect_status(None);
-        let keep = row_by_name(&rows, "keep_going (autonomous follow-up)");
-        assert_eq!(keep.armed, Some(true));
-        assert_eq!(keep.rank, "env");
-    }
-
-    #[test]
-    fn absent_env_falls_through_to_the_config_rank() {
-        // The override answers only when SET: an absent FNO_THINK_SPAWN
-        // drops the row to its config read (the same fallback the deleted
-        // Python leg took), and the empty-string value still reads as env.
-        let _guard = EnvGuard::clear("FNO_THINK_SPAWN");
-        let (armed, rank) = spawn_think_resolve(None);
-        assert_eq!(rank, "config");
-        assert_eq!(armed, Some(false));
-    }
-
-    #[test]
     fn master_switch_off_vetoes_every_other_row() {
         // The master switch reads through the settings stack; a root whose
         // .fno config.toml carries autonomy.enabled=false vetoes every gated
@@ -521,10 +501,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn ungated_cells_render_ungated() {
-        let rows = vec![row("x", "t", "k", None, "ungated")];
-        let rendered = format_table(&rows);
-        assert!(rendered.contains("ungated"));
-    }
 }

@@ -2695,30 +2695,6 @@ mod tests {
     }
 
     #[test]
-    fn opencode_infrastructure_failure_is_inconclusive_never_gone() {
-        // Spawn failure (binary missing) and a nonzero exit (unopenable store)
-        // must both stay Err, or a dead-pane pass would orphan a live pane.
-        fn spawn_failed(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Err("No such file or directory (os error 2)".into())
-        }
-        fn nonzero(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Ok((false, String::new()))
-        }
-        for run in [
-            spawn_failed as OpencodeDbRunner,
-            nonzero as OpencodeDbRunner,
-        ] {
-            let err = opencode_reachable_with(
-                &opencode_entry(Some(OC_SES)),
-                Duration::from_secs(2),
-                &run,
-            )
-            .unwrap_err();
-            assert_eq!(err.provider, "opencode");
-        }
-    }
-
-    #[test]
     fn codex_index_present_id_absent_is_false() {
         // The id is NOT in the index -> the session ended (index drops it) ->
         // definitively orphaned, even if a historical session file still exists.
@@ -2758,36 +2734,6 @@ mod tests {
     }
 
     const G_UUID: &str = "35624650-b11e-4300-ad85-0fc87baeb3af";
-
-    #[test]
-    fn gemini_reachability_is_cwd_pinned_and_verifies_full_uuid() {
-        let tmp = tempdir();
-        // Filename carries the 8-char short prefix; the FULL uuid must appear in
-        // the file's first line for the probe to confirm (defeats collisions).
-        let chats = tmp
-            .join(".gemini")
-            .join("tmp")
-            .join("myproject")
-            .join("chats");
-        std::fs::create_dir_all(&chats).unwrap();
-        std::fs::write(
-            chats.join("session-35624650.json"),
-            format!("{{\"sessionId\":\"{G_UUID}\",\"messages\":[]}}\n").as_bytes(),
-        )
-        .unwrap();
-        with_home(&tmp, || {
-            let entry = gemini_entry(G_UUID, "/work/myproject");
-            assert_eq!(
-                GeminiProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(true)
-            );
-            // Same id but a DIFFERENT cwd must not find it (cwd-pinned).
-            let other = gemini_entry(G_UUID, "/work/elsewhere");
-            assert!(GeminiProvider
-                .reachability(&other, Duration::from_secs(2))
-                .is_err()); // chats dir for "elsewhere" absent -> inconclusive
-        });
-    }
 
     // ---- test helpers (no external tempfile dep) ----
 

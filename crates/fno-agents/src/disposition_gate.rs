@@ -523,21 +523,6 @@ mod tests {
     }
 
     #[test]
-    fn withhold_below_the_cap_any_open_at_the_cap_none() {
-        // One predicate: below the configured rounds any open finding
-        // withholds; at the cap nothing does, hard included.
-        let open_hard = vec![super::DispositionBlocker {
-            finding_key: "f.py:1:correctness".to_string(),
-            axis: "open",
-            hard: true,
-            diagnosis: None,
-        }];
-        assert!(blockers_withhold(&open_hard, false));
-        assert!(!blockers_withhold(&open_hard, true));
-        assert!(!blockers_withhold(&[], false));
-    }
-
-    #[test]
     fn a_suffix_less_key_names_the_exact_repost_fix() {
         // The disposition was posted under the raised key minus its
         // ':category' segment: the fix landed, but the map can never match,

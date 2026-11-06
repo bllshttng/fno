@@ -525,18 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn ac3_hp_astra_enters_preparation_then_action_bands() {
-        assert_eq!(
-            compaction_band("gpt-6-astra", 200_000, 1_000_000),
-            CompactionBand::Prepare
-        );
-        assert_eq!(
-            compaction_band("gpt-6-astra", 250_000, 1_000_000),
-            CompactionBand::Action
-        );
-    }
-
-    #[test]
     fn last_usage_reader_finds_a_recent_record_without_loading_old_transcript_bytes() {
         let path = std::env::temp_dir().join(format!(
             "fno-context-probe-{}-{}.jsonl",

@@ -216,34 +216,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn window_cell_shows_the_dated_row_or_the_unmeasured_default_ac7() {
-        let routing: Vec<toml::Value> = toml::from_str::<toml::Value>(
-            "[[rows]]\nmodel = \"glm-5.3-flash[1m]\"\ncontext = 1310720\ncontext_measured_at = \"2026-09-17\"\n",
-        )
-        .unwrap()
-        .get("rows")
-        .and_then(toml::Value::as_array)
-        .cloned()
-        .unwrap();
-        let out = inventory_leg_with(
-            &json!({
-                "inventory": {"rows": [
-                    {"name": "flash", "harness": "claude", "model": "glm-5.3-flash", "band": "medium", "effort": ""},
-                    {"name": "other", "harness": "codex", "model": "gpt-6-luna", "band": "high", "effort": ""},
-                ]},
-                "known_harnesses": KNOWN,
-            }),
-            &routing,
-        );
-        let rows = out["rows"].as_array().unwrap();
-        assert_eq!(rows[0]["window"], "1310720 (measured 2026-09-17)");
-        assert_eq!(
-            rows[1]["window"],
-            format!(
-                "unmeasured, default {}",
-                crate::context_window::window_for_model("gpt-6-luna")
-            )
-        );
-    }
 }

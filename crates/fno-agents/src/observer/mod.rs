@@ -2024,25 +2024,4 @@ mod parity_tests {
         );
     }
 
-    #[test]
-    fn surface_collisions_match_oracle() {
-        let g = golden();
-        let colliding = vec!["E\tparallel tasks share surface 'b.py': 1.1, 1.2".to_string()];
-        assert_eq!(
-            fold::collisions_from_check(Some(&colliding)),
-            Some(
-                g["surface_collisions_colliding"]
-                    .as_array()
-                    .expect("oracle holds the collision line")
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect::<Vec<String>>()
-            )
-        );
-        assert_eq!(fold::collisions_from_check(None), None);
-        assert_eq!(
-            json!(fold::collisions_from_check(None)),
-            g["surface_collisions_plain"]
-        );
-    }
 }

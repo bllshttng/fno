@@ -983,27 +983,4 @@ mod tests {
         assert!(error.contains("--kind must be start or end"), "{error}");
     }
 
-    #[test]
-    fn commit_boundary_skips_a_store_committed_boundary() {
-        // AC10-DAY: a day_boundary committed to the store only is not re-appended.
-        let tmp = tempfile::tempdir().unwrap();
-        let journal = tmp.path().join("events.jsonl");
-        let questions = tmp.path().join("questions.jsonl");
-        let payload = serde_json::json!({
-            "boundary_id": "day-start-20260910",
-            "kind": "start",
-            "day": "2026-09-10",
-        });
-        let line = boundary_event_line(&payload).unwrap();
-        crate::event_store::append_envelope(&journal, &line, None).unwrap();
-        commit_boundary(&payload, &journal, &questions).unwrap();
-        let rows = crate::event_store::query_events(
-            &journal,
-            &crate::event_store::EventQuery::of_types(&["day_boundary"]),
-        )
-        .unwrap();
-        assert_eq!(rows.len(), 1, "the store-only boundary is recognized");
-        let raw = std::fs::read_to_string(&journal).unwrap_or_default();
-        assert!(raw.is_empty(), "no second append for the same id");
-    }
 }

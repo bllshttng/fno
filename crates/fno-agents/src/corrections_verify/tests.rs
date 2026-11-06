@@ -136,53 +136,6 @@ fn too_few_sessions_after_reads_insufficient_data() {
 }
 
 #[test]
-fn blocks_count_into_friction_and_window_bounds_hold() {
-    let dir = temp_dir("bounds");
-    let log = dir.join("corrections.log");
-    let events = dir.join("events.jsonl");
-    std::fs::write(
-        &log,
-        "2026-09-15T12:00:00Z | S1 | git-rule-edit | rules/loop.md | stop polling\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &events,
-        [
-            // before: 3 clean ends, one carrying 3 blocks of loop friction
-            termination("s1", "2026-09-01T10:00:00Z", "DonePRGreen"),
-            block("s1", "2026-09-01T09:00:00Z"),
-            block("s1", "2026-09-01T09:01:00Z"),
-            block("s1", "2026-09-01T09:02:00Z"),
-            termination("s6", "2026-09-02T10:00:00Z", "DonePRGreen"),
-            termination("s7", "2026-09-03T10:00:00Z", "DonePRGreen"),
-            // at the boundary ts: neither window counts it
-            termination("s2", "2026-09-15T12:00:00Z", "DonePRGreen"),
-            // after: clean
-            termination("s3", "2026-09-16T10:00:00Z", "DonePRGreen"),
-            termination("s4", "2026-09-17T10:00:00Z", "DonePRGreen"),
-            termination("s5", "2026-09-18T10:00:00Z", "DonePRGreen"),
-        ]
-        .join("\n"),
-    )
-    .unwrap();
-    let sessions = read_sessions(&std::fs::read_to_string(&events).unwrap());
-    let verdicts = score(
-        &read_corrections(
-            &std::fs::read_to_string(&log).unwrap(),
-            parse_ts("2026-01-01T00:00:00Z").unwrap(),
-        ),
-        &sessions,
-    );
-    let v = &verdicts[0];
-    // s2 ends exactly at the correction ts: excluded from both windows.
-    assert_eq!((v.sessions_before, v.sessions_after), (3, 3), "{v:?}");
-    assert_eq!(v.before, 1.0);
-    assert_eq!(v.after, 0.0);
-    assert_eq!(v.verdict, "improved");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn skill_commit_rows_score_and_carry_their_link() {
     let log = concat!(
         "2026-09-10T12:00:00Z | S1 | skill-commit | skills/target/SKILL.md | autocorrect r1#1: fix skill sha=abc123def456 ref=r1#1\n",

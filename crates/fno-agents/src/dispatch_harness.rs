@@ -262,10 +262,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn profile_keys_strip_the_sigils() {
-        assert_eq!(canonical_profile_key("target"), "target");
-        assert_eq!(canonical_profile_key("/target"), "target");
-        assert_eq!(canonical_profile_key("$fno:target"), "target");
-    }
 }

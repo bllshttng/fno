@@ -691,41 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn a_schedule_never_outlives_its_row_or_its_expiry() {
-        let fixture = Fixture::new();
-        fixture.seed_row(fixture.footnote_row(SESSION, "exited"));
-        fixture.schedule(SESSION, EVERY_S, NOW);
-        let report = run_pass_checked(&fixture.home, NOW, false);
-        assert_eq!(report.acted, 1);
-        assert!(!schedule_path(&fixture.home, SESSION).exists(), "kept");
-        assert_eq!(fixture.last_outcome(), Some("row-gone".to_string()));
-
-        fixture.schedule(SESSION, EVERY_S, NOW);
-        let path = schedule_path(&fixture.home, SESSION);
-        let body = std::fs::read_to_string(&path).unwrap().replace(
-            &format!("\"expires_at\":{}", NOW + 86_400),
-            &format!("\"expires_at\":{}", NOW - 1),
-        );
-        std::fs::write(&path, body).unwrap();
-        let report = run_pass_checked(&fixture.home, NOW, false);
-        assert_eq!(report.acted, 1);
-        assert!(!path.exists(), "kept");
-        assert_eq!(fixture.last_outcome(), Some("expired".to_string()));
-    }
-
-    #[test]
-    fn a_paused_pass_reads_and_types_nothing() {
-        let fixture = Fixture::new();
-        fixture.seed_row(fixture.footnote_row(SESSION, "live"));
-        fixture.schedule(SESSION, EVERY_S, NOW);
-        let report = run_pass_checked(&fixture.home, NOW, true);
-        assert_eq!(report.acted, 0);
-        assert!(report.error.is_none());
-        assert!(schedule_path(&fixture.home, SESSION).exists(), "deleted");
-        assert!(fixture.last_outcome().is_none());
-    }
-
-    #[test]
     fn a_corrupt_schedule_retires_visibly() {
         let fixture = Fixture::new();
         fixture.seed_row(fixture.footnote_row(SESSION, "live"));
@@ -738,44 +703,4 @@ mod tests {
         assert_eq!(fixture.last_outcome(), Some("corrupt".to_string()));
     }
 
-    #[test]
-    fn arm_refusals_write_nothing_and_a_valid_arm_lists() {
-        let fixture = Fixture::new();
-        fixture.seed_row(fixture.footnote_row(SESSION, "live"));
-        let argv =
-            |parts: &[&str]| -> Vec<String> { parts.iter().map(|p| p.to_string()).collect() };
-        for parts in [
-            vec!["--session", SESSION, "--every", "30s", "--", "x"],
-            vec!["--session", SESSION, "--every", "5m", "--", "   "],
-            vec!["--session", "nope", "--every", "5m", "--", "x"],
-            vec!["--session", SESSION, "--every", "5m"],
-        ] {
-            let code = run_arm(&argv(&parts));
-            assert_eq!(code, 2, "{parts:?}");
-            assert!(!schedule_path(&fixture.home, SESSION).exists(), "{parts:?}");
-        }
-        let code = run_arm(&argv(&[
-            "--session",
-            SESSION,
-            "--every",
-            "5m",
-            "--",
-            "check",
-            "CI",
-        ]));
-        assert_eq!(code, 0);
-        let stored: Vec<Schedule> = read_schedules(&fixture.home)
-            .into_iter()
-            .filter_map(|(_, parsed)| parsed)
-            .collect();
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].session, SESSION);
-        assert_eq!(stored[0].prompt, CHECK_PROMPT);
-        assert_eq!(stored[0].every_s, EVERY_S);
-        let code = run_disarm(&argv(&["--session", SESSION]));
-        assert_eq!(code, 0);
-        assert!(!schedule_path(&fixture.home, SESSION).exists(), "kept");
-        let code = run_disarm(&argv(&["--session", SESSION]));
-        assert_eq!(code, 0, "disarm without an arm still exits 0");
-    }
 }

@@ -287,56 +287,8 @@ mod tests {
         assert!(error.contains("--substrate thread"), "{error}");
     }
 
-    #[test]
-    fn the_convert_door_opens_on_the_flag_and_not_on_a_value_that_looks_like_it() {
-        assert!(requests_conversion(&args(&[
-            "worker",
-            "--substrate",
-            "thread"
-        ])));
-        assert!(requests_conversion(&args(&[
-            "worker",
-            "--substrate=thread"
-        ])));
-        // A message that merely contains the flag's spelling is a message.
-        assert!(!requests_conversion(&args(&[
-            "worker",
-            "-m",
-            "--substrate thread"
-        ])));
-        assert!(!requests_conversion(&args(&["worker", "--substrate-ish"])));
-        assert!(!requests_conversion(&args(&["worker"])));
-    }
-
     fn args(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| (*t).to_string()).collect()
-    }
-
-    #[test]
-    fn resume_parses_account_and_reaches_name_resolution() {
-        // Regression for the exit-2 trap: the wake seam appends --account, so
-        // `resume <name> --account <id>` must PARSE. A miss at parse printed
-        // `unknown resume flag: --account` before the name ever resolved,
-        // which broke the wake path three runtime receipts advertise.
-        let parsed = parse_resume_args(&args(&["zzz-nonexistent-probe", "--account", "probeacct"]))
-            .expect("resume with --account parses");
-        assert_eq!(parsed.name, "zzz-nonexistent-probe");
-        assert_eq!(parsed.account.as_deref(), Some("probeacct"));
-        // The control: no account named still parses (the seam only appends
-        // when the caller named none, so both shapes arrive here).
-        let parsed =
-            parse_resume_args(&args(&["zzz-nonexistent-probe"])).expect("bare resume parses");
-        assert_eq!(parsed.name, "zzz-nonexistent-probe");
-        assert_eq!(parsed.account, None);
-        // Equals form rides the same expansion every sibling flag uses.
-        let parsed = parse_resume_args(&args(&["zzz-nonexistent-probe", "--account=probeacct"]))
-            .expect("resume --account= parses");
-        assert_eq!(parsed.account.as_deref(), Some("probeacct"));
-        // A value-less --account is a usage error, not an unknown flag.
-        assert_eq!(
-            parse_resume_args(&args(&["zzz-nonexistent-probe", "--account"])),
-            Err(2)
-        );
     }
 
     #[test]

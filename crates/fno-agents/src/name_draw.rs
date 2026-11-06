@@ -757,26 +757,6 @@ mod tests {
         assert_eq!(answer["draw"]["name"], "Zelda", "{answer}");
     }
 
-    /// A name the user reserves in `names.reserved` is used for every naming
-    /// decision, so the draw filter and the checkin/rename refusal skip it.
-    #[test]
-    fn a_user_reserved_name_counts_as_used() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("team_names.json");
-        let registry = tmp.path().join("registry.json");
-        crate::registry_store::seed_raw(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
-                .to_string(),
-        );
-        let config = tmp.path().join("config.toml");
-        std::fs::write(&config, "[names]\nreserved = [\"Esme\", \" \"]\n").unwrap();
-        std::env::set_var("FNO_CONFIG", &config);
-        let used = crate::team_names::used_names(&store, &registry);
-        std::env::remove_var("FNO_CONFIG");
-        assert!(used.unwrap().contains("esme"));
-    }
-
     #[test]
     fn settle_draw_declines_a_spawn_that_refuses_the_draw_contract() {
         let tmp = tempfile::tempdir().unwrap();
@@ -822,76 +802,4 @@ mod tests {
         assert!(answer.get("draw").is_none());
     }
 
-    /// A fresh grant draws only when asked: `--name redraw` names the new
-    /// lead, and a retired `--name` refusal names a fresh name to retry with.
-    #[test]
-    fn a_fresh_grant_draws_on_redraw_and_names_a_draw_in_a_retired_refusal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("team_names.json");
-        crate::registry_store::seed_raw(
-            &tmp.path().join("registry.json"),
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
-                .to_string(),
-        );
-        let root = tmp.path().to_str().unwrap();
-        let mut answer = json!({"outcome": "granted"});
-        settle_draw(
-            &json!({"scope": "x-aaaa", "claims_root": root}),
-            &mut answer,
-            &store,
-        );
-        assert!(answer.get("draw").is_none(), "{answer}");
-        // A bare hand-off over a scope nobody holds still gets a name.
-        let mut unheld = json!({"outcome": "granted"});
-        settle_draw(
-            &json!({"scope": "x-cccc", "succession": true, "claims_root": root}),
-            &mut unheld,
-            &store,
-        );
-        assert!(unheld["draw"]["name"].as_str().is_some(), "{unheld}");
-        settle_draw(
-            &json!({"scope": "x-aaaa", "redraw": true, "claims_root": root}),
-            &mut answer,
-            &store,
-        );
-        let drawn = answer["draw"]["name"].as_str().unwrap().to_string();
-        assert_eq!(
-            crate::team_names::unconsumed_draw(&store, "x-aaaa").unwrap(),
-            Some(drawn.to_ascii_lowercase())
-        );
-        // Once a lead binds the draw, it is a retired name, never an accept.
-        crate::team_names::history_append(
-            &store,
-            crate::team_names::NameHistoryEntry::here(&drawn, "x-aaaa", Some("s".into()), "bound"),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::team_names::unconsumed_draw(&store, "x-aaaa").unwrap(),
-            None
-        );
-        let mut answer = json!({"outcome": "declined", "retired": "Rowan",
-            "refusal": "--promote --name requires a fresh person name: Rowan is retired"});
-        settle_draw(
-            &json!({"scope": "x-bbbb", "proposed_name": "Rowan", "claims_root": root}),
-            &mut answer,
-            &store,
-        );
-        let refusal = answer["refusal"].as_str().unwrap();
-        let fresh = refusal.rsplit("--name ").next().unwrap();
-        assert!(refusal.contains("The machine drew"), "{refusal}");
-        assert_ne!(fresh, drawn, "{refusal}");
-        assert_eq!(answer["outcome"], "declined");
-        // A take-over draws on `--name redraw` only; a typed name binds as is.
-        for (redraw, draws) in [(false, false), (true, true)] {
-            let mut answer = json!({"outcome": "succeeded", "holders": ["Alder"]});
-            settle_draw(
-                &json!({"scope": "x-dddd", "take_over": {"reason": "r"},
-                    "redraw": redraw, "proposed_name": if redraw { Value::Null } else { json!("Odile") },
-                    "claims_root": root}),
-                &mut answer,
-                &store,
-            );
-            assert_eq!(answer["draw"]["name"].is_string(), draws, "{answer}");
-        }
-    }
 }

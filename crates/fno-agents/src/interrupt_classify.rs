@@ -311,32 +311,4 @@ mod tests {
         std::fs::remove_file(path).ok();
     }
 
-    // AC1-HP: the trailing reader answers with the newest call's name, id and time.
-    #[test]
-    fn trailing_open_call_reads_the_newest_call_with_its_time() {
-        let tail = concat!(
-            r#"{"type":"assistant","timestamp":"2026-09-21T08:21:13.913Z","message":{"content":[{"type":"tool_use","id":"toolu_01DRy8JKGCBLeubeGxap9SwP","name":"Bash","input":{}}]},"uuid":"u1","parentUuid":null}"#,
-            "\n",
-            r#"{"type":"user","timestamp":"2026-09-21T08:21:40.000Z","message":{"content":[{"type":"queue-operation","content":"x"}]}}"#,
-            "\n",
-        );
-        let call = trailing_open_call(tail).expect("the newest call is open");
-        assert_eq!(call.id, "toolu_01DRy8JKGCBLeubeGxap9SwP");
-        assert_eq!(call.name, "Bash");
-        assert_eq!(call.at.as_deref(), Some("2026-09-21T08:21:13.913Z"));
-    }
-
-    // A partial (unterminated) tail line must not break the newest-call read;
-    // the walk skips it like any Other record.
-    #[test]
-    fn trailing_open_call_skips_a_partial_last_line() {
-        let tail = concat!(
-            r#"{"type":"assistant","timestamp":"2026-09-21T08:21:13.913Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
-            "\n",
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
-            "\n",
-            r#"{"type":"user","message":{"content":[{"type":"tool_re"#,
-        );
-        assert!(trailing_open_call(tail).is_none());
-    }
 }

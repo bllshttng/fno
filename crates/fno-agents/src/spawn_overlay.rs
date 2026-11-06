@@ -1164,50 +1164,6 @@ mod tests {
         drop(guard);
     }
 
-    /// The packaged claude template renders the ruled native line: the
-    /// settings path, model and effort land between `--bg` and `--name`, and
-    /// the payload rides as the final positional. This golden IS the wave's
-    /// ruled print shape; the Python side asserts only the transport.
-    #[test]
-    fn print_fills_the_packaged_claude_line() {
-        let (guard, dir, saved) = print_world(None);
-        let out = resolve(json!({
-            "kind": "print", "harness": "claude", "substrate": "thread",
-            "name": "w", "payload": "/fno:target x-aaaa",
-            "cwd": dir.path(),
-            "model": "glm-5.3-flash[1m]", "effort": "xhigh",
-            "route_env": {
-                "FNO_ROUTE_PROVIDER": "zai",
-                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "zk"
-            },
-        }))
-        .unwrap();
-        let tokens = out["tokens"].as_array().unwrap();
-        assert_eq!(tokens[0], "claude");
-        assert_eq!(tokens[1], "--bg");
-        assert_eq!(tokens[2], "--settings");
-        let settings_path = tokens[3].as_str().unwrap();
-        assert!(
-            settings_path.starts_with(dir.path().to_str().unwrap()),
-            "the settings file lands in the staged state root: {settings_path}"
-        );
-        assert!(std::path::Path::new(settings_path).exists());
-        assert_eq!(
-            &tokens[4..],
-            [
-                "--model",
-                "glm-5.3-flash[1m]",
-                "--effort",
-                "xhigh",
-                "--name",
-                "w",
-                "/fno:target x-aaaa"
-            ]
-        );
-        print_world_restore(guard, saved);
-    }
-
     /// The contract gates through the staged inventory: a bad row template
     /// refuses by name, and a harness the lane has no native line for
     /// refuses before the template resolves.

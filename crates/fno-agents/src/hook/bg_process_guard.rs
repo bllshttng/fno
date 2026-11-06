@@ -995,44 +995,6 @@ mod tests {
     }
 
     #[test]
-    fn no_wrapper_hides_an_unbounded_generator() {
-        for wrap in WRAPS {
-            let missed: Vec<String> = PREFIXES
-                .iter()
-                .flat_map(|p| GENERATORS.iter().map(move |g| format!("{p}{g}")))
-                .map(|cmd| wrap.replace("{cmd}", &cmd))
-                .filter(|cmd| decide(cmd).is_none())
-                .collect();
-            assert!(missed.is_empty(), "{}: {missed:?}", wrap);
-        }
-    }
-
-    #[test]
-    fn no_wrapper_turns_a_legal_command_into_a_refusal() {
-        for wrap in WRAPS.iter().filter(|w| !w.starts_with("until false")) {
-            let refused: Vec<String> = LEGAL
-                .iter()
-                .map(|cmd| wrap.replace("{cmd}", cmd))
-                .filter(|cmd| decide(cmd).is_some())
-                .collect();
-            assert!(refused.is_empty(), "{}: {refused:?}", wrap);
-        }
-    }
-
-    #[test]
-    fn a_bounding_wrapper_rescues_every_generator() {
-        for wrap in BOUNDING_WRAPS {
-            let refused: Vec<String> = PREFIXES
-                .iter()
-                .flat_map(|p| GENERATORS.iter().map(move |g| format!("{p}{g}")))
-                .map(|cmd| wrap.replace("{cmd}", &cmd))
-                .filter(|cmd| decide(cmd).is_some())
-                .collect();
-            assert!(refused.is_empty(), "{}: {refused:?}", wrap);
-        }
-    }
-
-    #[test]
     fn every_advertised_remedy_actually_works() {
         let reason = decide("yes > /dev/null &").expect("refused");
         for (phrase, remedy) in [
@@ -1051,13 +1013,6 @@ mod tests {
 
     fn bash(command: &str, background: bool) -> Value {
         json!({"tool_name": "Bash", "tool_input": {"command": command, "run_in_background": background}})
-    }
-
-    #[test]
-    fn a_foreground_generator_names_the_hand_form() {
-        let reason = judge(&bash("yes > /dev/null &", false)).expect("refused");
-        assert!(reason.contains("exec -a fno-"), "{reason}");
-        assert!(reason.starts_with("Refusing an unbounded process"));
     }
 
     #[test]

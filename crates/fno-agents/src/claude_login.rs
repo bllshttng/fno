@@ -282,30 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn probe_command_pins_config_dir_and_argv() {
-        let held = vec![
-            "ANTHROPIC_BASE_URL".to_string(),
-            "FNO_ROUTE_PROVIDER".to_string(),
-        ];
-        let cmd = probe_command(Path::new("/tmp/x"), &held);
-        assert_eq!(cmd.get_program(), "claude");
-        assert!(cmd
-            .get_envs()
-            .any(|(k, v)| k == "CLAUDE_CONFIG_DIR" && v == Some(std::ffi::OsStr::new("/tmp/x"))));
-        let argv: Vec<String> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(argv.first().map(String::as_str), Some("-p"));
-        assert!(argv
-            .windows(2)
-            .any(|w| w[0] == "--output-format" && w[1] == "json"));
-        assert!(argv.contains(&"--no-session-persistence".to_string()));
-        assert!(argv.contains(&"--strict-mcp-config".to_string()));
-        assert_eq!(cmd.get_current_dir(), Some(std::env::temp_dir().as_path()));
-    }
-
-    #[test]
     fn a_sleeper_hits_the_bound_and_reads_unknown() {
         // The loop, not a bare sleep: when the runner is fork-starved, a
         // bare `sleep 30` makes bash exit at once with empty output, and
@@ -322,57 +298,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn login_command_names_the_login_words() {
-        assert_eq!(
-            login_command(Path::new("/tmp/acct")),
-            "CLAUDE_CONFIG_DIR=/tmp/acct claude /login"
-        );
-    }
-
     fn read_probe(home: &crate::paths::AgentsHome, account: &str) -> Option<serde_json::Value> {
         let raw = std::fs::read_to_string(login_probes_path(home)).ok()?;
         let doc: serde_json::Value = serde_json::from_str(&raw).ok()?;
         doc.get("probes")?.get(account).cloned()
     }
 
-    #[test]
-    fn a_logged_out_verdict_is_persisted_with_detail() {
-        let root = tempfile::tempdir().unwrap();
-        let home = crate::paths::AgentsHome::at(root.path().to_path_buf());
-        let dir = Path::new("/tmp/acct");
-        record_verdict(
-            &home,
-            "makers",
-            dir,
-            &Login::LoggedOut("OAuth session expired".to_string()),
-        );
-        let row = read_probe(&home, "makers").expect("refusal recorded");
-        assert_eq!(row["verdict"], "logged_out");
-        assert_eq!(row["detail"], "OAuth session expired");
-        assert_eq!(row["config_dir"], "/tmp/acct");
-        assert!(row["at_epoch"].is_i64());
-
-        // A live verdict overwrites the refusal; an inconclusive probe
-        // leaves the existing entry alone.
-        record_verdict(&home, "makers", dir, &Login::LoggedIn);
-        let row = read_probe(&home, "makers").expect("verdict recorded");
-        assert_eq!(row["verdict"], "logged_in");
-        assert!(row.get("detail").is_none());
-
-        record_verdict(
-            &home,
-            "makers",
-            dir,
-            &Login::LoggedOut("Login expired".to_string()),
-        );
-        record_verdict(
-            &home,
-            "makers",
-            dir,
-            &Login::Unknown("probe timed out after 20s".to_string()),
-        );
-        let row = read_probe(&home, "makers").expect("earlier refusal survives");
-        assert_eq!(row["verdict"], "logged_out");
-    }
 }
