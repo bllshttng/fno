@@ -2069,7 +2069,7 @@ mod tests {
         std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
         std::env::remove_var("FNO_CARGO_TARGETS_BASE");
         std::env::remove_var("CARGO_BUILD_BUILD_DIR");
-        std::env::set_var("FNO_TEST_LIVE_CARGO_CWDS", "/tmp/x-ef05-no-live-cargo");
+        std::env::set_var("FNO_TEST_LIVE_CARGO_CWDS", "/tmp/no-live-cargo");
         init_git_repo(&root);
 
         let new_base = state.join("cache/cargo-build");
