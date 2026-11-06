@@ -574,8 +574,7 @@ fn seed_transcript(prefix: &str) -> Option<(String, PathBuf)> {
 }
 
 fn daily(state: &Path) -> Result<Value, String> {
-    let source = crate::state_layout::place(state, "corrections.log")
-        .unwrap_or_else(|| state.join("logs/corrections.log"));
+    let source = crate::state_layout::place(state, "corrections.log");
     let seeded = import_seed(state, &source)?;
     crate::evals_profile::local(state, None)?;
     let repo = crate::evals::canonical_repo_root();
