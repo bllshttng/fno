@@ -204,7 +204,7 @@ mod tests {
     fn a_numbered_row_leads_the_node_cell_with_the_number() {
         let rows = json!([
             {"node": "x-aaaa", "number": "x-5555", "status": "in_progress"},
-            {"node": "x-aaaa", "status": "in_progress"},
+            {"node": "x-bbbb", "status": "in_progress"},
             {"node": null}
         ]);
         let lines = render_lineup(rows.as_array().unwrap());
