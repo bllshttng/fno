@@ -1933,6 +1933,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let (tmp, repo) = cross_vault_fixture("resolve");
         let mux = crate::escalation::vault_dir_with_home(&repo, None, "mux");
+        std::fs::create_dir_all(&mux).unwrap();
         let sibling = tmp.join("vault").join("internal").join("fno").join("mux");
         std::fs::create_dir_all(&sibling).unwrap();
         std::fs::write(sibling.join("x-aaaa-dark.png"), "x").unwrap();
