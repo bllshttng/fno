@@ -111,7 +111,7 @@ pub fn run_status(tail: &[String]) -> i32 {
     // The display read hides archived residents (wire_rows' default read).
     let entries: Vec<&Value> = rows.iter().filter(|e| !truthy(e, "archived_at")).collect();
     if entries.is_empty() {
-        println!("No graph entries found. Run /megawalk vision.md to generate a roadmap.");
+        println!("No graph entries found. Run 'fno backlog idea \"...\"' or 'fno backlog intake <file>' to create entries.");
         return 0;
     }
     if let Some(rid) = &roadmap_id {
