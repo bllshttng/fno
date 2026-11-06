@@ -6,7 +6,7 @@
 //! cli/src/fno/events/__init__.py) BEFORE that leg was deleted. The
 //! goldens under tests/golden/event_validate/ freeze one
 //! (exit, stdout, stderr) triple per corpus row (284 of the 285 rows in
-//! cli/tests/events/parity_corpus.jsonl; the overflow-literals row is
+//! tests/py/events/parity_corpus.jsonl; the overflow-literals row is
 //! answered by the door's substrate refusal and stays in the Python
 //! suite). The native judge in crates/fno-agents/src/event_store/
 //! validate.rs must answer every frozen case identically.
@@ -32,7 +32,7 @@ fn repo_root() -> PathBuf {
 
 /// (label, event JSON) per corpus row.
 fn corpus_rows() -> Vec<(String, String)> {
-    let path = repo_root().join("cli/tests/events/parity_corpus.jsonl");
+    let path = repo_root().join("tests/py/events/parity_corpus.jsonl");
     let text = fs::read_to_string(path).expect("parity corpus is present");
     let mut rows = Vec::new();
     for line in text.lines() {

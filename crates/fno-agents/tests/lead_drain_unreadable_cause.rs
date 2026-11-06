@@ -74,7 +74,6 @@ fn quiet_fire(body: &str) -> (tempfile::TempDir, [EnvGuard; 6], Vec<String>) {
         ),
     )
     .unwrap();
-    write_exec(&bin, "fno-py", "#!/bin/sh\nprintf '[]\\n'");
     let gh = write_exec(&bin, "gh", "#!/bin/sh\nprintf '[]\\n'");
     let fno = write_exec(dir.path(), "fno-drain", body);
     let state = dir.path().join("lead.md");
@@ -99,7 +98,6 @@ fn quiet_fire(body: &str) -> (tempfile::TempDir, [EnvGuard; 6], Vec<String>) {
         set_env("FNO_CONFIG", &config),
         set_env("FNO_AGENTS_HOME", dir.path().join("agents")),
         set_env("FNO_CLAIMS_ROOT", dir.path().join("claims")),
-        set_env("FNO_PY", bin.join("fno-py")),
         set_env("PATH", path),
     ];
 

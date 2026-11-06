@@ -47,8 +47,8 @@ const REGISTERED_GATES: &[&str] = &["gate:merge-freeze", "gate:merge-hold", "gat
 /// needs a runner, so only a registered artifact retires. Keyed by artifact,
 /// the write side's own string, not by decision id.
 const REGISTERED_TEST_PROBES: &[(&str, &str)] = &[(
-    "test:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment",
-    "test_passed:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment",
+    "test:tests/py/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment",
+    "test_passed:tests/py/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment",
 )];
 
 /// `^d-[0-9a-f]{4,32}$`, the Python `looks_like_decision_id` shape. The
@@ -2185,7 +2185,7 @@ mod tests {
                 "2026-09-01T00:00:00Z",
                 "operator",
                 "topic-g",
-                ",\"graduation\":{\"kind\":\"enforced\",\"artifact\":\"test:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment\"}",
+                ",\"graduation\":{\"kind\":\"enforced\",\"artifact\":\"test:tests/py/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment\"}",
             ),
             // duplicate id appended twice: one row wins
             envelope(

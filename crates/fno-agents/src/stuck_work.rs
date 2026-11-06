@@ -63,8 +63,7 @@ fn hung_command(pid: u32, age_s: u64, args: &str, now_unix: u64) -> Option<Findi
     let tokens: Vec<&str> = args.split_whitespace().collect();
     let argv0 = tokens.first()?;
     let base = argv0.rsplit('/').next().unwrap_or(argv0);
-    let is_command = matches!(base, "fno" | "fno-py" | "fno-agents")
-        || (base.starts_with("python") && tokens.get(1).is_some_and(|a| a.ends_with("/fno-py")));
+    let is_command = matches!(base, "fno" | "fno-agents");
     if !is_command {
         return None;
     }
@@ -407,8 +406,7 @@ mod tests {
         let rows = vec![(
             66_853u32,
             12_540u64,
-            "/x/python3 /x/fno-py backlog advance --loose --project fno --source ab --json"
-                .to_string(),
+            "/x/fno backlog advance --loose --project fno --source ab --json".to_string(),
         )];
         let findings = hung_commands(&rows, now);
         assert_eq!(findings.len(), 1);
@@ -417,7 +415,7 @@ mod tests {
         assert_eq!(f.key, format!("hung:66853@{}", now - 12_540));
         assert!(
             f.line
-                .starts_with("hung command pid 66853 3h29m /x/python3 /x/fno-py backlog advance"),
+                .starts_with("hung command pid 66853 3h29m /x/fno backlog advance"),
             "{}",
             f.line
         );

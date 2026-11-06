@@ -135,7 +135,7 @@ esac
     );
     // The fno binary path the plist carries: a stub, so the rendered
     // ProgramArguments stay inside the masked case dir.
-    make_script(&stub, "fno-py", "exit 0");
+    make_script(&stub, "fno-agents", "exit 0");
 
     dir
 }
@@ -164,7 +164,7 @@ fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
         ),
         (
             "FNO_TEST_FNO_BINARY".into(),
-            dir.join("stub").join("fno-py").display().to_string(),
+            dir.join("stub").join("fno-agents").display().to_string(),
         ),
         // Keep the deployed fno and any real launchctl out of reach; the stub
         // dir answers both.
@@ -240,7 +240,7 @@ fn rust_leg(dir: &Path, case: &Case) -> Golden {
     if !matches!(case.mode, Mode::Uninstall { .. }) {
         cmd.args([
             "--fno-binary",
-            &dir.join("stub").join("fno-py").display().to_string(),
+            &dir.join("stub").join("fno-agents").display().to_string(),
         ]);
     }
     for (k, v) in pin_env(dir, case) {

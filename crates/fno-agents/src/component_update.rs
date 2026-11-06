@@ -1,10 +1,10 @@
 //! Deployed-component convergence verdict.
 //!
 //! Pure decision over probe data: classify each deployed component (the
-//! Python tool and the four cargo binaries) as Fresh, Updated, Stale,
+//! four cargo binaries) as Fresh, Updated, Stale,
 //! Missing, Failed or Unknown, and name the executable repair command for
 //! each. The probes (`<bin> version --json`, the installed-rev marker) are
-//! instruments the Python transport runs; the classification lives here so
+//! instruments the update runs; the classification lives here so
 //! `fno doctor update` and `fno doctor` cannot fork it. A no-op success or an
 //! attempted build is never convergence: only a post-effect probe matching
 //! the expected revision proves a component.
@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub const PYTHON_TOOL: &str = "python-tool";
 pub const MUX_FRONT_DOOR: &str = "fno";
 pub const AGENTS_CLIENT: &str = "fno-agents";
 pub const AGENTS_DAEMON: &str = "fno-agents-daemon";
@@ -82,7 +81,7 @@ pub struct ComponentProbe {
 #[derive(Debug, Deserialize)]
 pub struct VerdictRequest {
     /// Default expected revision: the crates/ subtree rev for cargo bins.
-    /// A probe may override (the Python tool expects the source rev).
+    /// A probe may override it.
     pub expected_rev: String,
     #[serde(default)]
     pub crates_agents_dir: Option<String>,
@@ -155,7 +154,6 @@ fn shell_quote(path: &str) -> String {
 
 fn repair_command(component: &str, req: &VerdictRequest) -> Option<String> {
     match component {
-        PYTHON_TOOL => Some("fno doctor update".to_string()),
         MUX_FRONT_DOOR => Some(match &req.crates_mux_dir {
             Some(dir) => format!("cargo install --path {} --bins", shell_quote(dir)),
             None => "fno doctor update --rust".to_string(),
@@ -295,25 +293,19 @@ pub fn verdict(req: &VerdictRequest) -> VerdictReport {
 
 /// One probe of a deployed executable through the shared exec-prover: it
 /// classifies the exec, repairs a poisoned path at most once (the kill-shaped
-/// classifications), and re-probes. Returns (rev, python_script,
-/// instrument_error, repair_evidence): the error names the instrument so an
+/// classifications), and re-probes. Returns (rev, instrument_error,
+/// repair_evidence): the error names the instrument so an
 /// unanswerable probe lands at the classifier as Unknown (never collapsed into
 /// fresh or missing), and the evidence names the classification that triggered
 /// a repair so a healed path is visible in the verdict.
 fn probe_binary(
     path: &std::path::Path,
     timeout: Duration,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+) -> (Option<String>, Option<String>, Option<String>) {
     let outcome =
         crate::install_verify::verify_and_repair(path, timeout, crate::install_verify::probe_exec);
     (
         outcome.rev,
-        outcome.script,
         outcome.instrument_error,
         outcome.repaired_after,
     )
@@ -355,10 +347,6 @@ struct ProbeArgs {
     include_mux: bool,
     agents_dir: Option<String>,
     mux_dir: Option<String>,
-    python_expected: Option<String>,
-    python_rev: Option<String>,
-    python_error: Option<String>,
-    python_evidence: Option<String>,
 }
 
 fn parse_probe_args(args: &[String]) -> Result<ProbeArgs, String> {
@@ -369,10 +357,6 @@ fn parse_probe_args(args: &[String]) -> Result<ProbeArgs, String> {
         include_mux: false,
         agents_dir: None,
         mux_dir: None,
-        python_expected: None,
-        python_rev: None,
-        python_error: None,
-        python_evidence: None,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -388,13 +372,6 @@ fn parse_probe_args(args: &[String]) -> Result<ProbeArgs, String> {
             "--expected" => p.expected = value("--expected")?,
             "--agents-dir" => p.agents_dir = Some(value("--agents-dir")?),
             "--mux-dir" => p.mux_dir = Some(value("--mux-dir")?),
-            "--python-expected" => p.python_expected = Some(value("--python-expected")?),
-            "--python-rev" => {
-                let v = value("--python-rev")?;
-                p.python_rev = Some(v).filter(|v| v != "-");
-            }
-            "--python-error" => p.python_error = Some(value("--python-error")?),
-            "--python-evidence" => p.python_evidence = Some(value("--python-evidence")?),
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -407,14 +384,13 @@ fn parse_probe_args(args: &[String]) -> Result<ProbeArgs, String> {
     Ok(p)
 }
 
-/// Probe the cargo components in `bindir` (plus the mux front door and the
-/// python-tool row when requested) and classify. Converged only when every
+/// Probe the cargo components in `bindir` (plus the mux front door when
+/// requested) and classify. Converged only when every
 /// row proves Fresh or Updated from its own probe.
 fn verdict_from_probe(p: &ProbeArgs) -> VerdictReport {
     let probe_timeout = Duration::from_secs(20);
     let exe = if cfg!(windows) { ".exe" } else { "" };
     let mut components: Vec<ComponentProbe> = Vec::new();
-    let mut python_exec: Option<String> = None;
     for (name, stem) in [
         (format!("fno-agents{exe}"), AGENTS_CLIENT),
         (format!("fno-agents-daemon{exe}"), AGENTS_DAEMON),
@@ -422,10 +398,10 @@ fn verdict_from_probe(p: &ProbeArgs) -> VerdictReport {
     ] {
         let path = p.bindir.join(&name);
         let present = path.is_file();
-        let (rev, _script, err, evidence) = if present {
+        let (rev, err, evidence) = if present {
             probe_binary(&path, probe_timeout)
         } else {
-            (None, None, None, None)
+            (None, None, None)
         };
         components.push(ComponentProbe {
             component: stem.to_string(),
@@ -448,12 +424,11 @@ fn verdict_from_probe(p: &ProbeArgs) -> VerdictReport {
     if p.include_mux {
         let path = p.bindir.join(format!("fno{exe}"));
         let present = path.is_file();
-        let (rev, script, err, evidence) = if present {
+        let (rev, err, evidence) = if present {
             probe_binary(&path, probe_timeout)
         } else {
-            (None, None, None, None)
+            (None, None, None)
         };
-        python_exec = script;
         components.push(ComponentProbe {
             component: MUX_FRONT_DOOR.to_string(),
             expected_rev: None,
@@ -470,24 +445,6 @@ fn verdict_from_probe(p: &ProbeArgs) -> VerdictReport {
             effect_ok: None,
             observed_is_descendant: None,
             repair_evidence: evidence,
-        });
-    }
-    if p.python_rev.is_some() || p.python_error.is_some() {
-        // A requested python-tool row is emitted even when the marker could
-        // not be read: that state is Unknown with the named instrument, never
-        // a silent omission from the summary.
-        components.push(ComponentProbe {
-            component: PYTHON_TOOL.to_string(),
-            expected_rev: p.python_expected.clone(),
-            executable: python_exec.or(Some("<unresolved python>".to_string())),
-            pre_rev: None,
-            post_rev: p.python_rev.clone(),
-            instrument_error: p.python_error.clone(),
-            contradicting_evidence: p.python_evidence.clone(),
-            effect_attempted: p.attempted,
-            effect_ok: None,
-            observed_is_descendant: None,
-            repair_evidence: None,
         });
     }
     stamp_newer_descendants(&mut components, &p.expected, p.agents_dir.as_deref());
@@ -519,9 +476,6 @@ fn stamp_newer_descendants(
     let mut cache: std::collections::HashMap<(String, String), Option<bool>> =
         std::collections::HashMap::new();
     for probe in components.iter_mut() {
-        if probe.component == PYTHON_TOOL {
-            continue;
-        }
         let Some(rev) = probe.post_rev.clone() else {
             continue;
         };
@@ -548,8 +502,7 @@ pub fn run_component_verdict(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
             "usage: fno-agents component-verdict --bindir <dir> --expected <rev>\n\
-             [--attempted] [--include-mux] [--agents-dir <dir>] [--mux-dir <dir>]\n\
-             [--python-expected <rev>] [--python-rev <rev|->] [--python-evidence <text>]"
+             [--attempted] [--include-mux] [--agents-dir <dir>] [--mux-dir <dir>]"
         );
         return 0;
     }
@@ -654,9 +607,9 @@ mod tests {
     fn contradicting_evidence_beats_a_matching_revision() {
         // The marker reads fresh but the installed bytes differ: Stale wins
         // over the rev match, and the evidence is carried as the detail.
-        let mut p = probe(PYTHON_TOOL, Some("abc123"));
+        let mut p = probe(AGENTS_CLIENT, Some("abc123"));
         p.expected_rev = Some("abc123".to_string());
-        p.contradicting_evidence = Some("3 .py file(s) on disk differ from source".to_string());
+        p.contradicting_evidence = Some("the installed bytes differ from the build".to_string());
         let v = verdict(&req(vec![p])).components.remove(0);
         assert_eq!(v.status, Status::Stale);
         assert!(v.detail.as_deref().unwrap().contains("differ"));

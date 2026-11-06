@@ -350,16 +350,13 @@ fn teamed_row_routes_a_real_drain_read_and_the_drain_answers() {
     let saved_config = std::env::var_os("FNO_CONFIG");
     std::env::set_var("FNO_CONFIG", &config);
     std::env::set_var("FNO_HOME", graph_home.path());
-    // The board's quiet verdict needs its own sources readable: fno-py and gh
-    // answer empty queues from a stub dir on PATH. The scripted drain sleeps
+    // The board's quiet verdict needs its own sources readable: gh
+    // answers empty queues from a stub dir on PATH. The scripted drain sleeps
     // 400ms, then answers: a bound at the old 250ms floor would have killed
     // it. It rides --fno-bin, so the PATH stubs never cover it.
     let bin = cwd.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    for (name, body) in [
-        ("fno-py", "#!/bin/sh\nprintf '[]\\n'\n"),
-        ("gh", "#!/bin/sh\nprintf '[]\\n'\n"),
-    ] {
+    for (name, body) in [("gh", "#!/bin/sh\nprintf '[]\\n'\n")] {
         let path = bin.join(name);
         fs::write(&path, body).unwrap();
         {
@@ -367,9 +364,7 @@ fn teamed_row_routes_a_real_drain_read_and_the_drain_answers() {
             fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
-    let saved_py = std::env::var_os("FNO_PY");
     let saved_path = std::env::var_os("PATH");
-    std::env::set_var("FNO_PY", bin.join("fno-py"));
     std::env::set_var(
         "PATH",
         std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
@@ -389,10 +384,6 @@ fn teamed_row_routes_a_real_drain_read_and_the_drain_answers() {
     args.push("--fno-bin".into());
     args.push(stub.to_string_lossy().into_owned());
     let (code, out) = run_loop_check_capture(&with_binding(args, "ses_lead"));
-    match saved_py {
-        Some(v) => std::env::set_var("FNO_PY", v),
-        None => std::env::remove_var("FNO_PY"),
-    }
     if let Some(v) = saved_path {
         std::env::set_var("PATH", v);
     }

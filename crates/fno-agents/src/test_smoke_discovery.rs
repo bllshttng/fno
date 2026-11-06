@@ -103,14 +103,14 @@ pub fn is_deferred(rel: &str) -> bool {
 /// Auto-discover owned shell harnesses; return repo-relative paths.
 ///
 /// A file is a harness iff it has a shell shebang, is not a library
-/// (scripts/lib/) or an orchestrated subtree (cli/tests/smoke/), and is not a
+/// (scripts/lib/) or an orchestrated subtree (tests/smoke/), and is not a
 /// source-only helper. This is what makes a new tests/hooks/test_x.sh run
 /// with no registry edit.
 pub fn discover_shell_harnesses(root: &Path) -> Vec<String> {
     let mut candidates: std::collections::BTreeSet<String> = Default::default();
     for pattern in reg::HARNESS_GLOBS {
         for rel in walk_glob(root, pattern) {
-            if rel.starts_with("scripts/lib/") || rel.starts_with("cli/tests/smoke/") {
+            if rel.starts_with("scripts/lib/") || rel.starts_with("tests/smoke/") {
                 continue;
             }
             if !has_shell_shebang(&root.join(&rel)) {

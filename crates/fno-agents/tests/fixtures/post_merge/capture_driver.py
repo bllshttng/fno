@@ -133,7 +133,7 @@ def build_mint_case(root_path, case, index):
 # -- the ritual subject ------------------------------------------------------
 
 STUB_FNO = r"""#!/usr/bin/python3
-# Shared stub for fno / fno-py: answers each call from
+# Shared stub for fno: answers each call from
 # answers/op-<op>.json and journals it. Unknown argv fails loud (exit 3).
 import json, os, sys
 
@@ -285,7 +285,7 @@ def build_ritual_case(root_path, case, index):
     for d in ("home", "agents-home", "claims", "journals", "answers", "stub-bin"):
         (case_dir / d).mkdir(parents=True)
     for name, body in (
-        ("fno", STUB_FNO), ("fno-py", STUB_FNO), ("gh", STUB_GH), ("fno-agents", STUB_AGENTS),
+        ("fno", STUB_FNO), ("gh", STUB_GH), ("fno-agents", STUB_AGENTS),
     ):
         p = case_dir / "stub-bin" / name
         p.write_text(body)

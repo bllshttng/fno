@@ -3480,7 +3480,7 @@ mod tests {
 
         // The live-attach arm ((["claude","attach",short_id], None)) is the one
         // this binary used to exec bare, with no pty/route/verification. It is
-        // the only combination that should delegate to `fno-py agents resume`.
+        // the only combination that should delegate to `fno agents resume`.
         assert!(should_delegate_claude_live_attach("claude", &None, &None,));
         // Dead-relaunch arm carries Some(uuid) -> Rust already restores the
         // route and relaunches itself; must not also delegate.

@@ -100,8 +100,8 @@ fn xml_escape(value: &str) -> String {
 
 /// The binary the plist execs when no `--fno-binary` names one: this
 /// fno-agents itself. It answers `do pr watch tick` natively (the `fno` front
-/// door only forwards that argv here), so the agent needs neither `fno-py`
-/// nor a porcelain lookup.
+/// door only forwards that argv here), so the agent needs no porcelain
+/// lookup.
 pub(crate) fn default_tick_binary() -> String {
     std::env::current_exe().map_or_else(
         |_| "fno-agents".to_string(),
@@ -739,7 +739,7 @@ mod tests {
     fn render_plist_augments_the_path_in_fixed_order() {
         let tmp = tempfile::TempDir::new().unwrap();
         let agents = tmp.path().join("LaunchAgents");
-        let binary = tmp.path().join("bin").join("fno-py");
+        let binary = tmp.path().join("bin").join("fno-agents");
         let text = render_plist(&agents, &binary.display().to_string(), None, 1234);
         // The interval lands in StartInterval and the agent runs the tick.
         assert!(text.contains("<integer>1234</integer>"), "{text}");

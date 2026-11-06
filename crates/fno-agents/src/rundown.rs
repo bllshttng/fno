@@ -817,8 +817,8 @@ pub struct Arm {
 /// The production runner: the page render, cwd-bound (config, the graph and
 /// the default out path all resolve per cwd). The Rust front is the program:
 /// `org rundown` is its rewrite of `lead ledger` plus the faithful-root
-/// `--out`; fno-py serves no `org` group and bare `lead ledger` defaults to
-/// lead.html, which the /team route does not read. Returns the page path
+/// `--out`; bare `lead ledger` defaults to lead.html, which the /team route
+/// does not read. Returns the page path
 /// the child named, so a tick can never call the wrong file rendered.
 fn run_ledger() -> Result<String, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
@@ -1495,13 +1495,11 @@ mod tests {
     #[cfg(unix)]
     fn team_ledger_success_writes_one_acted_row_through_the_rust_front() {
         // The real runner, not a synthetic Ok: FNO_BIN pins a stub naming a
-        // real page and FNO_PY a sentinel, so a regression to fno-py - which
-        // has no `org` command - fails this row instead of a daemon beat.
+        // real page.
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prior_bin = std::env::var_os("FNO_BIN");
-        let prior_py = std::env::var_os("FNO_PY");
         let dir = tempfile::tempdir().unwrap();
         let page = dir.path().join("rundown.html");
         std::fs::write(&page, b"<html></html>").unwrap();
@@ -1511,7 +1509,6 @@ mod tests {
             &format!("#!/bin/sh\necho \"lead ledger: {}\"\n", page.display()),
         );
         std::env::set_var("FNO_BIN", &stub);
-        std::env::set_var("FNO_PY", "/nonexistent/fno-py-sentinel");
         let h = home();
         let (o, named) = emit_one(&h, run_ledger);
         assert_eq!(o.acted, 1);
@@ -1530,10 +1527,6 @@ mod tests {
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
-        }
-        match prior_py {
-            Some(v) => std::env::set_var("FNO_PY", v),
-            None => std::env::remove_var("FNO_PY"),
         }
         assert_eq!(ghost_named, None, "a failed run names no page");
         assert_eq!(o.acted, 0);

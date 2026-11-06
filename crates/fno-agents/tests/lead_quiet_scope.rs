@@ -64,11 +64,6 @@ fn a_quiet_board_with_undelivered_scope_stops_while_waiting() {
         ),
     )
     .unwrap();
-    write_exec(
-        &bin,
-        "fno-py",
-        "#!/bin/sh\nprintf '{\"questions\":[],\"verdicts\":{}}\\n'",
-    );
     let gh = write_exec(&bin, "gh", "#!/bin/sh\nprintf '[]\\n'");
     let fno = write_exec(
         dir.path(),
@@ -98,7 +93,6 @@ fn a_quiet_board_with_undelivered_scope_stops_while_waiting() {
         set_env("FNO_AGENTS_HOME", dir.path().join("agents")),
         set_env("FNO_CLAIMS_ROOT", dir.path().join("claims")),
         set_env("FNO_SPACES_DIR", dir.path().join("spaces")),
-        set_env("FNO_PY", bin.join("fno-py")),
         set_env("PATH", path),
     ];
 

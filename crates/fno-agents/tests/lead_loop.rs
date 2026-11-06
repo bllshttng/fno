@@ -3,7 +3,7 @@
 //!
 //! Split from loop_check.rs: that file is over the line budget and
 //! shrink-only, and this family is self-contained - its own fixture (a real
-//! graph under a temp home, stub gh/fno-py/fno on PATH), its own spawn
+//! graph under a temp home, stub gh/fno on PATH), its own spawn
 //! helper, and exactly one read still served by a mock (the escalation
 //! command). The board itself is read in process, so the canned-payload mocks
 //! are gone; a spec names the graph the fixture writes instead.
@@ -199,10 +199,6 @@ fn lead_prepare_fixture(cwd: &Path, home: &Path, board_spec: &Path) {
     // this stub every fire pays a real installed-CLI cold start and probes the
     // operator's live sessions - slow AND non-hermetic.
     fs::write(stubs.join("fno"), "#!/bin/sh\necho '{}'\n").unwrap();
-    // Every queue read folds in-process now (the operator questions read
-    // `questions.jsonl` under this home), so the fno-py stub only answers {}
-    // for whatever the truth probe still shells.
-    fs::write(stubs.join("fno-py"), "#!/bin/sh\necho '{}'\n").unwrap();
     // Stage the default mock only when absent: lead_escalate_bin stages its
     // argv-recording version FIRST, and this fixture prep runs after it.
     let mock = home.join("escalate-mock");
@@ -226,7 +222,7 @@ fn lead_prepare_fixture(cwd: &Path, home: &Path, board_spec: &Path) {
         );
     };
     #[cfg(unix)]
-    for stub in ["gh", "fno-py", "fno"] {
+    for stub in ["gh", "fno"] {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(stubs.join(stub), fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -279,11 +275,6 @@ fn lead_spawn_with(
             "FNO_OPERATOR_CAPTURE_DIR",
             home.join(".fno/operator-capture"),
         )
-        // The board resolves its fno-py shellout FNO_PY-first, ahead of PATH
-        // (scrape::fno_py), so a machine with the wheel installed under the uv
-        // tools bin runs the REAL CLI against the real machine-wide question
-        // index and every fixture stub here never fires. Pin the stub.
-        .env("FNO_PY", stubs.join("fno-py"))
         .env("PATH", format!("{}:{}", stubs.display(), real_path))
         .output()
         .unwrap();
@@ -1379,7 +1370,6 @@ fn external_read_timeout_dies_at_its_slice_and_is_named() {
         ])
         .env("FNO_CLAIMS_ROOT", bin_dir.path())
         .env("FNO_HOME", bin_dir.path())
-        .env("FNO_PY", stubs.join("fno-py"))
         .env(
             "PATH",
             format!(

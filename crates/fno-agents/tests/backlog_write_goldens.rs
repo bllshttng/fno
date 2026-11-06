@@ -477,13 +477,6 @@ fn materialize(case: &Case) -> Fixture {
                 .to_string(),
         ));
     }
-    // The port era replays forwarded shapes through the wheel's fno-py; after
-    // the cut-over (the forward deleted) nothing execs it and the golden run
-    // stays Python-free.
-    let fno_py = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/.venv/bin/fno-py");
-    if fno_py.exists() {
-        env.push(("FNO_PY".into(), fno_py.to_string_lossy().to_string()));
-    }
     let argv: Vec<String> = case
         .argv
         .iter()

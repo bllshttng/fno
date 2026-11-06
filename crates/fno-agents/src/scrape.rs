@@ -189,10 +189,8 @@ pub(crate) fn declared_fno<T: From<&'static str>>(declared: Option<T>) -> T {
 /// The `fno` front-door binary (the Rust mux owner), same resolution as the
 /// active-backlog supervisor and the Python spawn back half: `FNO_BIN`
 /// overrides for tests and non-PATH installs, then the sibling of this
-/// binary (every complete install - uv tool venv, pip/uv venv, wheel scripts
-/// dir, Homebrew keg - ships `fno` and `fno-agents` in one bin dir, the same
-/// sibling resolution `fno_py` performs for the python half), then bare
-/// `fno`. `var_os` (not `var`) so a path with non-UTF-8 bytes passes through
+/// binary (every complete install ships `fno` and `fno-agents` in one bin
+/// dir), then bare `fno`. `var_os` (not `var`) so a path with non-UTF-8 bytes passes through
 /// to `Command` unmangled (gemini MEDIUM).
 pub fn fno_bin() -> std::ffi::OsString {
     if let Some(declared) = std::env::var_os("FNO_BIN") {
@@ -209,101 +207,6 @@ pub fn fno_bin() -> std::ffi::OsString {
         }
     }
     declared_fno(None)
-}
-
-/// The undeclared-`fno-py` twin of [`UNDECLARED_FNO`]: the same refusal for
-/// the Python half of the porcelain, whose uv-tools and bare-name fallback
-/// legs otherwise still reach the installed CLI from a lib unit test.
-pub(crate) const UNDECLARED_FNO_PY: &str =
-    "/nonexistent/fno-py-undeclared-in-this-unit-test--set-FNO_PY";
-
-/// The `fno-py` Python CLI console script, resolved without relying on PATH
-/// `FNO_PY` overrides for tests and nonstandard installs, then the
-/// script packaged beside this binary (every complete install - uv tool venv,
-/// pip/uv venv, wheel scripts dir, Homebrew keg - ships `fno` and `fno-py` in
-/// one bin dir, the same sibling resolution crates/fno/src/bootstrap.rs
-/// performs for the `fno` shim), then the uv tool venv's bin under its
-/// default tools dir, for a cargo/dev build of this binary with the wheel
-/// installed elsewhere. Bare `fno-py` last, so a genuinely missing install
-/// surfaces a real NotFound instead of a silent no-op. Under `cfg!(test)` an
-/// unset `FNO_PY` refuses through [`UNDECLARED_FNO_PY`], the same
-/// declared-only rule `fno_bin` applies.
-pub fn fno_py() -> std::ffi::OsString {
-    if let Some(p) = std::env::var_os("FNO_PY").filter(|v| !v.is_empty()) {
-        return p;
-    }
-    if cfg!(test) {
-        return std::ffi::OsString::from(UNDECLARED_FNO_PY);
-    }
-    if let Some(p) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| fno_py_beside(&exe))
-    {
-        return p.into_os_string();
-    }
-    if let Some(p) = default_uv_tools_dir().and_then(|base| fno_py_in_tools_dir(&base)) {
-        return p.into_os_string();
-    }
-    std::ffi::OsString::from("fno-py")
-}
-
-/// The executable `fno-py` in `exe`'s directory, if any. `exe` is a parameter
-/// so the leg is testable (bootstrap.rs's `resolve_via_sibling` does the
-/// same); production passes `current_exe`.
-fn fno_py_beside(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    let sibling = exe.parent()?.join("fno-py");
-    is_executable_file(&sibling).then_some(sibling)
-}
-
-/// The wheel venv's `fno-py` under a uv tools base dir (`<base>/fno/bin`).
-fn fno_py_in_tools_dir(base: &std::path::Path) -> Option<std::path::PathBuf> {
-    let script = base.join("fno").join("bin").join("fno-py");
-    is_executable_file(&script).then_some(script)
-}
-
-/// Exec the Python CLI (`fno_py`) with the command words leading, stdio
-/// inherited, exit code returned. Unix execs in place; elsewhere it spawns
-/// and waits. `label` names the caller in the refusal lines. Lifted from
-/// the backlog forward so the mail relay's verbatim forwards share one
-/// door with it.
-pub fn exec_python(label: &str, argv: Vec<String>) -> i32 {
-    let mut cmd = std::process::Command::new(fno_py());
-    cmd.args(argv);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
-        eprintln!("{label}: the Python CLI could not be exec'd: {err}");
-        eprintln!("       reinstall fno, run `fno doctor update --rust`, or set FNO_PY.");
-        2
-    }
-    #[cfg(not(unix))]
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(err) => {
-            eprintln!("{label}: the Python CLI could not be run: {err}");
-            2
-        }
-    }
-}
-
-/// uv's DEFAULT tools dir: `$XDG_DATA_HOME/uv` when set, else
-/// `$HOME/.local/share/uv`. ponytail: a stat, not the `uv tool dir`
-/// subprocess bootstrap.rs runs - no PATH dependency on uv, and a customized
-/// tools dir is exactly what the `FNO_PY` override exists for.
-fn default_uv_tools_dir() -> Option<std::path::PathBuf> {
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(x) if !x.is_empty() => std::path::PathBuf::from(x),
-        _ => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
-    };
-    Some(base.join("uv").join("tools"))
-}
-
-fn is_executable_file(p: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
 }
 
 /// One row of `fno mux pane ls --json`: the pane id, its OSC title, and the

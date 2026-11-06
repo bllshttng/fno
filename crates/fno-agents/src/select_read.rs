@@ -280,7 +280,7 @@ pub fn select_read(kind: Kind, args: &[String], door_exe: &OsStr, bound_s: u64) 
     receipt("ok", Some(answer), bound_s, elapsed_ms, None, None)
 }
 
-/// The `held` kind answers from the question journals directly - no fno-py
+/// The `held` kind answers from the question journals directly - no child
 /// cold start, no bound to ride out. The fno dir is the one holding
 /// `graph_json_path(cwd)` (org_board/scope.rs), so the map the Python guard
 /// reads is the same fold `needs::held_map` gives the keeper.
@@ -402,7 +402,7 @@ mod tests {
 
     fn stub(body: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        crate::write_exec_stub(dir.path(), "fno-py", body);
+        crate::write_exec_stub(dir.path(), "fno", body);
         dir
     }
 
@@ -412,8 +412,8 @@ mod tests {
             "#!/bin/sh\ncase \"$2 $3\" in\n  next*) printf '%s' '{\"id\":\"x-1\",\"cwd\":\"/raw\"}' ;;\n  get*) printf '%s' '{\"id\":\"x-1\",\"_resolved_cwd\":\"/mapped\"}' ;;\nesac\n",
         );
         let args = vec!["--project".to_string(), "fno".to_string()];
-        let fno_py = dir.path().join("fno-py");
-        let receipt = select_read(Kind::Next, &args, fno_py.as_os_str(), 5);
+        let fno_stub = dir.path().join("fno");
+        let receipt = select_read(Kind::Next, &args, fno_stub.as_os_str(), 5);
         assert_eq!(receipt.status, "ok");
         assert_eq!(receipt.bound_s, Some(5));
         assert_eq!(receipt.answer.unwrap()["_resolved_cwd"], "/mapped");
@@ -426,8 +426,8 @@ mod tests {
         let dir = stub("#!/bin/sh\nsleep 3\n");
         let started = Instant::now();
         let args = vec!["--project".to_string(), "fno".to_string()];
-        let fno_py = dir.path().join("fno-py");
-        let receipt = select_read(Kind::Next, &args, fno_py.as_os_str(), 1);
+        let fno_stub = dir.path().join("fno");
+        let receipt = select_read(Kind::Next, &args, fno_stub.as_os_str(), 1);
         assert!(started.elapsed().as_secs_f32() < 2.5);
         assert_eq!(receipt.status, "unmeasured");
         assert_eq!(receipt.reason.as_deref(), Some("select-unmeasured"));
@@ -444,14 +444,14 @@ mod tests {
             "#!/bin/sh\nprintf '%*s' 200 '' | tr ' ' x >&2\nprintf '%s' ' store keeper unavailable; selection refused: stalled' >&2\nexit 1\n",
         );
         let args = vec!["--project".to_string(), "fno".to_string()];
-        let fno_py = transient.path().join("fno-py");
-        let receipt = select_read(Kind::Next, &args, fno_py.as_os_str(), 5);
+        let fno_stub = transient.path().join("fno");
+        let receipt = select_read(Kind::Next, &args, fno_stub.as_os_str(), 5);
         assert_eq!(receipt.status, "unmeasured");
         assert_eq!(receipt.reason.as_deref(), Some("select-unmeasured"));
 
         let ordinary = stub("#!/bin/sh\nprintf '%s' 'Error: graph unreadable' >&2\nexit 1\n");
-        let fno_py = ordinary.path().join("fno-py");
-        let receipt = select_read(Kind::Next, &args, fno_py.as_os_str(), 5);
+        let fno_stub = ordinary.path().join("fno");
+        let receipt = select_read(Kind::Next, &args, fno_stub.as_os_str(), 5);
         assert_eq!(receipt.status, "error");
         assert_eq!(receipt.reason.as_deref(), Some("next-error"));
     }

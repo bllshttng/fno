@@ -42,7 +42,6 @@ const TEST_RUNNER_NAMES: &[&str] = &["pytest", "py.test"];
 /// fno binaries whose own process is fleet-attributable.
 const FNO_BINARIES: &[&str] = &[
     "fno",
-    "fno-py",
     "fno-agents",
     "fno-agents-daemon",
     "fno-agents-worker",
@@ -116,7 +115,7 @@ pub(crate) fn is_test_runner(command: &str) -> bool {
     if program == "cargo" {
         return matches!(positional.first(), Some(&"test") | Some(&"nextest"));
     }
-    if program == "fno" || program == "fno-py" {
+    if program == "fno" {
         return positional.first() == Some(&"test")
             || (positional.len() >= 2 && positional[0] == "doctor" && positional[1] == "test");
     }
@@ -158,11 +157,7 @@ fn attributed_command(command: &str) -> bool {
     let Some(first) = tokens.first() else {
         return false;
     };
-    let name = basename(first);
-    if FNO_BINARIES.contains(&name) {
-        return true;
-    }
-    name.starts_with("python") && tokens[1..].iter().any(|t| *t == "fno-py")
+    FNO_BINARIES.contains(&basename(first))
 }
 
 /// The `worktrees/<name>` tail a cluster of commands shares - the one line

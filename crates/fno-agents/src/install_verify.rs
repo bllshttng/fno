@@ -16,8 +16,8 @@ use std::time::Duration;
 /// One bounded `version --json` probe of a deployed executable, classified.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Probe {
-    /// Clean answer carrying the build's `crates_rev` (and python script path).
-    Ran { rev: String, script: Option<String> },
+    /// Clean answer carrying the build's `crates_rev`.
+    Ran { rev: String },
     /// Killed by signal `n` - the poisoned-path signature.
     Signal(i32),
     /// Exited with code `n`; `had_output` separates a real CLI error from silence.
@@ -147,12 +147,7 @@ pub fn probe_exec(path: &Path, timeout: Duration) -> Probe {
     let Some(rev) = rev else {
         return Probe::NoOutput("carries no rev stamp (built outside a git checkout?)".to_string());
     };
-    let script = data
-        .get("python_script")
-        .and_then(|s| s.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-    Probe::Ran { rev, script }
+    Probe::Ran { rev }
 }
 
 /// Give `path` a fresh inode in place: copy to a sibling name in the same
@@ -190,7 +185,6 @@ pub fn repair_inode(path: &Path) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifyOutcome {
     pub rev: Option<String>,
-    pub script: Option<String>,
     pub instrument_error: Option<String>,
     /// Classification that triggered the repair, when one ran and helped.
     pub repaired_after: Option<String>,
@@ -198,15 +192,13 @@ pub struct VerifyOutcome {
 
 fn outcome_from(probe: &Probe) -> VerifyOutcome {
     match probe {
-        Probe::Ran { rev, script } => VerifyOutcome {
+        Probe::Ran { rev } => VerifyOutcome {
             rev: Some(rev.clone()),
-            script: script.clone(),
             instrument_error: None,
             repaired_after: None,
         },
         other => VerifyOutcome {
             rev: None,
-            script: None,
             instrument_error: other.instrument_error(),
             repaired_after: None,
         },
@@ -226,16 +218,14 @@ pub fn verify_and_repair(
     if let Err(e) = repair_inode(path) {
         return VerifyOutcome {
             rev: None,
-            script: None,
             instrument_error: Some(format!("inode repair failed after {trigger}: {e}")),
             repaired_after: None,
         };
     }
     let second = probe(path, timeout);
     match &second {
-        Probe::Ran { rev, script } => VerifyOutcome {
+        Probe::Ran { rev } => VerifyOutcome {
             rev: Some(rev.clone()),
-            script: script.clone(),
             instrument_error: None,
             repaired_after: Some(trigger),
         },
@@ -245,7 +235,6 @@ pub fn verify_and_repair(
                 .unwrap_or_else(|| format!("{other:?}"));
             VerifyOutcome {
                 rev: None,
-                script: None,
                 instrument_error: Some(format!("{err} (still, after inode repair for {trigger})")),
                 repaired_after: None,
             }

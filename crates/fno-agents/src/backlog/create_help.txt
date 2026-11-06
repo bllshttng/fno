@@ -1,4 +1,4 @@
-Usage: fno-py backlog add [OPTIONS] TITLE
+Usage: fno backlog add [OPTIONS] TITLE
 
 Arguments:
   TITLE  Feature title  [required]

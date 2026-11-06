@@ -7,7 +7,7 @@ fn resolved_optional_bots_default_matches_the_shared_python_default() {
     // DEFAULT_OPTIONAL_APPS both answer these rows, so a drift on either
     // side fails its own test against the SAME file.
     let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../cli/tests/config/optional_apps_default.json");
+        .join("../../tests/py/config/optional_apps_default.json");
     let text = std::fs::read_to_string(&golden)
         .unwrap_or_else(|e| panic!("read golden {}: {e}", golden.display()));
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();

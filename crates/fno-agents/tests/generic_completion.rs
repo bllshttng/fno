@@ -183,17 +183,11 @@ fn canonical_setup() -> GenericEnv {
         ),
     )
     .unwrap();
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
+    // The front door maps `do delivery evaluate ...` onto this binary's
+    // `delivery-evaluate`; the stub does the same.
     fs::write(
         &env.evaluator,
-        format!(
-            "#!/bin/sh\nexec uv run --project '{}' fno-py \"$@\"\n",
-            repo.join("cli").display(),
-        ),
+        format!("#!/bin/sh\nshift 3\nexec '{BIN}' delivery-evaluate \"$@\"\n"),
     )
     .unwrap();
     fs::set_permissions(&env.evaluator, fs::Permissions::from_mode(0o755)).unwrap();

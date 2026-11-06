@@ -98,11 +98,11 @@ fn new_run_id() -> String {
     format!("{}x{:x}", std::process::id(), now % 0xffff_ffff)
 }
 
-/// Walk up from `start` to the checkout root (the dir with cli/src/fno).
+/// Walk up from `start` to the checkout root (the dir with crates/fno-agents).
 pub fn repo_root(start: &Path) -> Option<PathBuf> {
     let mut cur = Some(start);
     while let Some(dir) = cur {
-        if dir.join("cli/src/fno/__init__.py").is_file() {
+        if dir.join("crates/fno-agents/Cargo.toml").is_file() {
             return Some(dir.to_path_buf());
         }
         cur = dir.parent();
@@ -176,8 +176,8 @@ pub fn test_timeout_seconds() -> u64 {
 /// The environment every test child gets, built once and handed to the
 /// bounded runner per command (`--env`/`--unset`).
 ///
-/// This is the ONE process boundary all four test trees cross - pytest over
-/// `cli/tests`, pytest over `cli/src`, every `bash tests/*.sh` smoke step, and
+/// This is the ONE process boundary every test tree crosses - pytest over
+/// `tests/py`, every `bash tests/*.sh` smoke step, and
 /// cargo - so neutralising here needs no shell mirror and no second leg.
 ///
 /// Under [`AmbientMode::Dirty`] the parent is poisoned FIRST and then
@@ -206,7 +206,7 @@ pub fn build_child_env(
         .collect();
     let poisoned = if ambient == AmbientMode::Dirty {
         let fixtures = root
-            .join("cli/tests/fixtures/ambient-poison")
+            .join("tests/py/fixtures/ambient-poison")
             .canonicalize()
             .map_err(|e| format!("fno doctor test: ambient-poison fixtures missing: {e}"))?;
         Some(test_env::poison(&parent, &fixtures)?)
@@ -411,7 +411,7 @@ pub fn run_pytest(
     let interp = resolve_interpreter(&root);
     let timeout = test_timeout_seconds();
 
-    // Default to THE Python suite (cli/tests) when no collection target was
+    // Default to THE Python suite (tests/py) when no collection target was
     // given. A bare `pytest` collects from cwd, which from the repo root pulls
     // in script-style tests/ files that `raise SystemExit` at import (pytest
     // INTERNALERROR, not a real run). A collection target is a non-flag arg
@@ -430,9 +430,9 @@ pub fn run_pytest(
         .into_iter()
         .chain(pytest_args)
         .collect();
-        match root.join("cli/tests").canonicalize() {
+        match root.join("tests/py").canonicalize() {
             Ok(p) => pytest_args.push(p.to_string_lossy().to_string()),
-            Err(_) => pytest_args.push(root.join("cli/tests").to_string_lossy().to_string()),
+            Err(_) => pytest_args.push(root.join("tests/py").to_string_lossy().to_string()),
         }
     }
 
@@ -932,10 +932,10 @@ mod tests {
     #[test]
     fn repo_root_walks_up_to_the_checkout_marker() {
         let tmp = tempfile::tempdir().unwrap();
-        let deep = tmp.path().join("cli/src/fno");
+        let deep = tmp.path().join("crates/fno-agents");
         std::fs::create_dir_all(&deep).unwrap();
-        std::fs::write(deep.join("__init__.py"), "").unwrap();
-        let start = tmp.path().join("cli/src/fno/sub");
+        std::fs::write(deep.join("Cargo.toml"), "").unwrap();
+        let start = tmp.path().join("crates/fno-agents/src");
         std::fs::create_dir_all(&start).unwrap();
         let root = repo_root(&start).unwrap();
         assert_eq!(root, tmp.path());

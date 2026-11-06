@@ -103,7 +103,7 @@ const UV_VALUE_FLAGS: &[&str] = &[
     "-p",
 ];
 
-const PYTEST_REASON: &str = "[fno test-run guard] `{cmd}` runs pytest outside the suite admission. A raw suite takes no test:suite slot, waits behind no live cargo build, and imports whichever fno is first on PYTHONPATH - on this machine two raw suites at once are the measured crush behind this guard.\n\nRun `fno doctor test <test files>` instead, for example `fno doctor test cli/tests/unit/test_x.py`. It takes the one machine-wide test:suite slot, holds while another suite or cargo build is live, and pins PYTHONPATH to this worktree. A bare `fno doctor test` runs the whole cli/tests tree while it holds that slot.";
+const PYTEST_REASON: &str = "[fno test-run guard] `{cmd}` runs pytest outside the suite admission. A raw suite takes no test:suite slot, waits behind no live cargo build, and imports whichever fno is first on PYTHONPATH - on this machine two raw suites at once are the measured crush behind this guard.\n\nRun `fno doctor test <test files>` instead, for example `fno doctor test tests/py/unit/test_x.py`. It takes the one machine-wide test:suite slot, holds while another suite or cargo build is live, and pins PYTHONPATH to this worktree. A bare `fno doctor test` runs the whole tests/py tree while it holds that slot.";
 
 const CARGO_REASON: &str = "[fno test-run guard] `{cmd}` runs the crates suite unadmitted. Raw `cargo test` takes no test:suite slot and waits behind no live cargo build.\n\nAn agent session runs no tests here at all: the cargo run door refuses its test binaries. Commit, push with `fno do pr push`, and CI runs the tests. In a session the user attends, run the narrowest target through the door instead: `fno doctor test rust --manifest-path crates/<crate>/Cargo.toml --lib <module>::` for unit tests, or `--test <file stem>` for one integration file. A whole-crate run is refused here too; CI runs every suite on every PR.";
 
@@ -359,7 +359,7 @@ fn refused_head(head: &str, argv: &[String]) -> Option<Kind> {
     if head == "cargo" && cargo_runs_tests(argv) {
         return Some(Kind::Cargo);
     }
-    if matches!(head, "fno" | "fno-py") {
+    if head == "fno" {
         if let Some(cargo_argv) = doctor_test_rust_cargo_argv(argv) {
             if cargo_test_selects_whole_suite(&cargo_argv) {
                 return Some(Kind::WholeRust);
@@ -659,7 +659,10 @@ fn repo_root(cwd: &Path) -> Option<PathBuf> {
 /// are tracked files, so every worktree carries them; a random other repo
 /// the plugin happens to be active in is out of scope.
 fn is_footnote_checkout(root: &Path) -> bool {
-    root.join("cli").join("src").join("fno").is_dir()
+    root.join("crates")
+        .join("fno-agents")
+        .join("Cargo.toml")
+        .is_file()
         && root.join("hooks").join("hooks.json").is_file()
 }
 
@@ -669,10 +672,12 @@ mod tests {
 
     use tempfile::TempDir;
 
-    /// A repo shaped like this one: cli/src/fno plus hooks/hooks.json.
+    /// A repo shaped like this one: crates/fno-agents plus hooks/hooks.json.
     fn footnote_root() -> TempDir {
         let dir = TempDir::new().expect("tempdir");
-        std::fs::create_dir_all(dir.path().join("cli").join("src").join("fno")).expect("mkdir");
+        let crate_dir = dir.path().join("crates").join("fno-agents");
+        std::fs::create_dir_all(&crate_dir).expect("mkdir");
+        std::fs::write(crate_dir.join("Cargo.toml"), "").expect("write");
         std::fs::create_dir_all(dir.path().join("hooks")).expect("mkdir");
         std::fs::write(dir.path().join("hooks").join("hooks.json"), "{}").expect("write");
         dir

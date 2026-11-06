@@ -2321,7 +2321,7 @@ pub(crate) mod tests {
     fn write_stub_py(dir: &std::path::Path) -> std::path::PathBuf {
         crate::write_exec_stub(
             dir,
-            "stub-fno-py.sh",
+            "stub-fno.sh",
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PARK_LOG\"\n[ -n \"$PARK_FAIL\" ] && exit 1\nexit 0\n",
         )
     }

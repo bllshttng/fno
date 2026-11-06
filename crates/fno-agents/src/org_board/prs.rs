@@ -180,7 +180,7 @@ pub(crate) fn read_prs(
 /// not-actionable with a warning naming the exit.
 fn read_pr_gate(cwd: &Path, number: i64, timeout: Duration) -> Result<Value, String> {
     // One owner: the status read answers in process through the door, so a
-    // board refresh pays no fno-py cold start per candidate.
+    // board refresh pays no cold start per candidate.
     let _ = timeout;
     let payload = serde_json::json!({
         "cwd": cwd.display().to_string(),
@@ -219,7 +219,7 @@ pub(crate) fn read_pr_gates(
             Vec::new(),
         );
     };
-    // Bounded fan-out: one fno-py cold start per candidate is the price of
+    // Bounded fan-out: one gate read per candidate is the price of
     // asking the gate, but every candidate at once would spend the fleet's
     // shared gh quota faster than any slice can police.
     const GATE_FANOUT: usize = 4;
