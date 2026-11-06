@@ -49,7 +49,7 @@ pub(super) fn run(args: &[OsString], json: bool) -> i32 {
             }
             Some("--dry-run" | "-N") => dry_run = true,
             Some("--help") => {
-                println!("Usage: fno-py doctor event gc [OPTIONS]\n\n  Delete expired explicit-ephemeral rows while preserving all other rows.\n\nOptions:\n  --events <path>          path to events.jsonl (default: worktree root)\n  --ttl-hours <int range>  ephemeral retention horizon in hours  [x>=1]\n  -N, --dry-run            report without rewriting\n  --help                   Show this message and exit.");
+                println!("Usage: fno doctor event gc [OPTIONS]\n\n  Delete expired explicit-ephemeral rows while preserving all other rows.\n\nOptions:\n  --events <path>          path to events.jsonl (default: worktree root)\n  --ttl-hours <int range>  ephemeral retention horizon in hours  [x>=1]\n  -N, --dry-run            report without rewriting\n  --help                   Show this message and exit.");
                 return 0;
             }
             _ => {

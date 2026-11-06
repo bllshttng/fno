@@ -3,11 +3,10 @@
 //! tagged GitHub release. The wheel stops publishing once Python is gone, so
 //! `uv tool upgrade fno` would strand every wheel user on the last wheel.
 //!
-//! The move keeps the uv tool. The front door still forwards some argv to
-//! `fno-py`, and the bootstrap reinstalls the wheel when it finds none, so
-//! only the four Rust entrypoint links move. `uv tool uninstall fno` runs
-//! once a probe shows the binary `fno --version` answers without Python.
-//! Every later binary update runs the same probe.
+//! The four Rust entrypoint links move first. `uv tool uninstall fno` runs
+//! once the installed binary is a release whose front door forwards nothing
+//! to Python ([`NATIVE_ONLY_FROM`]); an older front door still needs the
+//! wheel's Python CLI. Every later binary update makes the same check.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -199,8 +198,8 @@ pub(crate) fn receipt_links(receipt: &str) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// Point each Rust entrypoint link at its binary in `bin`. `fno-py` keeps its
-/// venv link. Each link lands as a temp symlink, then renames over the old one.
+/// Point each Rust entrypoint link at its binary in `bin`. Any other script
+/// keeps its venv link. Each link lands as a temp symlink, then renames over the old one.
 pub(crate) fn relink(links: &[(String, PathBuf)], bin: &Path) -> Result<(), String> {
     for (name, path) in links.iter().filter(|(n, _)| BINARIES.contains(&n.as_str())) {
         let tmp = path.with_file_name(format!(".{name}.fno-move-{}", std::process::id()));
@@ -308,11 +307,10 @@ fn adopt_unpacked(
     Ok(tool_root)
 }
 
-/// The argv the front door still forwarded to `fno-py` when the move
-/// shipped. Each must answer with `FNO_PY` on a refusing stub before the uv
-/// tool goes: a forward that finds no `fno-py` reinstalls the wheel over the
-/// move.
-const FORWARD_PROBES: [&[&str]; 3] = [&["--version"], &["--help"], &["inbox", "outstanding"]];
+/// The first release whose front door forwards nothing to the Python CLI.
+/// An older front door still needs the wheel's Python CLI, and reinstalls
+/// the wheel when it finds none, so the uv tool stays under it.
+const NATIVE_ONLY_FROM: &str = "0.4.7";
 
 /// One line per live process whose argv names a path under `root`. The same
 /// over-catching read as doctor_update's `live_tool_env_processes` and
@@ -350,31 +348,10 @@ fn retire_uv_tool(tool_root: &Path, bin: &Path) -> Result<String, String> {
     let Ok(text) = std::fs::read_to_string(&receipt) else {
         return Ok("no uv tool to retire".to_string());
     };
-    let stub_dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
-    let stub = stub_dir.path().join("fno-py");
-    let reached = stub_dir.path().join("reached");
-    std::fs::write(
-        &stub,
-        format!("#!/bin/sh\n: > '{}'\nexit 97\n", reached.display()),
-    )
-    .map_err(|e| format!("{}: {e}", stub.display()))?;
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755));
-    let forwards = FORWARD_PROBES.iter().find(|argv| {
-        crate::process_admission::std_command(bin.join(FRONT_DOOR))
-            .args(argv.iter())
-            .env("FNO_PY", &stub)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_err()
-            || reached.exists()
-    });
-    if let Some(argv) = forwards {
+    let installed = unpacked_version(bin).unwrap_or_default();
+    if version_key(&installed) < version_key(NATIVE_ONLY_FROM) {
         return Ok(format!(
-            "keeping the uv tool: `fno {}` still needs fno-py",
-            argv.join(" ")
+            "keeping the uv tool: fno {installed} still forwards to its Python CLI"
         ));
     }
     let uv = crate::bootstrap::find_uv().ok_or("uv is not on PATH")?;
@@ -636,7 +613,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool) -> i32 {
         );
         if let Some(root) = &tool_root {
             println!(
-                "Would relink the uv tool links from {} into {}, write {} = binary, refresh pr-watch, and keep the uv tool while fno-py is needed",
+                "Would relink the uv tool links from {} into {}, write {} = binary, refresh pr-watch, and retire the uv tool once nothing runs from it",
                 root.join("uv-receipt.toml").display(),
                 bin.display(),
                 marker_path().display()
@@ -807,7 +784,7 @@ mod tests {
         let source = "[tool]\nrequirements = [{ name = \"fno\", directory = \"/x/cli\" }]\n";
         std::fs::write(home.path().join("tools/fno/uv-receipt.toml"), source).unwrap();
         assert_eq!(channel_of(&venv.join("fno"), &bin), InstallChannel::Other);
-        let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\nentrypoints = [\n  { name = \"fno\", install-path = \"/u/bin/fno\", from = \"fno\" },\n  { name = \"fno-py\", install-path = \"/u/bin/fno-py\", from = \"fno\" },\n]\n";
+        let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\nentrypoints = [\n  { name = \"fno\", install-path = \"/u/bin/fno\", from = \"fno\" },\n  { name = \"legacy-script\", install-path = \"/u/bin/legacy-script\", from = \"fno\" },\n]\n";
         std::fs::write(home.path().join("tools/fno/uv-receipt.toml"), receipt).unwrap();
         let root = std::fs::canonicalize(home.path().join("tools/fno")).unwrap();
         assert_eq!(
@@ -818,7 +795,7 @@ mod tests {
             receipt_links(receipt),
             vec![
                 ("fno".to_string(), PathBuf::from("/u/bin/fno")),
-                ("fno-py".to_string(), PathBuf::from("/u/bin/fno-py")),
+                ("legacy-script".to_string(), PathBuf::from("/u/bin/legacy-script")),
             ]
         );
         assert!(receipt_links("not toml [").is_empty());
@@ -840,16 +817,16 @@ mod tests {
     }
 
     #[test]
-    fn relink_moves_the_rust_links_and_leaves_fno_py() {
+    fn relink_moves_the_rust_links_and_leaves_other_scripts() {
         let dir = tempfile::tempdir().unwrap();
         let tool_bin = dir.path().join("tool-bin");
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&tool_bin).unwrap();
-        let venv_py = dir.path().join("venv-fno-py");
+        let venv_py = dir.path().join("venv-legacy-script");
         std::fs::write(&venv_py, b"").unwrap();
-        std::os::unix::fs::symlink(&venv_py, tool_bin.join("fno-py")).unwrap();
+        std::os::unix::fs::symlink(&venv_py, tool_bin.join("legacy-script")).unwrap();
         std::os::unix::fs::symlink(&venv_py, tool_bin.join("fno")).unwrap();
-        let links: Vec<(String, PathBuf)> = ["fno", "fno-agents", "fno-py"]
+        let links: Vec<(String, PathBuf)> = ["fno", "fno-agents", "legacy-script"]
             .iter()
             .map(|n| (n.to_string(), tool_bin.join(n)))
             .collect();
@@ -863,7 +840,7 @@ mod tests {
             bin.join("fno-agents")
         );
         assert_eq!(
-            std::fs::read_link(tool_bin.join("fno-py")).unwrap(),
+            std::fs::read_link(tool_bin.join("legacy-script")).unwrap(),
             venv_py
         );
         let leftovers = std::fs::read_dir(&tool_bin).unwrap().count();

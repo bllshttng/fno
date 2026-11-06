@@ -1,4 +1,4 @@
-Usage: fno-py doctor event find [OPTIONS] [kind]
+Usage: fno doctor event find [OPTIONS] [kind]
 
   Query every event journal and retained rotation with a denominator.
 

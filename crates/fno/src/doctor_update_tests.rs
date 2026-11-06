@@ -187,13 +187,11 @@ fn component_build_revs_reads_cargo_rows_only() {
         "components": [
             {"component": "fno-agents", "status": "stale", "observed_rev": REV_A},
             {"component": "fno-agents-daemon", "status": "stale", "observed_rev": null},
-            {"component": "python-tool", "status": "stale", "observed_rev": REV_C},
             {"component": "fno", "status": "stale", "observed_rev": REV_A}
         ]
     });
     let revs = component_build_revs(Some(&report));
-    // The unanswered daemon row and the python-tool marker stay out: a
-    // python-only HEAD advance is not a mixed build.
+    // The unanswered daemon row stays out.
     assert_eq!(
         revs,
         vec![
@@ -594,44 +592,6 @@ fn the_check_readback_skips_a_corrupt_row_after_the_install() {
         None => std::env::remove_var("FNO_STATE_DIR"),
     }
     let _ = std::fs::remove_dir_all(&tmp);
-}
-
-#[test]
-fn python_holds_whenever_rust_trails_the_source() {
-    // The 2026-10-14 iMac shape: no tarball for the merged rev, so the wheel
-    // must not move ahead of the bins it talks to.
-    for trails in [
-        "waiting-ci",
-        "installed-newest-published",
-        "newest-published-current",
-        "skipped-no-origin",
-        "skipped-no-cargo",
-        "failed",
-    ] {
-        let line = python_hold_line(Some(trails)).expect(trails);
-        assert!(
-            line.contains(trails) && line.starts_with("python held"),
-            "{line}"
-        );
-        // Only a hold on the newest published build is publish lag: it exits
-        // 0 so `fno update && fno restart` still restarts.
-        let planned = matches!(
-            trails,
-            "installed-newest-published" | "newest-published-current"
-        );
-        assert_eq!(hold_is_planned(Some(trails)), planned, "{trails}");
-    }
-    // Rust current, wheel-only machines, and --no-rust move Python freely.
-    for moves in [
-        "fresh",
-        "refreshed",
-        "partial",
-        "skipped-no-binary",
-        "skipped-no-crate",
-    ] {
-        assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
-    }
-    assert_eq!(python_hold_line(None), None);
 }
 
 #[test]

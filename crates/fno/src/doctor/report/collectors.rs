@@ -2,7 +2,7 @@
 //! from the deleted `cli/src/fno/doctor.py` at the field-order the frozen
 //! goldens pin. Every collector degrades to a named-unknown shape.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -33,7 +33,6 @@ impl Report {
             .then(|| probes.str_field("source_rev"))
             .flatten();
         let marker = probes.str_field("installed_rev");
-        let capture_present = probe_installed_command();
         let rust = rust_report();
         let rust_src_rev = source_resolved
             .then(|| probes.str_field("rust_subtree_rev"))
@@ -42,14 +41,7 @@ impl Report {
 
         let deployed_config_keys = deployed_config_keys();
         let source_config_keys = source_config_keys(src.as_deref());
-        let content_drift = python_content_drift(src.as_deref());
-        let components = component_convergence(
-            src.as_deref(),
-            &rust,
-            marker.as_deref(),
-            content_drift,
-            &probes,
-        );
+        let components = component_convergence(src.as_deref(), &rust, &probes);
         let component_statuses: Vec<(String, String)> = components
             .iter()
             .filter_map(|c| {
@@ -64,7 +56,6 @@ impl Report {
             source_resolved,
             source_rev.as_deref(),
             marker.as_deref(),
-            &capture_present,
             rust.get("binary")
                 .and_then(Value::as_str)
                 .map(str::to_string),
@@ -75,7 +66,6 @@ impl Report {
             cargo_bin,
             deployed_config_keys,
             source_config_keys,
-            content_drift,
             &component_statuses,
         );
         if let Value::Object(map) = &mut head {
@@ -133,32 +123,6 @@ impl Report {
 // ---------------------------------------------------------------------------
 // Verdict-input probes
 // ---------------------------------------------------------------------------
-
-fn probe_installed_command() -> String {
-    let Some(fno_py) = which("fno-py") else {
-        return "unknown".to_string();
-    };
-    let output = match Command::new(&fno_py)
-        .args(["backlog", "capture", "--help"])
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return "unknown".to_string(),
-    };
-    if output.status.code() == Some(0) {
-        return "present".to_string();
-    }
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    )
-    .to_lowercase();
-    if combined.contains("no such command") {
-        return "missing".to_string();
-    }
-    "unknown".to_string()
-}
 
 /// The `_rust_report` shape: which binary `auto` resolves, plus the cargo
 /// binary's crates/ rev (the verdict-driving one).
@@ -226,13 +190,7 @@ fn cargo_bin_present_flag(probes: &Probes) -> bool {
 
 /// One `component-verdict` probe against the resolved binary; None when it
 /// cannot answer (the caller renders the named gap, never fresh).
-fn component_convergence(
-    src: Option<&Path>,
-    rust: &Value,
-    marker: Option<&str>,
-    content_drift: Option<i64>,
-    probes: &Probes,
-) -> Vec<Value> {
+fn component_convergence(src: Option<&Path>, rust: &Value, probes: &Probes) -> Vec<Value> {
     let Some(src) = src else { return Vec::new() };
     let subtree = probes.str_field("rust_subtree_rev");
     let verdict_bin = rust
@@ -260,7 +218,7 @@ fn component_convergence(
         .parent()
         .unwrap_or(Path::new("/"))
         .join("crates/fno-agents");
-    let mut argv: Vec<String> = vec![
+    let argv: Vec<String> = vec![
         verdict_bin.clone(),
         "component-verdict".into(),
         "--bindir".into(),
@@ -271,24 +229,6 @@ fn component_convergence(
         agents_dir.to_string_lossy().into_owned(),
         "--include-mux".into(),
     ];
-    if let Some(rev) = marker {
-        argv.extend(["--python-rev".into(), rev.to_string()]);
-    }
-    if let Some(expected) = probes.str_field("source_rev") {
-        argv.extend(["--python-expected".into(), expected]);
-    }
-    if let Some(drift) = content_drift.filter(|d| *d != 0) {
-        argv.extend([
-            "--python-evidence".into(),
-            format!("{drift} .py file(s) on disk differ from source"),
-        ]);
-    }
-    if marker.is_none() {
-        argv.extend([
-            "--python-error".into(),
-            "the installed-rev marker could not be read".into(),
-        ]);
-    }
     let output = match Command::new(&argv[0]).args(&argv[1..]).output() {
         Ok(o) if o.status.code() == Some(0) => o,
         _ => return unknown_components(),
@@ -304,7 +244,7 @@ fn component_convergence(
 }
 
 fn unknown_components() -> Vec<Value> {
-    ["python-tool", "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"]
+    ["fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"]
         .iter()
         .map(|c| {
             json!({
@@ -353,73 +293,6 @@ fn source_config_keys(source: Option<&Path>) -> Option<Vec<String>> {
         .unwrap_or_default();
     keys.sort();
     Some(keys)
-}
-
-fn installed_pkg_dir() -> Option<PathBuf> {
-    // The installed package dir, through the deployed interpreter (the one
-    // diagnostic crossing; see rust-python-seam.md).
-    let python = super::wheel_python()?;
-    let output = Command::new(&python)
-        .args([
-            "-c",
-            "import fno, pathlib; print(pathlib.Path(fno.__file__).parent)",
-        ])
-        .output()
-        .ok()?;
-    if output.status.code() != Some(0) {
-        return None;
-    }
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!line.is_empty()).then(|| PathBuf::from(line))
-}
-
-fn python_content_drift(source: Option<&Path>) -> Option<i64> {
-    let source = source?;
-    let inst = installed_pkg_dir()?;
-    let inst_fp = pkg_py_fingerprint(&inst)?;
-    let src_fp = pkg_py_fingerprint(&source.join("src/fno"))?;
-    let mut differing = 0i64;
-    let all: BTreeSet<&String> = inst_fp.keys().chain(src_fp.keys()).collect();
-    for key in all {
-        if inst_fp.get(key) != src_fp.get(key) {
-            differing += 1;
-        }
-    }
-    Some(differing)
-}
-
-fn pkg_py_fingerprint(dir: &Path) -> Option<BTreeMap<String, String>> {
-    if !dir.is_dir() {
-        return None;
-    }
-    let mut map = BTreeMap::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
-        let entries = std::fs::read_dir(&current).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().map(|e| e == "py").unwrap_or(false) {
-                let bytes = std::fs::read(&path).ok()?;
-                let rel = path.strip_prefix(dir).ok()?;
-                let rel = rel.to_string_lossy().replace('\\', "/");
-                map.insert(rel, sha256_hex(&bytes));
-            }
-        }
-    }
-    Some(map)
-}
-
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------

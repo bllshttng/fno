@@ -18,7 +18,6 @@ fn native_doctor_cost_exports_and_reports_without_python() {
             .args(args)
             .env("FNO_AGENTS_HOME", &home)
             .env("FNO_CONFIG", &config)
-            .env("FNO_PY", temp.path().join("no-python"))
             .env("FNO_TEST_HERMETIC", "1")
             .output()
             .unwrap()

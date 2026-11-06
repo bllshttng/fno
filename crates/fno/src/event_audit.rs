@@ -114,7 +114,7 @@ pub(super) fn run(args: &[OsString]) -> i32 {
             },
             Some("--strict") => strict = true,
             Some("--help") => {
-                println!("Usage: fno-py doctor event audit [OPTIONS]\n\n  Audit events for a session. Use --strict to check for gaps.\n\nOptions:\n  --session-id <str>  session ID to audit  [required]\n  --strict            check for required event sequences\n  --events <path>     path to events.jsonl\n  --help              Show this message and exit.");
+                println!("Usage: fno doctor event audit [OPTIONS]\n\n  Audit events for a session. Use --strict to check for gaps.\n\nOptions:\n  --session-id <str>  session ID to audit  [required]\n  --strict            check for required event sequences\n  --events <path>     path to events.jsonl\n  --help              Show this message and exit.");
                 return 0;
             }
             _ => {

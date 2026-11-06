@@ -33,8 +33,11 @@ pub enum FrontDoor {
     /// text is either clap's rendered help (an explicit help request on a
     /// group) or one command-qualified refusal line naming the bad token.
     Usage { message: String },
-    /// Everything else: forward byte-verbatim to the Python CLI.
-    Forward,
+    /// `fno --help` / `fno -h`: the root menu, read from command-names.tsv.
+    /// `all` adds the retired names with their new spellings.
+    RootHelp { all: bool },
+    /// `fno --version` / `fno -V`: `fno <crate version>`.
+    RootVersion,
 }
 
 /// The `mux` subcommand's typed parse.
@@ -595,6 +598,15 @@ pub struct ServerArgs {
 /// typed layer) on purpose: the typed layer misroutes subcommand capture
 /// once the enum also carries a non-subcommand arm.
 pub fn classify(args: &[OsString]) -> FrontDoor {
+    match args.first().and_then(|a| a.to_str()) {
+        Some("--help" | "-h") => {
+            return FrontDoor::RootHelp {
+                all: args[1..].iter().any(|a| a == "--all" || a == "-A"),
+            }
+        }
+        Some("--version" | "-V") if args.len() == 1 => return FrontDoor::RootVersion,
+        _ => {}
+    }
     match front_command()
         .no_binary_name(true)
         .try_get_matches_from(args)
@@ -607,7 +619,7 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
         },
         Err(e) => {
             if !native_first(args) {
-                return FrontDoor::Forward;
+                return unclaimed(args);
             }
             // `fno mux thread -h`/`--help` is the addressing door's one
             // self-teaching surface. The thread group keeps its help flag OFF
@@ -646,6 +658,24 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
             FrontDoor::Usage { message }
         }
     }
+}
+
+/// The refusal for an argv no classifier claims: name the words and the help
+/// that lists what does answer.
+fn unclaimed(args: &[OsString]) -> FrontDoor {
+    let words: Vec<String> = args
+        .iter()
+        .take(2)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let message = match words.as_slice() {
+        [root, rest, ..] if !root.starts_with('-') => {
+            format!("fno {root}: no command `{rest}`. Run fno {root} --help.")
+        }
+        [] => "fno: no command given. Run fno --help.".to_string(),
+        [word, ..] => format!("fno: no command `{word}`. Run fno --help."),
+    };
+    FrontDoor::Usage { message }
 }
 
 /// The front-door command, assembled once: the derive-built tree with the
@@ -771,12 +801,12 @@ fn front_door_from(root: FnoRoot, args: &[OsString]) -> FrontDoor {
             name: None,
             explicit_socket: false,
         },
-        // `fno --` (an escape with nothing after it) forwards, as before.
-        None => FrontDoor::Forward,
+        // `fno --` (an escape with nothing after it) names no command.
+        None => unclaimed(args),
         Some(RootCmd::Version { json }) => FrontDoor::Version { json },
         Some(RootCmd::Uninstall(opts)) => FrontDoor::Uninstall(opts),
-        // Everything unclaimed IS the forwarded Python surface.
-        Some(RootCmd::External(_)) => FrontDoor::Forward,
+        // No classifier claimed it, and no Python CLI is left to forward to.
+        Some(RootCmd::External(_)) => unclaimed(args),
         Some(RootCmd::Mux(mux)) => {
             // The server subcommand carries its own deprecated `--session`
             // alias; it warns here, exactly where the root-level spelling
@@ -995,7 +1025,7 @@ mod tests {
     #[test]
     fn bare_fno_is_the_attach() {
         // No argv at all is the bare attach (the picker or the nested
-        // guard decides downstream); a bare `--` still forwards.
+        // guard decides downstream); a bare `--` names no command.
         assert_eq!(
             classify(&[]),
             FrontDoor::Attach {
@@ -1003,20 +1033,36 @@ mod tests {
                 explicit_socket: false
             }
         );
-        assert_eq!(classify(&os(&["--"])), FrontDoor::Forward);
+        assert!(matches!(classify(&os(&["--"])), FrontDoor::Usage { .. }));
     }
 
     #[test]
-    fn forward_keeps_the_python_surface_byte_verbatim() {
-        assert_eq!(classify(&os(&["backlog", "list"])), FrontDoor::Forward);
-        assert_eq!(classify(&os(&["--help"])), FrontDoor::Forward);
-        assert_eq!(classify(&os(&["--version"])), FrontDoor::Forward);
-        assert_eq!(classify(&os(&["--wat"])), FrontDoor::Forward);
-        // A non-UTF-8 payload inside the forwarded tail must survive as raw
-        // bytes, never a parse error.
-        let mut raw = os(&["backlog", "list"]);
+    fn root_help_and_version_answer_and_the_rest_refuses() {
+        assert_eq!(
+            classify(&os(&["--help"])),
+            FrontDoor::RootHelp { all: false }
+        );
+        assert_eq!(
+            classify(&os(&["-h", "--all"])),
+            FrontDoor::RootHelp { all: true }
+        );
+        assert_eq!(classify(&os(&["--version"])), FrontDoor::RootVersion);
+        let usage = |args: &[&str]| match classify(&os(args)) {
+            FrontDoor::Usage { message } => message,
+            other => panic!("{args:?}: {other:?}"),
+        };
+        assert_eq!(
+            usage(&["--wat"]),
+            "fno: no command `--wat`. Run fno --help."
+        );
+        assert_eq!(
+            usage(&["config", "frob"]),
+            "fno config: no command `frob`. Run fno config --help."
+        );
+        // A non-UTF-8 payload refuses by its lossy spelling, never a panic.
+        let mut raw = os(&["config"]);
         raw.push(os_raw(&[0xff]));
-        assert_eq!(classify(&raw), FrontDoor::Forward);
+        assert!(matches!(classify(&raw), FrontDoor::Usage { .. }));
     }
 
     #[test]

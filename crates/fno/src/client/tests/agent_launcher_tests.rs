@@ -1116,7 +1116,7 @@ fn model_picker_rows() {
     let mut choices = catalog(&[("claude", true, true)]).unwrap();
     if let CatalogOutcome::Ok(rows, models_err, _) = &mut choices {
         *models_err =
-            Some("account records unavailable: Usage: fno-py config get [OPTIONS] {key}".into());
+            Some("account records unavailable: Usage: fno config get [OPTIONS] {key}".into());
         let _ = rows;
     }
     v.launcher_catalog = Some(choices);

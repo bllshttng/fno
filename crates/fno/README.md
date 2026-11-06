@@ -19,21 +19,15 @@ dropped; render frames are droppable (a slow client just skips to the newest
 self-contained frame). The server survives `cargo install` upgrades and
 refuses version-skewed clients with both versions named.
 
-## The CLI (bootstrapper)
+## The CLI
 
-Any `fno <subcommand>` invocation forwards to the Python CLI. The wheel ships that CLI as the **`fno-py`** console script. The Rust binary owns `fno`, so the two never fight for the PATH name. The wheel also bundles the `fno-agents*` binaries. On first run, the shim provisions the wheel through [uv](https://docs.astral.sh/uv/) and verifies this project owns the package. It then `exec`s `<uv tool dir>/fno/bin/fno-py` by absolute path. Later runs forward instantly. `fno doctor update` refreshes this binary (`crates/fno`) alongside the fno-agents bins, so a normal reboot keeps the front door current.
+This binary is the `fno` front door. It answers each command itself or hands it to the `fno-agents` binary installed beside it. No Python runs. The release tarball carries all four binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`), and `curl -fsSL fno.sh | sh` installs it into `~/.fno/install/bin`. `fno update` keeps the set current.
 
 ```sh
-cargo install fno
-fno --version          # first run provisions uv + the wheel, then runs
+curl -fsSL fno.sh | sh
+fno --help
 ```
 
-The supported cargo front door is `cargo install fno`. The sibling crate
-`fno-agents` is published for name-reservation and to back this crate;
-`cargo install fno-agents` (pure Rust, no Python CLI) is not an advertised
-install path.
-
-Pre-publish testing: set `FNO_BOOTSTRAP_WHEEL=/path/to/fno-*.whl` to provision
-from a local wheel instead of resolving `fno` by name on PyPI.
+`cargo install fno` builds the front door alone. A command that needs `fno-agents` then refuses and names `fno update` as the fix.
 
 Apache-2.0.

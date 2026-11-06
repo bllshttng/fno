@@ -34,24 +34,6 @@ pub(crate) use surface::*;
 // Transports
 // ---------------------------------------------------------------------------
 
-/// The interpreter the installed wheel runs on: the `fno-py` script's
-/// shebang. `fno-py` itself is the CLI and takes no `-c`.
-pub(crate) fn wheel_python() -> Option<String> {
-    let script = std::fs::read_to_string(which("fno-py")?).ok()?;
-    let mut words = script
-        .lines()
-        .next()?
-        .strip_prefix("#!")?
-        .split_whitespace();
-    let first = words.next()?;
-    let python = if first.ends_with("/env") {
-        words.next()?
-    } else {
-        first
-    };
-    Some(python.to_string())
-}
-
 pub(crate) fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -535,29 +517,24 @@ pub(crate) fn verdict(
     source_resolved: bool,
     source_rev: Option<&str>,
     marker: Option<&str>,
-    capture_present: &str,
     rust_binary: Option<String>,
     rust_installed_rev: Option<String>,
     rust_source_rev: Option<String>,
     cargo_bin_present: bool,
     deployed_config_keys: Option<Vec<String>>,
     source_config_keys: Option<Vec<String>>,
-    content_drift: Option<i64>,
     component_statuses: &[(String, String)],
 ) -> Value {
-    let mut missing_commands: Vec<String> = Vec::new();
-    let mut python_stale = false;
+    // `marker_stale`: the installed-rev marker the source update writes is
+    // behind the source checkout, or the deployed config schema lacks keys.
+    let mut marker_stale = false;
     let mut status = "unknown".to_string();
 
-    if capture_present == "missing" {
-        python_stale = true;
-        missing_commands.push("backlog capture".to_string());
-        status = "stale".to_string();
-    } else if source_resolved && source_rev.is_some() && marker.is_some() {
+    if source_resolved && source_rev.is_some() && marker.is_some() {
         if marker == source_rev {
             status = "fresh".to_string();
         } else {
-            python_stale = true;
+            marker_stale = true;
             status = "stale".to_string();
         }
     }
@@ -572,18 +549,8 @@ pub(crate) fn verdict(
         missing_config_keys.sort();
     }
     if !missing_config_keys.is_empty() {
-        python_stale = true;
+        marker_stale = true;
         status = "stale".to_string();
-    }
-
-    let content_stale = content_drift.map(|n| n > 0).unwrap_or(false);
-    if content_stale {
-        python_stale = true;
-        status = "stale".to_string();
-    }
-    let content_indeterminate = content_drift.is_none();
-    if content_indeterminate && status == "fresh" {
-        status = "unknown".to_string();
     }
 
     let rust_stale = (cargo_bin_present
@@ -604,12 +571,8 @@ pub(crate) fn verdict(
     };
     json!({
         "status": status,
-        "python_stale": python_stale,
+        "marker_stale": marker_stale,
         "rust_stale": rust_stale,
-        "content_stale": content_stale,
-        "content_drift_count": content_drift.map(Value::from).unwrap_or(Value::Null),
-        "content_indeterminate": content_indeterminate,
-        "missing_commands": missing_commands,
         "missing_config_keys": missing_config_keys,
         "source_rev": opt_str(&source_rev.map(str::to_string)),
         "installed_rev": opt_str(&marker.map(str::to_string)),

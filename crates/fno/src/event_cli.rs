@@ -153,7 +153,7 @@ pub fn run(args: &[OsString]) -> i32 {
                 .first()
                 .map(|v| v.to_string_lossy())
                 .unwrap_or_default();
-            eprintln!("Usage: fno-py doctor event [OPTIONS] COMMAND [ARGS]...\nTry 'fno-py doctor event --help' for help.\n\nError: No such command '{name}'.");
+            eprintln!("Usage: fno doctor event [OPTIONS] COMMAND [ARGS]...\nTry 'fno doctor event --help' for help.\n\nError: No such command '{name}'.");
             2
         }
         "emit-envelope" => run_emit_envelope(rest),

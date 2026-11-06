@@ -129,7 +129,7 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
             }
             "--help" => {
                 print!("{}", concat!(
-                    "Usage: fno-py doctor event gate-escape [OPTIONS] {reason}\n\n",
+                    "Usage: fno doctor event gate-escape [OPTIONS] {reason}\n\n",
                     "  Tag a human intervention the loop should have handled (Tier-2).\n\n",
                     "  Low-friction manual sugar for the reasons with no clean auto chokepoint\n",
                     "  (flake / stale-base / wedge): an operator runs this at the moment they\n",

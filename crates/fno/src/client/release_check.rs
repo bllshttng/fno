@@ -318,7 +318,8 @@ async fn attach_notes(outcome: ReleaseOutcome) -> ReleaseOutcome {
 /// Runs off the UI loop; every failure degrades, never hangs.
 pub(crate) async fn probe_release() -> ReleaseOutcome {
     let found = tokio::task::spawn_blocking(|| {
-        crate::bootstrap::resolved_python_script()
+        std::env::current_exe()
+            .ok()
             .and_then(|p| std::fs::canonicalize(p).ok())
             .is_some_and(|p| p.to_string_lossy().contains("/Cellar/fno/"))
     })
