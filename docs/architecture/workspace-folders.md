@@ -21,7 +21,7 @@ No rung reads focus, a portal seat, or an Open Here viewer. A tap on a row never
 
 ## Giving a workspace a folder
 
-A new workspace takes the folder you pick. The `+` overlay lists the project roots of the live rows. While you type, the folder follows the name: a folder whose last segment equals the name is chosen. The Up and Down keys step through the folders and the default, and a pick stops the name from changing it. The footer shows the folder that Enter sends. The default is the cwd of the workspace you are viewing, which is also where the first shell opens.
+A new workspace takes the folder you pick. The `+` overlay is a form with a name row and a folder row. The folder row shows the folder that Enter sends. Tab turns it into a path field. A long name or path keeps its tail. While you type, the folder follows the name: a folder whose last segment equals the name is chosen. The Up and Down keys step through the folders and the default, and a pick stops the name from changing it. The footer lists the keys. The default is the cwd of the workspace you are viewing, which is also where the first shell opens.
 
 A workspace made by recruiting rows takes the one project root those rows share. Rows from mixed roots make a workspace with no folder.
 
@@ -29,7 +29,7 @@ A named workspace with no folder binds one on its own. Say a live row's project 
 
 A new tab opens in the workspace folder. With no folder, it opens in the cwd of the focused row, then in the project root of any live member row, then in HOME. A new tab never opens in the server's own directory.
 
-The section menu of a named workspace has Add folder. It opens a numbered list of the same live-row folders, and the digit adds one folder to the workspace. It is the same edit as `fno mux workspace origin add`. An older mux server shows `update the mux server to move a session` and receives nothing.
+The section menu of a named workspace has Group sessions from a folder. It opens a numbered list of the same live-row folders, and the digit adds one folder to the workspace. The entry only groups: sessions started under that folder join this workspace, and it grants no access to the folder. A workspace takes several folders. Each one you add joins the list, and a folder already on the list stays once. It is the same edit as `fno mux workspace origin add`. An older mux server shows `update the mux server to move a session` and receives nothing.
 
 To change the folder of an open workspace, run:
 

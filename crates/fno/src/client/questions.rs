@@ -1313,6 +1313,79 @@ impl View {
         self.selector
     }
 
+    /// Stamp `AgentBadge::Blocked` on every live row whose session holds an
+    /// open user-rung question. The stamp rides the badge path a parked
+    /// prompt rides (`AgentBadge::Blocked` drives the glyph, the pinned
+    /// Needs input section and the strip count), so the flag never forks a
+    /// second state source. Matched by the asker's session id first, its
+    /// registry name second; an exited row keeps its exit fact. Re-derived
+    /// on every fold landing and layout push, so an answer clears it.
+    pub(super) fn restamp_asking_badges(&mut self) {
+        use std::collections::HashSet;
+        let Some(fold) = self.questions_fold.as_ref() else {
+            return;
+        };
+        let mut ids: HashSet<String> = HashSet::new();
+        let mut names: HashSet<String> = HashSet::new();
+        for item in &fold.items {
+            if item.state != "open" || !matches!(item.kind.as_str(), "question" | "pin") {
+                continue;
+            }
+            // A question sitting at a lead rung is not the user's to answer
+            // yet; its row keeps working until the lease lapses onto the
+            // board (the same visibility rule `on_board` applies).
+            if !matches!(
+                item.rung.as_ref().and_then(|r| r.level.as_deref()),
+                None | Some("user")
+            ) {
+                continue;
+            }
+            let Some(origin) = item.origin.as_ref() else {
+                continue;
+            };
+            if let Some(sid) = origin.session_id.as_deref() {
+                ids.insert(sid.to_string());
+            }
+            // The name joins only a question asked on this machine (the
+            // item's host reads None here, and Some on a copy): a cross-
+            // machine copy's name is another machine's registry name, and
+            // two machines name rows alike.
+            if item.host.is_none() {
+                if let Some(name) = origin.name.as_deref() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        for a in &mut self.layout.agents {
+            if a.exited {
+                continue;
+            }
+            let asks = a
+                .harness_session_id
+                .as_deref()
+                .is_some_and(|s| ids.contains(s))
+                || names.contains(a.name.as_str());
+            let key = a
+                .harness_session_id
+                .clone()
+                .unwrap_or_else(|| a.name.clone());
+            if asks {
+                // An already-stamped row keeps its first capture: the badge
+                // under a live stamp is always the stamp itself.
+                if a.reason.as_deref() != Some("filed_question") {
+                    self.question_stamps
+                        .insert(key, (a.badge.take(), a.reason.take()));
+                    a.badge = Some(AgentBadge::Blocked);
+                    a.reason = Some("filed_question".into());
+                }
+            } else if let Some((badge, reason)) = self.question_stamps.remove(&key) {
+                // The question closed: the row reads its own badge again.
+                a.badge = badge;
+                a.reason = reason;
+            }
+        }
+    }
+
     /// Apply the latest questions projection. An Err remains visible in the
     /// bell panel instead of becoming an empty list.
     pub(super) fn apply_questions_fold(
@@ -1325,6 +1398,7 @@ impl View {
                 self.questions_degraded = false;
                 self.questions_degraded_reason = None;
                 self.questions_fold = Some(f);
+                self.restamp_asking_badges();
             }
             Err(reason) => {
                 // The last good fold stays: an unread board never renders 0,

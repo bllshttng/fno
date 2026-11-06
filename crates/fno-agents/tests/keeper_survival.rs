@@ -374,16 +374,25 @@ fn identify_reports_drift_and_the_pane_survives_a_rewritten_binary() {
 }
 
 /// The self-exit contract: a keeper spawned with SIGTERM blocked (the mask
-/// the mux server gives a real keeper) dies to SIGTERM, and a keeper whose
+/// the mux server gives a real keeper) dies to SIGTERM; a keeper whose
 /// socket DIRECTORY is deleted ends itself and its child once two polls
-/// pass with no subscriber seated. A keeper whose dir still exists stays
-/// up and answers Identify - the re-adoption contract. Exit is read with
-/// `try_wait`, never `kill(pid, 0)`, which reads a zombie as alive.
+/// pass with no subscriber seated; and a keeper whose subscriber seat sits
+/// empty past the idle bound ends itself the same way with the dir intact -
+/// the throwaway-mux orphan road, where a scratch mux's server dies and its
+/// panes dir is left standing. A seated subscriber holds the keeper past
+/// the bound. A keeper whose dir still exists and whose bound is the
+/// default stays up and answers Identify - the re-adoption contract. Exit
+/// is read with `try_wait`, never `kill(pid, 0)`, which reads a zombie as
+/// alive.
 #[test]
-fn keeper_ends_itself_on_sigterm_and_when_its_socket_dir_is_deleted() {
+fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
     use std::os::unix::process::CommandExt;
 
-    fn spawn_blocked_keeper(sock: &PathBuf, pane_key: u32) -> std::process::Child {
+    fn spawn_blocked_keeper(
+        sock: &PathBuf,
+        pane_key: u32,
+        idle_ms: Option<&str>,
+    ) -> std::process::Child {
         let mut cmd = Command::new(keeper_bin());
         cmd.arg("--pane")
             .arg("--sock")
@@ -400,6 +409,9 @@ fn keeper_ends_itself_on_sigterm_and_when_its_socket_dir_is_deleted() {
             .env("FNO_KEEPER_ORPHAN_POLL_MS", "200")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(ms) = idle_ms {
+            cmd.env("FNO_KEEPER_ORPHAN_MAX_IDLE_MS", ms);
+        }
         // The same mask the mux server gives a real keeper: SIGTERM blocked
         // in the child before exec.
         unsafe {
@@ -450,8 +462,8 @@ fn keeper_ends_itself_on_sigterm_and_when_its_socket_dir_is_deleted() {
     let sock_a = dir_a.join("k.sock");
     let sock_b = dir_b.join("k.sock");
 
-    let mut a = spawn_blocked_keeper(&sock_a, 31);
-    let mut b = spawn_blocked_keeper(&sock_b, 32);
+    let mut a = spawn_blocked_keeper(&sock_a, 31, None);
+    let mut b = spawn_blocked_keeper(&sock_b, 32, None);
     let child_a = identify(&sock_a)["child_pid"].as_u64().unwrap() as u32;
     let child_b = identify(&sock_b)["child_pid"].as_u64().unwrap() as u32;
     let _child_a = KillGuard(child_a);
@@ -474,9 +486,10 @@ fn keeper_ends_itself_on_sigterm_and_when_its_socket_dir_is_deleted() {
         "keeper A must end its child when its socket dir is gone"
     );
 
-    // Survival control: B's dir still exists and no server attached - it
-    // stays up and answers Identify. One sleep covers five polls, so a
-    // keeper miscounting dir-gone would already be out.
+    // Survival control: B's dir still exists, its seat sits empty, and its
+    // idle bound is the default (1 h) - it stays up and answers Identify.
+    // One sleep covers five polls, so a keeper miscounting dir-gone, or
+    // firing the idle bound early, would already be out.
     std::thread::sleep(Duration::from_secs(1));
     assert!(
         b.try_wait().expect("try_wait").is_none(),
@@ -498,6 +511,54 @@ fn keeper_ends_itself_on_sigterm_and_when_its_socket_dir_is_deleted() {
     assert!(
         !sock_b.exists(),
         "keeper B unlinks its socket on the SIGTERM exit"
+    );
+
+    // Idle-bound leg: C's dir exists the whole time - the throwaway-mux
+    // orphan road. A held subscriber seat keeps it alive past the bound;
+    // dropping the seat ends it inside the bound plus one poll. The exit
+    // unlinks the socket the normal way, since the dir is still standing.
+    // The bound is 3 s and the hold 3.5 s. The connect deadline is 2 s,
+    // inside the bound: the seat always lands before the self-end clock can
+    // fire, so the leg carries no connect-versus-bound race.
+    fn connect_seat(sock: &PathBuf, secs: u64) -> std::os::unix::net::UnixStream {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            match std::os::unix::net::UnixStream::connect(sock) {
+                Ok(stream) => return stream,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Err(e) => panic!("seat never connected: {e}"),
+            }
+        }
+    }
+    let dir_c = scratch.join("c/panes");
+    std::fs::create_dir_all(&dir_c).unwrap();
+    let sock_c = dir_c.join("k.sock");
+    let mut c = spawn_blocked_keeper(&sock_c, 33, Some("3000"));
+    // Seat first, then probe: a probe racing the seat could itself be
+    // seated, and its own clear would start the bound clock early.
+    let seat = connect_seat(&sock_c, 2);
+    let child_c = identify(&sock_c)["child_pid"].as_u64().unwrap() as u32;
+    let _child_c = KillGuard(child_c);
+    let _keeper_c = KillGuard(c.id());
+    std::thread::sleep(Duration::from_millis(3500));
+    assert!(
+        c.try_wait().expect("try_wait").is_none(),
+        "a seated subscriber holds the keeper past the idle bound"
+    );
+    drop(seat);
+    assert!(
+        wait_exit(&mut c, 15),
+        "keeper C must end itself once the seat sits empty past the bound"
+    );
+    assert!(
+        wait_child_gone(child_c, 15),
+        "keeper C must end its child on the idle bound"
+    );
+    assert!(
+        !sock_c.exists(),
+        "keeper C unlinks its socket on the idle-bound exit"
     );
 
     std::fs::remove_dir_all(&scratch).ok();

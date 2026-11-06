@@ -768,7 +768,7 @@ pub fn org_fold(
     // store read fault leaves the key ABSENT (the ledger treats absence as
     // "no name change"), a genuinely unnamed team carries `null`.
     if let Some(store) = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json()) {
-        if let Ok(names) = crate::team_names::live_names(&store, registry_path) {
+        if let Ok(names) = crate::team_names::live_names(registry_path) {
             for (scope, fold) in folds.iter_mut() {
                 fold["name"] = names.get(scope).map(|n| json!(n)).unwrap_or(Value::Null);
             }

@@ -66,6 +66,10 @@ pub enum ViewKind {
     NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,
+    /// The new-workspace form, with a name typed.
+    NewWorkspace,
+    /// A workspace section's menu.
+    WorkspaceMenu,
     /// The new-agent composer sheet, with a seeded draft so the editor text
     /// and the real terminal cursor's cell are in the picture.
     Composer,
@@ -275,6 +279,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "needs-input-pulse-off" => Some(ViewKind::NeedsInputPulseOff),
         "tab-menu" => Some(ViewKind::TabMenu),
         "sideline-menu" => Some(ViewKind::SidelineMenu),
+        "new-workspace" => Some(ViewKind::NewWorkspace),
+        "workspace-menu" => Some(ViewKind::WorkspaceMenu),
         "composer" => Some(ViewKind::Composer),
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
@@ -420,7 +426,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -1469,6 +1475,18 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.nav_open_menu();
         }
         Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
+        Some(ViewKind::NewWorkspace) => {
+            view.open_create();
+            view.create = Some("fno-web".to_string());
+        }
+        Some(ViewKind::WorkspaceMenu) => {
+            let i = view
+                .display_rows()
+                .iter()
+                .position(|r| matches!(r, super::DisplayRow::Sel(row) if row.tab.is_none()))
+                .ok_or("no workspace row to open a section menu on")?;
+            view.open_row_menu(i, Anchor::Center);
+        }
         Some(ViewKind::Composer) => {
             super::agent_launcher::open(&mut view);
             if let Some(l) = view.launcher.as_mut() {
@@ -1662,6 +1680,8 @@ mod tests {
             ("needs-input-pulse-off", ViewKind::NeedsInputPulseOff),
             ("tab-menu", ViewKind::TabMenu),
             ("sideline-menu", ViewKind::SidelineMenu),
+            ("new-workspace", ViewKind::NewWorkspace),
+            ("workspace-menu", ViewKind::WorkspaceMenu),
             ("composer", ViewKind::Composer),
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
@@ -1726,7 +1746,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
             ),
             "{e}"
         );
