@@ -1220,7 +1220,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
         let old = "2026-11-01T00:00:00+00:00";
-        let fresh = "2026-11-05T00:00:00+00:00";
+        // Two hours before `now`: inside the six-hour quiet window, so the
+        // session stays live unless a termination event names it.
+        let fresh = "2026-11-05T10:00:00+00:00";
         trace_file(state, "s-old", "user_correction", old, "no, prove it");
         trace_file(state, "s-fresh", "user_correction", fresh, "no, prove it");
         trace_file(state, "s-term", "user_correction", fresh, "stop re-ranking");
