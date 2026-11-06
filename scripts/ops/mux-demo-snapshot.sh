@@ -785,13 +785,13 @@ PY
 # rest idle. The server's read loop stamps the rows from these exactly as
 # it does in production.
 mkdir -p "$ROOT/.fno/db/build-marks"
-python3 - "$ROOT" "${SIDS[0]}" "${SIDS[1]}" <<'PY'
+python3 - "$ROOT" "${SIDS[1]}" "${SIDS[2]}" <<'PY'
 import json, os, sys, time
-root, scout_sid, archer_sid = sys.argv[1:4]
+root, archer_sid, reviewer_sid = sys.argv[1:4]
 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 marks = {
-    scout_sid: {"state": "compiling"},
-    archer_sid: {"state": "waiting", "position": 2},
+    archer_sid: {"state": "compiling"},
+    reviewer_sid: {"state": "waiting", "position": 2},
 }
 d = f"{root}/.fno/db/build-marks"
 os.makedirs(d, exist_ok=True)

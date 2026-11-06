@@ -170,10 +170,15 @@ pub(crate) fn build_frame(elapsed_ms: u64) -> char {
 /// runs no cargo, and the mark never fights the lattice. Compiling renders
 /// the BRAILLE_SIX frame IN PLACE OF the working cell - never both. The
 /// waiting arm renders the static hourglass with the queue position when
-/// the lane read can name it. Both stay within the 5-column status cell.
+/// the lane read can name it. Both stay within the `cells`-column status
+/// cell the caller names: the list column is 5, the card glyph column 1
+/// (its second cell is the edge bar's, which paints over cell 0 after the
+/// blit - a two-cell mark there loses its left glyph to the bar, the
+/// 2026-11-06 shot finding), the slim rail 2.
 pub(crate) fn build_status_cell(
     mark: Option<crate::proto::BuildMark>,
     s: LatticeState,
+    cells: usize,
 ) -> Option<String> {
     if !matches!(s, LatticeState::Working) {
         return None;
@@ -188,13 +193,17 @@ pub(crate) fn build_status_cell(
             Some(t0) => build_frame(t0.elapsed().as_millis() as u64).to_string(),
             None => build_rest_glyph().to_string(),
         }),
-        crate::proto::BuildStage::Waiting => Some(match mark.position {
-            Some(n) => format!("{HOURGLASS}{n}"),
-            None => HOURGLASS.to_string(),
+        crate::proto::BuildStage::Waiting => Some(match (cells >= 2, mark.position) {
+            (true, Some(n)) => format!("{HOURGLASS}{n}"),
+            _ => HOURGLASS.to_string(),
         }),
     }
 }
 
-/// The waiting mark's glyph (user pick, 2026-10-09; already in the
-/// client's vocabulary for a wedged review, so the terminal renders it).
-pub(crate) const HOURGLASS: char = '\u{23f3}';
+/// The waiting mark's glyph (user pick, 2026-10-09: an hourglass and the
+/// position). The BLACK HOURGLASS codepoint, not the emoji one: the
+/// snapshot grid draws each cell at an exact textLength, which squeezes
+/// the emoji-presentation hourglass to nothing (the 2026-11-06 probe shot
+/// provably dropped it), while this text-presentation spelling renders in
+/// the grid, in the terminal, and distinct from every lattice glyph.
+pub(crate) const HOURGLASS: char = '\u{29d7}';

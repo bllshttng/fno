@@ -701,13 +701,37 @@ fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     );
     let waiter_row = text.lines().find(|line| line.contains("waiter")).unwrap();
     assert!(
-        waiter_row.contains("\u{23f3}2"),
+        waiter_row.contains("\u{29d7}2"),
         "waiting paints the hourglass and queue position: {waiter_row:?}"
     );
     let plain_row = text.lines().find(|line| line.contains("plain")).unwrap();
     assert!(
         plain_row.contains('\u{25cf}'),
         "an unmarked working row keeps the plain glyph: {plain_row:?}"
+    );
+}
+
+#[test]
+fn a_marked_card_renders_the_waiting_mark_in_its_one_live_glyph_cell() {
+    // The card's status column is two cells wide and right-aligned, and the
+    // resting edge bar paints cell 0 after the blit - so the card's mark
+    // gets ONE live cell and the waiting mark drops the position digit
+    // there (the list cell keeps it). Without the budget the bar ate the
+    // hourglass and the row read a bare digit (the 2026-11-06 shot finding).
+    let mut waiter = agent_row("waiter", 5, Some(AgentBadge::Working), false);
+    waiter.build = Some(crate::proto::BuildMark::waiting(Some(2)));
+    let mut v = wide_view(vec![waiter]);
+    set_density(&mut v, Density::Extended);
+    v.sideline_layout = sideline_color::SidelineLayout::Card;
+    let text = frame_text(&v.compose());
+    let waiter_line = text.lines().find(|line| line.contains("waiter")).unwrap();
+    assert!(
+        waiter_line.contains('\u{29d7}'),
+        "the card paints the hourglass in its live glyph cell: {waiter_line:?}"
+    );
+    assert!(
+        !waiter_line.contains("\u{29d7}2"),
+        "the one-cell slot drops the position digit, never a bar-eaten glyph: {waiter_line:?}"
     );
 }
 

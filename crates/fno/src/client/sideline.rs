@@ -819,7 +819,7 @@ impl View {
                         crate::chrome::clip(
                             &format!(
                                 " {} {}",
-                                build_status_cell(a.build, lat)
+                                build_status_cell(a.build, lat, 2)
                                     .unwrap_or_else(|| status_glyph(lat).to_string()),
                                 card_line::slug(a, &self.backlog)
                             ),
@@ -1278,7 +1278,7 @@ impl View {
                         // A Working row's spin glyph takes the blank lead
                         // column of the right-aligned word, so the word stays put.
                         rt_cell(
-                            match build_status_cell(a.build, lat) {
+                            match build_status_cell(a.build, lat, if card { 1 } else { 5 }) {
                                 // The build mark wins where it applies: a
                                 // compiling row renders the BRAILLE_SIX frame
                                 // in place of the working spin (never both),
@@ -1491,7 +1491,7 @@ impl View {
         // A resting card's state glyph wears the state color, as a list row's does.
         // A build-marked row paints the build glyph (the override's first char),
         // so the color finds the cell that actually carries the state.
-        let glyph = build_status_cell(agent.build, lattice)
+        let glyph = build_status_cell(agent.build, lattice, 1)
             .and_then(|text| text.chars().next())
             .unwrap_or_else(|| status_glyph(lattice));
         if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
