@@ -3,7 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
-#       [--hold] [--group <axis>] [--remote-pane] [--web]
+#       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -37,6 +37,7 @@ HOLD=""
 GROUP=""
 REMOTE_PANE=""
 WEB=""
+WEB_PORT=8722
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -45,7 +46,9 @@ for a in "$@"; do
     export FNO_MUX_WINDOW_SIZE="$a"
   elif [ "$PREV" = "--group" ]; then
     GROUP="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ]; then
+  elif [ "$PREV" = "--web-port" ]; then
+    WEB_PORT="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ]; then
     :
   elif [ "$a" = "--hold" ]; then
     HOLD=1
@@ -811,7 +814,7 @@ sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
 if [ -n "$WEB" ]; then
-  "$FNO" mux serve --web --server "$SERVER"
+  "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
 else
   "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
 fi

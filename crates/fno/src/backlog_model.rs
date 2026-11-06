@@ -940,6 +940,27 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
             .transpose()
             .ok()
             .flatten();
+    let graph_done_context: Vec<Card> = if q.view == View::Graph && !q.status.is_empty() {
+        let mut context_query = q.clone();
+        context_query.status.clear();
+        on_board
+            .iter()
+            .filter(|card| {
+                card.column == "Done"
+                    && keeps_query(
+                        inp,
+                        &by_ref,
+                        card,
+                        by_ref.get(card.id.as_str()).copied(),
+                        &context_query,
+                        parsed.as_ref(),
+                    )
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let filtered: Vec<Card> = on_board
         .into_iter()
         .filter(|c| {
@@ -954,7 +975,14 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
         })
         .collect();
     let graph = (q.view == View::Graph)
-        .then(|| crate::backlog_graph::graph(inp, &filtered, q.focus.as_deref()))
+        .then(|| {
+            crate::backlog_graph::graph_with_done_context(
+                inp,
+                &filtered,
+                &graph_done_context,
+                q.focus.as_deref(),
+            )
+        })
         .flatten();
     let mut hidden = Hidden::default();
     for c in &off_board_cards {

@@ -57,23 +57,44 @@ pub struct GraphHidden {
 /// Build the family rooted at the focus. `cards` already holds the board's
 /// scope and filters, so this function cannot introduce a second filter path.
 pub fn graph(inp: &Inputs, cards: &[Card], requested_focus: Option<&str>) -> Option<Graph> {
+    graph_with_done_context(inp, cards, &[], requested_focus)
+}
+
+pub(crate) fn graph_with_done_context(
+    inp: &Inputs,
+    cards: &[Card],
+    done_context: &[Card],
+    requested_focus: Option<&str>,
+) -> Option<Graph> {
+    if cards.is_empty() {
+        return None;
+    }
     let row_by_id: HashMap<&str, &Value> = inp
         .rows
         .iter()
         .filter_map(|row| Some((row.get("id")?.as_str()?, row)))
         .collect();
-    let card_by_id: HashMap<&str, &Card> =
-        cards.iter().map(|card| (card.id.as_str(), card)).collect();
-    if card_by_id.is_empty() {
-        return None;
+    let mut all_cards = cards.to_vec();
+    let mut seen: HashSet<String> = all_cards.iter().map(|card| card.id.clone()).collect();
+    for card in done_context {
+        if seen.insert(card.id.clone()) {
+            all_cards.push(card.clone());
+        }
     }
+    let visible_ids: HashSet<&str> = cards.iter().map(|card| card.id.as_str()).collect();
+    let card_by_id: HashMap<&str, &Card> = all_cards
+        .iter()
+        .map(|card| (card.id.as_str(), card))
+        .collect();
 
-    let mut ordered: Vec<&Card> = cards.iter().collect();
-    ordered.sort_by_key(|card| card.order);
+    let mut visible_order: Vec<&Card> = cards.iter().collect();
+    visible_order.sort_by_key(|card| card.order);
     let focus = requested_focus
-        .filter(|id| card_by_id.contains_key(id))
-        .unwrap_or(&ordered[0].id)
+        .filter(|id| visible_ids.contains(id))
+        .unwrap_or(&visible_order[0].id)
         .to_string();
+    let mut ordered: Vec<&Card> = all_cards.iter().collect();
+    ordered.sort_by_key(|card| card.order);
 
     let tree_parent = |id: &str| -> Option<&str> {
         let row = row_by_id.get(id)?;
@@ -84,7 +105,7 @@ pub fn graph(inp: &Inputs, cards: &[Card], requested_focus: Option<&str>) -> Opt
     let mut root = focus.clone();
     let mut ancestors = HashSet::new();
     while ancestors.insert(root.clone()) {
-        let Some(parent) = tree_parent(&root).filter(|id| card_by_id.contains_key(id)) else {
+        let Some(parent) = tree_parent(&root).filter(|id| visible_ids.contains(id)) else {
             break;
         };
         root = parent.to_string();

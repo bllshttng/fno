@@ -153,6 +153,30 @@ fn graph_board_returns_the_focused_family_and_collapses_done_children() {
         .as_ref()
         .is_some_and(|card| card.id == "x-a")
         && node.layer == 0));
+
+    let status_filtered = fixture(vec![
+        json!({"id": "x-root", "status": "ready", "type": "epic"}),
+        json!({"id": "x-open", "status": "ready", "parent": "x-root"}),
+        json!({"id": "x-done", "status": "done", "parent": "x-root"}),
+    ]);
+    let filtered_graph = board(
+        &status_filtered,
+        &Query::from_pairs(&[
+            ("view".into(), "graph".into()),
+            ("focus".into(), "x-root".into()),
+            ("status".into(), "ready".into()),
+        ])
+        .unwrap(),
+    )
+    .graph
+    .unwrap();
+    assert!(filtered_graph.nodes.iter().any(|node| {
+        node.id == "done:x-root"
+            && matches!(
+                &node.stub,
+                Some(crate::backlog_graph::Stub::Done { count: 1 })
+            )
+    }));
 }
 
 #[test]
