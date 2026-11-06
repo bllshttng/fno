@@ -395,11 +395,12 @@ pub(crate) fn dispatch_with(
             // serves), while an identity bug means the keeper answering is
             // ours and still alive.
             let answered = py_repr_opt(answered_sid.as_deref());
+            let expected = py_repr_opt(crate::pane_keeper::session_id_from_argv(&keeper_argv));
             if crate::agent_lock::pid_is_alive(launched as u64) {
                 return refused(SpawnRefusal::err(
                     format!(
                         "keeper answered session_id {answered}, \
-                         expected the minted {session_id:?}"
+                         expected the create form's {expected}"
                     ),
                     1,
                 ));
@@ -1038,6 +1039,53 @@ mod tests {
         assert_eq!(keeper.pasted(), b"hello world\r");
     }
 
+    /// A bare create form carries no id on the child argv (agy retired its
+    /// print-turn mint), so Identify answers session_id null and the launch
+    /// is proven by the keeper pid alone. The strict both-fields equality
+    /// read that null as a rival keeper and refused every agy thread spawn.
+    #[test]
+    fn an_agy_bare_create_identifies_by_pid() {
+        let (dir, home) = home();
+        let sock = dir.path().join("mux").join("threads").join("wk-agy.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let keeper = Arc::new(FakeKeeper::with_identify_argv(
+            &sock,
+            b"? for shortcuts".to_vec(),
+            vec![
+                "agy".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            ],
+        ));
+        {
+            let k = Arc::clone(&keeper);
+            std::thread::spawn(move || k.serve());
+        }
+        let seams = Seams {
+            mint: &|_h, _cwd, _req| Ok(SID.to_string()),
+            probe: &|s: &Path| crate::daemon::probe_keeper_socket(s, Duration::from_millis(500)),
+            launch: &|_spec| Ok(4242),
+            kill: &|_pid| {},
+            worker_bin: Path::new(fake_worker_bin()),
+        };
+        let params = json!({"substrate": "thread"});
+        let outcome = dispatch_with(
+            &home,
+            "agy",
+            WK,
+            "hello world",
+            "tester",
+            dir.path(),
+            &[],
+            &params,
+            &seams,
+        );
+        assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
+        let row = read_row(&home, WK).expect("the row is written");
+        assert_eq!(row.status, crate::AgentStatus::Live);
+        assert_eq!(row.pid, Some(4242));
+        assert_eq!(row.keeper_child_pid, Some(4243));
+    }
+
     /// Nothing lands under the name when proof or uniqueness fails: a keeper
     /// that never answers Identify is killed and writes no row; an existing
     /// name refuses before the launch; a concurrent registry write of the
@@ -1245,14 +1293,30 @@ mod tests {
     struct FakeKeeper {
         path: PathBuf,
         ready: Vec<u8>,
+        identify_argv: Vec<String>,
         pasted: Mutex<Vec<u8>>,
     }
 
     impl FakeKeeper {
         fn new(path: &Path, ready: Vec<u8>) -> Self {
+            Self::with_identify_argv(
+                path,
+                ready,
+                vec![
+                    "pi".to_string(),
+                    "--session-id".to_string(),
+                    SID.to_string(),
+                ],
+            )
+        }
+
+        /// The argv the Identify reply reports, parsed back into the reply's
+        /// session id exactly as `session_id_from_argv` reads a live keeper's.
+        fn with_identify_argv(path: &Path, ready: Vec<u8>, identify_argv: Vec<String>) -> Self {
             Self {
                 path: path.to_path_buf(),
                 ready,
+                identify_argv,
                 pasted: Mutex::new(Vec::new()),
             }
         }
@@ -1298,7 +1362,7 @@ mod tests {
                                 let reply = serde_json::json!({
                                     "keeper_pid": 4242,
                                     "child_pid": 4243,
-                                    "argv": ["pi", "--session-id", SID],
+                                    "argv": self.identify_argv,
                                 });
                                 let payload = serde_json::to_vec(&reply).unwrap();
                                 let _ = stream.write_all(&encode(&Frame::IdentifyReply(payload)));

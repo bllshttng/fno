@@ -197,10 +197,11 @@ where
         Ok(pair) => pair,
     };
     // The keeper binds the socket only after hosting the child, so the first
-    // Identify that names BOTH this session id AND this keeper pid proves the
-    // launch is ours. Another pid answering the same session id means a
-    // concurrent revival won the socket; ours exited refusing to bind a
-    // served socket, and the winner owns the row flip.
+    // Identify that names the id the child argv carries (or, for a create
+    // form that carries none, no id at all) AND this keeper pid proves the
+    // launch is ours. Another pid answering means a concurrent revival won
+    // the socket; ours exited refusing to bind a served socket, and the
+    // winner owns the row flip.
     let (keeper_pid, child_pid) = match outcome {
         IdentifyOutcome::Ours {
             keeper_pid,
@@ -421,8 +422,9 @@ fn append_resume_event(
 /// Killing is the caller's move: the revival and the create arm map these
 /// outcomes onto different refusals (concurrent-won vs collision-vs-identity).
 pub(crate) enum IdentifyOutcome {
-    /// The keeper answered Identify naming BOTH this session id AND this
-    /// keeper pid: the launch is ours.
+    /// The keeper answered Identify naming BOTH the session id its child
+    /// argv carries (a create form that carries none may answer null) AND
+    /// this keeper pid: the launch is ours.
     Ours {
         keeper_pid: u32,
         child_pid: Option<u32>,
@@ -456,11 +458,27 @@ where
 {
     let launched = launch(spec)?;
     let deadline = std::time::Instant::now() + IDENTIFY_WINDOW;
+    // The session id the CHILD argv carries, parsed exactly as the keeper
+    // parses its own Identify reply. A create form that carries no id (agy's
+    // bare launch since 6805ab42ac) yields None, and identity rests on the
+    // keeper pid alone; an id-carrying form must name that id.
+    let expected_sid = crate::pane_keeper::session_id_from_argv(&spec.argv);
     loop {
         if let crate::daemon::KeeperProbe::Answered(reply) = probe(&spec.sock) {
             let (answered_sid, keeper_pid, child_pid) = reply_parts(&reply);
             match (answered_sid, keeper_pid) {
-                (Some(s), Some(p)) if s == spec.session_id && p == launched => {
+                (Some(s), Some(p))
+                    if Some(s.as_str()) == expected_sid.as_deref() && p == launched =>
+                {
+                    return Ok((
+                        launched,
+                        IdentifyOutcome::Ours {
+                            keeper_pid: p,
+                            child_pid,
+                        },
+                    ));
+                }
+                (None, Some(p)) if expected_sid.is_none() && p == launched => {
                     return Ok((
                         launched,
                         IdentifyOutcome::Ours {
@@ -720,6 +738,85 @@ mod tests {
         let events = events_of(&home);
         assert_eq!(events.matches("\"agent_resumed\"").count(), 1, "{events}");
         assert!(events.contains("\"substrate\":\"thread\""), "{events}");
+    }
+
+    /// Identity follows the child argv, not the mint: a bare create form
+    /// (agy retired its print-turn mint) answers session_id null and is
+    /// proven by the keeper pid alone, an id-carrying form still demands its
+    /// id, and a rival pid is never ours whichever way it answers.
+    #[test]
+    fn identify_proofs_a_bare_create_by_pid_and_an_id_form_by_both() {
+        fn spec(child_argv: Vec<String>) -> LaunchSpec {
+            LaunchSpec {
+                argv: [
+                    vec![
+                        "worker".to_string(),
+                        "--keeper".to_string(),
+                        "--sock".to_string(),
+                        "/s".to_string(),
+                        "--session".to_string(),
+                        "t-a".to_string(),
+                        "--pane-key".to_string(),
+                        SID.to_string(),
+                        "--cwd".to_string(),
+                        "/tmp".to_string(),
+                        "--".to_string(),
+                    ],
+                    child_argv,
+                ]
+                .concat(),
+                sock: PathBuf::from("/s"),
+                cwd: PathBuf::from("/tmp"),
+                keeper_log: PathBuf::from("/l"),
+                agent_name: "t-a".to_string(),
+                harness: "agy".to_string(),
+                session_id: SID.to_string(),
+            }
+        }
+        fn answered(keeper_pid: u32) -> impl Fn(&Path) -> crate::daemon::KeeperProbe {
+            move |_| {
+                crate::daemon::KeeperProbe::Answered(json!({
+                    "keeper_pid": keeper_pid,
+                    "child_pid": 4243u32,
+                    "argv": ["agy", "--dangerously-skip-permissions"],
+                }))
+            }
+        }
+        let bare = spec(vec![
+            "agy".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+        ]);
+        let (_, out) = launch_and_identify(&bare, answered(4242), |_| Ok(4242)).unwrap();
+        assert!(matches!(
+            out,
+            IdentifyOutcome::Ours {
+                keeper_pid: 4242,
+                ..
+            }
+        ));
+        let (_, out) = launch_and_identify(&bare, answered(999), |_| Ok(4242)).unwrap();
+        assert!(matches!(
+            out,
+            IdentifyOutcome::Wrong {
+                answered_sid: None,
+                ..
+            }
+        ));
+        let id_form = spec(vec![
+            "agy".to_string(),
+            "--conversation".to_string(),
+            SID.to_string(),
+        ]);
+        // The mint rides the argv on an id form, so a null answer there is a
+        // rival or a liar, never ours.
+        let (_, out) = launch_and_identify(&id_form, answered(4242), |_| Ok(4242)).unwrap();
+        assert!(matches!(
+            out,
+            IdentifyOutcome::Wrong {
+                answered_sid: None,
+                ..
+            }
+        ));
     }
 
     #[test]
