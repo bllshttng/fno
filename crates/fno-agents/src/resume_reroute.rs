@@ -47,7 +47,21 @@ pub(crate) fn apply(
              through its mux pane; drive it there, or stop the pane and re-spawn it"
         ));
     }
-    let session_id = crate::client_commands::resume_session_id(entry, harness).to_string();
+    // The registry key is the FULL session id, never the transport key:
+    // resume_session_id answers a claude row's 8-hex short_id first, and
+    // persist_overwrite matches full ids only (the same match persist uses).
+    let session_id = entry
+        .get("harness_session_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            entry
+                .get("claude_session_uuid")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("")
+        .to_string();
     if session_id.is_empty() {
         return Err(format!(
             "resume --route: row {name:?} records no session id; nothing to re-route"
