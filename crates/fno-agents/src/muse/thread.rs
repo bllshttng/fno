@@ -136,9 +136,7 @@ pub fn dispatch_thread(
                 .unwrap_or_else(|_| Stdio::null()),
         )
         .stderr(Stdio::from(log_file));
-    for var in crate::claims::AMBIENT_IDENTITY_NAMES {
-        cmd.env_remove(var);
-    }
+    crate::claims::scrub_identity_env(&mut cmd);
     // SAFETY: setsid is async-signal-safe; it runs between fork and exec. The
     // host leads its own group, which the stop command signals.
     unsafe {
