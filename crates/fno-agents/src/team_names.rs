@@ -1682,29 +1682,20 @@ pub(crate) fn stamp_beat_lead(store_path: &Path, cwd: &Path, scope: &str) -> Opt
 /// Set (once per scope) a lead's theme. The team must be live and named;
 /// L1 refuses ("Head of <project> takes the project name; no theme"); the
 /// same theme again is a no-op; a different theme names the current one and
-/// refuses (set once per scope, like the name).
+/// refuses (set once per scope, like the name). The refusal rules live in
+/// one place ([`validate_theme`], read-only); this commit path re-checks the
+/// set-once conflict under the store lock and writes.
 pub fn set_theme(
     store_path: &Path,
     registry_path: &Path,
     scope: &str,
     theme: &str,
 ) -> Result<String, String> {
+    validate_theme(store_path, registry_path, scope, theme, false)?;
     let theme = theme.trim();
-    if !valid_theme(theme) {
-        return Err(format!(
-            "a theme is 2-40 characters (letters, digits, spaces, hyphens and apostrophes; no quote or angle bracket), got {theme:?}"
-        ));
-    }
     let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
     update(store_path, |store| {
-        let names = live_names_in(store, &live);
-        if !names.contains_key(&canon) {
-            return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
-        }
-        if live.get(&canon).is_some_and(|c| c.level == 1) {
-            return Err("Head of <project> takes the project name; no theme".into());
-        }
         let verdict = {
             let rec = store
                 .teams
