@@ -169,16 +169,21 @@ pub fn cell_colors(cell: &Cell, theme: Theme) -> ((u8, u8, u8), (u8, u8, u8)) {
     let mut bg = resolve(cell.bg, theme.bg, theme);
     // Only default/base ANSI colors can brighten before the inverse swap.
     // Specified RGB and extended-palette colors keep their color under SGR 1.
+    let inverse =
+        (cell.flags & cell_flags::INVERSE != 0) ^ (cell.flags & cell_flags::SELECTED != 0);
+    // Bold default text on a light ground would lift toward white and fall
+    // under 4.5:1, so it keeps its colour there. Inverse still lifts: that
+    // case is the documented contrast cost below.
+    let lifts = !(matches!(cell.fg, Color::Default) && !inverse && luminance(theme.bg) > 0.5);
     if cell.flags & cell_flags::BOLD != 0
         && matches!(cell.fg, Color::Default | Color::Indexed(0..=7))
+        && lifts
     {
         fg = brighten(fg);
     }
     if cell.flags & cell_flags::DIM != 0 {
         fg = dim(fg, bg);
     }
-    let inverse =
-        (cell.flags & cell_flags::INVERSE != 0) ^ (cell.flags & cell_flags::SELECTED != 0);
     if inverse {
         std::mem::swap(&mut fg, &mut bg);
     }
