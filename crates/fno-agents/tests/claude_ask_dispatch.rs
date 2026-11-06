@@ -128,6 +128,42 @@ fn validation_rejects_bad_inputs() {
 // --- create ---
 
 // Task 1.3a: ask never creates. Create-machinery coverage repointed to dispatch_claude_spawn.
+#[test]
+fn ask_unknown_name_exits_16_not_create() {
+    // dispatch_claude_ask on an unknown name must exit 16 (not create).
+    let home = AgentsHome::at(tmpdir("ask-nocreat-home"));
+    let ch = ClaudeHome::at(tmpdir("ask-nocreat-claude"));
+    let cwd = tmpdir("ask-nocreat-cwd");
+    let bin = tmpdir("ask-nocreat-bin");
+    install_fake_claude(&bin);
+    let path = path_with(&bin);
+
+    let out = dispatch_claude_ask(
+        &home,
+        &ch,
+        "alice",
+        "hello",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(
+        out.exit_code, 16,
+        "ask unknown name must exit 16, got {} ({})",
+        out.exit_code, out.stderr
+    );
+    assert!(out.stderr.contains("unknown agent"), "{}", out.stderr);
+    assert!(out.stderr.contains("spawn"), "{}", out.stderr);
+    // No registry row written.
+    assert!(
+        !home.registry_json().exists()
+            || !registry_text(&home.registry_json())
+                .unwrap()
+                .contains("alice")
+    );
+}
 
 #[test]
 fn spawn_receipt_marks_an_unrecorded_prompt_unverified() {

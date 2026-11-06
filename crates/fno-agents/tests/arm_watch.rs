@@ -127,6 +127,28 @@ fn the_same_set_three_hundred_seconds_later_is_deduped() {
 
 /// AC3-HP: still failing plus a newly failing arm, past the rate floor, is
 /// one send naming both arms.
+#[test]
+fn a_new_arm_joining_the_set_sends_after_the_rate_floor() {
+    let store = temp_store("ac3");
+    let now = real_now();
+    let first = vec![failing(row("lead_wake"), "timeout", 2000)];
+    let out1 = tick_arm_watch(&lined(&first), &[], 1800, &store, now, |_, _| true);
+    assert_eq!(out1.acted, 1);
+    let second = vec![
+        failing(row("lead_wake"), "timeout", 2000 + 1900),
+        failing(row("notify_watch"), "timeout", 1900),
+    ];
+    let mut bodies: Vec<String> = Vec::new();
+    let out2 = tick_arm_watch(&lined(&second), &[], 1800, &store, now + 1900, |_, body| {
+        bodies.push(body.to_string());
+        true
+    });
+    assert_eq!(out2.acted, 1);
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].contains("lead_wake"), "{}", bodies[0]);
+    assert!(bodies[0].contains("notify_watch"), "{}", bodies[0]);
+    std::fs::remove_file(&store).ok();
+}
 
 /// AC4-EDGE: below threshold no send goes out and the stored entry is
 /// removed, so a later episode sends again.
