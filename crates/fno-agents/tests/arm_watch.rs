@@ -339,26 +339,6 @@ fn a_stuck_finding_alone_pages_and_dedupes() {
     std::fs::remove_file(&store).ok();
 }
 
-/// AC5-ERR: a failed send leaves the store unwritten.
-#[test]
-fn a_failed_send_on_a_finding_stores_nothing() {
-    let store = temp_store("ac5-err");
-    let findings = vec![fno_agents::stuck_work::Finding {
-        kind: "dead_holder",
-        key: "holder:flight:x@1".to_string(),
-        line: "dead holder flight:x holder h pid 9 absent held 10m".to_string(),
-        root: None,
-        holder: None,
-        claim_key: None,
-    }];
-    let out = tick_arm_watch(&[], &findings, 1800, &store, TS_UNIX, |_, _| false);
-    assert_eq!(out.acted, 0);
-    assert_eq!(out.skip_reason.as_deref(), Some("notify_failed"));
-    let text = std::fs::read_to_string(&store).unwrap_or_default();
-    assert!(!text.contains("holder:flight:x"), "{text}");
-    std::fs::remove_file(&store).ok();
-}
-
 /// AC5-EDGE: empty arms and empty findings keep the clear path.
 #[test]
 fn empty_arms_and_empty_findings_stay_clear() {

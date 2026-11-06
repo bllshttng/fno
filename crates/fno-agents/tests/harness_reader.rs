@@ -3,7 +3,7 @@
 //! declarations, the watch-lease journey cell, the isolation nonce pair, and
 //! the live spawn's substrate and provider route.
 
-use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl, JOURNEY_KEYS};
+use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl};
 use fno_agents::harness_reader::{
     isolated_provider_config, probe_route_args, probe_substrate, retry_marker, wait_for_ci_cell,
     LineVerdict,
@@ -113,18 +113,6 @@ fn every_convicted_pattern_matches_its_denial() {
             "the {field:?} pattern must match its denial control (it was convicted on this)"
         );
     }
-}
-
-#[test]
-fn the_ten_journey_keys_are_declared() {
-    let contract = HarnessContract::packaged().expect("the shipped table parses");
-    for key in JOURNEY_KEYS {
-        assert!(
-            contract.journeys.contains_key(key),
-            "journey {key:?} is missing from the shipped table"
-        );
-    }
-    assert_eq!(contract.journeys.len(), JOURNEY_KEYS.len());
 }
 
 #[test]

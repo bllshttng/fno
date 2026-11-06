@@ -294,6 +294,8 @@ pub(crate) use self_review_floor::self_review_floor_applies;
 use self_review_floor::{
     classify_payload_for_floor, floor_self_review, reviewer_invocation_for, REVIEW_ORDER,
 };
+#[cfg(test)]
+pub(crate) use settings::parse_settings;
 use settings::{
     fail_closed_settings, normalize_reviewer, parse_manifest, parse_settings_result, Manifest,
     PeerEntry,
@@ -301,8 +303,6 @@ use settings::{
 pub(crate) use settings::{
     ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
 };
-#[cfg(test)]
-pub(crate) use settings::{parse_settings, value_as_probe_list};
 #[cfg(test)]
 use settings::{MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
 use watch_lease::{harness_can_idle, watch_target, watch_window_ms, CONTINUE_WORKING};

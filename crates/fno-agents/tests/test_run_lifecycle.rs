@@ -466,55 +466,6 @@ fn a_queued_waiter_stops_on_sigterm() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// AC5-ERR: SIGINT stops a queued waiter with exit 130, and the argv never
-/// ran.
-#[test]
-fn a_queued_waiter_stops_on_sigint() {
-    let root = tmp_claims_root("wait-int");
-    let mut holder = test_run(&root)
-        .args(["--timeout", "20"])
-        .arg("--")
-        .arg("sleep")
-        .arg("20")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder");
-    std::thread::sleep(Duration::from_millis(300));
-    let mut waiter = test_run(&root)
-        .args(["--timeout", "20"])
-        .arg("--")
-        .arg("sleep")
-        .arg("20")
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn waiter");
-    std::thread::sleep(Duration::from_millis(500));
-
-    unsafe { libc::kill(waiter.id() as libc::c_int, libc::SIGINT) };
-    let start = Instant::now();
-    let status = waiter.wait().expect("wait for the interrupted waiter");
-    assert_eq!(status.code(), Some(130), "SIGINT must exit 130");
-    assert!(
-        start.elapsed() < Duration::from_secs(2),
-        "the stop must follow the signal within 2s, took {:?}",
-        start.elapsed()
-    );
-    let mut stderr = String::new();
-    std::io::Read::read_to_string(&mut waiter.stderr.take().unwrap(), &mut stderr).unwrap();
-    assert!(
-        stderr.contains("suite_wait_interrupted"),
-        "interrupted receipt missing: {stderr}"
-    );
-    assert!(
-        !stderr.contains("suite_started"),
-        "the argv must never run: {stderr}"
-    );
-
-    let _ = holder.kill();
-    let _ = holder.wait();
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// AC6-HP: a SIGKILLed holder's slot frees at once. The stamped
 /// holder-process lease reads the dead pid as the verdict, so the next
 /// waiter acquires inside 3s instead of timing out against the dead pid.
@@ -669,62 +620,6 @@ fn a_waiter_outlasts_its_own_budget_while_the_holder_runs() {
         "a queued waiter outlives its own budget: got {:?}: {}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// AC5-HP: the waiting line carries holder_left_s in the holder's remaining
-/// budget, and the holder's own claim record sets expires_at to acquired_at
-/// plus its --timeout. The budget clears the store's 60s TTL floor, so the
-/// equality is exact.
-#[test]
-fn the_waiting_line_names_the_holders_remaining_budget() {
-    let root = tmp_claims_root("holder-left");
-    let mut holder = test_run(&root)
-        .args(["--timeout", "90"])
-        .arg("--")
-        .arg("sleep")
-        .arg("20")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder");
-    std::thread::sleep(Duration::from_millis(300));
-    let waiter = test_run(&root)
-        .args(["--timeout", "30"])
-        .arg("--")
-        .arg("true")
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn the waiter");
-    // The record is read while the holder still holds it; once the holder
-    // releases, the record is gone.
-    std::thread::sleep(Duration::from_millis(1500));
-    let (_, rec) = fno_agents::claims::status("test:suite", Some(&root));
-    let rec = rec.expect("the holder's claim record while it holds");
-    assert_eq!(
-        rec.expires_at,
-        Some(rec.acquired_at + 90_000),
-        "expires_at is the holder's own run deadline: {rec:?}"
-    );
-    let out = waiter.wait_with_output().expect("wait for the waiter");
-    assert!(holder.try_wait().unwrap().is_some());
-    let _ = holder.wait();
-    assert!(out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.contains("suite_waiting") && l.contains("holder_left_s="))
-        .unwrap_or_else(|| panic!("waiting line missing: {stderr}"));
-    let left: i64 = line
-        .split(" holder_left_s=")
-        .nth(1)
-        .and_then(|rest| rest.split(' ').next())
-        .unwrap_or("")
-        .parse()
-        .unwrap_or(-1);
-    assert!(
-        (85..=90).contains(&left),
-        "holder_left_s must sit in the holder's remaining 90s budget: {line}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

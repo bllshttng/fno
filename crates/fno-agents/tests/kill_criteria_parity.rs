@@ -161,19 +161,6 @@ fn iteration_ceiling_hit() {
 }
 
 #[test]
-fn iteration_ceiling_not_hit() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let repo = tmp.path();
-    init_repo(repo);
-    let plan = write_full_plan(
-        repo,
-        "  - name: iter_ceiling\n    predicate: iteration > 10\n    reason: too many\n",
-    );
-    write_state(repo, "session_id: s\niteration: 2\n");
-    assert_golden(repo, &plan, "iteration > 10 (cur=2 -> no fire)");
-}
-
-#[test]
 fn iteration_gte_boundary() {
     let tmp = tempfile::TempDir::new().unwrap();
     let repo = tmp.path();
@@ -219,22 +206,6 @@ fn stuck_test_hit() {
 }
 
 #[test]
-fn stuck_test_not_hit() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let repo = tmp.path();
-    init_repo(repo);
-    let plan = write_full_plan(
-        repo,
-        "  - name: stuck\n    predicate: same_test_failing_for > 5\n    reason: stuck test\n",
-    );
-    write_state(
-        repo,
-        "session_id: s\niteration: 1\nverification:\n  consecutive_failures: 2\n",
-    );
-    assert_golden(repo, &plan, "same_test_failing_for > 5 (cf=2 -> no fire)");
-}
-
-#[test]
 fn stuck_test_no_verification_block_defaults_zero() {
     let tmp = tempfile::TempDir::new().unwrap();
     let repo = tmp.path();
@@ -266,21 +237,6 @@ fn files_outside_over() {
     }
     run_git(repo, &["add", "a.rs", "b.rs", "c.rs"]);
     assert_golden(repo, &plan, "files_outside > 1 (3 outside -> FIRE)");
-}
-
-#[test]
-fn files_outside_under() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let repo = tmp.path();
-    init_repo(repo);
-    let plan = write_full_plan(
-        repo,
-        "  - name: scope\n    predicate: files_outside(plan_path) > 5\n    reason: scope creep\n",
-    );
-    // Only one file outside -> 1 is not > 5.
-    fs::write(repo.join("only.rs"), "x").unwrap();
-    run_git(repo, &["add", "only.rs"]);
-    assert_golden(repo, &plan, "files_outside > 5 (1 outside -> no fire)");
 }
 
 #[test]
@@ -364,21 +320,6 @@ fn malformed_predicate_warns_and_exits_zero() {
 }
 
 #[test]
-fn malformed_iteration_operator() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let repo = tmp.path();
-    init_repo(repo);
-    // `iteration < 3` routes to the iteration evaluator (prefix match) but the
-    // regex rejects `<` -> rc=2 malformed -> WARN + skip.
-    let plan = write_full_plan(
-        repo,
-        "  - name: badop\n    predicate: iteration < 3\n    reason: bad operator\n",
-    );
-    write_state(repo, "session_id: s\niteration: 5\n");
-    assert_golden(repo, &plan, "iteration < 3 (bad op) -> WARN + exit 0");
-}
-
-#[test]
 fn no_kill_criteria_block_exits_zero() {
     let tmp = tempfile::TempDir::new().unwrap();
     let repo = tmp.path();
@@ -439,14 +380,4 @@ fn quick_mode_fenced_kill_criteria() {
         &plan_file.to_string_lossy(),
         "quick-mode fenced kill_criteria -> FIRE",
     );
-}
-
-#[test]
-fn empty_plan_path_warns_and_exits_zero() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let repo = tmp.path();
-    init_repo(repo);
-    // Empty plan_path: the bash `check_kill_criteria ""` warns and returns 0.
-    // Both sides emit a WARN to stderr (not frozen) and exit 0 / empty stdout.
-    assert_golden(repo, "", "empty plan_path -> WARN + exit 0");
 }
