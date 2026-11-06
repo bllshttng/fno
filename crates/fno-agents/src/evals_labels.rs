@@ -999,7 +999,10 @@ pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
             continue;
         }
         let marker = format!("cluster: layer={label} kind={kind}");
-        let body = format!("{marker}\n{}", lines.join("\n"));
+        // The append carries the evidence lines alone, so a rerun over
+        // identical evidence dedupes on the tail and writes nothing.
+        let lines_text = lines.join("\n");
+        let body = format!("{marker}\n{lines_text}");
         let open = crate::graph_store::read_rows(&graph)
             .unwrap_or_default()
             .into_iter()
@@ -1021,6 +1024,7 @@ pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
             if id.is_empty() {
                 continue;
             }
+            let mut changed = false;
             crate::graph_store::mutate_rows(
                 &graph,
                 crate::graph_store::DEFAULT_LOCK_TIMEOUT,
@@ -1035,10 +1039,12 @@ pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
                             .get("details")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        if let Some(next) =
-                            crate::backlog::update_ops::append_text(existing.as_deref(), &body)
-                        {
+                        if let Some(next) = crate::backlog::update_ops::append_text(
+                            existing.as_deref(),
+                            &lines_text,
+                        ) {
                             row["details"] = json!(next);
+                            changed = true;
                             return Ok(true);
                         }
                     }
@@ -1046,7 +1052,9 @@ pub(crate) fn fixer(state: &Path) -> Result<Value, String> {
                 },
             )
             .map_err(|e| e.to_string())?;
-            appended.push(id);
+            if changed {
+                appended.push(id);
+            }
             continue;
         }
         let here = std::env::current_dir().unwrap_or_default();
