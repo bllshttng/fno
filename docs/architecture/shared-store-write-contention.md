@@ -57,7 +57,7 @@ Run the probe against the directory you plan to bind to `/var/lib/sqld`. It prin
 docker run --rm -v /path/to/sqld-data:/d python:3.12-alpine python -c "import ctypes,os;open('/d/.x1','w');open('/d/.x2','w');l=ctypes.CDLL(None,use_errno=True);r=l.renameat2(-100,b'/d/.x1',-100,b'/d/.x2',2);print('renameat2 ->',r,os.strerror(ctypes.get_errno()));os.remove('/d/.x1');os.remove('/d/.x2')"
 ```
 
-ext4, tmpfs and APFS pass. btrfs on kernels older than 4.7 fails, and so does any other filesystem without the flag.
+ext4 and tmpfs pass. btrfs on kernels older than 4.7 fails, and so does any other filesystem without the flag. The probe is Linux-shaped: macOS libc exposes no `renameat2`, and APFS supports atomic swap through a different call, so the probe does not run there.
 
 ### Remediation on the shared primary (2026-11-06)
 
