@@ -2105,8 +2105,10 @@ mod tests {
                 }]
             }
         });
-        let mut snap = Snapshot::default();
-        snap.layout = Some(layout.to_string());
+        let snap = Snapshot {
+            layout: Some(layout.to_string()),
+            ..Default::default()
+        };
         let snap = Arc::new(Mutex::new(snap));
         let agents = layout_agents(&snap).expect("the layout parses");
         assert_eq!(agents.len(), 1);
@@ -2688,21 +2690,6 @@ console.log("framePacer: 12 cases ok");
         }
     }
 
-    /// The page must keep calling retention what it is. A protocol
-    /// history request is unreachable while `writer.forget()` stands, so the
-    /// visible label must not promise scrollback the wire never carries.
-
-    /// Fit-to-width is client-side only. The bridge attaches passive
-    /// with rows==0/cols==0 so it never shrinks a PTY, and `writer.forget()`
-    /// leaves no upstream handle. A page that learned to ask for a resize would
-    /// collapse every terminal user's pane to phone width.
-    ///
-    /// Anchored on the WIRE vocabulary and on sending, not on the bare word
-    /// "Resize". A bare match also banned `ResizeObserver`, which is a local DOM
-    /// API and the right way to refit when the screen box changes without a
-    /// window resize event - the guard would have refused it with a message
-    /// about PTY geometry it has nothing to do with.
-
     #[test]
     fn bind_rows() {
         assert_eq!(bind_addr("127.0.0.1", 8722), "127.0.0.1:8722");
@@ -3192,7 +3179,7 @@ eq(themeAttr("light"), "light", "light sets the light attribute");
 console.log("theme store: 9 cases ok");
 "#;
         let src = format!(
-            "{}\n{}\n{}\n{}",
+            "{}\nconst CASES = {};\nconst KEYS = {};\n{}",
             [
                 "cardKeeps",
                 "nestChildren",
@@ -3243,8 +3230,8 @@ console.log("theme store: 9 cases ok");
             .map(|name| lift_js_fn(BACKLOG_PAGE, name))
             .collect::<Vec<String>>()
             .join("\n"),
-            format!("const CASES = {};", include_str!("search_query_cases.json")),
-            format!("const KEYS = {};", crate::search_query::keys_json()),
+            include_str!("search_query_cases.json"),
+            crate::search_query::keys_json(),
             asserts
         );
         let path =
