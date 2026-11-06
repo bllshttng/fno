@@ -19,13 +19,13 @@ const BUILD_LANES: [(&str, &str); 5] = [
     ("full", "full"),
 ];
 
-struct Job {
+pub(crate) struct Job {
     cargo_pid: u32,
-    worktree: String,
+    pub(crate) worktree: String,
     slots: Vec<String>,
     since_ms: i64,
-    waiting: Option<String>,
-    marker_pid: Option<i32>,
+    pub(crate) waiting: Option<String>,
+    pub(crate) marker_pid: Option<i32>,
 }
 
 /// One live waiter marker with the lane it waits in, its checkout, and the
