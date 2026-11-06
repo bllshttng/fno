@@ -957,7 +957,6 @@ pub fn render_inventory() -> String {
 mod tests {
     use super::*;
     use clap::CommandFactory;
-    use std::os::unix::ffi::OsStringExt;
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()

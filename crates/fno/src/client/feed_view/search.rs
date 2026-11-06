@@ -184,7 +184,6 @@ pub(crate) fn apply_query(o: &mut super::FeedOverlay) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::feed_overlay::{event_fields, EventCtx, FeedItem};
 
     fn _refusal_case() {
         // AC8-EDGE: the shared refusal names `s:` as node-only, and the

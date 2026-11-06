@@ -582,6 +582,8 @@ mod tests {
         }
     }
 
+    struct Updates;
+
     impl Http for Updates {
         fn call(
             &mut self,

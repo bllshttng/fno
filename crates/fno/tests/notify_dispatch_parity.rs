@@ -19,6 +19,7 @@
 //! by the nine seam cases and not re-asserted here - a Linux runner without
 //! a notifier would answer 1 honestly and still be correct.
 
+use fno::notify_dispatch::send_notification_seams;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 

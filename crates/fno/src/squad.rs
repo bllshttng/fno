@@ -540,7 +540,7 @@ fn root_from_common_dir(common_dir: &str) -> String {
 mod tests {
     use super::*;
     use crate::tree::Node;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     fn tab(ids: &[PaneId]) -> Tab {
         let root = if ids.len() == 1 {

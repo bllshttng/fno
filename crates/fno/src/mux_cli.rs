@@ -5166,6 +5166,7 @@ mod tests {
     use super::pane_submit::positive_post_submit_marker;
     use super::*;
     use crate::pane_send_audit::{FNO_AGENTS_HOME_GUARD, FNO_BIN_GUARD};
+    use block_args::{ParsedBlockAnnotate, ParsedBlockPipe};
 
     // The paneless route-hint test lives in its own file; the parent is
     // shrink-only under the file-budget gate.

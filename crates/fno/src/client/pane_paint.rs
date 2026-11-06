@@ -527,7 +527,6 @@ impl View {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{meta, text_frame};
     use super::*;
 
     const BAND: char = '\u{0243}';
