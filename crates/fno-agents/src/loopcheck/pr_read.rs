@@ -261,7 +261,7 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
 }
 
 /// The manifest node's completion shape read from the graph store: a done or
-/// superseded node with no numbered PR rows, or one whose recorded PRs are
+/// superseded node with no PR records, or one whose recorded PRs are
 /// settled with at least one merged row. Returns None for an open node, an
 /// unreadable store, or any live PR row so the caller keeps the normal gate.
 ///
@@ -269,10 +269,10 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
 /// gate's REST read can only re-learn a fact it already knows, and under a
 /// loaded machine that read is the one thing that can still fail - each
 /// timeout re-blocking a finished session that never goes idle, so queued
-/// mail never lands. A numbered history or closed row is still a PR row and
-/// never qualifies for the no-PR advisory terminal. An unstamped live row
-/// keeps the normal PR gate; the live-row rule matches the selector's own
-/// reopen-history rule.
+/// mail never lands. A primary record or any additional PR row prevents the
+/// no-PR classification, even without a number. Numbered history, closed, or
+/// live rows keep the normal PR gate; the live-row rule matches the selector's
+/// own reopen-history rule.
 pub(super) enum DoneNodeTerminal {
     NoPr,
     Merged(i64),
@@ -291,7 +291,16 @@ pub(super) fn node_done_terminal(cwd: &Path, node_id: Option<&str>) -> Option<Do
     }
     let rows = numbered_pr_rows(&node);
     if rows.is_empty() {
-        return Some(DoneNodeTerminal::NoPr);
+        let has_pr_record = node.primary_pr.is_some()
+            || node
+                .additional_prs
+                .as_ref()
+                .is_some_and(|rows| !rows.is_empty());
+        return if has_pr_record {
+            None
+        } else {
+            Some(DoneNodeTerminal::NoPr)
+        };
     }
     let terminal = terminal_stamp;
     let max_terminal = rows

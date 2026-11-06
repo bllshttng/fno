@@ -838,7 +838,7 @@ pub(crate) fn decide_with_payload(
     // thing that can still time out - each timeout re-blocked the finished
     // session so it never went idle and never took its queued mail. Retire
     // the fire on the store's own stamp, before the probe and done() can pay
-    // for a read. A done node with no numbered PR row uses the advisory
+    // for a read. A done node with no PR record uses the advisory
     // terminal on a promise, after the same finding, local-work and probe
     // holds. Batched, plan and explicitly advisory units have their own folds.
     // A failed store read or an open node keeps the REST read (fail-open).
@@ -906,7 +906,7 @@ pub(crate) fn decide_with_payload(
                     ),
                     DoneNodeTerminal::NoPr => (
                         format!(
-                            "node {} done with no numbered PR row; promise accepted as advisory without the REST read",
+                            "node {} done with no PR record; promise accepted as advisory without the REST read",
                             node_id.as_deref().unwrap_or(""),
                         ),
                         TerminationReason::DoneAdvisory,

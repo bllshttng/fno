@@ -129,7 +129,7 @@ esac"#,
 }
 
 #[test]
-fn a_done_node_without_any_pr_row_ends_as_advisory_without_rest_read() {
+fn a_done_node_without_any_pr_record_ends_as_advisory_without_rest_read() {
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
     let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
     let (tmp, manifest_path, transcript_path) = stamped_rig(
@@ -241,6 +241,16 @@ fn a_done_node_with_any_pr_record_stays_on_the_regular_gate() {
         );
         let cwd = tmp.path();
         let mock = MockBins::failing_gh();
+        let git = make_script(
+            cwd,
+            "git",
+            r#"case "$*" in
+  *"@{push}"*) echo sha1111111111111111111111111111111111111111 ;;
+  *"rev-parse"*) echo sha1111111111111111111111111111111111111111 ;;
+  *"porcelain"*) exit 0 ;;
+  *) echo deadbeefdeadbeefdeadbeefdeadbeef00000001 ;;
+esac"#,
+        );
 
         let (code, d) = fire(&[
             "loop-check",
@@ -253,7 +263,7 @@ fn a_done_node_with_any_pr_record_stays_on_the_regular_gate() {
             "--now",
             "2026-06-05T00:30:00Z",
             &format!("--gh-bin={}", mock.gh.display()),
-            &format!("--git-bin={}", mock.git.display()),
+            &format!("--git-bin={}", git.display()),
         ]);
         let events_path = project_events(cwd);
         std::env::set_var("FNO_HOME", restore_home.clone());
