@@ -25,6 +25,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_CODE_SESSION_ID` | rs | unclear: crates/fno-agents/src/claims.rs |
 | `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` | rs | Consecutive Stop-hook block cap the harness enforces before it force-ends the turn (Claude Code default 9). The run records whether the env override or the default bound. |
 | `CLAUDE_CONFIG_DIR` | rs | Overrides the Claude config directory for managed provider lookups. |
+| `CLAUDE_DIR_OVERRIDE` | rs | Redirects the whole Claude config root. Read by crates/fno-agents/src/claude_roster.rs `config_dir` and crates/fno-agents/src/harness_reader.rs. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
 | `CLAUDE_JOB_DIR` | rs | Set by Claude Code in a `claude --bg` job. Its `state.json` names the job, and the SessionStart launch claim reads that name to match the launcher's record. The write gate also falls back to its tmp dir in a refusal when the payload carries no session id; the payload's session wins when present. |
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
