@@ -212,7 +212,7 @@ fn blocked(
     record: Option<&crate::claims::ClaimRecord>,
 ) -> Value {
     // A launch-window holder reads SUSPECT for its whole TTL by construction
-    // (its pid is the spawner that already exited), so it is never a wedge.
+    // (it carries no pid; the TTL bounds it), so it is never a wedge.
     let in_launch_window = seen.holder.starts_with(HANDOVER_HOLDER_PREFIX);
     let wedged = state == ClaimState::Suspect && !in_launch_window;
     let block = seen.block_reason.clone().unwrap_or_default();
@@ -412,9 +412,9 @@ pub fn reserve_and_hand_over(req: &GuardRequest) -> (Value, i32) {
     };
     // THE node claim, so the node reads worked from the moment it is
     // dispatched rather than from whenever the worker reaches its own init.
-    // The spawn client exits within seconds of the launch, so a pid here
-    // reads suspect `pid-absent` long before init re-acquires, and a fresh
-    // worker reaps its own claim. The TTL alone is this claim's liveness.
+    // The spawn client exits within seconds of the launch, so its pid here
+    // read `pid-absent`, a death basis, long before init re-acquired. The
+    // claim carries no pid: the TTL bounds it and the pane probe proves death.
     let reason = format!("spawn handover window for {}", req.node_id);
     let handover_opts = AcquireOpts {
         pid: None,
@@ -1366,12 +1366,17 @@ mod tests {
             holder_of(tmp.path(), "node:x-1").as_deref(),
             Some("spawn-handover:w")
         );
-        // The handover outlives the spawn client: no pid, the TTL is the
-        // liveness, so the claim reads live and never suspect pid-absent.
-        let (state, record) = crate::claims::status("node:x-1", Some(tmp.path()));
-        let record = record.unwrap();
+        // The handover outlives the spawn client: it carries no pid, so a dead
+        // client never reads as pid-absent; the TTL alone bounds it.
+        let record = crate::claims::status("node:x-1", Some(tmp.path()))
+            .1
+            .unwrap();
         assert!(record.pid_unavailable && record.pid.is_none(), "{record:?}");
-        assert_eq!(state, crate::claims::ClaimState::Live);
+        let gone = |_| crate::claims::PidProbe::Absent;
+        assert_eq!(
+            crate::claims::classify_with_basis(&record, None, &gone),
+            (crate::claims::ClaimState::Suspect, "pid-unavailable")
+        );
     }
 
     #[test]

@@ -71,7 +71,7 @@ The roster read stays, and the node claim alone does not decide occupancy. On 20
 
 Each admission reserves its worker name with a `spawn-name:<name>` claim. The registry has no row until the child boots, so two spawns of one seed once both drew the same name. The claim has a 900 s TTL and no pid. A minted name that another spawn holds takes the next suffix. A typed `--name` that another spawn holds refuses and names the holder. A spawn that exits nonzero releases its name. The key is not `name:`, because that key marks a lead's drawn person name as used forever.
 
-The `spawn-handover:<name>` node claim also has no pid. The spawn client exits within seconds, so a pid there read suspect `pid-absent` long before the worker's init took the claim over. The worker then reaped its own claim. The 900 s TTL is now the claim's liveness. A handover that no init takes over expires, and the next spawn admits.
+The `spawn-handover:<name>` node claim also has no pid. The spawn client exits within seconds, so a pid there read suspect `pid-absent`, a death basis, long before the worker's init took the claim over. The claim now reads suspect `pid-unavailable` for its 900 s TTL. A dead client is no evidence against it, and only the pane probe proves the worker gone. A handover that no init takes over expires, and the next spawn admits.
 
 The `agent_spawned` event of a codex thread spawn carries `stage_ms`: `seam`, `gate`, `guard`, `launch`, `row`, `total` and `queued`. `total` sums the first five. `queued` is the gate wait, outside `total`.
 
