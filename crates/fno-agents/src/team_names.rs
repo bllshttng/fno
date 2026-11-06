@@ -868,6 +868,12 @@ pub fn name_team(
             used.remove(&own);
         }
     }
+    // The rollback snapshot is taken BEFORE the record commits, so a failed
+    // label rename restores the pre-command state instead of re-inserting
+    // the bind it is meant to undo.
+    let prior_record = read(store_path)
+        .ok()
+        .and_then(|s| s.teams.get(&canon).cloned());
     let shown = update(store_path, |store| {
         let names = live_names_in(store, &live);
         if let Some(existing) = names.get(&canon) {
@@ -910,9 +916,6 @@ pub fn name_team(
     // bind back: the record restores, and a drawn name releases its claim,
     // because a drawn name binds only when the whole command succeeds.
     let holder = team.holder.clone();
-    let prior_record = read(store_path)
-        .ok()
-        .and_then(|s| s.teams.get(&canon).cloned());
     let displaceable = |row: &crate::state::RegistryEntry,
                         entries: &[crate::state::RegistryEntry]| {
         if crate::state::row_is_terminal(row) {
