@@ -556,7 +556,7 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
         while Instant::now() < deadline {
             let mut chunk = [0u8; 4096];
             match stream.read(&mut chunk) {
-                Ok(n) => buf.extend_from_slice(&chunk),
+                Ok(_) => buf.extend_from_slice(&chunk),
                 Err(_) => {}
             }
             let mut consumed = 0usize;
