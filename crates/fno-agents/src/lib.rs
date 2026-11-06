@@ -2456,6 +2456,44 @@ fn boot_ms_from(sec: i64, usec: i64) -> Option<i64> {
     Some(sec * 1000 + usec / 1000)
 }
 
+/// Idle seconds that only count time the host was awake: the idle clock
+/// starts at the LATER of the last activity and this boot. An anchor that
+/// predates the boot cannot have idled through the powered-off stretch
+/// between the two - a reboot would otherwise let every transcript age past
+/// every window at once, and the first sweep would vacate and reap the fleet
+/// the boot revival exists to bring back. A boot the host cannot read
+/// applies no clamp: an unmeasurable boot never invents one.
+pub fn awake_idle_secs(anchor_epoch_s: i64, now_epoch_s: i64) -> i64 {
+    awake_idle_from(anchor_epoch_s, now_epoch_s, host_boot_epoch_ms())
+}
+
+/// [`awake_idle_secs`] with the boot reading injected, so tests pin it.
+pub(crate) fn awake_idle_from(anchor_epoch_s: i64, now_epoch_s: i64, boot_ms: Option<i64>) -> i64 {
+    let clamped = match boot_ms {
+        Some(ms) => anchor_epoch_s.max(ms / 1000),
+        None => anchor_epoch_s,
+    };
+    (now_epoch_s - clamped).max(0)
+}
+
+#[cfg(test)]
+mod awake_idle_tests {
+    use super::*;
+
+    #[test]
+    fn idle_counts_from_the_boot_when_the_anchor_predates_it() {
+        // Last activity 100s, boot at 1000s, now 3000s: the powered-off
+        // stretch between them is not idle, so the clock starts at boot.
+        assert_eq!(awake_idle_from(100, 3000, Some(1_000_000)), 2000);
+        // An anchor inside this boot is untouched.
+        assert_eq!(awake_idle_from(1500, 3000, Some(1_000_000)), 1500);
+        // A boot the host cannot read never invents a clamp.
+        assert_eq!(awake_idle_from(100, 3000, None), 2900);
+        // A future anchor clamps to zero, like every other idle read.
+        assert_eq!(awake_idle_from(3000, 2000, Some(1_000_000)), 0);
+    }
+}
+
 #[cfg(test)]
 #[path = "../codegen/event_retention.rs"]
 mod event_retention_tests;
