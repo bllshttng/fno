@@ -471,6 +471,7 @@ pub fn gate_with_wait<G>(
             last_note = Some(now);
         }
         std::thread::sleep(left.min(Duration::from_secs(10)));
+        crate::backlog::worked::forget_roster_reading();
     }
 }
 

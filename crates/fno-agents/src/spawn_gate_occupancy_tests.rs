@@ -253,3 +253,42 @@ fn a_finished_row_admits_the_node() {
     check_node_occupancy("x-occ-node", None, false)
         .expect("an exited row is positive evidence of the end; the arm admits");
 }
+
+#[test]
+fn one_roster_scope_shells_the_claude_roster_once() {
+    let fixture = OccupancyFixture::new();
+    fixture.write_entries(vec![fixture.worker_on(
+        "fork-occ-fixture",
+        "sess-occ-fork",
+        "x-occ-other",
+        "live",
+    )]);
+    let count = fixture.dir.join("roster-runs");
+    let script = format!(
+        "#!/bin/sh\necho run >> '{}'\necho '{{\"agents\": []}}'\n",
+        count.display()
+    );
+    let _ = crate::write_exec_stub(&fixture.dir.join("stub-bin"), "claude", &script);
+    let runs = || {
+        std::fs::read_to_string(&count)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    };
+
+    // The three reads a node-bearing spawn makes: the guard's overlay, the
+    // gate's admit arm and its slot-free arm.
+    let scope = crate::backlog::worked::RosterScope::open();
+    let overlay = crate::backlog::advance::live_worked_overlay_for("x-occ-node")
+        .expect("the guard's overlay reads");
+    assert!(!overlay.contains_key("x-occ-node"), "{overlay:?}");
+    check_node_occupancy("x-occ-node", None, false).expect("admit arm");
+    check_node_occupancy("x-occ-other", None, false)
+        .expect_err("the replayed reading still names the live worker");
+    assert_eq!(runs(), 1, "one scope shells the roster once");
+
+    // A queued pass forgets the reading and reads afresh.
+    crate::backlog::worked::forget_roster_reading();
+    check_node_occupancy("x-occ-node", None, false).expect("dequeue arm");
+    assert_eq!(runs(), 2, "a forgotten reading re-reads");
+    drop(scope);
+}

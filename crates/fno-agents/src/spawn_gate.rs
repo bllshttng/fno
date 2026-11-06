@@ -2308,6 +2308,8 @@ fn decide_gate(
             return Err(Refusal::with_receipt(EXIT_QUEUE_TIMEOUT, receipt));
         }
         std::thread::sleep(pause);
+        // A queued pass must not reuse the admit pass's roster reading.
+        crate::backlog::worked::forget_roster_reading();
     }
 }
 

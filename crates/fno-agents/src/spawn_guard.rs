@@ -18,7 +18,9 @@
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-use crate::backlog::advance::{observe_node_claim, DispatchClaimObservation};
+use crate::backlog::advance::{
+    live_worked_overlay_for, observe_node_claim, DispatchClaimObservation,
+};
 use crate::claims::{AcquireOpts, AcquireOutcome, ClaimState, BLUEPRINT_HOLDER_PREFIX};
 
 /// Holder prefix of a reservation the spawn door writes. Recovery of a
@@ -157,14 +159,18 @@ fn observe(
     emit_events: bool,
     claim_read: Option<(ClaimState, Option<crate::claims::ClaimRecord>)>,
 ) -> DispatchClaimObservation {
+    let (worked, worked_error) = match live_worked_overlay_for(req.node_id) {
+        Ok(map) => (Some(map), None),
+        Err(e) => (None, Some(e)),
+    };
     observe_node_claim(
         req.node_id,
         req.cwd,
         !req.no_reserve,
         emit_events,
         claim_read,
-        None,
-        None,
+        worked,
+        worked_error,
         None,
     )
 }

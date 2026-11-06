@@ -1854,7 +1854,7 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(run(vec!["resume".into(), "w1".into()]));
+        .block_on(run(vec!["resume".into(), "w1".into()], None));
     assert_eq!(code, 16);
 }
 
@@ -1905,10 +1905,13 @@ fn resume_by_predecessor_full_id_refuses_13() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(run(vec![
-            "resume".into(),
-            "77770003-2222-3333-4444-555555555555".into(),
-        ]));
+        .block_on(run(
+            vec![
+                "resume".into(),
+                "77770003-2222-3333-4444-555555555555".into(),
+            ],
+            None,
+        ));
     assert_eq!(code, 13);
 }
 

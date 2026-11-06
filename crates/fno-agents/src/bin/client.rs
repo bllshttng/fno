@@ -1579,6 +1579,7 @@ async fn run(
     // and fall through to the daemon RPC unchanged.
     let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
     let mut promotion = None;
+    let mut roster_scope: Option<fno_agents::backlog::worked::RosterScope> = None;
     if method == "agent.spawn" && command_owned == "spawn" {
         if let Some(map) = params.as_object_mut() {
             if let Err((line, code)) = fno_agents::spawn_bare::admit(map) {
@@ -1627,6 +1628,8 @@ async fn run(
         // stamp names the account it applied; a spawn no arm takes falls
         // through to the daemon RPC below.
         let promoted = promotion.as_ref();
+        // The guard and the gate share one roster read; each gate closes it.
+        roster_scope = Some(fno_agents::backlog::worked::RosterScope::open());
         if let Some(code) = maybe_run_spawn(
             &home,
             &params,
@@ -1782,6 +1785,7 @@ async fn run(
         if let Some(timing) = spawn_timing.as_mut() {
             timing.record_gate(gate_work, gate_started.elapsed().saturating_sub(gate_work));
         }
+        drop(roster_scope.take());
         match gate_result {
             Ok(guard) => Some(guard),
             Err(refusal) => {
@@ -2493,6 +2497,11 @@ fn maybe_run_spawn(
             }
         }
     };
+    // A codex thread's gate runs later, around the daemon RPC, and closes
+    // the roster scope there.
+    if !codex_thread_fallthrough {
+        fno_agents::backlog::worked::close_roster_scope();
+    }
 
     // Each provider module defines its OWN AskOutcome struct (nominally
     // distinct types), so `emit!` prints+returns inline per arm rather than via
