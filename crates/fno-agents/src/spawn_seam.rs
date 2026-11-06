@@ -77,10 +77,30 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     refuse_codex_without_git_grant(&args, &here)?;
 
     let home = crate::paths::AgentsHome::from_env();
-    let names: HashSet<String> = crate::state::load_registry(&home.registry_json())
+    let mut names: HashSet<String> = crate::state::load_registry(&home.registry_json())
         .map(|r| r.entries.into_iter().map(|e| e.name).collect())
         .unwrap_or_default();
-    let admitted = crate::spawn_admission::admit(&args, &here, &names);
+    let typed = flag_value(&args[1..], &["--name"]).is_some();
+    let admitted = loop {
+        let admitted = crate::spawn_admission::admit(&args, &here, &names);
+        let name = match (&admitted.exit, flag_value(&admitted.argv[1..], &["--name"])) {
+            (None, Some(name)) if !name.is_empty() => name,
+            _ => break admitted,
+        };
+        match reserve_name(&name, None) {
+            Ok(()) => break admitted,
+            // A minted name another spawn holds: mint the next suffix. The
+            // mint gives up past `-5`, and that refusal ends the loop.
+            Err(_) if !typed && names.insert(name.clone()) => continue,
+            Err(holder) => {
+                eprintln!(
+                    "fno agents spawn: the name {name} is reserved by {holder}, a spawn still \
+                     inside its launch window; pass another --name or wait for that spawn"
+                );
+                return Err(2);
+            }
+        }
+    };
     for line in &admitted.stderr {
         eprintln!("{line}");
     }
@@ -120,6 +140,53 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     }
     crate::claims::take_caller_identity(&crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV);
     Ok(argv)
+}
+
+/// Reserve a worker name for the launch window. The registry holds no row
+/// until the child boots (p50 8 s), so two spawns of one seed both read a
+/// name free; a claim decides the race. Its TTL covers spawn to first
+/// report, and the row keeps the name taken after that. The key is not
+/// `name:`, which marks a lead's drawn person name used forever. A broken
+/// claims store fails open to the registry read. `Err` names the holder.
+pub(crate) fn reserve_name(name: &str, root: Option<&Path>) -> Result<(), String> {
+    let key = format!("spawn-name:{}", name.to_ascii_lowercase());
+    let holder = format!(
+        "{}{}",
+        crate::spawn_guard::SPAWN_CLI_HOLDER_PREFIX,
+        std::process::id()
+    );
+    let opts = crate::claims::AcquireOpts {
+        pid_unavailable: true,
+        ttl_ms: Some(crate::spawn_guard::HANDOVER_TTL_MS),
+        reason: Some(format!("spawn launch window for worker {name}")),
+        root: root.map(Path::to_path_buf),
+        ..Default::default()
+    };
+    match crate::claims::acquire(&key, &holder, opts) {
+        crate::claims::AcquireOutcome::HeldByOther { holder, .. } => Err(holder),
+        crate::claims::AcquireOutcome::Error(e) => {
+            eprintln!("spawn note: {key} could not be reserved ({e}); the registry read decides");
+            Ok(())
+        }
+        crate::claims::AcquireOutcome::Acquired(_) => {
+            if let Ok(mut held) = RESERVED_NAME.lock() {
+                *held = Some((key, holder, root.map(Path::to_path_buf)));
+            }
+            Ok(())
+        }
+    }
+}
+
+type HeldName = (String, String, Option<PathBuf>);
+static RESERVED_NAME: std::sync::Mutex<Option<HeldName>> = std::sync::Mutex::new(None);
+
+/// Release this process's name reservation when its spawn failed, so a
+/// retry under the same `--name` is not refused for the TTL.
+pub fn settle_name(exit: i32) {
+    let held = RESERVED_NAME.lock().ok().and_then(|mut h| h.take());
+    if let (Some((key, holder, root)), true) = (held, exit != 0) {
+        let _ = crate::claims::release(&key, &holder, root.as_deref(), root.as_deref());
+    }
 }
 
 /// The spawn's effective working directory: `--cwd`/`-c`, else the caller's.
@@ -351,6 +418,32 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn a_name_another_spawn_reserved_refuses_and_names_its_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rival = crate::claims::AcquireOpts {
+            pid_unavailable: true,
+            ttl_ms: Some(60_000),
+            root: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        };
+        let _ = crate::claims::acquire("spawn-name:t-second-pass", "spawn-cli:1", rival);
+        assert_eq!(
+            reserve_name("t-Second-Pass", Some(tmp.path())),
+            Err("spawn-cli:1".to_string())
+        );
+        assert_eq!(reserve_name("t-second-pass-2", Some(tmp.path())), Ok(()));
+        let (state, _) = crate::claims::status("spawn-name:t-second-pass-2", Some(tmp.path()));
+        assert_eq!(state, crate::claims::ClaimState::Live);
+        settle_name(1);
+        let (state, _) = crate::claims::status("spawn-name:t-second-pass-2", Some(tmp.path()));
+        assert_eq!(
+            state,
+            crate::claims::ClaimState::Free,
+            "a failed spawn frees its name"
+        );
     }
 
     #[test]

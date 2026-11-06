@@ -344,6 +344,7 @@ fn main() {
         Err(code) => std::process::exit(code),
     };
     let code = rt.block_on(run(args, spawn_timing));
+    fno_agents::spawn_seam::settle_name(code);
     std::process::exit(code);
 }
 
