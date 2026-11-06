@@ -225,3 +225,70 @@ fn the_flags_parse_and_gemini_merges_once() {
         .unwrap()
         .contains("root is list"));
 }
+
+#[test]
+fn claude_auto_mode_rules_merge_without_widening_other_settings() {
+    const STATE: &str = "Footnote State Writes: Treat fno backlog, fno inbox law set, and fno doctor event emit as routine Footnote state writes under ~/.fno. Permit fno agents spawn only to launch a Footnote worker; this does not approve commands run by that worker or remote hosts. Never allow Claude Code settings edits, credentials, OS or GitHub permissions, or sandbox controls.";
+    const ROLES: &str = "Footnote Role Grants: Allow fno agents org promote, fno agents org grant, and fno agents role only for Footnote role changes stored under ~/.fno. This does not grant OS, GitHub, or Claude Code permissions, edit credentials or settings, or disable sandbox controls.";
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        json!({
+            "model": "opus",
+            "permissions": {"allow": ["Bash(cargo test *)"]},
+            "autoMode": {"allow": ["$defaults", "My custom Auto Mode rule", "Footnote State Writes: old rule"]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let result = install_claude_auto_mode_allow(&settings);
+    assert!(result.changed && result.error.is_none(), "{result:?}");
+    let written = read_json(&settings);
+    assert_eq!(written["model"], "opus");
+    assert_eq!(written["permissions"]["allow"][0], "Bash(cargo test *)");
+    assert_eq!(
+        written["autoMode"]["allow"],
+        json!(["$defaults", "My custom Auto Mode rule", STATE, ROLES])
+    );
+    let second = install_claude_auto_mode_allow(&settings);
+    assert!(!second.changed && second.already_present);
+
+    let fresh = dir.path().join("fresh/settings.json");
+    assert!(install_claude_auto_mode_allow(&fresh).changed);
+    assert_eq!(read_json(&fresh)["autoMode"]["allow"][0], "$defaults");
+}
+
+#[test]
+fn claude_auto_mode_rules_refuse_malformed_settings_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    std::fs::write(&settings, "{not json").unwrap();
+
+    let result = install_claude_auto_mode_allow(&settings);
+    assert!(result.error.as_deref().unwrap().contains("malformed"));
+    assert!(!result.changed);
+    assert_eq!(std::fs::read_to_string(settings).unwrap(), "{not json");
+
+    for (name, contents, expected) in [
+        (
+            "auto-mode-shape.json",
+            r#"{"autoMode":[]}"#,
+            "`autoMode` is not an object",
+        ),
+        (
+            "allow-shape.json",
+            r#"{"autoMode":{"allow":"keep this"}}"#,
+            "`autoMode.allow` is not an array",
+        ),
+    ] {
+        let settings = dir.path().join(name);
+        std::fs::write(&settings, contents).unwrap();
+        let result = install_claude_auto_mode_allow(&settings);
+        assert!(result.error.as_deref().unwrap().contains(expected));
+        assert!(!result.changed);
+        assert_eq!(std::fs::read_to_string(settings).unwrap(), contents);
+    }
+}
