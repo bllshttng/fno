@@ -39,7 +39,7 @@ const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 const STORE_EXTS: [&str; 3] = ["db", "sqlite", "sqlite3"];
 /// Directories the store walk never enters: the rebuildable cargo cache
 /// (3 GB on the measured machine) and the bundles themselves.
-const SKIP_DIRS: [&str; 2] = ["cargo-build", "cutover"];
+const SKIP_DIRS: [&str; 3] = ["cargo-build", "cache/cargo-build", "cutover"];
 const DEFAULT_IDLE_SECS: u64 = 600;
 const IDLE_POLL: Duration = Duration::from_secs(2);
 const COPY_PAGES_PER_STEP: i32 = 256;
@@ -276,11 +276,11 @@ fn discover_stores(root: &Path, bundle: &Path) -> Vec<PathBuf> {
             };
             let path = entry.path();
             if kind.is_dir() {
-                let skip = dir == root
-                    && path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| SKIP_DIRS.contains(&n));
+                let skip = path
+                    .strip_prefix(root)
+                    .ok()
+                    .and_then(Path::to_str)
+                    .is_some_and(|relative| SKIP_DIRS.contains(&relative));
                 if !skip && path != bundle {
                     walk(root, bundle, &path, out);
                 }
@@ -404,7 +404,7 @@ fn print_save_receipt(root: &Path, out: &Path, manifest: &Manifest) {
         root.display()
     );
     println!(
-        "  rsync -a --exclude '/cargo-build/' {root}/ <target>:{root}/",
+        "  rsync -a --exclude '/cargo-build/' --exclude '/cache/cargo-build/' {root}/ <target>:{root}/",
         root = root.display()
     );
     println!("  fno agents incident cutover restore {}", out.display());
@@ -584,6 +584,7 @@ mod tests {
         std::fs::write(src.path().join("db/notes.db"), "plain text").unwrap();
         std::fs::write(src.path().join("graph.db"), "").unwrap();
         make_store(&src.path().join("cargo-build/cache.db"), 1);
+        make_store(&src.path().join("cache/cargo-build/cache.db"), 1);
 
         let out = bundle.path().join("b");
         let manifest = snapshot(src.path(), &out, 4).unwrap();

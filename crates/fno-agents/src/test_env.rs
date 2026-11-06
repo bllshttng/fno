@@ -215,7 +215,7 @@ pub fn neutralise(
     out.insert(
         "CARGO_BUILD_BUILD_DIR".into(),
         format!(
-            "{}/.fno/cargo-build/{{workspace-path-hash}}",
+            "{}/.fno/cache/cargo-build/{{workspace-path-hash}}",
             home.to_string_lossy()
         ),
     );
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(
             out.get("CARGO_BUILD_BUILD_DIR").unwrap(),
             format!(
-                "{}/.fno/cargo-build/{{workspace-path-hash}}",
+                "{}/.fno/cache/cargo-build/{{workspace-path-hash}}",
                 home.to_string_lossy()
             )
             .as_str()
