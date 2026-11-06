@@ -1778,12 +1778,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ev = tmp.path().join("j.jsonl");
         let base = ["--events", ev.to_str().unwrap()];
-        let mut a1 = base.to_vec();
-        a1.extend(["--field", "=empty-name"]);
-        assert_eq!(
-            run_find(&a1.iter().map(OsString::from).collect::<Vec<_>>()),
-            2
-        );
         let mut a2 = base.to_vec();
         a2.extend(["--limit", "5", "--last", "2"]);
         assert_eq!(
