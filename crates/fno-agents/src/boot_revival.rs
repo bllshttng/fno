@@ -1311,6 +1311,9 @@ mod tests {
         assert_eq!(row.role_grantor.as_deref(), Some("operator"));
         // A live rival on the territory refuses the stamp: the manifest
         // stays set aside and the row keeps no role.
+        // The re-vacate renames the restored manifest aside; the fixture
+        // replays that before the rival leg.
+        std::fs::remove_file(&live).unwrap();
         std::fs::write(leads.join("zed.md.vacated"), manifest).unwrap();
         crate::registry_store::seed_raw(
             &registry,
