@@ -292,3 +292,17 @@ fn claude_auto_mode_rules_refuse_malformed_settings_unchanged() {
         assert_eq!(std::fs::read_to_string(settings).unwrap(), contents);
     }
 }
+
+#[test]
+fn claude_settings_path_respects_config_dir_override() {
+    let home = Path::new("/home/worker");
+    let account = Path::new("/var/tmp/claude-account");
+    assert_eq!(
+        claude_settings_path(home, None),
+        home.join(".claude/settings.json")
+    );
+    assert_eq!(
+        claude_settings_path(home, Some(account)),
+        account.join("settings.json")
+    );
+}

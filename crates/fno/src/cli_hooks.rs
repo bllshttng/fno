@@ -622,8 +622,16 @@ pub fn install_claude_worktree_remove(
     }
 }
 
+fn claude_settings_path(home: &Path, config_dir: Option<&Path>) -> PathBuf {
+    config_dir
+        .map(|path| path.join("settings.json"))
+        .unwrap_or_else(|| home.join(".claude/settings.json"))
+}
+
 pub fn user_claude_settings_path() -> PathBuf {
-    home().join(".claude/settings.json")
+    let home = home();
+    let config_dir = env_path("CLAUDE_CONFIG_DIR");
+    claude_settings_path(&home, config_dir.as_deref())
 }
 
 pub fn claude_auto_mode_allow_status(settings: &Path) -> Result<bool, String> {

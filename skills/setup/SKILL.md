@@ -43,7 +43,7 @@ fno config setup run --dry-run --json
 
 Apply nothing of kind `approve`. An approve needs a person.
 
-The `claude-auto-mode` approve step adds Footnote's narrow state and role rules to `~/.claude/settings.json`. The person must approve that step; unattended runs may report it as proposed but do not write Claude Code settings, credentials, or sandbox options.
+The `claude-auto-mode` approve step adds Footnote's narrow state and role rules to the active Claude Code user settings file (`CLAUDE_CONFIG_DIR/settings.json` when that variable is set, otherwise `~/.claude/settings.json`). The person must approve that step; unattended runs may report it as proposed but do not write Claude Code settings, credentials, or sandbox options.
 
 ## Read the report
 

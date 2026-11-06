@@ -384,7 +384,7 @@ pub const STEPS: &[Step] = &[
         layer: Layer::Global,
         kind: Kind::Approve,
         question: "Add Footnote's Auto Mode rules to Claude Code user settings?",
-        effect: "merges narrow ~/.fno state and role rules into ~/.claude/settings.json, preserving $defaults and all other settings; does not change permissions, credentials, or sandbox settings",
+        effect: "merges narrow state and role rules into the active Claude Code user settings file (CLAUDE_CONFIG_DIR/settings.json or ~/.claude/settings.json), preserving $defaults and all other settings; does not change permissions, credentials, or sandbox settings",
     },
     Step {
         id: "worktree-policy",
