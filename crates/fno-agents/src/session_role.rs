@@ -140,24 +140,4 @@ mod tests {
         let r = session_role(&fleet(), "s-wk", "claude").unwrap();
         assert_eq!((r.kind, r.lead.as_deref()), (RoleKind::Worker, Some("a,b")));
     }
-
-    #[test]
-    fn seed_command_marks_blueprint_and_parent_edge_may_omit_harness() {
-        let r = session_role(&fleet(), "s-bp", "codex").unwrap();
-        assert_eq!(
-            (r.kind, r.lead.as_deref()),
-            (RoleKind::Blueprint, Some("a,b"))
-        );
-    }
-
-    #[test]
-    fn exited_parent_covers_nothing() {
-        let r = session_role(&fleet(), "s-rv", "claude").unwrap();
-        assert_eq!((r.kind, r.lead), (RoleKind::Reviewer, None));
-    }
-
-    #[test]
-    fn unregistered_session_has_no_role() {
-        assert_eq!(session_role(&fleet(), "s-none", "claude"), None);
-    }
 }

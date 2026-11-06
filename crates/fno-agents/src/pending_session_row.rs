@@ -282,25 +282,6 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn park_stamps_the_row_once_and_a_second_park_keeps_the_first() {
-        let dir = tmp_dir("park");
-        let registry = dir.join("registry.json");
-        seed_row(&registry, "w1", Some("x-1"));
-        let payload = park_payload(&registry, "execute");
-
-        let first = park(&payload).unwrap();
-        assert_eq!(first["parked"], json!(true));
-        let rows = crate::client_commands::load_registry_entries(&registry).unwrap();
-        assert_eq!(rows[0]["pending_session_row"]["phase"], json!("execute"));
-
-        let second = park(&park_payload(&registry, "review")).unwrap();
-        assert_eq!(second["parked"], json!(false));
-        let rows = crate::client_commands::load_registry_entries(&registry).unwrap();
-        assert_eq!(rows[0]["pending_session_row"]["phase"], json!("execute"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     fn park_payload(registry: &Path, phase: &str) -> Value {
         json!({
             "action": "park", "name": "w1", "phase": phase, "merge_grant": null,

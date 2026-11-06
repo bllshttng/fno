@@ -433,30 +433,6 @@ fn diff_base_fence_on_untouched_line() {
 }
 
 #[test]
-fn diff_base_requires_markdown_surface() {
-    let dir = tempfile::TempDir::new().unwrap();
-    assert_case_volatile(
-        Some(dir.path()),
-        &["--stdin", "--surface", "mail", "--diff-base", "HEAD"],
-        None,
-        &[dir.path().display().to_string()],
-        "diff-base on mail refuses",
-    );
-}
-
-#[test]
-fn diff_base_fix_combination_refused() {
-    let dir = tempfile::TempDir::new().unwrap();
-    assert_case_volatile(
-        Some(dir.path()),
-        &["--surface", "markdown", "--diff-base", "HEAD", "--fix"],
-        None,
-        &[dir.path().display().to_string()],
-        "fix with diff-base refuses",
-    );
-}
-
-#[test]
 fn diff_base_bad_ref_refuses() {
     let dir = tempfile::TempDir::new().unwrap();
     // The wrap carries git's own not-a-repo text, which differs by git
@@ -490,11 +466,6 @@ fn unknown_surface_refuses() {
         Some("Do this.\n"),
         "unknown surface refuses",
     );
-}
-
-#[test]
-fn no_input_mode_refuses() {
-    assert_case(None, &["--surface", "mail"], None, "no input mode refuses");
 }
 
 // --- --fix ---

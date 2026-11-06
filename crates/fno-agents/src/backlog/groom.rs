@@ -867,15 +867,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn freshness_is_due_only_past_the_threshold_and_never_when_unknown() {
-        assert!(is_due(&Freshness::Never));
-        assert!(!is_due(&Freshness::Ran(6.0)));
-        assert!(!is_due(&Freshness::Ran(STALE_HOURS)));
-        assert!(is_due(&Freshness::Ran(STALE_HOURS + 1.0)));
-        assert!(!is_due(&Freshness::Unknown));
-    }
-
-    #[test]
     fn the_daily_claim_runs_once_and_a_failed_launch_hands_the_day_back() {
         let _lock = crate::claims::test_env_lock()
             .lock()

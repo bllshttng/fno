@@ -693,19 +693,30 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { break };
                     let gen = keeper.client_gen.fetch_add(1, Ordering::SeqCst) + 1;
+                    // First come, first seated - claimed HERE, in the accept
+                    // loop. Accept order is FIFO; the per-connection threads'
+                    // start order is the scheduler's. Claiming inside the
+                    // thread let two connections accepted back to back race
+                    // for the empty seat, and a probe winning that race took
+                    // the subscriber seat from the real subscriber (the mux
+                    // server at spawn or re-adoption), then cleared it on
+                    // exit - the keeper read an empty seat for the pane's
+                    // whole life and ended itself at the idle bound.
+                    let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut is_subscriber = slot.is_none();
+                    if is_subscriber {
+                        match stream.try_clone() {
+                            Ok(clone) => *slot = Some((gen, clone)),
+                            // No descriptor to write to, no seat: serve as a
+                            // probe instead of losing the accept loop.
+                            Err(_) => is_subscriber = false,
+                        }
+                    }
+                    drop(slot);
                     let keeper = Arc::clone(&keeper);
                     std::thread::Builder::new()
                         .name("fno-keeper-cli".into())
                         .spawn(move || {
-                            // First come, first seated: an empty subscriber
-                            // slot takes THIS connection.
-                            let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
-                            let is_subscriber = slot.is_none();
-                            if is_subscriber {
-                                *slot =
-                                    Some((gen, stream.try_clone().expect("clone keeper client")));
-                            }
-                            drop(slot);
                             serve_client(&keeper, stream, gen, is_subscriber);
                         })
                         .expect("spawn keeper client thread");
@@ -742,12 +753,18 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
             })?;
     }
 
-    // The socket-dir-gone thread. Why the DIRECTORY and not the socket
-    // path: a hand-off renames the socket file out of mux/panes and the
-    // keeper must keep running, while nothing in fno ever removes the
-    // panes/ dir - a gone dir means the whole state root went, so no
-    // server can ever reach us again. Two consecutive gone polls with no
-    // subscriber seated end the child.
+    // The orphan thread. Why the DIRECTORY and not the socket path: a
+    // hand-off renames the socket file out of mux/panes and the keeper must
+    // keep running, while nothing in fno ever removes the panes/ dir - a
+    // gone dir means the whole state root went, so no server can ever reach
+    // us again. Two consecutive gone polls with no subscriber seated end the
+    // child. The second road needs no gone dir: an empty subscriber seat is
+    // the no-server signal, and a seat empty past the idle bound (default
+    // 1 h) means the re-adoption this keeper waits for stopped coming -
+    // the throwaway-mux orphan, where a scratch mux's helpers kill the
+    // server and leave the panes dir standing (142 keepers measured waiting
+    // like that on one machine). Re-adoption is a seconds-scale event, so
+    // an hour of empty seat is unambiguous.
     {
         let keeper = Arc::clone(&keeper);
         let sock = cfg.sock.clone();
@@ -755,8 +772,27 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
             .name("fno-keeper-orphan".into())
             .spawn(move || {
                 let poll = orphan_poll();
+                let idle = orphan_idle_bound();
                 let dir = sock.parent().map(|p| p.to_path_buf());
                 let mut gone_streak = 0u32;
+                let mut last_seated = std::time::Instant::now();
+                // eprintln! panics on a write error, which would end this
+                // watcher and leave the keeper running: the server that held
+                // our stderr pipe is dead. writeln! to stderr and ignore the
+                // result.
+                let finish = |reason: &str| {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "fno-agents-worker: keeper_orphaned sock={} reason={reason} child_pid={child_pid}",
+                        sock.display()
+                    );
+                    if child_pid == 0 {
+                        // No child exit will ever wake the main thread;
+                        // exit directly.
+                        std::process::exit(1);
+                    }
+                    end_child(child_pid);
+                };
                 loop {
                     std::thread::sleep(poll);
                     let gone = match dir.as_deref().map(std::fs::symlink_metadata) {
@@ -771,27 +807,19 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .is_some();
+                    if seated {
+                        last_seated = std::time::Instant::now();
+                    } else if last_seated.elapsed() >= idle {
+                        finish("idle_no_subscriber");
+                        return;
+                    }
                     if gone && !seated {
                         gone_streak += 1;
                     } else {
                         gone_streak = 0;
                     }
                     if gone_streak >= 2 {
-                        // eprintln! panics on a write error, which would end
-                        // this watcher and leave the keeper running: the
-                        // server that held our stderr pipe is dead. writeln!
-                        // to stderr and ignore the result.
-                        let _ = writeln!(
-                            std::io::stderr(),
-                            "fno-agents-worker: keeper_orphaned sock={} reason=socket_dir_gone child_pid={child_pid}",
-                            sock.display()
-                        );
-                        if child_pid == 0 {
-                            // No child exit will ever wake the main thread;
-                            // exit directly.
-                            std::process::exit(1);
-                        }
-                        end_child(child_pid);
+                        finish("socket_dir_gone");
                         return;
                     }
                 }
@@ -854,6 +882,20 @@ fn orphan_poll() -> std::time::Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|ms| *ms > 0)
         .unwrap_or(30_000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// The orphan thread's idle bound: `FNO_KEEPER_ORPHAN_MAX_IDLE_MS`, a
+/// positive integer of milliseconds; default 3,600,000 (1 h). While the
+/// subscriber seat sits empty past it, no server is coming back and the
+/// keeper ends itself and its child. An unset or bad value means the
+/// default.
+fn orphan_idle_bound() -> std::time::Duration {
+    let ms = std::env::var("FNO_KEEPER_ORPHAN_MAX_IDLE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(3_600_000);
     std::time::Duration::from_millis(ms)
 }
 

@@ -914,7 +914,11 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
 /// equals this session's own. One join: name -> row -> session id, the same
 /// join the liveness reader does for the same holder shape. Rows come from
 /// the caller, so the join stays testable without a store.
-fn handover_row_is_ours(entries: &[RegistryEntry], worker: &str, own_sid: Option<&str>) -> bool {
+pub(crate) fn handover_row_is_ours(
+    entries: &[RegistryEntry],
+    worker: &str,
+    own_sid: Option<&str>,
+) -> bool {
     let Some(own) = own_sid.map(str::trim).filter(|s| !s.is_empty()) else {
         return false;
     };

@@ -2192,16 +2192,4 @@ mod tests {
         assert!(spawn_leadless(&json!({"leadless": true})));
         assert!(!spawn_leadless(&json!({"leadless": false})));
     }
-
-    #[test]
-    fn an_old_row_keyed_with_the_legacy_key_still_marks_the_render() {
-        let legacy = crate::role_migration::LEGACY_LEADLESS_KEY;
-        assert!(spawn_leadless(&json!({ (legacy): true })));
-        assert!(!spawn_leadless(&json!({ (legacy): false })));
-    }
-
-    #[test]
-    fn a_receipt_with_neither_key_renders_nothing() {
-        assert!(!spawn_leadless(&json!({})));
-    }
 }

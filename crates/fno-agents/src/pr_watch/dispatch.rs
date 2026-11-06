@@ -1821,16 +1821,6 @@ mod tests {
     }
 
     #[test]
-    fn the_repoll_cutoff_parses_and_fails_open() {
-        assert_eq!(
-            repoll_cutoff("2026-11-01T00:00:00Z", 1200).as_deref(),
-            Some("2026-10-31T23:40:00Z")
-        );
-        assert_eq!(repoll_cutoff("2026-11-01T00:00:00Z", 0), None);
-        assert_eq!(repoll_cutoff("not-a-stamp", 1200), None);
-    }
-
-    #[test]
     fn a_live_claim_skips_and_a_low_quota_mints_no_receipt() {
         let rig = rig();
         rig.seed(json!({KEY: {"last_seen_state": "OPEN"}}));

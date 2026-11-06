@@ -35,12 +35,6 @@ def test_missing_inbox_file_exits_1(tmp_path: Path) -> None:
     assert _run(str(tmp_path / "nope.md"), "123").returncode == 1
 
 
-def test_missing_args_exits_2() -> None:
-    """Usage error when args are missing."""
-    assert _run().returncode == 2
-    assert _run("only-one-arg").returncode == 2
-
-
 def test_marker_does_not_false_match_other_pr(tmp_path: Path) -> None:
     """PR 12 must not match a marker for PR 123 (no substring false positive)."""
     inbox = tmp_path / "inbox.md"

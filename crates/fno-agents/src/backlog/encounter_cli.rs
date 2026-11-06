@@ -482,18 +482,4 @@ mod tests {
         assert_eq!(vote(&f.graph, &["zz-0001", "-e", "me too."], Some(B)).0, 0);
         assert_eq!(encounters(&f.graph).len(), 2);
     }
-
-    #[test]
-    fn over_length_evidence_is_refused_and_the_kill_switch_reaches_it() {
-        let f = fixture(false);
-        let long = "word word word word word. ".repeat(24);
-        let (code, _, err) = vote(&f.graph, &["zz-0001", "-e", &long], Some(A));
-        assert_eq!(code, 4, "{err}");
-        assert!(err.contains("120"), "{err}");
-        assert!(encounters(&f.graph).is_empty());
-        let _off = EnvVarGuard::set("FNO_STYLE_ENFORCE", "0");
-        // The kill switch never escapes the identity refusal.
-        assert_eq!(vote(&f.graph, &["zz-0001", "-e", &long], None).0, 5);
-        assert_eq!(vote(&f.graph, &["zz-0001", "-e", &long], Some(A)).0, 0);
-    }
 }

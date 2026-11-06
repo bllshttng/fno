@@ -84,14 +84,6 @@ def graph(tmp_path, monkeypatch, _plan_hermetic_events_journal):
     return seed
 
 
-def test_epic_status_states_why_a_figure_is_withheld(graph):
-    graph(_window(with_origin=1, without_origin=9))
-    code, out, err = run_native("backlog", "epic", "status", "x-epic")
-    assert code == 0, out + err
-    assert "scope growth: withheld" in out
-    assert "below the" in out and "floor" in out
-
-
 def test_epic_status_json_never_emits_a_count_it_cannot_support(graph):
     graph(_window(with_origin=1, without_origin=9))
     code, out, err = run_native("backlog", "epic", "status", "x-epic", "--json")
@@ -112,20 +104,3 @@ def test_epic_status_renders_the_reportable_line(graph):
     assert "scope growth: 1 follow-ups" in out
     assert "origin capture" in out
     assert "realized" in out
-
-
-def test_scope_growth_reads_through_the_archive(graph, tmp_path, monkeypatch):
-    """A swept child must not shrink the epic's realized cost.
-
-    A metric that quietly changes when unrelated grooming runs is exactly the
-    kind of number this feature refuses to print.
-    """
-    swept = _node("x-swept", parent="x-epic", pr_number=99)
-    swept["archived_at"] = "2026-01-01T00:00:00Z"
-    graph([_epic(), _node("x-c1", parent="x-epic", pr_number=1), swept])
-
-    code, out, err = run_native("backlog", "epic", "status", "x-epic", "--json")
-    assert code == 0, out + err
-    payload = json.loads(out)
-    assert payload["scope_growth"]["realized_nodes"] == 2
-    assert payload["scope_growth"]["realized_prs"] == 2

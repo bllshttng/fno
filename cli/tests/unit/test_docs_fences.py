@@ -14,7 +14,6 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-import pytest
 import yaml
 
 _DOCS = Path(__file__).resolve().parents[3] / "docs"

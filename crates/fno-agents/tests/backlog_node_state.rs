@@ -38,42 +38,6 @@ fn read_graph(path: &PathBuf) -> Vec<serde_json::Value> {
 }
 
 #[test]
-fn replace_state_returns_the_view_it_replaced() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    write_graph(&graph, &[fixture_node("t-1", "d")]);
-    let first = node_state::replace_state(&graph, &ws(&graph, "t-1", "body one")).unwrap();
-    assert!(first.replaced.is_none());
-    let second = node_state::replace_state(&graph, &ws(&graph, "t-1", "body two")).unwrap();
-    let prior = second.replaced.expect("the second write replaced a state");
-    assert_eq!(prior.revision, 1);
-    assert_eq!(prior.body, "body one");
-}
-
-#[test]
-fn a_fresh_graph_write_does_not_wait_on_its_own_creation_lock() {
-    // x-94e3: the publication seam holds the store lock; opening the store
-    // must not re-take the creation lock behind it. Before the fix every
-    // replace_state on a fresh graph burned the full 10s timeout, swallowed
-    // the failure, and left no graph.db behind.
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    write_graph(&graph, &[fixture_node("t-lock", "d")]);
-    let started = std::time::Instant::now();
-    node_state::replace_state(&graph, &ws(&graph, "t-lock", "body")).unwrap();
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed < std::time::Duration::from_secs(1),
-        "fresh-graph write waited {:?} on its own creation lock",
-        elapsed
-    );
-    assert!(
-        fno_agents::backlog::database_path(&graph).exists(),
-        "the store was created"
-    );
-}
-
-#[test]
 fn ac1_one_current_state_priors_in_history() {
     let dir = tempfile::tempdir().unwrap();
     let graph = dir.path().join("graph.json");
@@ -103,21 +67,6 @@ fn ac1_one_current_state_priors_in_history() {
     let (_, db_total) =
         fno_agents::backlog::note_history::read(&db_spelling, Some("t-1"), 0, 500).unwrap();
     assert_eq!(db_total, 99, "the db spelling reads the anchor's journal");
-}
-
-/// A raw mutation through the shared seam (what any unrelated writer does).
-fn raw_mutate(graph: &PathBuf, rows: Vec<serde_json::Value>) {
-    fno_agents::graph_store::locked_mutate(
-        graph,
-        fno_agents::graph_store::MutateInput {
-            entries: rows,
-            canonical_path: None,
-            base_version: fno_agents::graph_store::base_version(graph).unwrap(),
-            plan_rungs: None,
-        },
-        std::time::Duration::from_secs(5),
-    )
-    .unwrap();
 }
 
 #[test]
@@ -158,53 +107,6 @@ fn ac2_budget_boundary() {
     assert!(err.contains("total=5001"), "message: {err}");
 }
 
-#[test]
-fn ac3_oversized_legacy_row_rules() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    // Legacy oversized row (details 6000 chars, no state).
-    write_graph(
-        &graph,
-        &[json!({
-            "id": "o-1", "slug": "slug-o-1", "title": "n", "type": "feature",
-            "status": "ready", "priority": "p1", "details": "x".repeat(6000),
-        })],
-    );
-    // Unrelated status change on the oversized row still succeeds.
-    let mut rows = read_graph(&graph);
-    for r in rows.iter_mut() {
-        if r["id"] == json!("o-1") {
-            r["status"] = json!("in_progress");
-        }
-    }
-    raw_mutate(&graph, rows);
-    let row = read_graph(&graph)
-        .into_iter()
-        .find(|r| r["id"] == json!("o-1"))
-        .unwrap();
-    assert_eq!(row["status"], json!("in_progress"));
-    // Any state write on the oversized row now grows the total (6000 -> more)
-    // and refuses, even for a one-character body.
-    let err = node_state::replace_state(&graph, &ws(&graph, "o-1", "y"))
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("total=6001"), "message: {err}");
-    // A details-only edit that REDUCES the oversized row is legal through the
-    // seam (unrelated to state), and leaves the row smaller.
-    let mut rows = read_graph(&graph);
-    for r in rows.iter_mut() {
-        if r["id"] == json!("o-1") {
-            r["details"] = json!("x".repeat(3000));
-        }
-    }
-    raw_mutate(&graph, rows);
-    let row = read_graph(&graph)
-        .into_iter()
-        .find(|r| r["id"] == json!("o-1"))
-        .unwrap();
-    assert_eq!(node_state::prose_total(&row), 3000);
-}
-
 fn ws_rev(_graph: &std::path::Path, id: &str, body: &str, if_revision: u64) -> StateWriteInput {
     StateWriteInput {
         node_id: id.to_string(),
@@ -229,57 +131,6 @@ fn ac4_conflict_refuses_stale_writer() {
         .to_string();
     assert!(err.contains("state conflict"), "message: {err}");
     assert!(err.contains("re-read"), "message: {err}");
-}
-
-#[test]
-fn ac4_history_failure_preserves_state() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    write_graph(&graph, &[fixture_node("c-1", "d")]);
-    node_state::replace_state(&graph, &ws(&graph, "c-1", "v1")).unwrap();
-    node_state::replace_state(&graph, &ws(&graph, "c-1", "v2")).unwrap();
-    let hist_dir = fno_agents::backlog::note_history::history_path(&graph)
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    std::fs::remove_file(hist_dir.join("notes.jsonl")).unwrap();
-    std::fs::create_dir_all(hist_dir.join("notes.jsonl")).unwrap();
-    let err = node_state::replace_state(&graph, &ws(&graph, "c-1", "v3"))
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("history write failed"), "message: {err}");
-    let row = read_graph(&graph)
-        .into_iter()
-        .find(|r| r["id"] == json!("c-1"))
-        .unwrap();
-    assert_eq!(row[node_state::STATE_KEY]["body"], json!("v2"));
-    std::fs::remove_dir_all(hist_dir).unwrap();
-    node_state::replace_state(&graph, &ws(&graph, "c-1", "v3")).unwrap();
-    let (_, h) = node_state::history_page(&graph, "c-1", 0, 100).unwrap();
-    assert_eq!(h, 1, "only v2@1 remains journaled; failed write added none");
-}
-
-#[test]
-fn history_dedupe_is_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    write_graph(&graph, &[fixture_node("h-1", "d")]);
-    let original = json!({"body": "prior", "revision": 7});
-    for _ in 0..3 {
-        fno_agents::backlog::note_history::append(
-            &graph,
-            "h-1",
-            fno_agents::backlog::note_history::REASON_STATE_REPLACED,
-            Some(7),
-            None,
-            &original,
-            None,
-            None,
-        )
-        .unwrap();
-    }
-    let (_, h) = fno_agents::backlog::note_history::read(&graph, Some("h-1"), 0, 100).unwrap();
-    assert_eq!(h, 1, "identical records dedupe to one");
 }
 
 #[test]

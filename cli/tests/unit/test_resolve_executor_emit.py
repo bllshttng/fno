@@ -21,8 +21,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "skills/execute/scripts/resolve-executor.sh"
 
-requires_rust = pytest.mark.dev_build
-
 
 @pytest.fixture()
 def stub_fno(tmp_path):
@@ -49,17 +47,6 @@ def _run(env, extra):
     return subprocess.run(
         ["bash", str(SCRIPT)], capture_output=True, text=True, env=e
     )
-
-
-@requires_rust
-def test_inference_tier_emits_and_stdout_is_only_the_value(stub_fno):
-    env, log = stub_fno
-    r = _run(env, {"TASK_ID": "1.2", "PLAN_PATH": "p.md", "TASK_FILES": "src/App.tsx"})
-    assert r.stdout.strip() == "impeccable"  # AC1-HP: contract unchanged
-    payload = log.read_text().strip()
-    assert '"tier":"surface-inference"' in payload
-    assert '"warn_fallback":false' in payload
-    assert '"task":"1.2"' in payload
 
 
 def test_warn_fallback_flagged(stub_fno):

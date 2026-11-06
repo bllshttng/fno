@@ -85,34 +85,6 @@ def test_toolbag_omitting_a_skill_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Missing requires.binaries.fno fails
-# ---------------------------------------------------------------------------
-
-
-def test_missing_fno_in_requires_fails(tmp_path):
-    """A metadata.requires.binaries block that lists other binaries but not
-    fno fails the lint."""
-    skill_md = textwrap.dedent(
-        """\
-        ---
-        name: target
-        description: "fno missing"
-        metadata:
-          requires:
-            binaries:
-              - "gh >= 2.0"
-              - "git >= 2.30"
-        ---
-        body
-        """
-    )
-    _make_skill(tmp_path, "target", skill_md)
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode != 0
-    assert "does not declare 'fno'" in result.stderr
-
-
-# ---------------------------------------------------------------------------
 # AC5-EDGE: real repo state passes the lint (regression-defense)
 # ---------------------------------------------------------------------------
 

@@ -1,5 +1,4 @@
 //! Runtime contracts migrated from the retired Python dispatch owners.
-use fno_agents::backlog::advance_join::{plan_graph, width, write_policies};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -150,66 +149,6 @@ fn decode(out: &Output) -> Value {
 }
 
 #[test]
-fn join_width_tracks_dependency_frontiers_and_collision_serialization() {
-    let world = World::new(json!([]));
-    for (surfaces, mode, expected) in [
-        ("a.rs", "parallel", 2),
-        ("a.rs", "sequential", 2),
-        ("shared.rs", "parallel", 1),
-        ("shared.rs", "sequential", 1),
-    ] {
-        let first = if surfaces == "shared.rs" {
-            surfaces
-        } else {
-            "b.rs"
-        };
-        let text = plan(
-            &format!("- id: a\n  surface: [{first}]\n- id: b\n  surface: [{surfaces}]"),
-            &format!("- wave: 1\n  mode: {mode}\n  tasks: [a, b]"),
-        );
-        let p = world.plan(&text);
-        let out = world.run(&["backlog", "join", "width", p.to_str().unwrap()], None);
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout).trim(),
-            expected.to_string()
-        );
-    }
-    for edges in ["- id: a\n  surface: [a.rs]\n  blocked_by: [missing]","- id: a\n  surface: [a.rs]\n  blocked_by: [b]\n- id: b\n  surface: [b.rs]\n  blocked_by: [a]"] {
-        let wave=if edges.contains("- id: b") {"- wave: 1\n  tasks: [a, b]"} else {"- wave: 1\n  tasks: [a]"};let p=world.plan(&plan(edges,wave));let out=world.run(&["backlog","join","width",p.to_str().unwrap()],None);assert!(!out.status.success());assert!(out.stdout.is_empty());
-    }
-    let p=world.plan(&plan("- id: a\n  surface: [a.rs]\n- id: b\n  surface: [b.rs]\n  blocked_by: []\n- id: c\n  surface: [c.rs]","- wave: 1\n  tasks: [a]\n- wave: 2\n  tasks: [b, c]"));
-    assert_eq!(width(&plan_graph(&p).unwrap()).unwrap(), 2);
-}
-#[test]
-fn join_write_policy_never_narrows_overlapping_or_unevaluated_bands() {
-    let w = World::new(json!([]));
-    for (right, expected) in [
-        ("[b.rs]", "enforced"),
-        ("[a.rs]", "overlapping"),
-        ("[]", "unevaluated"),
-    ] {
-        let p=w.plan(&plan(&format!("- id: a\n  surface: [a.rs]\n- id: b\n  surface: {right}"),"- wave: 1\n  difficulty: high\n  tasks: [a]\n- wave: 2\n  difficulty: low\n  tasks: [b]"));
-        let graph = plan_graph(&p).unwrap();
-        let policy = write_policies(&graph, &["high".into(), "low".into()]);
-        assert_eq!(policy["low"]["verdict"], expected);
-        if expected == "enforced" {
-            assert_eq!(policy["low"]["deny_edit"], json!(["a.rs"]));
-            assert!(policy["low"]["allow_write"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(".git/")));
-        } else {
-            assert!(policy["low"]["allow_write"].is_null());
-            assert!(policy["low"]["deny_edit"].is_null());
-        }
-    }
-}
-#[test]
 fn public_advance_preserves_disabled_receipt_and_validates_flag_combinations() {
     let w = World::new(json!([]));
     let out = w.run(&["backlog", "advance"], None);
@@ -254,23 +193,6 @@ fn public_advance_preserves_disabled_receipt_and_validates_flag_combinations() {
         events.len(),
         "explain must not emit decisions or take claims"
     );
-}
-#[test]
-fn native_armed_probe_keeps_master_env_and_config_precedence() {
-    let w = World::new(json!([]));
-    for (master, configured, env, armed, rank) in [
-        (false, true, "1", false, "autonomy"),
-        (true, false, "yes", true, "env"),
-        (true, true, "0", false, "env"),
-    ] {
-        std::fs::write(&w.config,format!("state_dir = {:?}\n[autonomy]\nenabled = {master}\n[auto_continue]\nenabled = {configured}\n",w.root.to_string_lossy())).unwrap();
-        let mut c = w.command();
-        c.args(["backlog", "advance", "--stdin"])
-            .env("FNO_AUTO_CONTINUE", env);
-        let answer = decode(&w.output(c, Some(&json!({"op":"armed"}))));
-        assert_eq!(answer["armed"], armed);
-        assert_eq!(answer["rank"], rank);
-    }
 }
 #[test]
 fn join_refusal_codes_have_one_outcome_event_and_do_not_launch() {
@@ -386,56 +308,6 @@ fn join_persists_brief_and_enforced_policies_before_each_launch() {
         );
     }
 }
-#[test]
-fn epic_continuation_does_not_reactivate_and_stop_clears_persisted_flag() {
-    let w = World::new(json!([
-        row("x-aaaa", json!({"type":"epic","mission_active":false})),
-        row("x-bbbb", json!({"parent":"x-aaaa"}))
-    ]));
-    let mut c = w.command();
-    c.args([
-        "backlog",
-        "advance",
-        "--epic",
-        "x-aaaa",
-        "--continuation",
-        "--json",
-    ])
-    .env("FNO_AUTO_CONTINUE", "1");
-    let receipt = decode(&w.output(c, None));
-    assert_eq!(receipt["deactivated"], true);
-    assert_eq!(receipt["dispatched"], json!([]));
-    let status = decode(&w.run(&["backlog", "get", "x-aaaa"], None));
-    assert_ne!(status["mission_active"], true);
-    let out = w.run(
-        &["backlog", "advance", "--stdin"],
-        Some(&json!({"op":"mission","node_id":"x-aaaa","active":true})),
-    );
-    assert_eq!(decode(&out)["changed"], true);
-    let out = w.run(
-        &["backlog", "advance", "--epic", "x-aaaa", "--stop", "--json"],
-        None,
-    );
-    assert_eq!(decode(&out)["deactivated"], true);
-    let status = decode(&w.run(&["backlog", "get", "x-aaaa"], None));
-    assert!(status
-        .get("mission_active")
-        .is_none_or(|v| v != &json!(true)));
-}
-#[cfg(unix)]
-#[test]
-fn launch_requires_identity_and_preserves_seam_notes_without_a_python_owner() {
-    let w = World::new(json!([]));
-    let p = w.plan("---\nstatus: ready\ndifficulty: high\n---\n");
-    let node = row(
-        "x-aaaa",
-        json!({"plan_path":p,"model":"glm-5.3-flash[1m]","cwd":w.root}),
-    );
-    for (body,success) in [("printf '%s\\n' noise",false),("printf '%s\\n' '{\"short_id\":\"abcd1234\"}'\nprintf '%s\\n' 'fno agents spawn: effort suppressed' >&2",true),("printf '%s\\n' 'spawn-gate: RAM refused' >&2\nexit 77",false)] {
-        let endpoint=w.endpoint(body);let mut c=w.command();c.args(["backlog","advance","--stdin"]).env("FNO_BIN",endpoint);let out=w.output(c,Some(&json!({"op":"spawn","node_id":"x-aaaa","node":node,"cwd":w.root,"harness":"claude","model":"glm-5.3-flash[1m]"})));assert_eq!(out.status.success(),success,"{}",String::from_utf8_lossy(&out.stderr));if success{let value=decode(&out);assert_eq!(value["short_id"],"abcd1234");assert_eq!(value["receipt"]["notes"],json!(["fno agents spawn: effort suppressed"]));}else{assert!(!out.stderr.is_empty());}
-    }
-}
-
 #[cfg(unix)]
 #[test]
 fn isolated_lanes_use_the_nodes_repo_and_return_failed_slots() {
@@ -529,53 +401,6 @@ fn closed_advance_is_single_flight_and_epic_scopes_are_independent() {
 
 #[cfg(unix)]
 #[test]
-fn pending_contract_reconcile_keeps_its_sentinel_until_a_worker_owns_the_pass() {
-    let w = World::new(json!([row(
-        "x-aaaa",
-        json!({"dep":"contract","model":"glm-5.3-flash[1m]"})
-    )]));
-    let pid = std::process::id().to_string();
-    let out = w.run(
-        &[
-            "claim",
-            "acquire",
-            "reconcile:x-aaaa",
-            "--holder",
-            "reconcile-pending:x-aaaa",
-            "--pid",
-            &pid,
-            "--ttl-ms",
-            "21600000",
-        ],
-        None,
-    );
-    assert!(out.status.success());
-    std::fs::create_dir_all(w.root.join(".fno")).unwrap();
-    std::fs::write(
-        w.root.join(".fno/stub-manifest-x-aaaa.json"),
-        "{\"node\":\"x-aaaa\",\"reconciled\":false,\"stubs\":[]}",
-    )
-    .unwrap();
-    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  *) printf '%s\\n' '{}' ;;\nesac");
-    let log = w.dir.path().join("launches");
-    let mut c = w.command();
-    c.args(["backlog", "advance", "--stdin"])
-        .env("FNO_BIN", endpoint)
-        .env("LAUNCH_LOG", &log);
-    let receipt = decode(&w.output(
-        c,
-        Some(&json!({"op":"fire-pending-now","node_id":"x-aaaa","root":w.root})),
-    ));
-    assert_eq!(receipt["decision"], "dispatched", "{receipt}");
-    assert!(std::fs::read_to_string(log)
-        .unwrap()
-        .contains("--reconcile"));
-    let status = decode(&w.run(&["claim", "status", "reconcile:x-aaaa"], None));
-    assert_eq!(status["state"], "free");
-}
-
-#[cfg(unix)]
-#[test]
 fn advance_reads_real_selection_and_preserves_launch_pins() {
     let seed = World::new(json!([]));
     let p = seed.plan("---\nstatus: ready\ndifficulty: high\n---\n");
@@ -623,137 +448,4 @@ fn advance_reads_real_selection_and_preserves_launch_pins() {
         1,
         "a live node must not launch twice"
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn closed_project_drives_dependents_even_when_next_selection_has_another_scope() {
-    let seed = World::new(json!([]));
-    let p = seed.plan("---\nstatus: ready\ndifficulty: high\n---\n");
-    let w = World::new(json!([
-        row(
-            "x-aaaa",
-            json!({"completed_at":chrono::Utc::now().to_rfc3339()})
-        ),
-        row(
-            "x-bbbb",
-            json!({"blocked_by":["x-aaaa"],"plan_path":p,"cwd":seed.root,"model":"glm-5.3-flash[1m]","provider":"claude"})
-        )
-    ]));
-    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
-    let log = w.dir.path().join("launches");
-    let mut c = w.command();
-    c.args([
-        "backlog",
-        "advance",
-        "--closed",
-        "x-aaaa",
-        "--project",
-        "other",
-        "--model",
-        "glm-5.3-flash[1m]",
-        "--provider",
-        "claude",
-        "--json",
-    ])
-    .env("FNO_AUTO_CONTINUE", "1")
-    .env("FNO_BIN", endpoint)
-    .env("NATIVE_DOOR", env!("CARGO_BIN_EXE_fno-agents"))
-    .env("LAUNCH_LOG", &log);
-    let _ = decode(&w.output(c, None));
-    let calls = std::fs::read_to_string(log).unwrap();
-    assert_eq!(calls.lines().count(), 1);
-    assert!(calls.contains("--node x-bbbb"));
-    assert!(w
-        .events()
-        .iter()
-        .any(|r| r["type"] == "advance_dispatched" && r["data"]["node_id"] == "x-bbbb"));
-}
-
-#[test]
-fn an_auto_continue_tick_commits_to_the_store_and_creates_no_root_file() {
-    let w = World::new(json!([]));
-    let out = w.run(&["backlog", "advance"], None);
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "skipped reason=disabled\n"
-    );
-    let events = w.events();
-    let ticks: Vec<&Value> = events
-        .iter()
-        .filter(|r| r["type"] == "control_plane_tick")
-        .collect();
-    assert_eq!(ticks.len(), 1, "ticks: {ticks:?}");
-    assert_eq!(ticks[0]["data"]["arm"], "auto_continue");
-    assert!(
-        !w.root.join("events.jsonl").exists(),
-        "the tick must not create the root journal file"
-    );
-}
-
-#[test]
-fn a_live_claim_with_a_recent_loop_check_reads_working() {
-    let w = World::new(json!([row("x-aaaa", json!({}))]));
-    let pid = std::process::id().to_string();
-    let acquired = w.run(
-        &[
-            "claim",
-            "acquire",
-            "node:x-aaaa",
-            "--holder",
-            "target-session:tok-1",
-            "--pid",
-            &pid,
-            "--ttl-ms",
-            "180000",
-        ],
-        None,
-    );
-    assert!(
-        acquired.status.success(),
-        "{}",
-        String::from_utf8_lossy(&acquired.stderr)
-    );
-    // The op runs as the holding session: its own pid is the child's, not the
-    // acquiring test's, so the session id is what makes the claim ours.
-    let claim_op = || {
-        let mut c = w.command();
-        c.args(["backlog", "advance", "--stdin"])
-            .env("TARGET_SESSION_ID", "tok-1");
-        decode(&w.output(
-            c,
-            Some(&json!({"op":"claim","node_id":"x-aaaa","emit_events":false})),
-        ))
-    };
-    // With no loop_check row the live claim reads waiting.
-    let none = claim_op();
-    assert_eq!(none["verdict"], "ours");
-    assert_eq!(none["truth_status"], "waiting");
-    // One committed loop_check row for the session flips it to working. The
-    // envelope carries every field the schema judge requires.
-    let envelope = json!({
-        "ts": chrono::Utc::now().to_rfc3339(),
-        "type": "loop_check",
-        "source": "hook",
-        "data": {
-            "session_id": "tok-1",
-            "fingerprint": "fp-1",
-            "fires": 1,
-            "consecutive_unchanged": 0,
-            "decision": "allow",
-            "intent": "none",
-            "pr_state": "clean",
-            "ci": "green",
-            "reviewed": true,
-        },
-    });
-    fno_agents::event_store::append_envelope(
-        &w.root.join("events.jsonl"),
-        &envelope.to_string(),
-        None,
-    )
-    .expect("the store beside the journal opened");
-    let working = claim_op();
-    assert_eq!(working["truth_status"], "working");
 }

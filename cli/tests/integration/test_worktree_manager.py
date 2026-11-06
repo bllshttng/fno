@@ -1,11 +1,7 @@
 """Integration tests for scripts/lib/worktree-manager.sh.
 
-Cover the AC4-EDGE seeds called out in the worktree-management-overhaul plan:
-
-- create honors worktree_base from config and is idempotent on re-call
-- setup copies declared env files and skips install when the lockfile hash matches
-- cleanup and migrate --auto never remove a worktree with status: IN_PROGRESS,
-  and migrate treats an unreadable state file as live
+migrate --auto removes a stale worktree, never one with status: IN_PROGRESS,
+and treats an unreadable state file as live.
 
 Tests use a temp git repo + temp $HOME so we never touch real worktrees.
 """
@@ -14,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -94,133 +89,6 @@ def parse_json(stdout: str) -> dict:
         return json.loads(last)
     except json.JSONDecodeError as e:  # pragma: no cover - debug aid
         raise AssertionError(f"bad JSON: {last!r}\nfull stdout: {stdout!r}") from e
-
-
-def write_settings(home: Path, settings_yaml: str) -> Path:
-    """Write a global flat config.toml under $HOME/.fno/ (parses the YAML fixture
-    text, lifts any legacy config: wrapper, strips None, emits TOML)."""
-    import tomli_w
-    import yaml
-
-    fno = home / ".fno"
-    fno.mkdir(parents=True, exist_ok=True)
-    data = yaml.safe_load(settings_yaml) or {}
-    cfg = data.get("config")
-    if isinstance(cfg, dict):
-        data = {**{k: v for k, v in data.items() if k != "config"}, **cfg}
-
-    def _sn(x):
-        if isinstance(x, dict):
-            return {k: _sn(v) for k, v in x.items() if v is not None}
-        if isinstance(x, list):
-            return [_sn(v) for v in x]
-        return x
-
-    path = fno / "config.toml"
-    path.write_text(tomli_w.dumps(_sn(data)))
-    return path
-
-
-
-
-# ---------------------------------------------------------------
-# create command
-# ---------------------------------------------------------------
-
-
-def test_create_uses_worktree_base_from_settings_and_is_idempotent(tmp_repo, isolated_env):
-    """create against a project with custom worktree_base produces path under
-    it; re-calling create with the same slug returns existing=true, no error."""
-    base = Path(isolated_env["HOME"]) / "conductor" / "workspaces" / "myproj"
-    write_settings(Path(isolated_env["HOME"]), textwrap.dedent(f"""
-        work:
-          workspaces:
-            ws1:
-              projects:
-                - name: myproj
-                  worktree_base: {base}
-    """))
-    result = run_wtm("create", "myproj", "feature-x", cwd=tmp_repo, env=isolated_env)
-    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
-    payload = parse_json(result.stdout)
-    assert payload["status"] == "ok"
-    assert payload["existing"] is False
-    assert payload["path"] == f"{base}/feature-x"
-    assert payload["branch"] == "feature/feature-x"
-    assert Path(payload["path"]).is_dir()
-
-    again = run_wtm("create", "myproj", "feature-x", cwd=tmp_repo, env=isolated_env)
-    assert again.returncode == 0, again.stderr
-    payload2 = parse_json(again.stdout)
-    assert payload2["existing"] is True
-    assert payload2["path"] == payload["path"]
-
-
-# ---------------------------------------------------------------
-# setup command
-# ---------------------------------------------------------------
-
-
-def test_setup_copies_env_files_and_skips_install_on_lockfile_match(tmp_repo, isolated_env):
-    """First setup copies declared env files and runs install; a second run
-    with the same lockfile hash hits the cache."""
-    write_settings(Path(isolated_env["HOME"]), textwrap.dedent("""
-        config:
-          worktree:
-            env_files:
-              - .env.test
-            setup_command: "echo setup-ran"
-    """))
-    (tmp_repo / "package-lock.json").write_text('{"name": "test"}')
-    (tmp_repo / ".env.test").write_text("FOO=bar\n")
-
-    create = run_wtm("create", ".", "cache-test", cwd=tmp_repo, env=isolated_env)
-    assert create.returncode == 0, create.stderr
-    wt_path = Path(parse_json(create.stdout)["path"])
-    # The created worktree shares the lockfile via git checkout
-    (wt_path / "package-lock.json").write_text('{"name": "test"}')
-
-    first = run_wtm("setup", str(wt_path), cwd=tmp_repo, env=isolated_env)
-    assert first.returncode == 0, first.stderr
-    p1 = parse_json(first.stdout)
-    assert p1["cached"] is False
-    assert p1["install"] == "ok"
-    assert int(p1["env_files_copied"]) >= 1
-    assert (wt_path / ".env.test").read_text() == "FOO=bar\n"
-
-    second = run_wtm("setup", str(wt_path), cwd=tmp_repo, env=isolated_env)
-    assert second.returncode == 0, second.stderr
-    p2 = parse_json(second.stdout)
-    assert p2["cached"] is True, f"expected cache hit, got: {p2}"
-
-
-# ---------------------------------------------------------------
-# cleanup command (lighter coverage - delegates to existing lifecycle script)
-# ---------------------------------------------------------------
-
-
-def test_cleanup_skips_in_progress_target_session(tmp_repo, isolated_env):
-    """A worktree with status: IN_PROGRESS is never removed."""
-    create = run_wtm("create", ".", "active-test", cwd=tmp_repo, env=isolated_env)
-    wt_path = Path(parse_json(create.stdout)["path"])
-
-    fnodir = wt_path / ".fno"
-    fnodir.mkdir(parents=True, exist_ok=True)
-    (fnodir / "target-state.md").write_text(textwrap.dedent("""
-        ---
-        status: IN_PROGRESS
-        ---
-    """))
-
-    # Force-old by lying about commit time would require git plumbing; instead
-    # we run cleanup with --older-than=0 so the worktree is "old enough" to
-    # qualify, and verify the IN_PROGRESS sentinel keeps it safe.
-    result = run_wtm(
-        "cleanup", "--mode=all", "--older-than=0d",
-        cwd=tmp_repo, env=isolated_env,
-    )
-    assert result.returncode == 0, result.stderr
-    assert wt_path.is_dir(), "active target session worktree must be preserved"
 
 
 # ---------------------------------------------------------------

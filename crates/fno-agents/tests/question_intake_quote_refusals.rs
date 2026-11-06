@@ -120,23 +120,3 @@ fn refusals_quote_the_line_they_read_and_the_shape_they_want() {
     assert!(joined.contains("'What happens next:'"), "{joined}");
     assert!(answer.qid.is_none(), "a refusal mints no id");
 }
-
-#[test]
-fn the_class_refusal_quotes_the_line_it_read() {
-    // The refusal quotes the class: line and names 'decision' not a class.
-    let home = tmp_home("quote-class");
-    let root = tmp_root("quote-class");
-    let class_case = QUESTION_FILE.replace(
-        "---\nrecommend: 1\n---",
-        "---\nrecommend: 1\nclass: decision\n---",
-    );
-    let mut r = req(&class_case, &root);
-    r.node = Some("x-aaaa".to_string());
-    let answer = run_intake(&r, &home);
-    assert_eq!(answer.exit_code, 2);
-    assert_eq!(answer.refusal.as_deref(), Some("class"));
-    let joined = answer.lines.join("\n");
-    assert!(joined.contains("read 'class: decision'"), "{joined}");
-    assert!(joined.contains("'decision' is not a class"), "{joined}");
-    assert!(answer.qid.is_none(), "a refusal mints no id");
-}

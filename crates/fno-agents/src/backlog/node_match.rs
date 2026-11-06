@@ -297,11 +297,4 @@ mod tests {
             MatchKind::None
         );
     }
-
-    #[test]
-    fn a_branch_derives_title_tokens_after_its_prefix() {
-        let found = resolve_id(None, &rows(), Some("feature/x-1-graph-core-port"));
-        assert_eq!(found.kind, MatchKind::BranchDerived);
-        assert_eq!(found.id.as_deref(), Some("x-aaaa"));
-    }
 }

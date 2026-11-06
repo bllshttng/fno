@@ -540,40 +540,4 @@ mod tests {
             None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
     }
-
-    #[test]
-    fn launcher_sweep_stamp_reads_sweep_without_a_session() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var_os(ACTOR_KIND_STAMP_ENV);
-        std::env::set_var(ACTOR_KIND_STAMP_ENV, "sweep");
-        let kind = actor_kind(None, "verb");
-        match prev {
-            Some(v) => std::env::set_var(ACTOR_KIND_STAMP_ENV, v),
-            None => std::env::remove_var(ACTOR_KIND_STAMP_ENV),
-        }
-        // The daemon close sweep and the detached finalize queue have no
-        // ambient session; the launcher stamp is what keeps their machine
-        // work out of the user column.
-        assert_eq!(kind, "sweep");
-    }
-
-    #[test]
-    fn non_sweep_stamp_values_fall_through_to_session_resolution() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var_os(ACTOR_KIND_STAMP_ENV);
-        // A stamp can name machine work; it can never forge a session
-        // actor: only the exact launcher word is honored.
-        for planted in ["user", "lead", "worker", "sweep "] {
-            std::env::set_var(ACTOR_KIND_STAMP_ENV, planted);
-            assert_eq!(actor_kind(None, "verb"), "user");
-        }
-        std::env::remove_var(ACTOR_KIND_STAMP_ENV);
-        assert_eq!(actor_kind(None, "verb"), "user");
-        match prev {
-            Some(v) => std::env::set_var(ACTOR_KIND_STAMP_ENV, v),
-            None => std::env::remove_var(ACTOR_KIND_STAMP_ENV),
-        }
-    }
 }

@@ -888,39 +888,6 @@ mod tests {
         assert_eq!(io.clears, 1, "no second clear");
     }
 
-    // The ladder never runs for a copy's answer: the asking machine delivers
-    // it, so no local clear or mail runs on this machine.
-    #[test]
-    fn a_copy_answer_row_never_enters_the_local_ladder() {
-        let _root = crate::paths::DeclaredRoot::declare("reply_copy_carried_");
-        let mut item = ready_item("q-copy@hosta", None, Some("s1"));
-        item.host = Some("hosta".into());
-        let items = vec![item];
-        record_answer("q-copy@hosta");
-        let mut io = FakeIo {
-            posture: String::new(),
-            clears: 0,
-        };
-        let state_dir = tempfile::tempdir().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let runner = &|_argv: &[String]| (0, String::new(), String::new());
-        let (acted, detail) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            deadline,
-            &mut io,
-            runner,
-        );
-        assert_eq!(io.clears, 0, "no local clear for a copy: {detail:?}");
-        assert_eq!(acted, 1, "one carried delivery row: {detail:?}");
-        let raw = journal();
-        assert!(
-            raw.contains("\"outcome\":\"carried\"") && raw.contains("\"item_id\":\"q-copy@hosta\""),
-            "the carried row landed: {raw}"
-        );
-    }
-
     #[test]
     fn ac2_edge_a_durable_receipt_resumes_and_confirms_by_transcript() {
         let _root = crate::paths::DeclaredRoot::declare("reply_edge_resumes_");

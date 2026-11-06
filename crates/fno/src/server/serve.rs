@@ -500,9 +500,19 @@ pub(super) async fn serve(
     let accept_conns = conns_alive.clone();
     tokio::spawn(async move {
         let mut next_id: u64 = 1;
+        // Descriptor starvation is a STATE, not an event stream: while it
+        // holds, every accept fails, and a 100ms retry would log ten lines
+        // a second for as long as the famine holds. Log the two edges once,
+        // retry at 1s inside the state, and stay silent between; other
+        // accept errors keep today's 100ms + line.
+        let mut starved = false;
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
+                    if starved {
+                        starved = false;
+                        eprintln!("fno mux: accept recovered after fd exhaustion");
+                    }
                     let id = next_id;
                     next_id += 1;
                     // Peer pid names WHICH client process this is (the e2e
@@ -524,8 +534,21 @@ pub(super) async fn serve(
                     });
                 }
                 Err(e) => {
-                    eprintln!("fno mux: accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Inside the starvation state every error kind stays
+                    // silent; edges log once and the sleep follows the state.
+                    let famine = crate::process_admission::no_descriptor_left(&e);
+                    if famine && !starved {
+                        starved = true;
+                        eprintln!("fno mux: accept starved: {e}; retrying every second until a descriptor frees");
+                    } else if !famine && !starved {
+                        eprintln!("fno mux: accept failed: {e}");
+                    }
+                    tokio::time::sleep(Duration::from_millis(if famine || starved {
+                        1000
+                    } else {
+                        100
+                    }))
+                    .await;
                 }
             }
         }
@@ -557,9 +580,20 @@ pub(super) async fn serve(
     pane_reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut owner_check_tick = tokio::time::interval(Duration::from_secs(1));
     owner_check_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The fleet sidecar refresh: only a client render carried the publish,
+    // so a machine with no attached client stopped writing and the beat read
+    // the file stale after five minutes. The timer keeps an unattended
+    // machine publishing; the throttle inside the publish coalesces this
+    // with the client-render writes.
+    let mut sidecar_tick = tokio::time::interval(crate::workspace_sidecar::every());
+    sidecar_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // `interval`'s first tick is immediate; consume it so the first scan lands
     // after one interval instead of duplicating startup's known-live state.
+    // For the sidecar the same consumption also skips a boot-time write from
+    // a core whose squads have not synced yet (an empty map would clobber a
+    // still-fresh file from the previous server run).
     pane_reap_tick.tick().await;
+    sidecar_tick.tick().await;
 
     // Build-drift retirement: the watch stats its own executable
     // off-loop every 5th tick and retires through Flow::Shutdown only on a
@@ -630,7 +664,7 @@ pub(super) async fn serve(
                 // Deferred repaint requests ride the same 1s pass.
                 core.fire_due_nudges();
                 core.reconcile_grid_sizes();
-                core.follow_portal_viewer_titles();
+                core.refresh_portal_viewer_labels();
                 // Snapshot first: reader completion guarantees all output for
                 // these panes was enqueued before this point. Drain it, then
                 // close exactly the snapshot even if another reader finishes
@@ -791,6 +825,12 @@ pub(super) async fn serve(
                     cause = "owner-gone";
                     break Flow::Shutdown;
                 }
+            }
+            // The sidecar publish rides `agent_rows`; with no client no
+            // render runs, so this timer is the only writer left on an
+            // unattended machine.
+            _ = sidecar_tick.tick() => {
+                core.agent_rows();
             }
             // On grace with no client, shut down owner-bound sandboxes and
             // explicit test servers through Flow::Shutdown. Replicate the

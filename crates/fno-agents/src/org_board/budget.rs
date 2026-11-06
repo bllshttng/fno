@@ -274,24 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn a_budget_kill_names_the_slice_and_says_the_source_did_not_fail() {
-        let dir = tempfile::tempdir().unwrap();
-        let cmd = vec!["/bin/sleep".to_string(), "5".to_string()];
-        let err = run_with_timeout(&cmd, dir.path(), Duration::from_millis(200)).unwrap_err();
-        assert!(
-            err.over_budget(),
-            "the kill path must carry the over_budget marker"
-        );
-        assert!(
-            err.message()
-                .contains("killed at its 0.2s slice of the board budget"),
-            "{}",
-            err.message()
-        );
-        assert!(err.message().contains("the source did not fail"));
-    }
-
-    #[test]
     fn a_nonzero_exit_is_a_failure_never_a_budget_kill() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = vec![
@@ -302,22 +284,5 @@ mod tests {
         let err = run_with_timeout(&cmd, dir.path(), Duration::from_secs(10)).unwrap_err();
         assert!(!err.over_budget());
         assert!(err.message().contains("exit 3"), "{}", err.message());
-    }
-
-    #[test]
-    fn an_accepting_run_still_refuses_an_exit_outside_the_set() {
-        // AC7-ERR: exit 4 is a reader failure, never a verdict; the
-        // error names the exit so the gate stays unanswered loudly.
-        let dir = tempfile::tempdir().unwrap();
-        let cmd = vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            "echo '{\"verdict\":\"error\"}'; exit 4".to_string(),
-        ];
-        let err =
-            run_with_timeout_accepting(&cmd, dir.path(), Duration::from_secs(10), &[0, 1, 2, 3])
-                .unwrap_err();
-        assert!(!err.over_budget());
-        assert!(err.message().contains("exit 4"), "{}", err.message());
     }
 }

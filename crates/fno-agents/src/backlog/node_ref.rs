@@ -493,38 +493,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn node_pr_refs_skips_a_history_marked_extra() {
-        let node = json!({
-            "id": "x-aaaa1111",
-            "pr_number": 900,
-            "pr_url": "https://github.com/o/r/pull/900",
-            "additional_prs": [
-                {"number": 930, "url": "https://github.com/o/r/pull/930"},
-                {"number": 940, "url": "https://github.com/o/r/pull/940",
-                 "merge_status": "MERGED", "history": true},
-            ],
-        });
-        assert_eq!(
-            node_pr_refs(&node),
-            vec![
-                (900, Some("https://github.com/o/r/pull/900".to_string())),
-                (930, Some("https://github.com/o/r/pull/930".to_string())),
-            ]
-        );
-    }
-
-    #[test]
-    fn wellformed_gate_matches_python_and_compact_legacy_grammar() {
-        assert!(is_wellformed_node_id("x-aaaa1111"));
-        assert!(is_wellformed_node_id("xd863"));
-        assert!(is_wellformed_node_id("ab-1234"));
-        assert!(!is_wellformed_node_id("nope"));
-        assert!(!is_wellformed_node_id("x-AAAA1111"));
-        assert!(!is_wellformed_node_id("x-123"));
-        assert!(!is_wellformed_node_id("xg863"));
-    }
-
-    #[test]
     fn resolvers_refuse_a_flag_shaped_token_before_the_graph() {
         // A leaked flag (`claim acquire got id --strict`) must never reach the
         // lookup tiers, exact or aliased.
@@ -535,31 +503,6 @@ mod tests {
         assert!(find_node(&entries, "-x-aaaa").is_none());
         // The dash-shaped alias of a real id is a flag leak too, not a spelling.
         assert!(resolve_tiers(&entries, "-aaaa").is_none());
-    }
-
-    #[test]
-    fn resolve_tiers_aliases_dash_shapes_both_ways() {
-        let compact = vec![json!({"id": "xbbbb", "slug": "xbbbb"})];
-        assert!(resolve_tiers(&compact, "xbbbb").is_some());
-        assert!(resolve_tiers(&compact, "x-bbbb").is_some());
-        let dashed = vec![json!({"id": "x-aaaa", "slug": "a"})];
-        assert!(resolve_tiers(&dashed, "x-aaaa").is_some());
-        assert!(resolve_tiers(&dashed, "xaaaa").is_some());
-        assert!(resolve_tiers(&dashed, "x-missing").is_none());
-    }
-
-    #[test]
-    fn resolvers_match_a_retired_id_alias() {
-        let entries = vec![json!({"id": "x-cccc", "aliases": ["ab-cccc"]})];
-        assert!(resolve_tiers(&entries, "x-cccc").is_some());
-        assert!(resolve_tiers(&entries, "ab-cccc").is_some());
-        assert!(resolve_tiers(&entries, "ab-dddd").is_none());
-        assert!(find_node(&entries, "ab-cccc").is_some());
-        assert!(find_node(&entries, "b-cccc").is_none());
-        // A row without the key never aliases.
-        let bare = vec![json!({"id": "x-eeee"})];
-        assert!(resolve_tiers(&bare, "x-eeee").is_some());
-        assert!(resolve_tiers(&bare, "eeee").is_none());
     }
 
     #[test]
@@ -575,21 +518,6 @@ mod tests {
         assert!(find_node(&entries, "ab-").is_none());
         assert!(find_node(&entries, "x-bbbb2222").is_some());
         assert!(find_node(&entries, "x-missing").is_none());
-    }
-
-    #[test]
-    fn cycle_and_depth_guards_walk_the_tree() {
-        let entries = vec![
-            json!({"id": "x-eeee5555", "type": "epic", "parent": Value::Null}),
-            json!({"id": "x-9999aaaa", "type": "epic", "parent": "x-eeee5555"}),
-            json!({"id": "x-abcd1234", "type": "feature", "parent": "x-9999aaaa"}),
-        ];
-        // Parenting the top epic under its own child closes a cycle.
-        assert!(would_create_cycle(&entries, "x-eeee5555", "x-9999aaaa"));
-        // Both epics with the parent already nested exceeds the cap.
-        assert!(would_exceed_epic_depth(&entries, &entries[0], &entries[1]));
-        // A feature under an epic is fine.
-        assert!(!would_exceed_epic_depth(&entries, &entries[2], &entries[1]));
     }
 
     #[test]

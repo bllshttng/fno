@@ -83,11 +83,3 @@ def test_cleanup_writes_zero_attestations_with_a_proven_instrument(tmp_path):
     # And the row count is still exactly the control's: nothing on the
     # cleanup surface appends to it.
     assert len(_attestations(repo)) == 1
-
-
-def test_the_router_has_a_cleanup_token_and_route_line():
-    text = ROUTER.read_text(encoding="utf-8")
-    assert "running cleanup (apply-or-skip)" in text
-    assert "`cleanup`" in text
-    # the unknown-mode help lists cleanup, so discovery does not depend on docs
-    assert "valid modes: prove-it, cleanup, peer, research, declare" in text

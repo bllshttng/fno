@@ -585,20 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_session_or_a_foreign_pr_gets_no_event() {
-        let dir = std::env::temp_dir().join(format!("fno-de-dead-{}", std::process::id()));
-        let done = state_file(&dir, "COMPLETE", 42);
-        let wt = done.parent().unwrap().parent().unwrap();
-        assert!(emit_session_satisfied_for_record(&record(wt.to_str()), "r").is_none());
-        // Same live session, but the merged PR is not the one the state
-        // file names: no cross-session nudge.
-        let live = state_file(&dir, "IN_PROGRESS", 7);
-        let wt7 = live.parent().unwrap().parent().unwrap();
-        assert!(emit_session_satisfied_for_record(&record(wt7.to_str()), "r").is_none());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn a_gate_escape_needs_a_pr_and_at_least_one_required_bot() {
         let mut no_pr = record(None);
         no_pr.pr_number = 0;

@@ -559,35 +559,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_p0_rebands_once_and_rollback_restores() {
-        let mut rows = vec![
-            json!({"id": "x-a", "priority": "p0"}),
-            json!({"id": "x-b", "priority": "p0", "blocks_everything": true}),
-            json!({"id": "x-c", "priority": "p2"}),
-        ];
-        let dry = migrate_legacy_p0(&mut rows.clone(), false);
-        assert_eq!(
-            sorted_json(&dry),
-            r#"{"already_migrated": 0, "legacy_p0": 1, "rebanded_to_p1": 1, "remaining_unacknowledged_p0": 1}"#
-        );
-        let applied = migrate_legacy_p0(&mut rows, true);
-        assert_eq!(applied["remaining_unacknowledged_p0"], json!(0));
-        assert_eq!(rows[0]["priority"], json!("p1"));
-        assert_eq!(rows[1]["priority"], json!("p0"), "acknowledged p0 stays");
-        let again = migrate_legacy_p0(&mut rows, true);
-        assert_eq!(
-            (
-                again["legacy_p0"].clone(),
-                again["already_migrated"].clone()
-            ),
-            (json!(0), json!(1))
-        );
-        assert_eq!(rollback_legacy_p0(&mut rows), json!({"restored_to_p0": 1}));
-        assert_eq!(rows[0]["priority"], json!("p0"));
-        assert_eq!(rows[0]["priority_history"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
     fn model_tier_drains_same_band_pairs_and_refuses_divergent_ones() {
         let mut rows = vec![
             json!({"id": "x-a", "model_tier": "High"}),

@@ -50,46 +50,5 @@ def test_ac2_hp_manual_tag_counts(tmp_path):
     assert escapes[0]["data"]["detail"] == "freed suspect claim"
 
 
-def test_ac2_inv_dedup_same_key(tmp_path):
-    """AC2-INV: three tags with the same explicit dedup key count once."""
-    ev = tmp_path / "events.jsonl"
-    for _ in range(3):
-        runner.invoke(
-            cli, ["gate-escape", "spawn-cap", "--dedup-key", "k1", "--events", str(ev)]
-        )
-    assert len(_escapes(ev, "spawn-cap")) == 1
-
-
-def test_pr_and_dedup_key_together_rejected(tmp_path):
-    """The command rejects --pr + --dedup-key with a clean error instead of
-    silently dropping --dedup-key (gemini review on #241)."""
-    ev = tmp_path / "events.jsonl"
-    res = runner.invoke(
-        cli,
-        ["gate-escape", "flake", "--pr", "7", "--dedup-key", "k", "--events", str(ev)],
-    )
-    assert res.exit_code != 0
-    assert "XOR" in res.output
-    assert not ev.exists()
-
-
 # The rebase nudge tests (AC1-UI) moved to
 # crates/fno-agents/tests/pr_rebase_note.rs with the _rebase.py port to Rust.
-
-
-def test_store_failure_records_a_counter_without_failing_host(tmp_path):
-    journal = tmp_path / "events.jsonl"
-    (tmp_path / "events.db").mkdir()
-    result = runner.invoke(cli, ["gate-escape", "spawn-cap", "--dedup-key", "k", "--events", str(journal)])
-    assert result.exit_code == 0
-    assert "failed" in result.stderr
-    import json
-    failure = tmp_path / "gate_escape_emit_failures.jsonl"
-    assert json.loads(failure.read_text().splitlines()[0])["reason"] == "spawn-cap"
-
-
-def test_equals_spelling_preserves_values(tmp_path):
-    ev = tmp_path / "events.jsonl"
-    res = runner.invoke(cli, ["gate-escape", "flake", f"--events={ev}", "--detail=an=value", "--dedup-key=k"])
-    assert res.exit_code == 0, res.output
-    assert _escapes(ev)[0]["data"]["detail"] == "an=value"

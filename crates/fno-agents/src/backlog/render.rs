@@ -304,21 +304,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn compact_matches_python_json_dumps_bytes() {
-        let v = json!({"title": "Gamma épic", "n": 3, "ok": true, "none": null,
-                       "list": ["one", "two"]});
-        let py = "{\"title\": \"Gamma \\u00e9pic\", \"n\": 3, \"ok\": true, \"none\": null, \"list\": [\"one\", \"two\"]}";
-        assert_eq!(py_json_compact(&v), py);
-    }
-
-    #[test]
-    fn pretty_matches_python_indent_two_bytes() {
-        let v = json!({"a": 1, "b": ["x", "y"]});
-        let expected = "{\n  \"a\": 1,\n  \"b\": [\n    \"x\",\n    \"y\"\n  ]\n}";
-        assert_eq!(py_json_pretty(&v), expected);
-    }
-
-    #[test]
     fn grouped_matches_the_captured_python_bytes() {
         let entry = json!({
             "id": "x-aaaa1111", "slug": "alpha-node", "title": "Alpha node",

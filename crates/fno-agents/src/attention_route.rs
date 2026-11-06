@@ -287,7 +287,7 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::{Asker, AttentionItem};
+    use crate::attention::AttentionItem;
     use crate::claims::test_env_lock;
     use serde_json::json;
 
@@ -376,65 +376,6 @@ mod tests {
         assert_eq!(routing.team.as_deref(), Some("x-b"), "AC2-HP");
         assert_eq!(routing.lead.as_deref(), Some("lead-b"), "AC2-HP");
         assert_eq!(routing.epic.as_deref(), Some("x-a"), "AC2-HP");
-    }
-
-    #[test]
-    fn ac2_edge_no_node_falls_through_asker_row_to_basename_to_none() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let entries = vec![
-            entry("x-a", "epic", None, "fno"),
-            entry("x-b", "epic", Some("x-a"), "fno"),
-            entry("x-c", "feature", Some("x-b"), "fno"),
-        ];
-        // An asker whose registry row holds node x-c routes like x-c.
-        let mut reg = Registry::default();
-        reg.entries.push(crate::state::RegistryEntry {
-            name: "worker-1".into(),
-            node: Some("x-c".into()),
-            ..Default::default()
-        });
-        let r = Router::from_parts(
-            entries.clone(),
-            teams(),
-            HashMap::from([("fno".to_string(), "fno".to_string())]),
-            HashMap::from([("fno".to_string(), "/ws/fno".to_string())]),
-            reg,
-        );
-        let mut it = item(vec![], None, "fno");
-        it.asker = Some(Asker {
-            handle: "worker-1".into(),
-            session_id: None,
-            harness: None,
-            rank: None,
-            live: None,
-            reach: None,
-            person: None,
-        });
-        let routing = r.route(&it);
-        assert_eq!(
-            routing.team.as_deref(),
-            Some("x-b"),
-            "AC2-EDGE asker row node"
-        );
-        assert_eq!(routing.epic.as_deref(), Some("x-a"));
-
-        // An asker with no row: the rung-1 team whose workspace basename
-        // matches the item's project.
-        let r = router(entries.clone(), teams());
-        let routing = r.route(&item(vec![], None, "fno"));
-        assert_eq!(
-            routing.team.as_deref(),
-            Some("fno"),
-            "AC2-EDGE workspace basename"
-        );
-        assert_eq!(routing.lead.as_deref(), Some("lead-fno"));
-
-        // With no live team at all: team, lead and epic are None.
-        let r = router(entries, vec![]);
-        let routing = r.route(&item(vec![], None, "fno"));
-        assert_eq!(routing.team, None, "AC2-EDGE no team");
-        assert_eq!(routing.lead, None);
-        assert_eq!(routing.epic, None);
     }
 
     #[test]

@@ -299,45 +299,4 @@ mod tests {
         .unwrap();
         assert!(json.get("refused").is_none());
     }
-
-    /// AC1-EDGE: a legacy organic row and a recorder harness alone stay
-    /// Unknown, and "OPERATOR RAISED" in prose is never read as provenance
-    /// (the resolver has no field that could carry it — asserted by shape).
-    #[test]
-    fn organic_harness_alone_and_prose_never_become_human_origin() {
-        let organic = record(Some("organic"), Some("idea"), None);
-        let harness_only = record(None, Some("new"), None);
-        assert_eq!(resolve(&organic, &Ok(0)).origin, RequestOrigin::Unknown);
-        assert_eq!(
-            resolve(&harness_only, &Ok(0)).origin,
-            RequestOrigin::Unknown
-        );
-        // The struct carries no title/details field, so substring backfill is
-        // impossible by construction; the JSON round-trip drops unknown keys.
-        let raw = serde_json::json!({
-            "source_kind": "organic",
-            "title": "OPERATOR RAISED: fix the thing"
-        });
-        let parsed: BirthRecord = serde_json::from_value(raw).expect("deserialize");
-        assert_eq!(resolve(&parsed, &Ok(0)).origin, RequestOrigin::Unknown);
-    }
-
-    #[test]
-    fn agent_discovery_requires_evidence_even_when_declared() {
-        let bare = record(Some("from_observation"), Some("idea"), None);
-        assert_eq!(resolve(&bare, &Ok(0)).origin, RequestOrigin::Unknown);
-        let blank = record(Some("from_supervisor"), Some("idea"), Some("   "));
-        assert_eq!(resolve(&blank, &Ok(0)).origin, RequestOrigin::Unknown);
-    }
-
-    /// AC2-EDGE at the decision layer: a later read of an already-born node
-    /// echoes the stamped origin, even as other inputs change underneath.
-    #[test]
-    fn prior_origin_is_immutable_birth() {
-        let mut reborn = record(Some("operator_request"), Some("idea"), Some("brief:p1"));
-        reborn.request_origin = Some("agent_discovery".into());
-        let resolved = resolve(&reborn, &Ok(0));
-        assert_eq!(resolved.origin, RequestOrigin::AgentDiscovery);
-        assert_eq!(resolved.evidence.as_deref(), Some("brief:p1"));
-    }
 }

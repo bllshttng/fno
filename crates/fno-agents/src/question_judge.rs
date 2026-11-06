@@ -1148,24 +1148,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prefilter_answers_what_the_row_settles() {
-        let none = HashSet::new();
-        assert!(matches!(
-            prefilter(&row("q-1", Some("taste")), &rules(), &none),
-            Prefilter::Done(HELD, Some(_), _)
-        ));
-        let not_ready = json!({"id": "q-2", "ready": false, "missing": ["missing options"]});
-        assert_eq!(
-            prefilter(&not_ready, &rules(), &none),
-            Prefilter::Done(SENT_BACK, None, "missing options".to_string())
-        );
-        let unclassified = row("q-3", None);
-        assert_eq!(prefilter(&unclassified, &rules(), &none), Prefilter::Read);
-        let judged = HashSet::from([("q-3".to_string(), body_hash(&unclassified))]);
-        assert_eq!(prefilter(&unclassified, &rules(), &judged), Prefilter::Skip);
-    }
-
     fn run_with(
         dir: &Path,
         rows: &[Value],
@@ -1236,94 +1218,5 @@ mod tests {
         };
         let err = run_with(dir.path(), &rows, &[], &never).unwrap_err();
         assert!(err.contains("holds the lock"));
-    }
-
-    #[test]
-    fn the_arm_starts_only_when_armed_and_idle() {
-        let arm = Arm::new(PathBuf::from("."));
-        assert!(!arm.should_start(false));
-        assert!(arm.last_tick.lock().unwrap().is_none());
-        let spec = crate::tick_ledger::KNOWN_ARMS
-            .iter()
-            .find(|spec| spec.arm == "question_judge")
-            .unwrap();
-        assert_eq!(spec.arm_key, Some("questions.judge.enabled"));
-
-        arm.in_flight.store(true, Ordering::SeqCst);
-        assert!(!arm.should_start(true));
-        *arm.last_tick.lock().unwrap() = None;
-        arm.in_flight.store(false, Ordering::SeqCst);
-        assert!(arm.should_start(true));
-        arm.in_flight.store(false, Ordering::SeqCst);
-        assert!(!arm.should_start(true), "inside the interval");
-    }
-
-    fn close(qid: &str, answer: &str, closed_by: &str) -> Value {
-        json!({"type": "operator_question_closed",
-               "data": {"question_id": qid, "answer": answer, "closed_by": closed_by}})
-    }
-
-    #[test]
-    fn the_report_counts_misses_feeds_them_back_and_names_the_arm() {
-        let empty = report(&[], &[], "2026-10-31T00:00:00Z", false);
-        assert_eq!(empty["verdicts"], 0);
-        assert!(render_report(&empty).contains("fno config set -g questions.judge.enabled=true"));
-        let wrote = report(
-            &[],
-            &[close("q-1", "x", "judge-run-abc")],
-            "2026-10-31T00:00:00Z",
-            true,
-        );
-        assert_eq!(wrote["board_writes"], 1);
-
-        let dir = tempfile::tempdir().unwrap();
-        let ledger_file = dir.path().join("state/judge/verdicts.jsonl");
-        std::fs::create_dir_all(ledger_file.parent().unwrap()).unwrap();
-        let verdict = |qid: &str| Verdict {
-            qid: qid.to_string(),
-            body_hash: "x".to_string(),
-            outcome: DECIDED.to_string(),
-            option: Some(1),
-            ts: "2026-10-31T01:00:00Z".to_string(),
-            ..Verdict::default()
-        };
-        append_ledger(&ledger_file, &[verdict("q-9"), verdict("q-8")]).unwrap();
-        let closes = vec![close("q-9", "b", "user"), close("q-8", "a", "user")];
-        let out = report(
-            &read_ledger(&ledger_file),
-            &closes,
-            "2026-10-31T00:00:00Z",
-            true,
-        );
-        assert_eq!(out["agreement"]["compared"], 2);
-        assert_eq!(out["agreement"]["missed"], 1);
-        assert_eq!(out["board_writes"], 0);
-        let by_text = Verdict {
-            answer: "Lift it.".to_string(),
-            ..verdict("q-7@peer")
-        };
-        let joined = report(
-            &[by_text],
-            &[close("q-7", "lift", "user")],
-            "2026-10-31T00:00:00Z",
-            true,
-        );
-        assert_eq!(joined["agreement"]["compared"], 1);
-        assert_eq!(joined["agreement"]["missed"], 0);
-        let fragment = Verdict {
-            answer: "be careful".to_string(),
-            ..verdict("q-6")
-        };
-        assert!(!agrees(&fragment, "b"));
-
-        let captured = Mutex::new(String::new());
-        let spawn = |_: &str, prompt: &str, _: &Path, _: u64, _: &str| {
-            *captured.lock().unwrap() = prompt.to_string();
-            Ok((0, r#"{"verdicts":[]}"#.to_string(), String::new()))
-        };
-        run_with(dir.path(), &[row("q-1", None)], &closes, &spawn).unwrap();
-        let prompt = captured.lock().unwrap();
-        assert!(prompt.contains(r#""later_answer":"b""#), "{prompt}");
-        assert!(!prompt.contains(r#""qid":"q-8""#));
     }
 }

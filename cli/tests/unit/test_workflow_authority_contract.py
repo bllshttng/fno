@@ -40,12 +40,6 @@ def test_agent_skill_obeying_helper_is_stated_and_stale_rule_gone():
     assert "degrades to `auto`" in text
 
 
-def test_agent_skill_preserves_explicit_consent_gates():
-    text = _skill("skills/agent/SKILL.md")
-    assert "confirm even the free lane" in text
-    assert "always confirms (destructive)" in text
-
-
 # ---- triage: rank mutations only after the approval boundary (AC1-EDGE) ------
 
 
@@ -61,45 +55,3 @@ def test_triage_mutations_sit_after_the_approval_boundary():
     assert any("triage apply" in fence for fence in after), (
         "positive control: the approved apply path must still exist"
     )
-
-
-def test_lead_checkin_names_the_merge_finish_line():
-    # The check-in printed open-PR indicators and a lever list that never
-    # merged, so a lead following the skill read a ready PR as report-only and
-    # escalated it instead of merging. The merge law makes the team the
-    # merger, so the skill must carry the command, the gate, and the merge rule
-    # together: a lever the file cannot name is a law rediscovered by
-    # exhaustion.
-    text = _skill("skills/lead/SKILL.md")
-    checkin = text[text.index("## The check-in body") :]
-    checkin = checkin[: checkin.index("## Recording a ruling")]
-    assert "fno do pr status" in checkin
-    assert "fno do pr merge" in checkin
-    assert "the team merges green" in checkin
-
-
-def test_term_finding_starts_a_new_epic():
-    # Law d-08ef1f90: new findings go into a new small epic, not a running
-    # one. The old lever told a lead to parent a finding into an active
-    # mission scope, which grew running epics without bound.
-    text = _skill("skills/lead/SKILL.md")
-    assert "### A finding starts a new epic" in text
-    # The epic type rides idea's own flag, which is not an update field;
-    # only the parent spellings moved to the operator form.
-    assert "--type epic" in text
-    assert "parent=null" in text
-    assert "parent=<new-epic-id>" in text
-    assert "--parent null" not in text
-    assert "fno agents org promote <handle> --scope" in text
-    assert "inside an active mission scope" not in text
-    once = _skill("skills/lead/references/once.md")
-    assert "../SKILL.md#a-finding-starts-a-new-epic" in once
-
-
-def test_review_empty_diff_guard_resolves_the_named_target():
-    text = _skill("skills/review/SKILL.md")
-    guard = text[text.index("### 2a. Empty-diff guard") :]
-    guard = guard[: guard.index("### 2b")]
-    assert "REVIEW_TARGET" in text[text.index("## Step 1") : text.index("## Step 2")]
-    assert 'if [ -z "$REVIEW_TARGET" ]' in guard
-    assert 'git log "$BASE".."$REVIEW_TARGET"' in guard

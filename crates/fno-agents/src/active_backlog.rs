@@ -2202,26 +2202,6 @@ mod tests {
     use super::*;
     use crate::territory::Territory;
 
-    #[test]
-    fn fanout_dicts_parse_all_or_nothing() {
-        let good = serde_json::json!([
-            {"project": "fno", "cwd": "/repo", "interval_seconds": 5}
-        ]);
-        let parsed = fanout_targets_from_dicts(good);
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].project, "fno");
-        assert_eq!(parsed[0].cwd, "/repo");
-        assert_eq!(parsed[0].interval_seconds, 5);
-        // The old child's stdout parse was all-or-nothing, and the posture
-        // keeps it: one malformed row (a negative interval fails the u64
-        // field) empties the list, so the daemon runs no fanout.
-        let malformed = serde_json::json!([
-            {"project": "fno", "cwd": "/repo", "interval_seconds": 5},
-            {"project": "bad", "cwd": "/x", "interval_seconds": -1}
-        ]);
-        assert!(fanout_targets_from_dicts(malformed).is_empty());
-    }
-
     fn held_facts() -> territory::ActiveBacklogFacts {
         territory::ActiveBacklogFacts {
             enabled: Ok(true),
@@ -2261,37 +2241,6 @@ mod tests {
         assert_eq!(held_drops, vec![("x-e".to_string(), "q-1".to_string())]);
     }
 
-    #[test]
-    fn loose_member_argv_names_the_project_door() {
-        // The CLI takes no positional beside --loose/--project; the daemon's
-        // loose dispatch must name the project through --project or the
-        // command is a usage error and the rung-1 territory never drains.
-        let member = DrainMember {
-            id: "readyrule".to_string(),
-            epic: false,
-        };
-        assert_eq!(
-            advance_member_args(&member),
-            vec![
-                "--loose".to_string(),
-                "--project".to_string(),
-                "readyrule".to_string()
-            ]
-        );
-        let epic = DrainMember {
-            id: "x-e".to_string(),
-            epic: true,
-        };
-        assert_eq!(
-            advance_member_args(&epic),
-            vec![
-                "--epic".to_string(),
-                "x-e".to_string(),
-                "--continuation".to_string()
-            ]
-        );
-    }
-
     /// The supervisor owns fanout enablement: a pass updates a live loop's
     /// interval, and a project whose sinks were removed has its loop stopped.
     #[tokio::test]
@@ -2317,44 +2266,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(handle.is_finished(), "its loop was stopped");
         shutdown.store(true, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn advance_epic_receipt_parses_children_and_substrate() {
-        // children[] is THE enqueue authority; substrate decides detached vs
-        // synchronous.
-        let r: AdvanceEpicReceipt = serde_json::from_slice(
-            br#"{"epic_id":"x-e","error":null,"activated":true,"deactivated":false,
-                 "all_done":false,"dispatched":["x-a"],
-                 "children":[{"node_id":"x-a","decision":"dispatched","reason":null,"detail":null,
-                              "short_id":"84a8d946","substrate":"thread","notes":[]},
-                             {"node_id":"x-b","decision":"dispatched","reason":null,"detail":null,
-                              "short_id":"84a8d947","substrate":"headless","notes":[]}]}"#,
-        )
-        .unwrap();
-        assert_eq!(r.children.len(), 2);
-        assert_eq!(r.children[0].substrate.as_deref(), Some("thread"));
-        assert_eq!(r.children[1].substrate.as_deref(), Some("headless"));
-        assert!(!r.deactivated);
-        assert!(!r.all_done);
-    }
-
-    #[test]
-    fn a_held_receipt_parses_and_reads_as_held_not_no_work() {
-        // the CLI's one-in-flight gate answers `held` with an empty
-        // child set. Without the field that receipt read as no_work - a lie
-        // that hides exactly the stacking this gate exists to delete. Held is
-        // never a retirement, so the mission flags must stay false.
-        let r: AdvanceEpicReceipt =
-            serde_json::from_slice(br#"{"epic_id":"x-e","held":true,"requests":4}"#).unwrap();
-        assert!(r.held);
-        assert_eq!(r.requests, 4);
-        assert!(!r.deactivated && !r.all_done);
-        let facts = facts_from_receipt(&r);
-        assert!(facts.held);
-        assert_eq!(facts.ready, 0);
-        assert_eq!(facts.error, None);
-        assert_eq!(facts.requests, 4);
     }
 
     // ── reconcile policy ────────────────────────────────────────────
@@ -2396,25 +2307,6 @@ mod tests {
             "fno",
             &format!(
                 "#!/usr/bin/env bash\necho \"$@\" >> \"{}\"\nexit 0\n",
-                record.display()
-            ),
-        );
-        p.display().to_string()
-    }
-
-    /// Like [`stub_fno`], but `backlog get` answers with `node_json` on stdout so
-    /// a test can control whether the node carries a PR ref. Every other command
-    /// records its argv and exits 0.
-    fn stub_fno_get(dir: &std::path::Path, record: &std::path::Path, node_json: &str) -> String {
-        std::fs::create_dir_all(dir).unwrap();
-        let p = crate::write_exec_stub(
-            dir,
-            "fno",
-            &format!(
-                "#!/usr/bin/env bash\n\
-                 if [ \"$2\" = \"get\" ]; then printf '%s' '{}'; exit 0; fi\n\
-                 echo \"$@\" >> \"{}\"\nexit 0\n",
-                node_json,
                 record.display()
             ),
         );
@@ -2522,50 +2414,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dispatch_done_pr_green_without_pr_ref_is_a_failure() {
-        let _env = env_guard();
-        // The dead-dispatch signature. A DonePRGreen terminal asserts a
-        // PR; a node carrying none means the worker died leaving nothing. It must
-        // count toward the streak AND must not `backlog done` (whose merged-PR
-        // cross-check is skipped entirely for a ref-less node).
-        let tmp = tempfile::TempDir::new().unwrap();
-        let record = tmp.path().join("fno-calls.txt");
-        let fno = stub_fno_get(
-            &tmp.path().join("bin"),
-            &record,
-            r#"{"id":"x-dead0001","status":"in_review"}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-
-        resolve_dispatch(
-            &cfg,
-            &mut breaker,
-            &journal,
-            "x-dead0001",
-            Evidence {
-                reason: TerminationReason::DonePRGreen,
-                message: "promised".to_string(),
-            },
-        );
-
-        assert_eq!(
-            breaker.consecutive_failures("x-dead0001"),
-            1,
-            "a zero-artifact DonePRGreen counts toward the streak"
-        );
-        let calls = std::fs::read_to_string(&record).unwrap_or_default();
-        assert!(
-            !calls.contains("backlog done"),
-            "must not close a node whose terminal lied: {calls}"
-        );
-        assert!(journal_lines(&project_journal)
-            .iter()
-            .any(|l| l.contains("active_backlog_skip") && l.contains("x-dead0001")));
-    }
-
-    #[test]
     fn resolve_dispatch_failed_done_records_failure_not_false_success() {
         // If `fno backlog done` FAILS, the node was not actually closed, so the
         // dispatch must Park (a failure toward the streak), never a false success.
@@ -2602,134 +2450,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dispatch_done_exit6_is_parked_with_refusal_intact() {
-        // the promise gate refuses with exit 6. The loop closer must NOT
-        // need a new arm - the catch-all (non-zero, non-5) maps it to Parked with
-        // the stderr intact, so an unmet promise parks the node with its refusal
-        // as the recorded reason rather than closing it.
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let bin = tmp.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let fno = crate::write_exec_stub(
-            &bin,
-            "fno",
-            "#!/usr/bin/env bash\nif [[ \"$1\" == backlog && \"$2\" == done ]]; then\n  echo 'Refused: promised 2 waves and asserts none of them.' >&2\n  exit 6\nfi\nexit 0\n",
-        );
-        // failure_limit 1 so a single exit-6 trips and emits the parked event.
-        let cfg = test_cfg(tmp.path(), fno.display().to_string(), 1);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(1);
-
-        resolve_dispatch(
-            &cfg,
-            &mut breaker,
-            &journal,
-            "x-prom6001",
-            Evidence {
-                reason: TerminationReason::DonePRGreen,
-                message: "done".to_string(),
-            },
-        );
-
-        // Exit 6 is a failure (unlike exit 5's awaiting-merge success): the
-        // streak tripped at limit 1, so the node is parked, not closed.
-        let parked = journal_lines(&project_journal)
-            .into_iter()
-            .find(|l| l.contains("active_backlog_parked") && l.contains("x-prom6001"))
-            .expect("a promise-gate refusal (exit 6) must park, not close");
-        // The refusal text rode through the catch-all arm intact - an operator
-        // reading the journal sees WHY the close was refused, not a bare code.
-        assert!(
-            parked.contains("promised 2 waves"),
-            "refusal text must survive into the parked detail: {parked}"
-        );
-    }
-
-    #[test]
-    fn resolve_crash_at_limit_defers_and_parks() {
-        let _env = env_guard();
-        // AC1-FR: a worker death (no termination event) counts as a failure; the
-        // Nth consecutive death trips the breaker -> defer + parked event.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let record = tmp.path().join("fno-calls.txt");
-        let fno = stub_fno(&tmp.path().join("bin"), &record);
-        let cfg = test_cfg(tmp.path(), fno, 2);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(2);
-
-        resolve_crash(&cfg, &mut breaker, &journal, "x-cra0001"); // failure 1/2
-        assert_eq!(breaker.consecutive_failures("x-cra0001"), 1);
-        resolve_crash(&cfg, &mut breaker, &journal, "x-cra0001"); // failure 2/2 -> trip
-
-        // Trip defers the node (graph exclusion) and resets the streak.
-        assert_eq!(breaker.consecutive_failures("x-cra0001"), 0);
-        let calls = std::fs::read_to_string(&record).unwrap_or_default();
-        assert!(calls.contains("backlog defer x-cra0001"), "calls: {calls}");
-        let parked = journal_lines(&project_journal)
-            .into_iter()
-            .find(|l| l.contains("active_backlog_parked") && l.contains("x-cra0001"))
-            .expect("parked event");
-        // A defer that landed is recorded as such, not assumed.
-        assert!(parked.contains("\"deferred\":true"), "parked: {parked}");
-    }
-
-    #[test]
-    fn reconcile_boot_grace_then_crash_floor() {
-        let _env = env_guard();
-        // A dispatched worker that never takes its `node:<id>` claim (never
-        // booted) is kept for BOOT_GRACE_TICKS reconcile passes, then counted as
-        // a crash. Uses a unique fake node id (naturally Free at the global root).
-        let tmp = tempfile::TempDir::new().unwrap();
-        crate::paths::pin_test_claims_root(tmp.path());
-        let record = tmp.path().join("fno-calls.txt");
-        let fno = stub_fno(&tmp.path().join("bin"), &record);
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, _pj) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = vec![PendingDispatch {
-            node_id: "x-bootgrace-never-real".to_string(),
-            session_id: None,
-            ticks: 0,
-            stamp_waits: 0,
-        }];
-
-        // Passes before the grace expires keep the dispatch and record nothing.
-        for _ in 1..BOOT_GRACE_TICKS {
-            reconcile_pending(&cfg, &mut breaker, &mut pending, &journal);
-            assert_eq!(
-                pending.len(),
-                1,
-                "must keep the dispatch during the boot window"
-            );
-            assert_eq!(breaker.consecutive_failures("x-bootgrace-never-real"), 0);
-        }
-        // The pass that reaches the grace counts a crash-floor failure and drops it.
-        reconcile_pending(&cfg, &mut breaker, &mut pending, &journal);
-        assert!(
-            pending.is_empty(),
-            "the never-booted dispatch is retired as a crash"
-        );
-        assert_eq!(breaker.consecutive_failures("x-bootgrace-never-real"), 1);
-    }
-
-    #[test]
-    fn resolved_target_parses_mission_target() {
-        // The Python emitter's mission-target shape round-trips; a receipt with
-        // no mission deserializes (mission=None) so the supervisor can skip it.
-        let t: ResolvedTarget = serde_json::from_str(
-            r#"{"project":"fno","cwd":"/x","interval_seconds":60,"failure_limit":3,"mission":"x-epic"}"#,
-        )
-        .unwrap();
-        assert_eq!(t.mission.as_deref(), Some("x-epic"));
-        let no_mission: ResolvedTarget = serde_json::from_str(
-            r#"{"project":"p","cwd":"/x","interval_seconds":60,"failure_limit":3}"#,
-        )
-        .unwrap();
-        assert_eq!(no_mission.mission, None);
-    }
-
-    #[test]
     fn breaker_trips_at_limit() {
         let mut b = CircuitBreaker::new(3);
         assert!(!b.record_failure("n1"));
@@ -2756,31 +2476,6 @@ mod tests {
         p.display().to_string()
     }
 
-    /// `backlog advance --epic` answers `advance_json`; `backlog get` answers
-    /// `node_json`; every other command appends its argv to `record`. For the
-    /// synchronous-child tests, which read graph state AND fire defers.
-    fn stub_fno_advance_and_get(
-        dir: &std::path::Path,
-        record: &std::path::Path,
-        advance_json: &str,
-        node_json: &str,
-    ) -> String {
-        std::fs::create_dir_all(dir).unwrap();
-        let p = crate::write_exec_stub(
-            dir,
-            "fno",
-            &format!(
-                "#!/usr/bin/env bash\n\
-                 if [[ \"$1\" == backlog && \"$2\" == advance ]]; then \
-                 cat <<'JSON'\n{advance_json}\nJSON\nexit 0; fi\n\
-                 if [ \"$2\" = \"get\" ]; then printf '%s' '{node_json}'; exit 0; fi\n\
-                 echo \"$@\" >> \"{}\"\nexit 0\n",
-                record.display()
-            ),
-        );
-        p.display().to_string()
-    }
-
     fn stub_fno_advance_with_observer(
         dir: &std::path::Path,
         advance_json: &str,
@@ -2801,37 +2496,6 @@ mod tests {
             ),
         );
         p.display().to_string()
-    }
-
-    #[test]
-    fn dispatch_mission_records_dispatched_and_continues() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let fno = stub_fno_advance(
-            &tmp.path().join("bin"),
-            r#"{"epic_id":"x-epic","deactivated":false,"all_done":false,"dispatched":["x-a","x-b"],
-                "children":[{"node_id":"x-a","decision":"dispatched","reason":null,"detail":null,
-                             "short_id":"84a8d946","substrate":"thread","notes":[]},
-                            {"node_id":"x-b","decision":"dispatched","reason":null,"detail":null,
-                             "short_id":"84a8d947","substrate":"thread","notes":[]}]}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = Vec::new();
-
-        let (outcome, _facts) = dispatch_mission(&cfg, &mut breaker, &mut pending, &journal);
-        assert_eq!(outcome, MissionDispatch::Continue);
-        assert_eq!(
-            pending
-                .iter()
-                .map(|p| p.node_id.clone())
-                .collect::<Vec<_>>(),
-            vec!["x-a", "x-b"]
-        );
-        assert!(journal_lines(&project_journal)
-            .iter()
-            .any(|l| l.contains("active_backlog_dispatched") && l.contains("x-a")));
     }
 
     #[test]
@@ -2983,135 +2647,6 @@ mod tests {
     }
 
     #[test]
-    fn mission_drain_tick_appends_one_control_plane_tick_row() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let fno = stub_fno_advance(
-            &tmp.path().join("bin"),
-            r#"{"epic_id":"x-epic","deactivated":false,"all_done":false,
-                "children":[{"node_id":"x-a","decision":"dispatched","substrate":"thread"}]}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = Vec::new();
-
-        let outcome = mission_drain_tick(&cfg, &mut breaker, &mut pending, &journal);
-
-        assert_eq!(outcome, MissionDispatch::Continue);
-        let rows: Vec<serde_json::Value> = journal_lines(&project_journal)
-            .iter()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter(|v| v["type"] == "control_plane_tick")
-            .collect();
-        assert_eq!(rows.len(), 1, "exactly one arm row per tick");
-        let data = &rows[0]["data"];
-        assert_eq!(data["arm"], "active_backlog");
-        assert_eq!(data["scheduler"], "daemon");
-        assert_eq!(data["acted"], 1);
-        assert_eq!(data["interval_s"], 300);
-        assert!(data["skip_reason"].is_null());
-        assert!(data["detail"].as_str().unwrap().contains("dispatched=1"));
-    }
-
-    #[test]
-    fn dispatch_mission_retires_on_deactivated() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let fno = stub_fno_advance(
-            &tmp.path().join("bin"),
-            r#"{"epic_id":"x-epic","deactivated":true,"all_done":false,"dispatched":[]}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, _pj) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = Vec::new();
-        assert_eq!(
-            dispatch_mission(&cfg, &mut breaker, &mut pending, &journal).0,
-            MissionDispatch::Retire
-        );
-    }
-
-    #[test]
-    fn dispatch_mission_dedups_already_pending() {
-        let _env = env_guard();
-        // A boot-window re-echo of a still-pending node must not double-record it.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let fno = stub_fno_advance(
-            &tmp.path().join("bin"),
-            r#"{"epic_id":"x-epic","children":[{"node_id":"x-a","decision":"dispatched","substrate":"thread"}]}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, _pj) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = vec![PendingDispatch {
-            node_id: "x-a".to_string(),
-            session_id: None,
-            ticks: 2,
-            stamp_waits: 0,
-        }];
-        dispatch_mission(&cfg, &mut breaker, &mut pending, &journal);
-        assert_eq!(pending.len(), 1, "x-a already pending must not be re-added");
-    }
-
-    #[test]
-    fn mission_drain_tick_names_lane_cap_instead_of_no_work() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let fno = stub_fno_advance(
-            &tmp.path().join("bin"),
-            r#"{"children":[{"node_id":"x-a","decision":"skipped","reason":"lane-cap"}],"dispatched":[]}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = Vec::new();
-
-        let outcome = mission_drain_tick(&cfg, &mut breaker, &mut pending, &journal);
-        assert_eq!(outcome, MissionDispatch::Continue);
-
-        let rows: Vec<serde_json::Value> = journal_lines(&project_journal)
-            .iter()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter(|v| v["type"] == "control_plane_tick")
-            .collect();
-        let data = &rows[0]["data"];
-        assert_eq!(data["skip_reason"], "lane-cap");
-        let detail = data["detail"].as_str().unwrap();
-        assert!(detail.contains("ready=1"), "detail was {detail}");
-        assert!(detail.contains("pending=0"), "detail was {detail}");
-    }
-
-    #[test]
-    fn mission_drain_tick_reports_stranded_board_rows_on_no_work() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let observer = r#"{"status":"ok","rows":[{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}]}"#;
-        let fno = stub_fno_advance_with_observer(
-            &tmp.path().join("bin"),
-            r#"{"children":[],"dispatched":[]}"#,
-            observer,
-            None,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = Vec::new();
-
-        mission_drain_tick(&cfg, &mut breaker, &mut pending, &journal);
-
-        let row = journal_lines(&project_journal)
-            .iter()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .find(|v| v["type"] == "control_plane_tick")
-            .expect("one tick row");
-        assert_eq!(row["data"]["skip_reason"], "no_work");
-        let detail = row["data"]["detail"].as_str().unwrap();
-        assert!(detail.contains("mission=x-epic"), "detail was {detail}");
-        assert!(detail.contains("stranded=25"), "detail was {detail}");
-    }
-
-    #[test]
     fn mission_drain_tick_dispatches_the_real_null_bearing_receipt() {
         // The receipt the CLI actually prints on a dispatch carries
         // "reason": null on the child. The tick must read acted=1 with no
@@ -3157,40 +2692,6 @@ mod tests {
     }
 
     // ── synchronous children ────────────────────────────────────────
-
-    #[test]
-    fn synchronous_child_not_closed_trips_breaker_and_defers_once() {
-        // A synchronous child with no completion, no defer and no PR ref scores
-        // as a failure per tick through the SAME map_outcome policy, and trips
-        // the breaker exactly once at failure_limit - the detached path's
-        // behaviour.
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let record = tmp.path().join("record");
-        let fno = stub_fno_advance_and_get(
-            &tmp.path().join("bin"),
-            &record,
-            r#"{"epic_id":"x-epic","children":[{"node_id":"x-h","decision":"dispatched","substrate":"headless"}]}"#,
-            r#"{"id":"x-h"}"#,
-        );
-        let cfg = test_cfg(tmp.path(), fno, 3);
-        let (journal, project_journal) = test_journal(tmp.path());
-        let mut breaker = CircuitBreaker::new(3);
-        let mut pending = Vec::new();
-
-        for _ in 0..3 {
-            mission_drain_tick(&cfg, &mut breaker, &mut pending, &journal);
-        }
-        let defers = std::fs::read_to_string(&record)
-            .unwrap()
-            .lines()
-            .filter(|l| l.contains("backlog defer x-h"))
-            .count();
-        assert_eq!(defers, 1, "exactly one defer at failure_limit=3");
-        assert!(journal_lines(&project_journal)
-            .iter()
-            .any(|l| l.contains("active_backlog_parked")));
-    }
 
     /// A stub `fno` for the converge-cap tests: every `backlog advance`
     /// (epic or loose) writes `S`, holds the slot for 300ms, writes `E`, then

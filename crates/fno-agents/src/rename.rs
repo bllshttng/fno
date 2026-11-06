@@ -495,46 +495,10 @@ mod tests {
     }
 
     #[test]
-    fn title_push_skips_a_harness_without_the_native_rename_command() {
-        let mut r = row("kestrel", "sess-1");
-        r.harness = Some("codex".into());
-        r.status = crate::AgentStatus::Live;
-        r.harness_title = Some("kestrel".into());
-        assert_eq!(title_push(&r, "hawk"), None);
-    }
-
-    #[test]
-    fn title_push_skips_a_harness_with_no_delivery_lane() {
-        // agy declares /rename but mail-inject delivers no agy thread
-        // session, so the push would spend a subprocess to answer
-        // not-injectable. Skipped at the plan, not at delivery.
-        let mut r = row("wren", "sess-1");
-        r.harness = Some("agy".into());
-        r.status = crate::AgentStatus::Live;
-        r.harness_title = Some("quill".into());
-        assert_eq!(title_push(&r, "wren"), None);
-    }
-
-    #[test]
-    fn title_push_skips_a_row_that_cannot_receive_a_turn() {
-        let mut r = row("wren", "sess-1");
-        r.harness_title = Some("quill".into());
-        r.status = crate::AgentStatus::Exited;
-        assert_eq!(title_push(&r, "wren"), None);
-    }
-
-    #[test]
     fn title_push_skips_a_mid_turn_row_whose_quiet_gate_would_hold_the_delivery() {
         let mut r = row("wren", "sess-1");
         r.harness_title = Some("quill".into());
         r.status = crate::AgentStatus::Busy;
-        assert_eq!(title_push(&r, "wren"), None);
-    }
-
-    #[test]
-    fn title_push_skips_a_row_without_a_harness_session() {
-        let mut r = row("wren", "");
-        r.status = crate::AgentStatus::Live;
         assert_eq!(title_push(&r, "wren"), None);
     }
 

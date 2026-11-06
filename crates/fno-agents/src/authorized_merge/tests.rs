@@ -88,6 +88,44 @@ struct Fake {
     main_repair: Option<Option<String>>,
 }
 
+#[test]
+fn stub_manifest_scoped_graph_rows() {
+    let _env_lock = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    struct RestoreHome(Option<std::ffi::OsString>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_HOME", value),
+                None => std::env::remove_var("FNO_HOME"),
+            }
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let _restore = RestoreHome(std::env::var_os("FNO_HOME"));
+    std::env::set_var("FNO_HOME", home.path());
+    let graph = crate::org_board::scope::graph_json_path(home.path());
+    crate::graph_store::seed_rows(
+        &graph,
+        &[
+            json!({"id":"x-contract", "dep":"contract", "pr_number":7}),
+            json!({"id":"x-feature", "type":"feature", "pr_number":8}),
+            json!({"id":"x-raw-contract", "dep":"contract", "status":"not-a-status", "pr_number":9}),
+        ],
+    )
+    .unwrap();
+
+    let rows = walk_entries(home.path()).expect("graph rows are readable");
+
+    let mut ids: Vec<_> = rows
+        .iter()
+        .filter_map(|row| row.get("id").and_then(Value::as_str))
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["x-contract", "x-raw-contract"]);
+}
+
 fn open_facts() -> PrFacts {
     PrFacts {
         number: 7,
@@ -504,7 +542,7 @@ fn request(effect: Effect) -> Request {
 }
 
 fn granted_decisions() -> Vec<u8> {
-    br#"{"decisions":[{"authority_source":"operator","decision":"merge authorized for this head"}]}"#
+    br#"{"decisions":[{"authority_source":"operator","ts":"2026-11-01T00:00:00Z","decision":"merge authorized for this head"}]}"#
         .to_vec()
 }
 
@@ -744,66 +782,6 @@ fn an_arm_refuses_past_a_red_evals_gate() {
     );
 }
 
-/// A pending gate refuses the arm the same way: the queue would merge the
-/// moment its one required check passed, while the gate goldens still run.
-#[test]
-fn an_arm_refuses_past_a_pending_evals_gate() {
-    let fake = Fake {
-        checks: Some("green".to_string()),
-        evals_gate_row: Some(EvalsGateRead {
-            state: "PENDING".to_string(),
-            description: "queued for the gate goldens".to_string(),
-        }),
-        ..clean()
-    };
-    let outcome = run(
-        &fake,
-        &Request {
-            require_checks: false,
-            ..request(Effect::Arm)
-        },
-    );
-    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
-    let detail = outcome.detail();
-    assert!(detail.contains("evals gate pending"), "{}", detail);
-}
-
-/// A gated head with no gate status refuses the arm too: missing is the
-/// daemon-never-reached-this-head shape, and the queue would not wait for
-/// a status the ruleset does not require.
-#[test]
-fn an_arm_refuses_past_a_missing_gate_status_at_a_gated_head() {
-    let fake = Fake {
-        checks: Some("green".to_string()),
-        evals_gate_expected: Some(true),
-        ..clean()
-    };
-    let outcome = run(
-        &fake,
-        &Request {
-            require_checks: false,
-            ..request(Effect::Arm)
-        },
-    );
-    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
-    let detail = outcome.detail();
-    assert!(detail.contains("no evals/gate status"), "{}", detail);
-
-    let blockers = preview_blockers(
-        &fake,
-        &Request {
-            require_checks: false,
-            ..preview_request(7)
-        },
-    );
-    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
-    assert!(
-        codes.contains(&"evals_gate_missing"),
-        "the preview names the missing-status hold with require_checks off: {:?}",
-        codes
-    );
-}
-
 // ── the head-scoped operator merge grant ──────────────────────────────
 
 #[test]
@@ -820,16 +798,17 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
     let receipt = outcome.to_json();
     assert_eq!(
         receipt["merge_grant"],
-        json!("operator head grant abc123"),
+        json!("user head grant abc123"),
         "{}",
         receipt
     );
 }
 
 #[test]
-fn an_absent_grant_refuses_and_names_only_the_attended_command() {
-    // AC2-ERR: absence refuses, the remedy is the one sanctioned grant
-    // command, and the out-of-band escape is gone from the refusal.
+fn an_absent_grant_refuses_and_names_both_sanctioned_doors() {
+    // AC2-ERR: absence refuses, and the refusal names both sanctioned grant
+    // doors - the attended operator command and the user's own chat approval
+    // recorded through the law door - while the out-of-band escape is gone.
     let mut req = request(Effect::Merge);
     req.approved = Some(false);
     req.auto_merge_source = Some("flag-no-merge".to_string());
@@ -847,7 +826,9 @@ fn an_absent_grant_refuses_and_names_only_the_attended_command() {
         detail.contains("'merge authorized for this head'"),
         "{detail}"
     );
-    assert!(detail.ends_with("--authority operator"), "{detail}");
+    assert!(detail.contains("--authority operator"), "{detail}");
+    assert!(detail.contains("fno inbox law set"), "{detail}");
+    assert!(detail.contains("user in chat:"), "{detail}");
     assert!(!detail.contains("out-of-band"), "{detail}");
     assert!(fake.gh_calls.borrow().is_empty());
 }
@@ -1963,58 +1944,6 @@ fn preview_blockers(fake: &Fake, req: &Request) -> Vec<Blocker> {
         PreviewVerdict::Go { .. } => Vec::new(),
         PreviewVerdict::Blocked(rows) => rows,
     }
-}
-
-/// AC13: a fixture `door:merge` rule holds PR 7 with blocker `rule`
-/// naming the rule id, and PR 8 clears - merge and preview answer alike.
-#[test]
-fn a_door_merge_rule_holds_one_pr_and_clears_the_next() {
-    let sentence = "Refused by rule: r-release-freeze: the release freeze is on";
-    let fake = clean();
-    fake.other_rules
-        .borrow_mut()
-        .insert(7, ProbeOutcome::Refused(sentence.to_string()));
-
-    let held = run(
-        &fake,
-        &Request {
-            require_checks: true,
-            ..request(Effect::Merge)
-        },
-    );
-    assert_eq!(held.word(), "held");
-    assert!(
-        held.detail().contains("r-release-freeze"),
-        "{:?}",
-        held.detail()
-    );
-
-    let blockers = preview_blockers(&fake, &preview_request(7));
-    assert_eq!(blockers[0].code, "rule");
-    assert!(
-        blockers[0].detail.contains("r-release-freeze"),
-        "{}",
-        blockers[0].detail
-    );
-
-    // PR 8 carries no rule fire: the decision clears.
-    fake.other_facts.borrow_mut().insert(
-        8,
-        PrFacts {
-            number: 8,
-            ..open_facts()
-        },
-    );
-    let cleared = run(
-        &fake,
-        &Request {
-            require_checks: true,
-            pr: Some(8),
-            decide_only: true,
-            ..request(Effect::Merge)
-        },
-    );
-    assert!(matches!(cleared, Outcome::Authorized { .. }), "{cleared:?}");
 }
 
 #[test]

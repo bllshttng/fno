@@ -1249,3 +1249,144 @@ fn parked_prompt_attention_is_readable_on_both_grounds() {
         "attention text must clear 4.5:1: {failures:?}"
     );
 }
+
+// A filed user question raises its asking row through the badge path: the
+// row stamps Blocked (reason `filed_question`), the strip count and the
+// pinned Needs input section read it, and answering the question unstamps.
+#[test]
+fn a_filed_question_stamps_the_asking_row_blocked() {
+    let item =
+        |state: &str, sid: Option<&str>, name: Option<&str>| crate::needs_overlay::QuestionItem {
+            kind: "question".into(),
+            state: state.into(),
+            origin: Some(crate::needs_overlay::QuestionOrigin {
+                session_id: sid.map(str::to_string),
+                name: name.map(str::to_string),
+                harness: Some("claude".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+    let fold =
+        |items: Vec<crate::needs_overlay::QuestionItem>| crate::needs_overlay::QuestionsFold {
+            items,
+            ..Default::default()
+        };
+    let mut v = wide_view(vec![
+        agent_row("asker", 4, Some(AgentBadge::Working), false),
+        agent_row("bystander", 5, Some(AgentBadge::Working), false),
+    ]);
+    v.layout.agents[0].harness_session_id = Some("sid-asker".into());
+
+    v.apply_questions_fold(Ok(fold(vec![item(
+        "open",
+        Some("sid-asker"),
+        Some("asker"),
+    )])));
+    assert_eq!(v.layout.agents[0].badge, Some(AgentBadge::Blocked));
+    assert_eq!(v.layout.agents[0].reason.as_deref(), Some("filed_question"));
+    assert_eq!(v.layout.agents[1].badge, Some(AgentBadge::Working));
+    assert_eq!(v.layout.agents[1].reason, None);
+    assert_eq!(v.need_input_count(), 1, "the strip count reads the stamp");
+    let row = top_row(&v);
+    assert!(row.starts_with(" 1 need input"), "{row:?}");
+
+    // The stamped row sits in the pinned section and stays in its group.
+    v.needs_open = true;
+    assert_eq!(
+        v.display_rows()
+            .iter()
+            .filter(|r| matches!(r, DisplayRow::Agent(a) if a.name == "asker"))
+            .count(),
+        2,
+        "the asking row sits pinned and in its group"
+    );
+
+    // An answer clears the flag the same way it landed.
+    v.apply_questions_fold(Ok(fold(vec![item(
+        "answered",
+        Some("sid-asker"),
+        Some("asker"),
+    )])));
+    assert_eq!(v.layout.agents[0].badge, Some(AgentBadge::Working));
+    assert_eq!(v.layout.agents[0].reason, None);
+    assert_eq!(v.need_input_count(), 0);
+}
+
+// The stamp's two guards: a question at a lead rung is not the user's to
+// answer, so its row keeps working; an exited row keeps its exit fact even
+// when its question is still open on the board.
+#[test]
+fn a_lead_rung_question_and_a_dead_row_never_stamp() {
+    let item = |level: Option<&str>, sid: &str| crate::needs_overlay::QuestionItem {
+        kind: "question".into(),
+        state: "open".into(),
+        origin: Some(crate::needs_overlay::QuestionOrigin {
+            session_id: Some(sid.into()),
+            ..Default::default()
+        }),
+        rung: level.map(|l| crate::needs_overlay::QuestionRung {
+            level: Some(l.into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut v = wide_view(vec![
+        agent_row("climbed", 4, Some(AgentBadge::Working), false),
+        {
+            let mut d = agent_row("dead", 5, Some(AgentBadge::Working), false);
+            d.exited = true;
+            d
+        },
+        agent_row("wren", 6, Some(AgentBadge::Working), false),
+    ]);
+    v.layout.agents[0].harness_session_id = Some("sid-climb".into());
+    v.layout.agents[1].harness_session_id = Some("sid-dead".into());
+    let mut far = item(None, "sid-far");
+    far.origin.as_mut().unwrap().name = Some("wren".into());
+    // A cross-machine copy carries a host; its name is another machine's
+    // registry name and must never join a local row.
+    far.host = Some("imac2d2".into());
+    v.apply_questions_fold(Ok(crate::needs_overlay::QuestionsFold {
+        items: vec![item(Some("lead"), "sid-climb"), item(None, "sid-dead"), far],
+        ..Default::default()
+    }));
+    assert_eq!(
+        v.layout.agents[0].badge,
+        Some(AgentBadge::Working),
+        "a lead rung is not the user's to answer"
+    );
+    assert_eq!(
+        v.layout.agents[1].badge,
+        Some(AgentBadge::Working),
+        "an exited row keeps its exit fact"
+    );
+    assert_eq!(
+        v.layout.agents[2].badge,
+        Some(AgentBadge::Working),
+        "a cross-machine copy's name never joins a local row"
+    );
+    assert_eq!(v.need_input_count(), 0);
+}
+
+// The registry name is the fallback join when the ask carried no session
+// id: the row still stamps, or a rename would orphan the flag.
+#[test]
+fn the_asking_name_matches_when_the_session_id_is_absent() {
+    let item = crate::needs_overlay::QuestionItem {
+        kind: "question".into(),
+        state: "open".into(),
+        origin: Some(crate::needs_overlay::QuestionOrigin {
+            name: Some("wren".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut v = wide_view(vec![agent_row("wren", 4, Some(AgentBadge::Working), false)]);
+    v.apply_questions_fold(Ok(crate::needs_overlay::QuestionsFold {
+        items: vec![item],
+        ..Default::default()
+    }));
+    assert_eq!(v.layout.agents[0].badge, Some(AgentBadge::Blocked));
+    assert_eq!(v.need_input_count(), 1);
+}

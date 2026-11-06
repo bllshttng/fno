@@ -454,10 +454,10 @@ pub trait Probes {
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead;
     /// Does this head owe an evals/gate status it does not have? True when
     /// the diff touches a gated path or a `covers:` prefix of main's bank
-    /// and the worker seat has a baseline (a first install holds nobody on a
-    /// check it cannot run yet). Default false: an impl that cannot answer
-    /// never manufactures the missing-status hold, so pre-existing stubs
-    /// keep their behavior.
+    /// and gate state exists (a head grades on its own pass rate before any
+    /// baseline is seated, so gate state alone puts it on the hook). Default
+    /// false: an impl that cannot answer never manufactures the
+    /// missing-status hold, so pre-existing stubs keep their behavior.
     fn evals_gate_expected(&self, _cwd: &Path, _facts: &PrFacts) -> bool {
         false
     }
@@ -1028,13 +1028,13 @@ fn decide_observed<P: Probes>(
     // A gated head with no gate status holds: the daemon either never
     // reached this head (the tick never ran it) or its status was lost. The
     // expectation probe is fail-open: an unreadable file read never
-    // manufactures the hold. First install passes because the probe
-    // reads no baseline there.
+    // manufactures the hold. A machine with no gate state at all passes
+    // because the probe finds no state there.
     if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, &facts) {
         return Err(Outcome::Held {
             reason: format!(
                 "no evals/gate status at this gated head: the diff touches a gated path \
-                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 or a covered prefix, and gate state exists here, but no status \
                  was posted. Clear: fno-agents evals gate-retry {} \
                  (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
@@ -1045,9 +1045,11 @@ fn decide_observed<P: Probes>(
     let strategy = probes.strategy(cwd);
     // Reaching here with `approved == Some(false)` means the only door through
     // `authority_refusal` was a Granted head grant, so the receipt names it.
+    // The grant is the user's voice whichever door recorded it: an operator
+    // row, or a chat_attested row carrying the user's own words.
     let merge_grant = (request.approved == Some(false)).then(|| {
         format!(
-            "operator head grant {}",
+            "user head grant {}",
             facts.head_sha.chars().take(8).collect::<String>()
         )
     });
@@ -1354,7 +1356,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             "evals_gate_missing",
             format!(
                 "no evals/gate status at this gated head: the diff touches a gated path \
-                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 or a covered prefix, and gate state exists here, but no status \
                  was posted. Clear: fno-agents evals gate-retry {} \
                  (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
@@ -1486,12 +1488,11 @@ fn optional_reviews_blocker(value: Option<Option<i64>>) -> Option<Blocker> {
     }
 }
 
-/// Graph rows for the stub-manifest and plan-fidelity gates. An unreadable
-/// store degrades to None (the default hard merge path), as the Python did.
+/// Contract rows for the stub-manifest gate. An unreadable store degrades to
+/// None (the default hard merge path), as the Python did.
 fn walk_entries(cwd: &Path) -> Option<Vec<Value>> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let store = GraphStore::new(&graph_path);
-    backlog_api::rows(&store).ok()
+    crate::graph_store::read_contract_rows(&graph_path).ok()
 }
 
 /// The repo top-level for manifest lookups: manifests live at the project
@@ -1511,13 +1512,15 @@ pub(crate) fn posture_is_default_off(approved: Option<bool>, source: Option<&str
 }
 
 /// The authority fold, in the order init folds it. A per-run refusal outranks
-/// every grant - EXCEPT the head-scoped operator grant, the one sanctioned
-/// remedy for a per-run no-merge, recorded out-of-band by a person at a
-/// terminal through `fno backlog decide --authority operator` and never by a
-/// session (`decide/__init__.py:297` refuses operator authority from agent
-/// sessions). The grant clears only the per-run layer; the live-config and
-/// posture-floor arms still run, and a push to a new head invalidates the
-/// grant by subject construction.
+/// every grant - EXCEPT the head-scoped user grant, one of two sanctioned
+/// remedies for a per-run no-merge: an operator row recorded out-of-band by
+/// a person at a terminal through `fno backlog decide --authority operator`
+/// (never by a session - `decide/__init__.py:297` refuses operator authority
+/// from agent sessions), or the user's own chat approval recorded at the
+/// head subject through the law door, whose `chat_attested` row carries the
+/// user's words (`merge_grant::chat_grant_command`). The grant clears only
+/// the per-run layer; the live-config and posture-floor arms still run, and
+/// a push to a new head invalidates the grant by subject construction.
 fn authority_refusal<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -1590,11 +1593,14 @@ fn authority_refusal<P: Probes>(
                 let (state_word, detail) = match &other {
                     crate::merge_grant::HeadGrant::Absent => (
                         "absent",
-                        "no operator row records a grant at this head".to_string(),
+                        "no row carrying the user's ruling records a grant at this head"
+                            .to_string(),
                     ),
                     crate::merge_grant::HeadGrant::Conflict => (
                         "conflicting",
-                        "operator rows at this head disagree or carry no decision".to_string(),
+                        "rows carrying the user's ruling at this head disagree or carry no \
+                         decision"
+                            .to_string(),
                     ),
                     crate::merge_grant::HeadGrant::Unreadable(d) => ("unreadable", d.clone()),
                     crate::merge_grant::HeadGrant::Granted => unreachable!("matched above"),
@@ -1603,9 +1609,15 @@ fn authority_refusal<P: Probes>(
                     "per_run_no_merge",
                     format!(
                         "per-run no-merge (manifest auto_merge_approved is not true; \
-                         auto_merge_source: {source}); the operator head grant reads \
-                         {state_word} ({detail}); sanctioned override: {}",
+                         auto_merge_source: {source}); the user head grant reads \
+                         {state_word} ({detail}); sanctioned overrides: {} (a person at a \
+                         terminal), or the user's own chat approval recorded at this head: {}",
                         crate::merge_grant::attended_grant_command(
+                            &slug,
+                            facts.number as i64,
+                            &facts.head_sha
+                        ),
+                        crate::merge_grant::chat_grant_command(
                             &slug,
                             facts.number as i64,
                             &facts.head_sha

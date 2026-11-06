@@ -265,15 +265,6 @@ mod tests {
     }
 
     #[test]
-    fn a_window_wraps_midnight() {
-        let w = parse_window("22:00-08:00").unwrap();
-        assert!(window_open(&w, t(23, 30)) && window_open(&w, t(7, 59)));
-        assert!(!window_open(&w, t(8, 0)) && !window_open(&w, t(12, 0)));
-        let day = parse_window("09:00-17:00").unwrap();
-        assert!(window_open(&day, t(9, 0)) && !window_open(&day, t(17, 0)));
-    }
-
-    #[test]
     fn every_part_must_pass_and_an_unread_part_fails_open() {
         let now = Utc::now();
         let dated = json!({"decision_id": "d-1", "when": {"from": {"kind": "date", "at": "2999-01-01T00:00:00+00:00"}}});

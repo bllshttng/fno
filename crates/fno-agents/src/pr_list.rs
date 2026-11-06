@@ -37,6 +37,26 @@ pub fn run_pr_list(args: &[String]) -> i32 {
             return 4;
         }
     };
+    let out = list_at(args, &cwd);
+    println!("{}", out.stdout);
+    for line in out.stderr {
+        eprintln!("{line}");
+    }
+    out.code
+}
+
+pub(crate) fn rows(args: &[String], cwd: &Path) -> Result<Vec<Value>, String> {
+    let out = list_at(args, cwd);
+    for line in &out.stderr {
+        eprintln!("{line}");
+    }
+    if out.code != 0 {
+        return Err(out.stdout);
+    }
+    serde_json::from_str(&out.stdout).map_err(|e| format!("PR list: {e}"))
+}
+
+fn list_at(args: &[String], cwd: &Path) -> Outcome {
     let gh = |cmd: &[String], cwd: &Path| {
         run_with_timeout(cmd, cwd, Duration::from_secs(30)).map_err(|e| {
             if e.over_budget() {
@@ -74,12 +94,7 @@ pub fn run_pr_list(args: &[String]) -> i32 {
         .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
         .map_err(|e| e.0)
     };
-    let out = list(args, &cwd, None, &gh, &graph);
-    println!("{}", out.stdout);
-    for line in out.stderr {
-        eprintln!("{line}");
-    }
-    out.code
+    list(args, cwd, None, &gh, &graph)
 }
 
 fn fail(code: i32, error: String) -> Outcome {

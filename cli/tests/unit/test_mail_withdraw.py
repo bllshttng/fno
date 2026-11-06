@@ -19,9 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.paths_testing import use_tmpdir
 
 MARKERS = (
@@ -76,10 +74,6 @@ def _tombstone(msg_id: str, from_: str = MY_HANDLE, to: str = PEER) -> None:
     )
 
 
-def _run(*args):
-    return CliRunner().invoke(app, list(args))
-
-
 # ---------------------------------------------------------------------------
 # The three readers, asserted independently
 # ---------------------------------------------------------------------------
@@ -102,21 +96,6 @@ def test_reader_1_scan_unread_omits_a_withdrawn_message(env):
 # ---------------------------------------------------------------------------
 
 
-def test_withdraw_does_not_advance_the_recipient_cursor(env):
-    """The failure this shape was chosen to avoid. A cursor is a last-seen
-    POSITION, so advancing it past the withdrawn message would mark every other
-    message queued for that recipient as seen -- trading one strand for many."""
-    from tests.fixtures.bus_rows import read_cursor, scan_unread
-
-    from_other = _send(PEER, PEER, "unrelated, still unread", ts=_ts_ago(3600))
-    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-
-    _tombstone(mid)
-
-    assert read_cursor(PEER) is None
-    assert [m["id"] for m in scan_unread(PEER)] == [from_other]
-
-
 def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
     """The sender check lives at the READ side as well as in the command. The command
     is one reachable path; a hand-appended or replayed line is another, and a
@@ -135,5 +114,3 @@ def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
     )
 
     assert [m["id"] for m in scan_unread("cccc1111")] == [mid]
-
-

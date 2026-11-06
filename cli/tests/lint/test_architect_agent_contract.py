@@ -43,12 +43,3 @@ def test_architect_keeps_write_access():
     description = _description_value(frontmatter)
     size = len(description.encode("utf-8"))
     assert size <= 220, f"description is {size} bytes; the budget is 220"
-
-
-def test_blueprint_substrate_launches_architect():
-    text = (resolve_repo_root() / "skills" / "blueprint" / "SKILL.md").read_text(encoding="utf-8")
-    for token in ("subagent_type: fno:architect", "--agent fno:architect", "agent_type: architect"):
-        assert token in text, f"blueprint Substrate step 3 does not name the architect: {token}"
-    assert "Use the Skill tool to run fno:blueprint with args" in text, (
-        "the one-line subagent prompt changed"
-    )

@@ -61,6 +61,9 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals report --by-failure-type [--repeats N] [--json]` | Rank the named failure types by cost, then by failing goldens. See Failure types. |
 | `fno doctor evals report --check-metrics [--json]` | Run each golden's grader on its labelled cases. Exit 1 when a type is not proved. No model spend. See Failure types. |
 | `fno-agents evals candidates [--limit N] [--source KIND] [--json]` | Rank real failures to label as goldens. See Goldens. Read-only. |
+| `fno-agents evals candidates --traces` | Run the local failure-trace intake now. The daemon runs the same pass daily. |
+| `fno-agents evals export --profile` | Refresh and print the local anonymous user profile. No network export. |
+| `fno-agents evals export --profile-set FIELD=VALUE` | Set one local profile field. User values win over derived readings. |
 | `fno-agents evals drafts` | Run the correction-to-draft pass now and print new, open and expired counts. The daemon runs it daily. See Goldens. |
 | `fno-agents intel --plans-ladder [--teacher-url URL] [--hosted NAME=COMMAND]` | Score the fixed labelled set rung by rung and stop at the first pass. See Plan premise labels. |
 | `fno-agents intel --plans [--limit N] [--dry-run]` | Label plan premises with the winning rung, or refuse and print each score. See Plan premise labels. |
@@ -121,7 +124,7 @@ golden:
 
 A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuses at load and names the task and file. `outcome` says what the source case did (`failed` or `passed`). It is history, not a current result. The current result comes from a run.
 
-`fno-agents evals candidates` ranks the pool to label from. It reads the rule-labelled reactions in `~/.fno/evals/decision/v1`, typed `agent_corrected` events, S2 rows in `corrections.log`, and `Revert` commits. It also reads plans by superseded status and caused commits, and plan premises that a later record contradicts. It prints a score, kind, reference, and one scrubbed quote. It writes nothing and calls no model. Every row is a candidate for a person to read. A rejected reaction is often a refused permission prompt, so the S2 rows are the stronger source.
+`fno-agents evals candidates` ranks the pool to label from. It reads the rule-labelled reactions in `~/.fno/evals/decision/v1`, typed `agent_corrected` events, S2 rows in the frozen `~/.fno/evals/traces/seed-s2.log`, and `Revert` commits. It also reads plans by superseded status and caused commits, and plan premises that a later record contradicts. It prints a score, kind, reference, and one scrubbed quote. It writes nothing and calls no model. Every row is a candidate for a person to read. A rejected reaction is often a refused permission prompt, so the S2 rows are the stronger source.
 
 A daily daemon pass turns each new typed correction into one draft in `~/.fno/evals/golden-drafts/`. It reads `agent_corrected` events after a watermark and skips interrupts, which carry no words. Two corrections with the same words are one case. A draft starts with empty `prompt`, `grade`, `expected`, `rule` and `failure_type` fields. After the pass, the daemon hands up to `evals.drafter.max_per_day` (default 5) of the oldest open drafts to a bounded model call with read tools. If a reply loads as a golden, and its grade passes 3 good fixture cases and fails 3 bad ones, the daemon keeps it. Kept goldens go into one PR a day on `evals/golden-drafts-<date>`, and a person reads it before merging, because an auto-committed bad answer holds merges. A `no_case` or unproved reply is logged in `.drafted` and never retried. A correction with no fixture shape stays a draft. A draft expires after 30 days, the pass counts it, and its case never returns. `fno-agents evals drafts` prints the counts.
 
@@ -144,6 +147,20 @@ The sealed fill, run 2026-11-02 on zai-flash at repeat 1, covers the last main c
 A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
 
 A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
+
+### Local failure traces
+
+Run `fno-agents evals candidates --traces` to collect local failure evidence. The same pass runs daily beside the golden-draft arm. It writes one JSON file per source failure under `~/.fno/evals/traces/`. Sources are typed user corrections, budget or no-progress terminations, aborted runs, repository reverts, PRs closed without a merge, explicit review-attestation retractions and proven refusal bypasses. A refusal alone is insufficient: a later successful result must match the refused tool and input within the next ten tool calls. The pass revisits unfinished refusals after its watermark advances. Closed PR intake uses the existing REST list command and its pagination bound. If the API fails, the pass reports the error and retains local evidence already written.
+
+Each trace holds the trigger, up to ten prior tool calls and assistant statements, truth evidence, an anonymous profile id, session facts and context readings. Transcript evidence stops before the identified failure turn. Missing transcripts, turns and unsupported harness readings produce `{value: null, basis: "unmeasured", reason}`. A recorded assistant statement is a claim to inspect. It has not been verified by the intake. `right_action` and `layer_verdict` stay unmeasured until labeled. Existing files are never overwritten, so a repeat pass preserves labels.
+
+The first pass freezes the available S2 rows from the legacy correction log into `seed-s2.log` and creates a seed trace for each row. Later passes reuse the frozen file after removal of the legacy log. A new installation with no legacy log starts with an empty seed. The seed stays local and is not committed to the repository. When exactly one retained Claude transcript matches a seed session prefix, the pass resolves the prefix. The log batch timestamp does not locate a failure turn: the trace needs a unique matching correction turn, or its transcript facts stay unmeasured.
+
+### Local user profiles
+
+Run `fno-agents evals export --profile` to read the profile. To correct a field, run `fno-agents evals export --profile-set experience_band=expert`. The six fields are `role`, `domain`, `experience_band`, `build_mode`, `verification_capacity` and `question_tolerance`. Each has a basis. Role and build mode use the correction fold’s usage counters. Domain uses the local graph. Explicit visual approvals and answered questions can supply decision evidence. Missing evidence stays unmeasured. Usage does not establish experience, so that field needs a user value.
+
+Profiles live in `~/.fno/evals/profiles/<anonymous-id>.json`. The file’s `user_set` block wins on every refresh. A persistent random local seed keys the user hash. Keep `.seed` to preserve the id and its deterministic train or held-out assignment. The profile is local context for later grading consumers. This pass does not change grades. `fno-agents evals events` still uses the existing export allowlist, which includes no profile field or trace content.
 
 ### Lead goldens
 

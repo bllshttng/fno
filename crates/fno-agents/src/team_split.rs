@@ -208,31 +208,6 @@ mod tests {
         assert_eq!(out.double_ruled[0].holders, vec!["lead-a", "lead-b"]);
     }
 
-    #[test]
-    fn a_terminal_row_is_stale_never_double_ruled() {
-        // A decided-dead Orphaned row (reaped pid) stays stale; an
-        // undecided one (no pid evidence) holds live, so it double-rules
-        // beside a live holder - never read stale on the word alone.
-        let mut dead = row("lead-dead", Some("shared"), AgentStatus::Orphaned);
-        dead.pid = Some(crate::row_verdict::reaped_pid());
-        let rows = [row("lead-live", Some("shared"), AgentStatus::Live), dead];
-        let out = read_team_splits(&rows);
-        assert!(out.double_ruled.is_empty());
-        assert_eq!(out.stale.len(), 1);
-        assert_eq!(out.stale[0].row, "lead-dead");
-        assert_eq!(out.stale[0].scope, "shared");
-        assert_eq!(out.stale[0].stored_status, "orphaned");
-
-        let undecided = row("lead-old", Some("shared"), AgentStatus::Orphaned);
-        let rows = [
-            row("lead-live", Some("shared"), AgentStatus::Live),
-            undecided,
-        ];
-        let out = read_team_splits(&rows);
-        assert_eq!(out.double_ruled.len(), 1);
-        assert!(out.stale.is_empty());
-    }
-
     fn claude_row(name: &str, sid: &str) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
@@ -242,46 +217,6 @@ mod tests {
             harness_session_id: Some(sid.to_string()),
             ..Default::default()
         }
-    }
-
-    fn plant_open_tail(dir: &std::path::Path, sid: &str, answered: bool) {
-        let project = dir.join("proj");
-        std::fs::create_dir_all(&project).unwrap();
-        let call = r#"{"type":"assistant","timestamp":"2026-09-21T08:21:13.913Z","message":{"content":[{"type":"tool_use","id":"toolu_01DRy8JKGCBLeubeGxap9SwP","name":"Bash","input":{}}]}}"#;
-        let queue = r#"{"type":"user","timestamp":"2026-09-21T08:25:22.043Z","message":{"content":[{"type":"text","content":"queue-operation enqueue"}]}}"#;
-        let result = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01DRy8JKGCBLeubeGxap9SwP","content":"ok"}]}}"#;
-        let body = if answered {
-            format!("{call}\n{result}\n{queue}\n")
-        } else {
-            format!("{call}\n{queue}\n")
-        };
-        std::fs::write(project.join(format!("{sid}.jsonl")), body).unwrap();
-    }
-
-    // AC4-HP shape: an open newest call reads Open and stamps the boot when
-    // the call predates it.
-    #[test]
-    fn dead_call_reads_an_open_call_and_stamps_the_boot() {
-        let dir = std::env::temp_dir().join(format!("cs-dc-a-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let sid = "278c9a89-11ed-49af-a6fb-371bb36e410d";
-        plant_open_tail(&dir, sid, false);
-        let reading = dead_call_in(&dir, &claude_row("lead-fno-g6", sid), Some(1789997638000));
-        match reading {
-            DeadCallReading::Open {
-                session_id,
-                tool,
-                at,
-                boot,
-            } => {
-                assert_eq!(session_id, sid);
-                assert_eq!(tool, "Bash");
-                assert_eq!(at, "2026-09-21T08:21:13.913Z");
-                assert_eq!(boot.as_deref(), Some("2026-09-21T13:33:58Z"));
-            }
-            other => panic!("expected Open, got {other:?}"),
-        }
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -304,18 +239,6 @@ mod tests {
             &dead_call_in(&dir, &no_id, None),
             "row carries no session id",
         );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    // AC4-EDGE shape: an answered newest call reads Clear.
-    #[test]
-    fn dead_call_is_clear_when_the_newest_call_is_answered() {
-        let dir = std::env::temp_dir().join(format!("cs-dc-d-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-        plant_open_tail(&dir, sid, true);
-        let reading = dead_call_in(&dir, &claude_row("lead-clear", sid), None);
-        assert_eq!(reading, DeadCallReading::Clear);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -760,11 +760,9 @@ pub(crate) struct View {
     /// The which-key hint line is painted over the bottom row (prefix held
     /// past [`HINT_DELAY`]); any chord resolution clears it (AC4-HP).
     hint: bool,
-    /// The which-key keybinds modal (prefix+?, US3): a centered popup
-    /// built from the prefix-chord table. While open, a bound key executes
-    /// through the SAME dispatch as a direct chord (which-key); arrows/pgup
-    /// scroll+select, Enter runs the selected row, Esc/unbound closes. `None`
-    /// when closed. Replaces the old static top-left key-table poster.
+    /// The which-key keybinds modal (prefix+?, US3): a centered popup built
+    /// from the prefix-chord table; arrows/pgup scroll, Enter runs, Esc
+    /// closes. `None` when closed.
     keys_modal: Option<KeysModal>,
     /// Held prefix+backslash reveal deadline. Client-local and transient: it
     /// follows whichever pane layout the server last supplied.
@@ -775,9 +773,8 @@ pub(crate) struct View {
     /// The agents list's `^B ?` footer grid is open.
     keys_footer: bool,
     /// (US2) The right-click / `m` row context menu over a sideline agent
-    /// row: an anchored popup whose entries route to existing commands. `None`
-    /// when closed. The target is pinned by name so a layout reshuffle can only
-    /// stale-refuse an action, never redirect it.
+    /// row; the target is pinned by name so a layout reshuffle can only
+    /// stale-refuse an action, never redirect it. `None` when closed.
     row_menu: Option<RowMenu>,
     /// Pending escape bytes in row-menu mode (arrow folding).
     row_menu_esc: Vec<u8>,
@@ -786,22 +783,19 @@ pub(crate) struct View {
     aux: Option<AuxPopup>,
     /// Pending escape bytes in aux-popup mode (arrow folding).
     aux_esc: Vec<u8>,
-    /// Per-section view state - client-local, instant (AC6-UI), and
-    /// persisted across restarts by [`crate::view_store`]. Keyed by squad NAME
-    /// (not the ephemeral session id) so a restart restores the same sections.
-    /// An absent squad key reads as [`SectionView::Collapsed`], an absent
-    /// fixed section as `Expanded` - see [`View::section_view`].
+    /// Per-section view state - client-local, instant (AC6-UI), persisted
+    /// across restarts by [`crate::view_store`], keyed by squad NAME so a
+    /// restart restores the same sections. An absent squad key reads as
+    /// [`SectionView::Collapsed`], an absent fixed section as `Expanded`.
     section_view: HashMap<SectionKey, SectionView>,
     /// The subset of [`View::section_view`] the operator EXPLICITLY
     /// chose, and the only thing that reaches disk. A seeded default is
     /// recomputed on every attach, so persisting it would let this build
     /// re-seed over a value a NEWER build wrote and this one could not parse.
     section_chosen: HashMap<SectionKey, SectionView>,
-    /// Squads the operator has expanded past the top-K idle cap for
-    /// THIS session - a transient "show me all the idle rows", not a durable
-    /// preference (that layer is [`SectionView`]). Ephemeral by design: dropped
-    /// on restart, and a dead-squad key left in it is inert, so it never needs
-    /// pruning.
+    /// Squads the operator has expanded past the top-K idle cap for THIS
+    /// session - a transient "show me all the idle rows", not a durable
+    /// preference (that layer is [`SectionView`]). Dropped on restart.
     idle_expanded: HashSet<SectionKey>,
     /// Selector cursor into [`View::display_rows`], when open (: one
     /// index space shared with painting, hover, and mouse hit-testing).
@@ -874,6 +868,10 @@ pub(crate) struct View {
     /// events leg. Rendered as its own row kind, ranked ahead of the rest of
     /// THEY NEED YOU.
     questions_fold: Option<crate::needs_overlay::QuestionsFold>,
+    /// Pre-stamp (badge, reason) a question stamp overwrote, keyed by the
+    /// row's session id else its name. The answer fold restores it; a layout
+    /// push drops it, because fresh server rows carry true badges.
+    question_stamps: HashMap<String, (Option<AgentBadge>, Option<String>)>,
     /// The pinned Needs input section is open (a tap on the strip count).
     needs_open: bool,
     /// The question pages index, read in-process: the bell's fast seed.
@@ -1907,6 +1905,7 @@ impl View {
             mine_action: None,
             mine_acting: false,
             questions_fold: None,
+            question_stamps: HashMap::new(),
             needs_open: false,
             questions_index: None,
             questions_degraded: false,
@@ -2640,11 +2639,7 @@ impl View {
             return Some(self.confirm_overlay_layout(rows, action));
         }
         if let Some(name) = &self.create {
-            return Some(self.name_modal_layout(
-                "new workspace",
-                name,
-                Some(&self.create_hint(name)),
-            ));
+            return Some(self.create_modal_layout(name));
         }
         if let Some((target, name)) = &self.rename {
             let noun = match target {
@@ -3839,6 +3834,8 @@ impl View {
         // pull the newly-focused row into view once the catalog settles.
         let focus_prev = self.layout.focus;
         self.layout = layout;
+        self.question_stamps.clear();
+        self.restamp_asking_badges();
         // Selector re-anchors to a live, actionable row on catalog change
         // (AC6-FR): clamp into the unified rows, then step off an inert Header
         // so the cursor never rests on a label. A pending J/K reorder
@@ -5865,20 +5862,14 @@ fn pane_state(badge: Option<AgentBadge>, seen: bool, activity: Option<ShellActiv
         Some(AgentBadge::Done) if seen => PaneState::Idle,
         Some(AgentBadge::Done) => PaneState::DoneUnseen,
         None => match activity {
-            // ACCEPTED COST, ruled 2026-08-26, do not relitigate: a bare shell
-            // running `less`, `nvim` or a long build also lands here, so it
-            // reads `Working` and holds an attention row it does not need.
-            // That is the cheaper error by design. This epic's founding
-            // measurement was four codex panes carrying `fno_id=-` while
-            // running `cargo test`, `fno doctor test` and `fno do pr wait`.
-            // Over-surfacing a shell costs one row; under-surfacing a working
-            // agent is the defect this branch ships to delete.
+            // ACCEPTED COST, do not relitigate: a bare shell running `less`,
+            // `nvim` or a long build also lands here, and over-surfacing a
+            // shell costs one row while under-surfacing a working agent is
+            // the founding defect this branch shipped to delete. A quiet
+            // shell reads `Idle` (the user's ruling: a shell tab is live,
+            // not a mystery to measure).
             Some(ShellActivity::Running) => PaneState::Working,
             Some(ShellActivity::Idle) => PaneState::Idle,
-            // The user's 2026-10-06 ruling: a user's shell tab is live. The
-            // `empty` and unmeasured marks are dropped - a quiet shell reads
-            // `Idle` like any live row, superseding the marked-absence
-            // ruling (a shell tab is not a mystery to measure).
             Some(ShellActivity::Empty) => PaneState::Idle,
             Some(ShellActivity::Unmeasured) | None => PaneState::Idle,
         },

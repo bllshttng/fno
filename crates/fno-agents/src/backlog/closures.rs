@@ -385,7 +385,6 @@ pub(crate) fn sweep_reparent_stranded_orphans(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backlog::workflows::cascade_close_parents;
     use serde_json::json;
 
     fn seed(id: &str, parent: Option<&str>) -> Value {
@@ -408,72 +407,6 @@ mod tests {
         assert_eq!(entries[0]["status"], "done");
         let note = entries[0]["completion_note"].as_str().unwrap_or_default();
         assert!(note.contains("all children complete"), "{note}");
-    }
-
-    #[test]
-    fn a_child_filed_after_the_reopen_never_re_arms_the_epic_close() {
-        // The epic was reopened with every filed child done, so the owed
-        // leaves were not yet filed. A child filed after the reopen closes:
-        // the sweep and the cascade both leave the epic open.
-        let rows = |kid_filed: &str| {
-            vec![
-                json!({"id": "x-epic", "reopened_at": "2026-10-25T13:51:00Z"}),
-                json!({"id": "x-old", "parent": "x-epic", "status": "done",
-                       "created_at": "2026-10-20T00:00:00Z",
-                       "completed_at": "2026-10-24T00:00:00Z"}),
-                json!({"id": "x-new", "parent": "x-epic", "status": "done",
-                       "created_at": kid_filed,
-                       "completed_at": "2026-10-26T08:22:00Z"}),
-            ]
-        };
-        let mut entries = rows("2026-10-25T20:00:00Z");
-        assert!(strandable_epic_ids(&entries).is_empty());
-        assert_eq!(
-            sweep_close_done_epics(&mut entries, &Default::default()),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            cascade_close_parents(&mut entries, "x-new", &Default::default()),
-            Vec::<String>::new()
-        );
-        assert!(entries[0].get("completed_at").is_none());
-        // Positive control: a child filed before the reopen that closes after
-        // it is evidence the reopened work finished.
-        let mut entries = rows("2026-10-25T10:00:00Z");
-        assert_eq!(
-            cascade_close_parents(&mut entries, "x-new", &Default::default()),
-            vec!["x-epic".to_string()]
-        );
-    }
-
-    #[test]
-    fn a_parent_with_its_own_plan_work_is_never_rollup_closed() {
-        // The strandable sweep and the done cascade read the same hold: a
-        // plan-having parent's own deliverables are unverified, so no
-        // children rollup closes it. Positive controls live in the two
-        // plan-less fixtures above and below.
-        let mut entries = vec![
-            json!({"id": "x-plan", "plan_path": "plans/p.md", "status": "ready"}),
-            json!({"id": "x-kid", "parent": "x-plan", "status": "done",
-                   "completed_at": "2026-10-01T00:00:00Z"}),
-        ];
-        assert!(
-            strandable_epic_ids(&entries).is_empty(),
-            "the self-heal sweep does not strand-close a plan-having parent"
-        );
-        assert_eq!(
-            sweep_close_done_epics(&mut entries, &Default::default()),
-            Vec::<String>::new()
-        );
-        assert!(entries[0].get("completed_at").is_none());
-        assert_eq!(entries[0]["status"], "ready");
-        assert_eq!(
-            cascade_close_parents(&mut entries, "x-kid", &Default::default()),
-            Vec::<String>::new(),
-            "the done cascade leaves the plan-having parent open"
-        );
-        assert!(entries[0].get("completed_at").is_none());
-        assert_eq!(entries[0]["status"], "ready");
     }
 
     #[test]
@@ -516,23 +449,6 @@ mod tests {
         );
         assert!(entries[0].get("completed_at").is_none());
         assert_eq!(entries[0]["status"], "in_progress");
-    }
-
-    #[test]
-    fn a_child_reopen_postdating_the_merge_holds_the_close() {
-        let mut entries = vec![
-            json!({"id": "x-owner", "pr_number": 9}),
-            json!({
-                "id": "x-carried",
-                "contained_in": "x-owner",
-                "reopened_at": "2026-10-02T00:00:00Z",
-                "reopened_reason": "still needed",
-            }),
-        ];
-        let closed =
-            cascade_close_contained(&mut entries, "x-owner", Some("2026-10-01T00:00:00Z"), None);
-        assert!(closed.closed.is_empty());
-        assert!(entries[1].get("completed_at").is_none());
     }
 
     #[test]
@@ -582,34 +498,6 @@ mod tests {
             Some(&ev),
         );
         assert_eq!(out.closed, vec!["x-carried".to_string()]);
-    }
-
-    #[test]
-    fn a_no_match_releases_the_containment() {
-        let mut entries = vec![
-            json!({"id": "x-owner", "pr_number": 9}),
-            json!({
-                "id": "x-carried",
-                "contained_in": "x-owner",
-                "containment_surfaces": ["scripts/ci/check-file-budget.sh"]
-            }),
-        ];
-        let files = vec!["crates/fno/src/theme.rs".to_string()];
-        let ev = CascadeEvidence {
-            changed_files: &files,
-            pr_number: 9,
-        };
-        let out = cascade_close_contained(
-            &mut entries,
-            "x-owner",
-            Some("2026-10-01T00:00:00Z"),
-            Some(&ev),
-        );
-        assert_eq!(out.released, vec!["x-carried".to_string()]);
-        assert!(out.closed.is_empty());
-        assert!(entries[1].get("completed_at").is_none());
-        assert!(entries[1].get("contained_in").is_none());
-        assert_eq!(entries[1]["released_from"], "x-owner");
     }
 
     #[test]

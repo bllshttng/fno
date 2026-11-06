@@ -215,7 +215,9 @@ pub mod evals_gate;
 pub mod evals_macro;
 pub mod evals_power;
 pub mod evals_predict;
+pub mod evals_profile;
 pub mod evals_qualification;
+pub mod evals_traces;
 pub mod evals_trend;
 pub mod event_rules;
 pub mod event_store;
@@ -567,6 +569,7 @@ pub mod resume_args;
 pub mod resume_gate;
 pub mod resume_pin;
 pub mod resume_receipt;
+pub(crate) mod resume_reroute;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
@@ -1870,6 +1873,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // 24h, marking finished rows handled. Emitted even on a quiet or skipped
     // run, so a quiet run cannot be mistaken for a sweep that never ran.
     "park_sweep",
+    // Evals-gate settle (daemon-emitted): the one-minute arm graded a
+    // finished gate run outside the pr-watch tick, or a run is in flight
+    // under it. A fully idle minute stays silent by design.
+    "evals_settle",
     // A parked PR resumed polling (pr-park-emitted): retries reset, by hand
     // (the lead row's command) or by the sweep.
     "pr_watch_unparked",

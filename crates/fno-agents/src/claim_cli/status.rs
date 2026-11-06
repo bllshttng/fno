@@ -1,7 +1,6 @@
 //! `claim status` leaf, ported from `cli/src/fno/claims/cli.py::status`.
-//! The goldens frozen in `tests/claim_status_parity.rs` are the contract:
-//! payload field order, verdict-line wording, and the typer parse-error
-//! layout. On a `node:` key nobody holds, one fleet roster read is shared
+//! Its contract is the payload field order, the verdict-line wording and
+//! the typer parse-error layout. On a `node:` key nobody holds, one fleet roster read is shared
 //! with the worked-overlay join; stdout stays parseable JSON on every path
 //! and all prose rides stderr.
 

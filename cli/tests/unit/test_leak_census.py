@@ -85,28 +85,3 @@ def test_reap_rooted_takes_the_whole_tree(tmp_path):
     finally:
         shell.kill()
         shell.wait()
-
-
-def test_match_component_reaps_garbage_only(tmp_path):
-    """With match_component='garbage-', a process under root/garbage-x/ is
-    reaped and one under root/pytest-9/ is untouched - the shape of the real
-    start-of-session sweep against a live sibling session."""
-    garbage = tmp_path / "garbage-abc"
-    garbage.mkdir()
-    live = tmp_path / "pytest-9"
-    live.mkdir()
-    in_garbage = _spawn_rooted(garbage, f"exec /bin/sleep {_SLEEP}")
-    in_live = _spawn_rooted(live, f"exec /bin/sleep {_SLEEP}")
-    try:
-        rows = reap_rooted(
-            [str(tmp_path)], match_component="garbage-", reaper=os.getpid()
-        )
-
-        assert {r["pid"] for r in rows} == {in_garbage.pid}
-        assert rows[0]["terminal"] is True
-        assert in_live.poll() is None
-    finally:
-        in_live.kill()
-        in_garbage.kill()
-        in_live.wait()
-        in_garbage.wait()

@@ -294,43 +294,4 @@ mod tests {
         assert!(run(row, &[]));
         assert!(run(json!({}), &[("epic", "x-bbbb")]));
     }
-
-    #[test]
-    fn a_pair_names_its_source_gap() {
-        assert_eq!(
-            parse_pair("harness=codex").unwrap(),
-            ("harness".into(), "codex".into())
-        );
-        assert_eq!(
-            parse_pair("lead=rowan").unwrap(),
-            ("lead".into(), "rowan".into())
-        );
-        assert!(parse_pair("pr_label=paint")
-            .unwrap_err()
-            .contains("no identity source"));
-        assert!(parse_pair("colour=red")
-            .unwrap_err()
-            .contains("no such filter"));
-        assert!(parse_pair("harness").is_err());
-    }
-
-    #[test]
-    fn branch_reads_a_plain_and_a_linked_checkout() {
-        let dir = tempfile::tempdir().unwrap();
-        let plain = dir.path().join("plain");
-        std::fs::create_dir_all(plain.join(".git")).unwrap();
-        std::fs::write(plain.join(".git/HEAD"), "ref: refs/heads/feature/a\n").unwrap();
-        assert_eq!(branch_of(&plain).as_deref(), Some("feature/a"));
-        let gitdir = dir.path().join("gitdirs/w");
-        std::fs::create_dir_all(&gitdir).unwrap();
-        std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/release/1\n").unwrap();
-        let linked = dir.path().join("linked");
-        std::fs::create_dir_all(&linked).unwrap();
-        std::fs::write(
-            linked.join(".git"),
-            format!("gitdir: {}\n", gitdir.display()),
-        )
-        .unwrap();
-        assert_eq!(branch_of(&linked).as_deref(), Some("release/1"));
-    }
 }

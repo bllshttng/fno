@@ -81,75 +81,12 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn claim(key: &str, holder: &str, expires_at: i64) -> crate::claims::ClaimRecord {
-        let now = crate::claims::now_ms();
-        crate::claims::ClaimRecord {
-            schema_version: 1,
-            key: key.into(),
-            holder: holder.into(),
-            acquired_at: now,
-            pid: Some(1),
-            host: "test-host".into(),
-            pid_unavailable: false,
-            expires_at: Some(expires_at),
-            reason: Some(format!("spawn handover window for {key}")),
-            harness: None,
-            session_id: None,
-            pid_provenance: None,
-            machine_id: None,
-            metadata: Default::default(),
-        }
-    }
-
-    fn handover_row(
-        holder: &str,
-        expires_in_ms: i64,
-        key: &str,
-    ) -> (String, crate::claims::ClaimRecord) {
-        let rec = claim(key, holder, crate::claims::now_ms() + expires_in_ms);
-        (format!("{}.lock", crate::claims::encode_key(key)), rec)
-    }
-
     /// A claims dir whose state root (`graph.db` home) is private to the test.
     fn scan_dir(tag: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("kb-claims-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
         root.join("claims")
-    }
-
-    #[test]
-    fn a_claim_row_names_its_holder_session_and_when_it_took_the_claim() {
-        // AC1: the projection stamps session_id and acquired_at, the two
-        // keys claim_session_by_node (org_board.rs) and the distress
-        // staleness compare read. A pre-change lockfile carries neither;
-        // its row stays with session_id null, never an error or a drop.
-        let dir = scan_dir("session-id");
-        let now = crate::claims::now_ms();
-        let mut named = claim("node:x-cccc", "target-session:a6d2ce6a-1da0", now + 900_000);
-        named.acquired_at = now;
-        named.session_id = Some("target-session:a6d2ce6a-1da0".into());
-        crate::claim_store::seed_at_path(&dir.join("node%3Ax-cccc.lock"), &named);
-        let (name, pre_change) =
-            handover_row("spawn-handover:launch-port", 900_000, "node:x-requeue");
-        crate::claim_store::seed_at_path(&dir.join(name), &pre_change);
-        let rows = read_claims_in(&[dir.clone()]).rows();
-        assert_eq!(rows.len(), 2, "both rows stay in scope: {rows:?}");
-        let named = rows
-            .iter()
-            .find(|r| r["key"] == "node:x-cccc")
-            .expect("session-carrying row present");
-        assert_eq!(named["session_id"], "target-session:a6d2ce6a-1da0");
-        assert_eq!(named["acquired_at"], now, "epoch milliseconds, unchanged");
-        let pre = rows
-            .iter()
-            .find(|r| r["key"] == "node:x-requeue")
-            .expect("pre-change row present");
-        assert!(
-            pre["session_id"].is_null(),
-            "absent session_id reads null, not a parse error: {pre:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

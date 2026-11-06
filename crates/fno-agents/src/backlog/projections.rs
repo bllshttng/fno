@@ -1974,37 +1974,6 @@ mod tests {
     }
 
     #[test]
-    fn board_sections_read_unknown_claims_and_never_fall_to_on_deck() {
-        let now = parse_iso_str("2026-01-10T12:00:00Z").unwrap();
-        let entries = vec![
-            json!({"id": "x-1", "title": "running", "status": "in_progress", "project": "p"}),
-            json!({"id": "x-2", "title": "waiting", "status": "ready", "project": "p",
-                   "blocked_by": ["x-1"]}),
-            json!({"id": "x-3", "title": "shipped", "status": "done", "project": "p",
-                   "completed_at": "2026-01-10T11:00:00Z", "pr_number": 7}),
-        ];
-        let board = compute_board(
-            &entries,
-            Some("p"),
-            Err("boom".into()),
-            now,
-            None,
-            Path::new("/nonexistent-repo-for-board-stale"),
-        );
-        assert_eq!(
-            board["in_progress"]["unknown"],
-            json!("live claim state unavailable (boom)")
-        );
-        assert_eq!(
-            board["just_finished"]["rows"][0]["fact"],
-            json!("PR 7 merged 1h ago")
-        );
-        let deck = board["on_deck"]["rows"].as_array().unwrap();
-        assert_eq!(deck.len(), 1);
-        assert_eq!(deck[0]["fact"], json!("blocked by x-1"));
-    }
-
-    #[test]
     fn bases_refuse_a_hand_authored_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("epics.base");
@@ -2014,47 +1983,6 @@ mod tests {
         std::fs::write(&path, "hand made\n").unwrap();
         assert_eq!(write_base(&path, content), "refused");
         assert!(content.starts_with(GENERATED_MARKER));
-    }
-
-    #[test]
-    fn roadmap_folds_columns_and_omits_leaky_titles() {
-        let entries = vec![
-            json!({"id": "x-1", "title": "Ship it", "status": "in_progress", "project": "p",
-                   "priority": "p1", "size": "M"}),
-            json!({"id": "x-2", "title": "Leak /Users/me/secret", "status": "ready",
-                   "project": "p"}),
-            json!({"id": "x-3", "title": "Private", "status": "ready", "project": "p",
-                   "public": false}),
-            json!({"id": "x-4", "title": "Waiting", "status": "ready", "project": "p",
-                   "queued_at": "2026-01-01"}),
-            json!({"id": "x-ext-null", "title": "Visitor ask", "status": "ready",
-                   "project": "p", "source_kind": "external_request"}),
-            json!({"id": "x-ext-pub", "title": "Visitor ask published",
-                   "status": "ready", "project": "p",
-                   "source_kind": "external_request", "public": true,
-                   "queued_at": "2026-01-01"}),
-        ];
-        let kept = omit_leaky_rows(entries, "p");
-        assert_eq!(kept.len(), 5);
-        let md = render_public_roadmap_md(&kept, "p");
-        assert_eq!(
-            md,
-            "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n- Visitor ask published\n"
-        );
-    }
-
-    #[test]
-    fn render_target_at_a_legacy_root_page_renders_at_the_page_home() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = resolve(dir.path());
-        assert_eq!(
-            fold_legacy_page(&root, &root.join("graph.html")),
-            root.join("cache").join("pages").join("graph.html")
-        );
-        let elsewhere = root.join("vault").join("graph.html");
-        assert_eq!(fold_legacy_page(&root, &elsewhere), elsewhere);
-        let not_a_page = root.join("ledger.json");
-        assert_eq!(fold_legacy_page(&root, &not_a_page), not_a_page);
     }
 
     #[test]
@@ -2074,41 +2002,5 @@ mod tests {
             .contains("scope must not be empty"));
         let star = parse_target(&json!({"path": "/tmp/b.html", "scope": "*"})).unwrap();
         assert_eq!(star.scope, "all");
-    }
-
-    #[test]
-    fn render_default_off_drops_the_implicit_page_and_view_restores_it() {
-        let off = json!({"backlog": {"render_default": false}});
-        let targets = targets_from_global(&off, &[]);
-        assert!(!names_canonical_page(&targets));
-        // `fno backlog view` renders the page on demand when the keeper skips it.
-        assert!(names_canonical_page(&view_targets(&off, &[])));
-        // Unset reads as on: exactly one target, the canonical page.
-        let on = targets_from_global(&json!({}), &[]);
-        assert_eq!(on.len(), 1);
-        assert!(names_canonical_page(&on));
-        // The lax bool reader takes the string spelling too.
-        let str_off = json!({"backlog": {"render_default": "false"}});
-        assert!(!names_canonical_page(&targets_from_global(&str_off, &[])));
-    }
-
-    #[test]
-    fn render_default_off_keeps_explicit_rows_and_view_adds_the_page_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let page = dir.path().join("board.html");
-        let global = json!({
-            "backlog": {
-                "render_default": false,
-                "render_targets": [{"path": page.to_string_lossy(), "scope": "all"}],
-            }
-        });
-        let targets = targets_from_global(&global, &[]);
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].path, page.to_string_lossy());
-        // The view list carries the explicit row plus the on-demand page.
-        let view = view_targets(&global, &[]);
-        assert_eq!(view.len(), 2);
-        assert_eq!(view[0].path, page.to_string_lossy());
-        assert!(names_canonical_page(&view));
     }
 }

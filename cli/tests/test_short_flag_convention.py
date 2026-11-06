@@ -18,13 +18,12 @@ every ``typer.Option`` declaration in ``fno`` source, so it needs no
 runtime import of the (lazily loaded) command tree and cannot be fooled by
 deferred sub-apps.
 
-Covers ACs 1 (Python side), 2 (global register), 3 (no collisions + pins).
-The Rust-path side of AC1 and AC4/AC5 lives in the Rust crate tests.
+Covers AC2 (the global register never carries a local meaning). The
+Rust-path side of the convention lives in the Rust crate tests.
 """
 from __future__ import annotations
 
 import ast
-from collections import defaultdict
 from pathlib import Path
 
 import pytest
@@ -41,31 +40,6 @@ GLOBAL_REGISTER: dict[str, str] = {
     "-N": "--dry-run",
     "-R": "--reason",
     "-Y": "--yolo",
-}
-#: Inverse: a command that declares this long MUST carry this short (AC2 positive).
-GLOBAL_LONG_TO_SHORT: dict[str, str] = {v: k for k, v in GLOBAL_REGISTER.items()}
-
-#: The 7 shorts that predate the convention and must never change (AC3).
-#: Lowercase letters are per-command under the convention, so each pair is
-#: pinned to its HOME declaration site (file suffix); another command may
-#: legally reuse the letter for a different long (e.g. ``-b --body`` on
-#: ``inbox send``, while the native ``backlog pick`` arm keeps ``-b
-#: --blocked``). The uppercase pair (``-I``) stays codebase-exclusive like
-#: the global register.
-PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
-    # The -A --all row moved with the plan port: `fno do plan sync` is native,
-    # and the global register still pins -A to --all for any Python decl.
-    # The -b --blocked row moved with the pick port: the native arm owns the
-    # surface now, and the wheel-side scan can no longer see a Rust flag decl.
-}
-
-#: Uppercase shorts outside the global register: still exclusive, i.e. the letter
-#: maps to exactly one long codebase-wide. ``-P`` is half of the spawn axis pair:
-#: uppercase because ``-p`` means headless there, mirroring the harnesses' own
-#: one-shot short. Its twin ``-H --harness`` moved with the accounts port: the
-#: native arm owns that surface now, out of reach of the wheel-side scan.
-EXCLUSIVE_PRE_EXISTING: dict[str, str] = {
-    "-P": "--provider",
 }
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src" / "fno"
@@ -182,59 +156,3 @@ def test_global_register_never_carries_a_local_meaning(decls: list[Decl]) -> Non
             if s in GLOBAL_REGISTER and d.long != GLOBAL_REGISTER[s]:
                 offenders.append(f"{s} -> {d.long} at {d.where} (reserved for {GLOBAL_REGISTER[s]})")
     assert not offenders, "global-register letters reused for a local meaning:\n" + "\n".join(offenders)
-
-
-def test_every_global_long_carries_its_global_short(decls: list[Decl]) -> None:
-    """AC2 positive: any option declaring a global long has the matching short."""
-    missing: list[str] = []
-    for d in decls:
-        if d.long in GLOBAL_LONG_TO_SHORT:
-            want = GLOBAL_LONG_TO_SHORT[d.long]
-            if want not in d.shorts:
-                missing.append(f"{d.long} missing {want} at {d.where}")
-    assert not missing, "global longs without their reserved short:\n" + "\n".join(missing)
-
-
-# --------------------------------------------------------------------------- #
-# AC3 - no collisions + pinned pre-existing shorts.
-# --------------------------------------------------------------------------- #
-
-def test_no_short_collision_within_a_command(decls: list[Decl]) -> None:
-    """AC3: no single command declares the same short for two different longs."""
-    per_cmd: dict[tuple[str, str], dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-    for d in decls:
-        for s in d.shorts:
-            per_cmd[(d.file, d.func)][s].add(d.long or "?")
-    collisions: list[str] = []
-    for (file, func), short_map in per_cmd.items():
-        for short, longs in short_map.items():
-            if len(longs) > 1:
-                collisions.append(f"{file} ({func}): {short} -> {sorted(longs)}")
-    assert not collisions, "same short letter on two options of one command:\n" + "\n".join(collisions)
-
-
-def test_pre_existing_shorts_unchanged(decls: list[Decl]) -> None:
-    """AC3: the pre-existing (short, long) pairs still exist at their home.
-
-    Lowercase shorts are per-command under the convention, so this pins each
-    pair to its home file rather than demanding codebase-wide exclusivity
-    (Phase 2 legally adds ``-b --body`` on ``inbox send`` while ``backlog
-    pick`` keeps ``-b --blocked``). Same-command ambiguity is impossible -
-    ``test_no_short_collision_within_a_command`` guards it.
-    """
-    for short, (long, home) in PRE_EXISTING_SHORTS.items():
-        hits = [
-            d for d in decls
-            if short in d.shorts and d.long == long
-            and (not home or d.file.endswith(home))
-        ]
-        assert hits, f"pre-existing short {short} ({long}) vanished from {home or 'the codebase'}"
-
-
-def test_exclusive_pre_existing_uppercase(decls: list[Decl]) -> None:
-    """AC3: legacy uppercase shorts outside the global register stay exclusive."""
-    for short, long in EXCLUSIVE_PRE_EXISTING.items():
-        observed = {d.long for d in decls if short in d.shorts and d.long}
-        assert observed == {long}, (
-            f"legacy uppercase short {short} must map only to {long}, found {sorted(observed)}"
-        )

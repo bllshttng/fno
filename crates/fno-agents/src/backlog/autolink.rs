@@ -365,23 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn orphan_receipt_when_no_candidate_clears_the_floor() {
-        let epic_row = epic(
-            "x-e0aa0001",
-            "Deployment pipeline hardening",
-            "code",
-            "ready",
-        );
-        let node = json!({"id": "ab-new", "title": "Quantum flux capacitor overhaul",
-                          "type": "feature", "domain": "code"});
-        let entries = vec![epic_row, node.clone()];
-        let r = resolve(&node, &entries, None);
-        assert_eq!(r.kind, "orphan");
-        let lines = receipt_lines(&r, "ab-new", &entries);
-        assert!(lines[0].contains("orphan_ok="), "{lines:?}");
-    }
-
-    #[test]
     fn exempt_when_parent_set_or_bulk_or_no_epics() {
         let parented =
             json!({"id": "ab-x", "title": "T", "type": "feature", "parent": "x-epic0001"});

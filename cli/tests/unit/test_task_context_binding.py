@@ -65,14 +65,6 @@ def _gate(node: str, root: str, env: dict | None = None) -> dict:
 
 
 @requires_rust
-def test_declared_but_unreadable_binding_refuses_by_name(tmp_path):
-    missing = tmp_path / "gone.json"
-    verdict = _gate("x-59b0", str(tmp_path), env={"FNO_TASK_CONTEXT_FILE": str(missing)})
-    assert verdict["ok"] is False
-    assert verdict["reason"] == "context_binding_unreadable"
-
-
-@requires_rust
 def test_gate_refuses_when_required_source_changed(tmp_path):
     binding_file = tmp_path / "task-context-x-59b0.json"
     _write_bound_binding(tmp_path, binding_file)

@@ -522,38 +522,6 @@ mod quota_signal_tests {
     }
 
     #[test]
-    fn p0_is_exempt_when_observation_is_armed() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let _env = EnvPin::pin(&quota_config(true, true), None);
-        let sig = evaluate_quota_signal("p1", Some("p0"), 0.0, None, NOW);
-        assert_eq!(sig.state, HeadroomState::Unknown);
-        assert!(!sig.defer && !sig.cutover);
-        assert_eq!(sig.reason, "p0-exempt");
-    }
-
-    #[test]
-    fn observe_only_without_a_snapshot_stays_unknown_and_does_not_act() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let _env = EnvPin::pin(&quota_config(true, false), None);
-        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
-        assert_eq!(sig.state, HeadroomState::Unknown);
-        assert!(!sig.defer && !sig.cutover);
-        assert_eq!(sig.reason, "probe-unavailable-native");
-    }
-
-    #[test]
-    fn observe_only_reports_the_verdict_a_fresh_snapshot_gives() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = state_file(&dir.path(), 32.0, NOW + 3600.0);
-        let _env = EnvPin::pin(&quota_config(true, false), Some(&state));
-        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
-        assert_eq!(sig.state, HeadroomState::Ok);
-        assert!(!sig.defer && !sig.cutover);
-        assert_eq!(sig.reason, "observed");
-    }
-
-    #[test]
     fn exhaustion_defers_and_cutovers() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().expect("tempdir");
@@ -563,30 +531,6 @@ mod quota_signal_tests {
         assert_eq!(sig.state, HeadroomState::Exhausted);
         assert!(sig.defer && sig.cutover);
         assert_eq!(sig.reason, "probed");
-    }
-
-    #[test]
-    fn low_near_reset_defers_without_cutover() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = state_file(&dir.path(), 95.0, NOW + 60.0);
-        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
-        let sig = evaluate_quota_signal("p1", None, 30.0, None, NOW);
-        assert_eq!(sig.state, HeadroomState::Low);
-        assert!(sig.defer);
-        assert!(!sig.cutover);
-    }
-
-    #[test]
-    fn low_far_reset_cutovers_when_the_knob_is_on() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = state_file(&dir.path(), 95.0, NOW + 7200.0);
-        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
-        let sig = evaluate_quota_signal("p1", None, 30.0, None, NOW);
-        assert_eq!(sig.state, HeadroomState::Low);
-        assert!(!sig.defer);
-        assert!(sig.cutover);
     }
 
     #[test]

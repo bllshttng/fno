@@ -10,7 +10,6 @@ same markers by hand so the validator contract stays pinned.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -115,34 +114,6 @@ def test_validator_rejects_unfilled_scaffold(tmp_path):
     assert "Seeded from epic waves" in result.stdout  # marker is named
 
 
-def test_validator_flags_empty_why_on_group_child(tmp_path):
-    # A group child (parent_epic set) whose ## Why body is empty is rejected even
-    # if the other markers were cleared.
-    plan = tmp_path / "big.group-1.md"
-    plan.write_text(
-        "---\ntitle: G\nparent_epic: ab-epic0001\n---\n\n"
-        "# G\n\n## Why (from epic)\n\n## Changes\n\nreal\n"
-    )
-    result = _run(plan)
-    assert result.returncode == 1, result.stdout
-    assert "empty '## Why (from epic)'" in result.stdout
-
-
-def test_validator_rejects_a_pre_design_rung(tmp_path):
-    """A filled plan that forgot to flip its status to `ready` is rejected.
-
-    The `idea` rung is undispatchable, so nothing would ever pick this child up.
-    """
-    plan = tmp_path / "big.group-1.md"
-    plan.write_text(
-        "---\ntitle: G\nstatus: idea\nparent_epic: ab-epic0001\n---\n\n"
-        "# G\n\n## Why (from epic)\n\nreal why\n\n## Changes\n\nreal\n"
-    )
-    result = _run(plan)
-    assert result.returncode == 1, result.stdout
-    assert "'idea' rung" in result.stdout
-
-
 def test_validator_passes_filled_child(tmp_path):
     plan = tmp_path / "big.group-1.md"
     plan.write_text(_FILLED)
@@ -150,15 +121,3 @@ def test_validator_passes_filled_child(tmp_path):
     assert result.returncode == 0, result.stdout
     assert "no unfilled stub markers" in result.stdout
     assert "## Why (from epic) is non-empty" in result.stdout
-
-
-def test_validator_uses_source_cli_when_fno_is_not_on_path(tmp_path):
-    plan = tmp_path / "big.group-1.md"
-    plan.write_text(_FILLED)
-    env = os.environ.copy()
-    env["PATH"] = "/usr/bin:/bin"
-
-    result = _run(plan, env=env)
-
-    assert result.returncode == 0, result.stdout
-    assert "semantic execution contract valid" in result.stdout

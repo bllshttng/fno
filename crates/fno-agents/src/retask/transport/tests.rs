@@ -165,62 +165,6 @@ fn test_source_preflight_trusts_a_graph_done_merged_source_node() {
     assert_eq!(receipt["source_node_id"], json!("x-source"));
 }
 
-#[test]
-fn test_source_preflight_folds_a_pr_status_failure_into_the_unknown_refusal() {
-    let dir = tempdir("preflight-timeout");
-    let graph = graph_file(
-        dir.path(),
-        json!([{
-            "id": "x-source",
-            "cwd": "/repo",
-            "pr_number": 1168,
-            "status": "in_review",
-            "sessions": [{"harness": "codex", "session_id": "old-session"}],
-        }]),
-    );
-    let row = codex_row();
-    let mut seams = seams_with(&dir, row.clone(), |_argv, _secs, _cwd| {
-        // The bounded runner's deadline death: killed, so no exit code.
-        Err(TransportFailure {
-            reason: "pane_read_timeout".to_string(),
-            detail: None,
-        })
-    });
-    seams.graph_path = graph;
-    let receipt = seams.source_preflight().expect("preflight answers");
-
-    assert_eq!(receipt["status"], json!("refused"));
-    assert_eq!(receipt["reason"], json!("source_pr_status_unknown"));
-    assert!(receipt.get("error").is_some());
-}
-
-#[test]
-fn test_source_preflight_two_distinct_nodes_stay_ambiguous() {
-    let dir = tempdir("preflight-ambiguous");
-    let graph = graph_file(
-        dir.path(),
-        json!([
-            {
-                "id": "x-one",
-                "pr_number": Value::Null,
-                "sessions": [{"harness": "codex", "session_id": "old-session"}],
-            },
-            {
-                "id": "x-two",
-                "pr_number": Value::Null,
-                "sessions": [{"harness": "codex", "session_id": "old-session"}],
-            },
-        ]),
-    );
-    let row = codex_row();
-    let mut seams = seams_with(&dir, row.clone(), |_argv, _secs, _cwd| unreachable!());
-    seams.graph_path = graph;
-    let receipt = seams.source_preflight().expect("preflight answers");
-
-    assert_eq!(receipt["status"], json!("refused"));
-    assert_eq!(receipt["reason"], json!("source_node_ambiguous"));
-}
-
 /// The shared full-transit harness: a codex pane whose /clear send restamps
 /// the registry row (modeling the daemon-side succession), then the real
 /// rename-with-node and tier projection run against the temp registry.

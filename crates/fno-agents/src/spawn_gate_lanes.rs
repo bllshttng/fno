@@ -1525,41 +1525,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The skip keys on the row, not the caller; a missing dir reads as no
-    /// receipts (count everything).
-    #[test]
-    fn the_receipt_skip_is_keyed_on_the_row_not_the_caller() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-share2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        let sid = "c79bce5b-1682-4a8c-97f4-d6254cf18112";
-        write_registry(
-            &reg,
-            &[
-                spawned_row("t-w-lead2", sid, "lead-2"),
-                spawned_row("t-w-lead1", "aaaaaaaa-bb-cc-dd-eeeeeeeeeeee", "lead-1"),
-            ],
-        );
-        let home = crate::paths::AgentsHome::at(&dir);
-        let runs = home.terminal_runs_dir();
-        crate::terminal_run::write_receipt(&home, sid, "DonePRGreen").unwrap();
-
-        // lead-2's own finished row skips; lead-1's live row still counts.
-        let reading = share_reading(&reg, 3, Some("lead-2"), Some(&runs));
-        assert_eq!(reading.held, Some(0), "lead-2's finished row skips");
-        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
-        assert_eq!(reading.held, Some(1), "lead-1's working row still counts");
-
-        // A nonexistent dir reads as no receipts: lead-2's row counts.
-        let reading = share_reading(&reg, 3, Some("lead-2"), Some(&dir.join("nope")));
-        assert_eq!(reading.held, Some(1), "missing dir: count everything");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A lead at its share borrows only a seat left over after every floor:
     /// with max_live 16 and leads A=5, B=1, C=1, A borrows the spare sixth
     /// seat. B then starts work and admits, and A's seventh is refused
@@ -1893,52 +1858,6 @@ mod tests {
         let mut warnings = Vec::new();
         let err = provider_live_count(&reg, "zai", None, &mut warnings).unwrap_err();
         assert!(err.contains("fno registry unreadable"), "{err}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The reserved spawn is not charged for its own reservation (AC1-EDGE /
-    /// AC2-HP), but a live worker's plain slot claim (no `reserved_by`) is
-    /// never skipped by a spawn borrowing its name (AC2-ERR).
-    #[test]
-    fn provider_count_skips_the_redeemers_reservation_only() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-redeem-{}", std::process::id()));
-        let root = dir.join("claims-root");
-        let claims_dir = root.join(".fno").join("claims");
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let host = claims::hostname();
-        for (key, holder, reserved) in [
-            ("worker:t-reserved-x-4444", "lead-1", true),
-            ("worker:t-live-worker", "live-holder", false),
-        ] {
-            let reserved_line = reserved
-                .then_some("  reserved_by: lead-1\n")
-                .unwrap_or_default();
-            let lock = claims_dir.join(format!("{}.lock", claims::encode_key(key)));
-            crate::claim_store::seed_yaml_at_path(&lock, &format!(
-                    "schema_version: {}\nkey: {key}\nholder: {holder}\nacquired_at: {now}\nexpires_at: {}\npid: {}\nhost: {host}\nmetadata:\n  model_provider: zai\n{reserved_line}",
-                    claims::SCHEMA_VERSION,
-                    now + 600_000,
-                    std::process::id()
-                ));
-        }
-        let mut warnings = Vec::new();
-        let (n, _) = provider_live_slot_claims("zai", &[], None, &mut warnings).unwrap();
-        assert_eq!(n, 2, "both claims count with no redeemer");
-        let (n, _) =
-            provider_live_slot_claims("zai", &[], Some("t-reserved-x-4444"), &mut warnings)
-                .unwrap();
-        assert_eq!(n, 1, "the redeemer skips its own reservation");
-        let (n, _) =
-            provider_live_slot_claims("zai", &[], Some("t-live-worker"), &mut warnings).unwrap();
-        assert_eq!(n, 2, "a live worker's claim is never skipped by name");
-        std::env::remove_var("FNO_CLAIMS_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

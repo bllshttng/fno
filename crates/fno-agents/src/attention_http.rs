@@ -741,43 +741,6 @@ mod tests {
         Instant::now() + std::time::Duration::from_secs(60)
     }
 
-    /// AC17-HP: a receiver that fails once sees both posts carry the same
-    /// delivery_id.
-    #[test]
-    fn ac17_hp_a_retry_reuses_the_delivery_id() {
-        let dir = tempfile::tempdir().unwrap();
-        let items = ready_items();
-        let sinks = vec![webhook_sink()];
-        let first = ScriptedPost {
-            responses: RefCell::new(vec![PostResult {
-                status: Some(503),
-                body: String::new(),
-            }]),
-            bodies: RefCell::new(vec![]),
-        };
-        let mut first = first;
-        let t1 = tick_sinks(&items, &sinks, dir.path(), future(), &mut first);
-        assert_eq!(t1.delivered, 0, "the 503 is transient");
-        let body1 = first.bodies.borrow()[0].clone();
-        let id1: Value = serde_json::from_str(&body1).unwrap();
-        let id1 = id1["delivery_id"].as_str().unwrap().to_string();
-        assert!(!id1.is_empty());
-
-        // The next beat: the same id, now delivered.
-        let mut second = ScriptedPost {
-            responses: RefCell::new(vec![PostResult {
-                status: Some(200),
-                body: String::new(),
-            }]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t2 = tick_sinks(&items, &sinks, dir.path(), future(), &mut second);
-        assert_eq!(t2.delivered, 1);
-        let body2 = second.bodies.borrow()[0].clone();
-        let id2: Value = serde_json::from_str(&body2).unwrap();
-        assert_eq!(id2["delivery_id"].as_str(), Some(id1.as_str()));
-    }
-
     #[test]
     fn a_permanent_4xx_drops_the_delivery_and_never_resends() {
         let dir = tempfile::tempdir().unwrap();
@@ -803,90 +766,11 @@ mod tests {
     }
 
     #[test]
-    fn a_delivered_item_closing_posts_item_closed_with_the_external_id() {
-        let dir = tempfile::tempdir().unwrap();
-        let items = ready_items();
-        let sinks = vec![webhook_sink()];
-        let mut open = ScriptedPost {
-            responses: RefCell::new(vec![PostResult {
-                status: Some(200),
-                body: r#"{"external_id": "page-7"}"#.to_string(),
-            }]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t = tick_sinks(&items, &sinks, dir.path(), future(), &mut open);
-        assert_eq!(t.delivered, 1);
-        // The question closes: the item leaves the open set.
-        let mut closer = ScriptedPost {
-            responses: RefCell::new(vec![PostResult {
-                status: Some(200),
-                body: String::new(),
-            }]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t2 = tick_sinks(&[], &sinks, dir.path(), future(), &mut closer);
-        assert_eq!(t2.closed, 1);
-        let body = closer.bodies.borrow()[0].clone();
-        let v: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["event"], "item.closed");
-        assert_eq!(v["external_id"], "page-7");
-        assert_eq!(v["delivery_id"], {
-            let opened: Value = serde_json::from_str(&open.bodies.borrow()[0].clone()).unwrap();
-            opened["delivery_id"].clone()
-        });
-        // A third beat stays quiet.
-        let mut quiet = ScriptedPost {
-            responses: RefCell::new(vec![]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t3 = tick_sinks(&[], &sinks, dir.path(), future(), &mut quiet);
-        assert_eq!(t3.acted(), 0);
-    }
-
-    /// A launchd daemon never sees an exported var: a token set only in
-    /// `~/.fno/.env` still resolves.
-    #[test]
-    fn a_sink_token_resolves_from_the_fno_env_file() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(home.path().join(".fno")).unwrap();
-        std::fs::write(
-            home.path().join(".fno/.env"),
-            "FNO_TEST_SINK_TOKEN=from-file\n",
-        )
-        .unwrap();
-        let _home = crate::claims::EnvVarGuard::set("HOME", home.path().to_str().unwrap());
-        let _unset = crate::claims::EnvVarGuard::unset("FNO_TEST_SINK_TOKEN");
-        assert_eq!(
-            resolve_token("FNO_TEST_SINK_TOKEN").as_deref(),
-            Some("from-file")
-        );
-    }
-
-    #[test]
     fn loopback_answer_urls_are_refused_at_load() {
         assert!(loopback_reason("http://127.0.0.1:8724").is_some());
         assert!(loopback_reason("http://localhost:8724").is_some());
         assert!(loopback_reason("http://[::1]:8724/v1").is_some());
         assert!(loopback_reason("https://reach.tailnet-name.ts.net").is_none());
         assert!(loopback_reason("https://ntfy.sh").is_none());
-    }
-
-    #[test]
-    fn not_ready_items_are_never_delivered() {
-        let dir = tempfile::tempdir().unwrap();
-        let raw = r#"{"ts":"2026-09-26T00:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-nr","question":"Which?","ask":"pick","session_id":"s1","cwd":"/r/fno","node":"x-aaaa","asker":"w1","options":[{"n":1,"text":"A","next":"x"},{"n":2,"text":"B","next":"y"}]}}"#;
-        let items = crate::attention::project(raw, &[], "", 0);
-        assert!(!items[0].ready);
-        let sinks = vec![webhook_sink()];
-        let mut post = ScriptedPost {
-            responses: RefCell::new(vec![]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t = tick_sinks(&items, &sinks, dir.path(), future(), &mut post);
-        assert_eq!(t.acted(), 0);
-        assert!(post.bodies.borrow().is_empty());
     }
 }

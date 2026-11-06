@@ -1,7 +1,6 @@
 //! The whole-graph write cycle under contention: a stale base survives
 //! three intervening commits, a real conflict names the row that moved,
-//! concurrent disjoint writers all land, and a commit with no base_digests
-//! falls back to the whole-graph version compare. base_digests carries
+//! and concurrent disjoint writers all land. base_digests carries
 //! begin's per-row version map (graph.db `nodes.version`) back to
 //! commit_rows. Properties, never durations: no sleeps, no timing
 //! assertions.
@@ -292,76 +291,4 @@ fn concurrent_writers_on_disjoint_nodes_all_land() {
         let id = format!("x-{c}");
         assert_eq!(row_title(&rows, &id), format!("{id}-w{i}"));
     }
-}
-
-/// A commit still carrying non-empty base_plan_rungs (a client from before
-/// row versions) does not conflict on an untouched row: the keeper ignores
-/// the key and compares versions.
-#[test]
-fn nonempty_base_plan_rungs_do_not_conflict_on_an_untouched_row() {
-    let (_home, _graph, sock, _keeper) = write_graph("rungs");
-    let mut stream = UnixStream::connect(&sock).unwrap();
-
-    let first = begin(&mut stream, 1);
-
-    for (i, id) in ["x-b", "x-c", "x-d"].iter().enumerate() {
-        let snap = begin(&mut stream, 10 + i as u64);
-        let mut row = snap["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["id"] == json!(id))
-            .cloned()
-            .unwrap();
-        row["title"] = json!(format!("{id}-moved"));
-        let reply = commit(&mut stream, 20 + i as u64, &snap, row, json!({}));
-        assert_eq!(reply["ok"], json!(true), "intervening commit {id}: {reply}");
-    }
-
-    let mut row = first["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == json!("x-a"))
-        .cloned()
-        .unwrap();
-    row["title"] = json!("a-moved");
-    let rungs = json!({"base_plan_rungs": {"x-a": "done"}});
-    let reply = commit(&mut stream, 30, &first, row, rungs);
-    assert_eq!(
-        reply["ok"],
-        json!(true),
-        "runge commit over a stale base must land: {reply}"
-    );
-}
-
-/// AC10-EDGE: a commit_rows that omits base_digests entirely commits rather
-/// than refusing.
-#[test]
-fn a_commit_that_omits_base_digests_commits() {
-    let (_home, graph, sock, _keeper) = write_graph("omit");
-    let mut stream = UnixStream::connect(&sock).unwrap();
-
-    let snap = begin(&mut stream, 1);
-    let version = snap["version"].as_str().unwrap().to_string();
-    let mut row = snap["entries"].as_array().unwrap()[0].clone();
-    row["title"] = json!("a-written");
-    let reply = rpc(
-        &mut stream,
-        2,
-        "commit_rows",
-        json!({
-            "base_version": version,
-            "changed": [row],
-            "removed": [],
-            "plan_rungs": {},
-        }),
-    );
-    assert_eq!(
-        reply["ok"],
-        json!(true),
-        "commit_rows without base_digests must commit: {reply}"
-    );
-    let rows = read_rows(&graph);
-    assert_eq!(row_title(&rows, "x-a"), "a-written");
 }

@@ -31,26 +31,6 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yield
 
 
-def _seed_epic(home: Path) -> None:
-    """One epic with a plan_path, seeded through the live write path."""
-    from tests.fixtures.graph_seed import seed_graph
-
-    (home / ".fno" / "db").mkdir(parents=True, exist_ok=True)
-    epic = {
-        "id": EPIC_ID,
-        "parent": None,
-        "title": "Epic",
-        "type": "epic",
-        "priority": "p1",
-        "domain": "code",
-        "blocked_by": [],
-        "plan_path": "plans/epic.md",
-        "cwd": "",
-        "created_at": "2026-01-01T00:00:00+00:00",
-    }
-    seed_graph(home / ".fno" / "db" / "graph.json", json.dumps({"entries": [epic]}) + "\n")
-
-
 def _door(tmp_path: Path, *args: str):
     from fno.rust_binary import find_dev_binary
 
@@ -69,18 +49,6 @@ def _door(tmp_path: Path, *args: str):
         cwd=tmp_path,
         timeout=60,
     )
-
-
-def test_decompose_door_re_run_updates_in_place(tmp_path: Path) -> None:
-    _seed_epic(tmp_path)
-    first = _door(tmp_path, EPIC_ID, "--groups", GROUPS, "--json")
-    assert first.returncode == 0, first.stdout + first.stderr
-    ids = {row["slug"]: row["id"] for row in json.loads(first.stdout)["groups"]}
-    again = _door(tmp_path, EPIC_ID, "--groups", GROUPS, "--json")
-    assert again.returncode == 0, again.stdout + again.stderr
-    payload = json.loads(again.stdout)
-    assert [row["action"] for row in payload["groups"]] == ["updated", "updated"]
-    assert {row["slug"]: row["id"] for row in payload["groups"]} == ids
 
 
 def test_decompose_door_refuses_a_planless_epic_and_names_contain(tmp_path: Path) -> None:

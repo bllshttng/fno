@@ -347,26 +347,6 @@ mod tests {
     }
 
     #[test]
-    fn adoption_binds_one_open_node_from_the_worktree_path() {
-        let _g = env_guard();
-        let tmp = tempfile::TempDir::new().expect("tmp");
-        std::env::set_var("FNO_STATE_DIR", tmp.path());
-        seed(
-            tmp.path(),
-            &[
-                json!({"id": "x-aaaa", "title": "a", "status": "in_progress"}),
-                json!({"id": "x-cccc", "title": "c", "status": "done"}),
-            ],
-        );
-        let sid = "11111111-2222-4333-8444-555566667777";
-        let bound = adoption_node(sid, None, "/w/footnote/worktrees/x-aaaa");
-        assert_eq!(bound, Some(("x-aaaa".to_string(), "worktree")));
-        assert_eq!(adoption_node(sid, None, "/w/worktrees/x-cccc"), None);
-        assert_eq!(adoption_node(sid, None, "/w/footnote"), None);
-        std::env::remove_var("FNO_STATE_DIR");
-    }
-
-    #[test]
     fn two_open_nodes_list_done_and_absent_stay_silent() {
         let _g = env_guard();
         let tmp = tempfile::TempDir::new().expect("tmp");

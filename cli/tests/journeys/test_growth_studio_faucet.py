@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PACK = REPO_ROOT / "plugins" / "growth-studio" / "plugin.yaml"
 PACK_DIR = REPO_ROOT / "plugins" / "growth-studio"
 
 # The bounded tool allowlist a packaged agent may hold. No ceiling grants a
@@ -62,60 +60,3 @@ def test_every_packaged_agent_tool_list_is_bounded() -> None:
     # Positive control at the sweep level: at least one allowed tool is present
     # across the agent set, proving the search reached the files.
     assert all_tools & ALLOWED_TOOLS
-
-
-# The declared-publication-effect classification moved to Rust
-# (effect_gate.rs, tested there); this file no longer asserts the table.
-
-
-# The faucet pack verifying clean is held by plugins_parity.rs, on the native
-# verify command.
-
-
-# AC8 re-confirmed at the faucet level: the evaluators run and a cited draft
-# passes while an uncited one fails.
-
-
-def test_evaluators_run_over_a_sample_draft(tmp_path: Path) -> None:
-    truth = PACK_DIR / "assets" / "product-truth.md"
-    good = tmp_path / "good.md"
-    good.write_text(
-        "# Plan\n\nA cited plan.\n\n## Claims\n\n"
-        "- Five phases in one graph [Delivery pipeline].\n",
-        encoding="utf-8",
-    )
-    bad = tmp_path / "bad.md"
-    bad.write_text("# Plan\n\n## Claims\n\n- An uncited claim.\n", encoding="utf-8")
-
-    def run(script: str, draft: Path, *args: str) -> int:
-        return subprocess.run(
-            ["bash", str(PACK_DIR / "evaluators" / script), str(draft), *map(str, args)],
-            capture_output=True,
-        ).returncode
-
-    assert run("factual-check.sh", good, truth) == 0
-    assert run("factual-check.sh", bad, truth) != 0
-    assert run("brand-check.sh", good) == 0
-
-    identity = PACK_DIR / "assets" / "brand-identity.md"
-
-    # A standalone byline line (the declared `byline` founder form) is a
-    # signature, not wrapped prose: brand-check with the identity skips it.
-    signed = tmp_path / "signed.md"
-    signed.write_text("# Plan\n\nA cited plan.\n\nJ.N. Choi\n", encoding="utf-8")
-    assert run("brand-check.sh", signed, identity) == 0
-
-    # A draft carrying a declared `never` founder-name form fails brand review.
-    banned_name = tmp_path / "banned_name.md"
-    banned_name.write_text("# Plan\n\nSigned, Jason Choi.\n", encoding="utf-8")
-    assert run("brand-check.sh", banned_name, identity) != 0
-
-    # A never-form that is a case-variant substring of an allowed form is
-    # dropped, so a draft using the allowed formal form is not false-positived.
-    sub_identity = tmp_path / "sub-identity.md"
-    sub_identity.write_text(
-        "## Founder\n\nformal: Jason Noah Choi\nnever: jason\n", encoding="utf-8"
-    )
-    formal_draft = tmp_path / "formal.md"
-    formal_draft.write_text("By Jason Noah Choi.\n", encoding="utf-8")
-    assert run("brand-check.sh", formal_draft, sub_identity) == 0

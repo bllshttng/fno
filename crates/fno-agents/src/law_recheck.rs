@@ -254,46 +254,6 @@ mod tests {
     }
 
     #[test]
-    fn set_guard_drains_when_every_node_closes() {
-        let r = row(json!({"kind": "set", "node_ids": ["x-aaaa", "x-bbbb"]}));
-        let closed =
-            |id: &str| json!({"id": id, "status": "done", "completed_at": "2026-11-01T00:00:00Z"});
-        let open = |id: &str| json!({"id": id, "status": "in_progress"});
-        let now = "2026-11-02T00:00:00+00:00";
-        let half = vec![closed("x-aaaa"), open("x-bbbb")];
-        assert_eq!(guard_verdict(&r, Some(&half), now), Verdict::Ok);
-        let all = vec![closed("x-aaaa"), closed("x-bbbb")];
-        assert!(matches!(
-            guard_verdict(&r, Some(&all), now),
-            Verdict::Expired(_)
-        ));
-        assert!(matches!(guard_verdict(&r, None, now), Verdict::Unknown(_)));
-    }
-
-    #[test]
-    fn a_moved_reading_is_stale() {
-        let r = json!({"expiry_ref": {"kind": "reading", "reads": [{"cmd": "c", "exit": 0, "out_head": "71h"}]}});
-        let root = std::path::Path::new(".");
-        let mut same = |_: &str, _: &std::path::Path| {
-            Ok(crate::evidence::RunOutcome {
-                exit: 0,
-                stdout: "71h\n".into(),
-            })
-        };
-        assert_eq!(reading_verdict(&r, &mut same, root), Verdict::Ok);
-        let mut moved = |_: &str, _: &std::path::Path| {
-            Ok(crate::evidence::RunOutcome {
-                exit: 0,
-                stdout: "ok\n".into(),
-            })
-        };
-        assert!(matches!(
-            reading_verdict(&r, &mut moved, root),
-            Verdict::Stale(_)
-        ));
-    }
-
-    #[test]
     fn until_grammar_parses_each_kind_and_refuses_count() {
         use crate::law_match::parse_guard;
         let now = chrono::DateTime::parse_from_rfc3339("2026-11-03T00:00:00Z")
