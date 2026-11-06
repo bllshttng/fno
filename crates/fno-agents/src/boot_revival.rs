@@ -167,12 +167,19 @@ pub(crate) fn start(home: &AgentsHome) {
                 )
             },
         ));
-        // Re-seat before the gate opens: the first post-revival sweep must
-        // read the world after the role re-seat, not before it.
-        reseat_vacated_roles(&pass_home, &revived_names(&rows));
-        write_receipt(&receipt, boot, &rows, true);
-        notify(&pass_home, &rows);
+        let passed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Re-seat before the gate opens: the first post-revival sweep
+            // must read the world after the role re-seat, not before it.
+            reseat_vacated_roles(&pass_home, &revived_names(&rows));
+            write_receipt(&receipt, boot, &rows, true);
+            notify(&pass_home, &rows);
+        }));
+        // The guard releases on every path: a panicked batch leaves the
+        // receipt unfinished on purpose, so a later kick re-runs it.
         BATCH_RUNNING.store(false, Ordering::SeqCst);
+        if passed.is_err() {
+            eprintln!("boot revival: the batch panicked; the receipt stays unfinished");
+        }
     });
 }
 
