@@ -237,7 +237,10 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     let mut token_lane: Option<String> = None;
     if let Some(resolved) = &args.resolved {
         recipient_session = Some(resolved.session_id.clone());
-        recipient = Some(crate::identity::canonical_handle(&resolved.session_id));
+        // The durable address is the FULL session id, never the first-eight
+        // handle: two same-window codex ids share a head, and a row staged
+        // under the head drains twice.
+        recipient = Some(resolved.session_id.clone());
         provider = Some(resolved.agent.clone());
         self_send = self_recipient(
             recipient.as_deref().unwrap_or_default(),
@@ -282,7 +285,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         } else if is_full_session_id(token) {
             recipient = Some(crate::spawn_context::session_identity_key(token));
         } else if let Some(reach) = &token_reachable {
-            recipient = Some(crate::identity::canonical_handle(&reach.session_id));
+            recipient = Some(reach.session_id.clone());
         } else if !is_session_shaped(token) {
             // A non-id token is not a mail address and would strand; --force
             // is the exception because it writes no durable row.
@@ -297,7 +300,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             });
             match forced_session {
                 Some(sid) => {
-                    recipient = Some(crate::identity::canonical_handle(&sid));
+                    recipient = Some(sid.clone());
                     provider = forced_entry
                         .as_ref()
                         .and_then(|e| opt_str_field(e, "harness"))

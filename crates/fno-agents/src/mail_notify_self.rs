@@ -16,6 +16,7 @@
 //! moves, so a crash in between re-renders (at-least-once), never drops.
 
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Entry behind the client.rs early-dispatch arm.
@@ -126,6 +127,10 @@ pub(crate) fn read_bus(bus_dir: &Path) -> Vec<Value> {
 pub(crate) struct Pending<'a> {
     handle: String,
     rows: Vec<(&'a Value, bool)>,
+    /// The bus address form each row was read under; a message has one `to`,
+    /// so it matches exactly one kept form. The cursor and the drain marker
+    /// are per form.
+    form_by_id: HashMap<String, String>,
     pub(crate) lines: Vec<String>,
 }
 
@@ -147,6 +152,11 @@ impl Pending<'_> {
 /// Scan, dedup and render one session's unread ordinary mail. `landed`
 /// names ids this same pass already delivered by another lane. A transcript
 /// read failure dedups nothing: print everything rather than risk a drop.
+///
+/// The scan walks every bus address form the session answers to, minus the
+/// short forms a second stored session also answers to: two same-window
+/// codex ids share the first-eight head, and reading it renders the
+/// sibling's mail at this session's prompt. The full-id form never refuses.
 pub(crate) fn pending<'a>(
     bus_dir: &Path,
     msgs: &'a [Value],
@@ -155,7 +165,33 @@ pub(crate) fn pending<'a>(
     landed: &[String],
 ) -> Pending<'a> {
     let handle = crate::identity::canonical_handle(session);
-    let unread = crate::mail_control_drain::unread_messages(bus_dir, msgs, &handle);
+    let stored: Vec<String> =
+        crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
+            .map(|registry| {
+                registry
+                    .entries
+                    .iter()
+                    .filter_map(|e| e.harness_session_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+    let (forms, refused) = crate::identity::bus_drain_forms(session, &stored);
+    for form in &refused {
+        eprintln!(
+            "note: not rendering short form {form}: more than one stored session answers to it"
+        );
+    }
+    let mut form_by_id: HashMap<String, String> = HashMap::new();
+    let mut collected: Vec<&Value> = Vec::new();
+    for form in &forms {
+        for m in crate::mail_control_drain::unread_messages(bus_dir, msgs, form) {
+            let id = m.get("id").and_then(Value::as_str).unwrap_or("");
+            if form_by_id.insert(id.to_string(), form.clone()).is_none() {
+                collected.push(m);
+            }
+        }
+    }
+    let unread = collected;
     // The transcript can run to tens of MB: read it only when there is mail.
     let present = if unread.is_empty() {
         None
@@ -194,20 +230,31 @@ pub(crate) fn pending<'a>(
     Pending {
         handle,
         rows,
+        form_by_id,
         lines,
     }
 }
 
-/// Move the main cursor to the last unread id and write one receipt per id.
-/// Callers run it only after the render is flushed, or when nothing renders.
+/// Move each read form's cursor to that form's last unread id and write one
+/// receipt per id. Callers run it only after the render is flushed, or when
+/// nothing renders.
 pub(crate) fn acknowledge(bus_dir: &Path, msgs: &[Value], pending: &Pending) {
-    if let Some(last) = pending
-        .rows
-        .last()
-        .and_then(|(m, _)| m.get("id"))
-        .and_then(Value::as_str)
-    {
-        advance_main_cursor(bus_dir, msgs, &pending.handle, last);
+    let mut last_by_form: Vec<(String, String)> = Vec::new();
+    for (m, _) in &pending.rows {
+        let id = m.get("id").and_then(Value::as_str).unwrap_or("");
+        let form = pending
+            .form_by_id
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| pending.handle.clone());
+        if let Some(slot) = last_by_form.iter_mut().find(|(f, _)| f == &form) {
+            slot.1 = id.to_string();
+        } else {
+            last_by_form.push((form, id.to_string()));
+        }
+    }
+    for (form, last_id) in &last_by_form {
+        advance_main_cursor(bus_dir, msgs, form, last_id);
     }
     for (m, render) in &pending.rows {
         let reason = if *render {
@@ -215,7 +262,13 @@ pub(crate) fn acknowledge(bus_dir: &Path, msgs: &[Value], pending: &Pending) {
         } else {
             "skipped-duplicate"
         };
-        emit_marker(&pending.handle, m, reason);
+        let id = m.get("id").and_then(Value::as_str).unwrap_or("");
+        let form = pending
+            .form_by_id
+            .get(id)
+            .map(String::as_str)
+            .unwrap_or(&pending.handle);
+        emit_marker(form, m, reason);
     }
 }
 

@@ -142,6 +142,16 @@ So this helper never refuses a spawn. It owes the caller an honest sidecar or no
 
 Note what this does and does not cover. Because the seed usually rides in on argv, `_send_source` (`cli/src/fno/agents/mux_spawn.py`) returns `preloaded` for an empty payload, and the `pane send --text payload --submit` arm is the RECOVERY path. So enveloping `pane send` covers every pane drive and the seed's recovery arm. The sidecar is what covers the common seed path.
 
+## Re-pointing a live worker's route
+
+A model or effort change is live already: retask drives `/model` and `/effort` in the running session (`crates/fno-agents/src/harness_capabilities.toml` holds the tokens). An endpoint or credential change is not. Claude pins the `--settings` file's content at launch. No edit to any route file reaches a running worker. fno has no channel that asks claude to reload one.
+
+The re-point is `fno agents session resume <name> --route <provider/model>`. It stops the worker, restamps the row's provider, model and route settings path, and re-enters the same session id through `claude --bg --resume` with the new `--settings`. The conversation keeps its transcript and its name. The process is new. When the stop lands mid-turn, the in-flight turn is lost.
+
+The account does not move. `CLAUDE_CONFIG_DIR` selects which config claude reads, so it cannot ride a settings file read from that config, and the re-route keeps the row's account. A worker that must move to another account needs a fresh spawn.
+
+This is the lane-cap escape. A quota-walled worker re-points to another lane instead of being reaped, and it keeps the conversation.
+
 ## The `fno_id` column answers identity, not idleness
 
 `fno mux pane ls` carries one column that says whether a pane belongs to fno, and it spent months lying in the direction that hid fno's own work. It printed `fno_id=-` for both "not an fno pane" and "an fno pane whose id never registered". Those demand opposite responses. The first is a pane to ignore or reuse. The second is a worker doing real work that every fno surface overlooks. Measured on 2026-09-02: 24 of 27 panes printed the dash, and 14 of those carried a populated fno worker `name` on the same line. That is how a live worker (pid 40859) read as untracked while a lead declared workers dead.
