@@ -30,11 +30,15 @@ jq -R -n -c --argjson max "$max_events" '
       ((capture("<command-name>(?<n>[\\s\\S]*?)</command-name>").n | trim)
         + " " + ((capture("<command-args>(?<a>[\\s\\S]*?)</command-args>").a // "") | trim))
       | trim
-    elif startswith("<") or startswith("Base directory for this skill") then ""
+    elif startswith("<") or startswith("Base directory for this skill")
+      or startswith("Stop hook feedback") then ""
     else . end;
+  # A reply that is only a control tag (<watching>, <help>, <promise>) is loop
+  # plumbing, not something the agent said.
+  def say_text: if (trim | startswith("<")) then "" else . end;
   def tool_label:
     .name as $n | (.input // {}) as $i
-    | if $n == "Bash" then ($i.description // ($i.command // "" | line1(72)))
+    | if $n == "Bash" then ($i.description // ($i.command // "" | line1(80)))
       elif $n == "Edit" or $n == "Write" or $n == "Read" then "\($n) \(($i.file_path // "") | split("/") | last)"
       elif $n == "Skill" then "skill \($i.skill // "")"
       else $n end;
@@ -42,15 +46,12 @@ jq -R -n -c --argjson max "$max_events" '
     reduce ($ARGS.positional[] | select(contains("=")) | split("=")) as $p
       (.; split($p[0]) | join($p[1:] | join("=")))
     | gsub("/Users/[^/\\s]+"; "~");
-  # Keep every prompt and reply; sample tool calls evenly to fit the cap.
+  # Keep the first and last events; sample the middle evenly to fit the cap.
   def thin($cap):
-    [to_entries[] | select(.value.kind == "tool") | .key] as $ti
-    | ($cap - (length - ($ti | length))) as $room
-    | if ($ti | length) <= $room then .
-      else
-        [range(0; [$room, 0] | max) | $ti[(. * ($ti | length) / ([$room, 1] | max)) | floor]] as $keep
-        | [to_entries[] | select(.value.kind != "tool" or (.key as $k | $keep | any(. == $k))) | .value]
-      end;
+    if length <= $cap then .
+    else . as $e | (length - 2) as $n
+      | [$e[0]] + [range(0; $cap - 2) | $e[1 + (. * $n / ($cap - 2) | floor)]] + [$e[-1]]
+    end;
 
   [inputs | fromjson? | select((.type == "user" or .type == "assistant") and .timestamp)] as $rows
   | if ($rows | length) == 0 then empty else
@@ -59,12 +60,12 @@ jq -R -n -c --argjson max "$max_events" '
           | ((.timestamp | ts) - $start) as $t
           | .type as $ty
           | (.message.content | if type == "string" then [{type: "text", text: .}] else (. // []) end)[]
-          | if $ty == "user" and .type == "text" then {t: $t, kind: "prompt", text: (.text | prompt_text | line1(72))}
-            elif $ty == "assistant" and .type == "text" then {t: $t, kind: "say", text: (.text | line1(72))}
-            elif $ty == "assistant" and .type == "tool_use" then {t: $t, kind: "tool", text: tool_label}
+          | if $ty == "user" and .type == "text" then {t: $t, kind: "prompt", text: (.text | prompt_text | line1(80))}
+            elif $ty == "assistant" and .type == "text" then {t: $t, kind: "say", text: (.text | say_text | line1(80))}
+            elif $ty == "assistant" and .type == "tool_use" then {t: $t, kind: "tool", text: (tool_label | line1(80))}
             else empty end
           | .text |= redact
           | select(.text != "") ]
       | thin($max)[]
     end
-' --args "$@" < "$src"
+' --args -- "$@" < "$src"
