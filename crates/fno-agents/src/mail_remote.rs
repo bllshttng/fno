@@ -1052,9 +1052,8 @@ mod tests {
 
     #[test]
     fn local_forward_replaces_its_pid_and_returns_destination_status() {
-        const TEST_PID_PATH: &str = "TEST_LOCAL_FORWARD_PID_PATH";
-        if std::env::var_os(TEST_PID_PATH).is_some() {
-            let script = "test \"$FNO_MAIL_LOCAL_FORWARD\" = 1 && test \"$FNO_MAIL_HOP\" = 1 && printf '%s' \"$$\" > \"$TEST_LOCAL_FORWARD_PID_PATH\" && exit 19";
+        if std::env::var_os("test_local_forward_pid_path").is_some() {
+            let script = "test \"$FNO_MAIL_LOCAL_FORWARD\" = 1 && test \"$FNO_MAIL_HOP\" = 1 && printf '%s' \"$$\" > \"$test_local_forward_pid_path\" && exit 19";
             let argv = [
                 OsString::from("/bin/sh"),
                 OsString::from("-c"),
@@ -1073,7 +1072,7 @@ mod tests {
             )
             .arg("--nocapture")
             .env_remove(HOP_ENV)
-            .env(TEST_PID_PATH, &pid_path)
+            .env("test_local_forward_pid_path", &pid_path)
             .spawn()
             .unwrap();
         let child_pid = child.id();

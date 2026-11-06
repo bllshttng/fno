@@ -2495,9 +2495,8 @@ mod tests {
 
     #[test]
     fn native_fno_agents_handoff_replaces_front_pid() {
-        const TEST_PID_PATH: &str = "TEST_FRONT_HANDOFF_PID_PATH";
-        if std::env::var_os(TEST_PID_PATH).is_some() {
-            let script = "printf '%s' \"$$\" > \"$TEST_FRONT_HANDOFF_PID_PATH\" && exit 19";
+        if std::env::var_os("test_front_handoff_pid_path").is_some() {
+            let script = "printf '%s' \"$$\" > \"$test_front_handoff_pid_path\" && exit 19";
             let rest = [OsString::from(script)];
             std::process::exit(fno_agents_exec_bin(
                 "test native handoff",
@@ -2514,7 +2513,7 @@ mod tests {
             .arg("--exact")
             .arg("tests::native_fno_agents_handoff_replaces_front_pid")
             .arg("--nocapture")
-            .env(TEST_PID_PATH, &pid_path)
+            .env("test_front_handoff_pid_path", &pid_path)
             .spawn()
             .unwrap();
         let child_pid = child.id();
