@@ -129,7 +129,7 @@ For every kept finding, open the cited `file:line` and check the finding's verba
 
 An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
 
-Read it with the named command, branch and head written in literally: `fno do review prior-head --branch <branch> --head <head-sha>`. The command reads the default journal set (pass `--events <path>` to read one journal). It prints the prior head sha on stdout, or nothing when no prior round exists; `--json` wraps the same answer in one object. An exit 3 names a store that refused the read: that is never a first-round answer, re-run or investigate before narrowing. A worktree session's Bash isolation refuses command substitution, so read the printed sha and write it into the decision below literally.
+Read it with the named command, branch and head written in literally: `fno do review prior-head --branch <branch> --head <head-sha>`. The command reads the default journal set (pass `--events <path>` to read one journal). When no prior round exists the command prints nothing. `--json` wraps the same answer in one object. An exit 3 names a store that refused the read. That is never a first-round answer. Re-run or investigate before narrowing. A worktree session's Bash isolation refuses command substitution, so read the printed sha and write it into the decision below literally.
 
 With `PRIOR_HEAD` resolved, read it into the scope decision with the same file-based shape (write any multi-step decision as a script, run it plainly):
 
