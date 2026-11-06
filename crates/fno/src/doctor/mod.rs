@@ -638,7 +638,14 @@ fn run_home(args: &[String]) -> i32 {
         return cost_check_report();
     }
 
-    let rep = Report::build(source.as_deref());
+    let auto_mode_settings = crate::cli_hooks::user_claude_settings_path();
+    let mut rep = Report::build(source.as_deref());
+    if let Value::Object(report) = &mut rep.value {
+        report.insert(
+            "auto_mode_rules".into(),
+            report::auto_mode_rules(&auto_mode_settings),
+        );
+    }
     let blockers = Blockers::of(&rep.value);
     let source_blocked = rep
         .value
@@ -667,6 +674,22 @@ fn run_home(args: &[String]) -> i32 {
             echo_stdout("fno doctor: advisory findings follow.");
         }
         human::emit_human(&rep.value, src.as_deref(), false, cargo_present);
+        match rep
+            .value
+            .get("auto_mode_rules")
+            .and_then(|v| v.get("status"))
+            .and_then(Value::as_str)
+        {
+            Some("missing") => echo_stdout(&format!(
+                "fno doctor: Claude Code Auto Mode rules are missing from {}. Fix: `fno doctor --fix` or `fno config setup run --only claude-auto-mode`.",
+                auto_mode_settings.display()
+            )),
+            Some("unknown") => echo_stdout(&format!(
+                "fno doctor: Claude Code Auto Mode settings could not be read at {}.",
+                auto_mode_settings.display()
+            )),
+            _ => {}
+        }
         if !fix {
             if let Some(line) = report::preamble_budget_line(src.as_ref().and_then(|p| p.to_str()))
             {
@@ -701,6 +724,32 @@ fn run_home(args: &[String]) -> i32 {
             "fno doctor: --fix refused: resolved source checkout is behind origin/main; sync the checkout before repairing.",
         );
         return 1;
+    }
+    let mut auto_mode_fixed = false;
+    let mut auto_mode_fix_failed = false;
+    if let Some(result) = report::repair_auto_mode_rules(&auto_mode_settings, fix, json) {
+        match result {
+            Err(error) => {
+                echo_stderr(&format!("fno doctor: --fix Auto Mode rules: {error}"));
+                auto_mode_fix_failed = true;
+            }
+            Ok(repaired) if repaired.error.is_some() => {
+                let error = repaired.error.unwrap_or_default();
+                echo_stderr(&format!("fno doctor: --fix Auto Mode rules: {error}"));
+                auto_mode_fix_failed = true;
+            }
+            Ok(repaired) if repaired.changed => {
+                echo_stderr(&format!(
+                    "fno doctor: --fix Auto Mode rules: repaired {}",
+                    auto_mode_settings.display()
+                ));
+                auto_mode_fixed = true;
+            }
+            Ok(_) => {
+                echo_stderr("fno doctor: --fix Auto Mode rules: already present");
+                auto_mode_fixed = true;
+            }
+        }
     }
     if fix {
         // Heal a dead/wedged pr-watch first; the stale --fix path below
@@ -811,7 +860,7 @@ fn run_home(args: &[String]) -> i32 {
                         }
                     }
                 }
-            } else {
+            } else if !auto_mode_fixed {
                 echo_stderr("fno doctor: nothing to fix.");
             }
         }
@@ -821,6 +870,7 @@ fn run_home(args: &[String]) -> i32 {
         || source_blocked
         || dead_agents
         || stage_stale
+        || auto_mode_fix_failed
     {
         1
     } else {
@@ -880,7 +930,7 @@ fn cost_check_report() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::bounded_command_for;
+    use super::{bounded_command_for, report};
 
     fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
         args.iter().map(std::ffi::OsString::from).collect()
@@ -966,5 +1016,36 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn auto_mode_doctor_finding_and_repair_preserve_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.json");
+        std::fs::write(
+            &settings,
+            r#"{"model":"opus","autoMode":{"allow":["$defaults","My custom Auto Mode rule"]}}"#,
+        )
+        .unwrap();
+        let before = std::fs::read(&settings).unwrap();
+
+        let finding = report::auto_mode_rules(&settings);
+        assert_eq!(finding["status"], "missing");
+        assert_eq!(std::fs::read(&settings).unwrap(), before);
+
+        assert!(report::repair_auto_mode_rules(&settings, false, false).is_none());
+        assert!(report::repair_auto_mode_rules(&settings, true, true).is_none());
+        assert_eq!(std::fs::read(&settings).unwrap(), before);
+
+        let repaired = report::repair_auto_mode_rules(&settings, true, false)
+            .expect("non-JSON --fix attempts the repair")
+            .unwrap();
+        assert!(repaired.changed && repaired.error.is_none(), "{repaired:?}");
+        let finding = report::auto_mode_rules(&settings);
+        assert_eq!(finding["status"], "present");
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(settings).unwrap()).unwrap();
+        assert_eq!(written["model"], "opus");
+        assert_eq!(written["autoMode"]["allow"][1], "My custom Auto Mode rule");
     }
 }

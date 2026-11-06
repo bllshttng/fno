@@ -69,6 +69,38 @@ pub(crate) fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+pub(crate) fn auto_mode_rules(settings: &Path) -> Value {
+    let settings_path = settings.display().to_string();
+    match crate::cli_hooks::claude_auto_mode_allow_status(settings) {
+        Ok(true) => json!({"status": "present", "settings_path": settings_path}),
+        Ok(false) => json!({
+            "status": "missing",
+            "settings_path": settings_path,
+            "next_action": "fno doctor --fix",
+        }),
+        Err(detail) => {
+            json!({"status": "unknown", "settings_path": settings_path, "detail": detail})
+        }
+    }
+}
+
+pub(crate) fn repair_auto_mode_rules(
+    settings: &Path,
+    fix: bool,
+    json: bool,
+) -> Option<Result<crate::cli_hooks::InstallResult, String>> {
+    if !fix || json {
+        return None;
+    }
+    match crate::cli_hooks::claude_auto_mode_allow_status(settings) {
+        Ok(true) => None,
+        Ok(false) => Some(Ok(crate::cli_hooks::install_claude_auto_mode_allow(
+            settings,
+        ))),
+        Err(error) => Some(Err(error)),
+    }
+}
+
 /// The store the backlog reads: the db twin of the graph.json anchor, on
 /// `fno.paths.place_anchor`'s ladder (a root mid-migration answers the store
 /// it actually holds).
