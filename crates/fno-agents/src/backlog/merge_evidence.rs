@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
+use super::pr_link::pr_url_from_slug;
 use crate::pr_push::run_labeled;
 
 const GH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -234,6 +235,20 @@ fn url_string(v: Option<&Value>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Fill each url-less ref with the repo-derived url, so every gate read
+/// lands in the repo the caller named instead of the checkout's. A recorded
+/// url stays authoritative; the named repo is for the PR the checkout
+/// cannot see.
+pub(crate) fn fill_ref_urls(
+    refs: Vec<(i64, Option<String>)>,
+    repo: Option<&str>,
+) -> Vec<(i64, Option<String>)> {
+    let repo_url = |n: i64| repo.map(|r| pr_url_from_slug(r.trim(), n));
+    refs.into_iter()
+        .map(|(num, url)| (num, url.or_else(|| repo_url(num))))
+        .collect()
+}
+
 /// One REST read: `gh api repos/{slug}/pulls/{n}` -> (state, html_url).
 pub(crate) fn query_pr_state(
     pr_number: i64,
@@ -314,6 +329,19 @@ pub(crate) fn resolve_merge_evidence(
     refs: &[(i64, Option<String>)],
     cwd: Option<&str>,
 ) -> MergeEvidence {
+    resolve_merge_evidence_with(refs, cwd, &query_pr_state)
+}
+
+/// The seam variant: the same decision with the PR-state read injectable,
+/// so tests drive this form with a stub instead of gh.
+pub(crate) fn resolve_merge_evidence_with<Q>(
+    refs: &[(i64, Option<String>)],
+    cwd: Option<&str>,
+    query: &Q,
+) -> MergeEvidence
+where
+    Q: Fn(i64, Option<&str>, Option<&str>) -> Result<(String, Option<String>), PrReadError>,
+{
     if refs.is_empty() {
         return MergeEvidence {
             outcome: Outcome::Refused,
@@ -337,7 +365,7 @@ pub(crate) fn resolve_merge_evidence(
     for (pr_number, pr_url) in refs {
         let pr_repo = repo_slug_from_url(pr_url.as_deref()).or_else(|| repo.clone());
         let pr_cwd = if pr_repo.is_none() { cwd } else { None };
-        match query_pr_state(*pr_number, pr_repo.as_deref(), pr_cwd) {
+        match query(*pr_number, pr_repo.as_deref(), pr_cwd) {
             Err(exc) => {
                 let remedy = exc.remedy_for(*pr_number, pr_repo.as_deref());
                 if exc.retryable() {
