@@ -1669,6 +1669,8 @@ pub fn run_release(json: bool) -> i32 {
     };
     match converge(runner, &home, &req) {
         Ok(done) => {
+            let trust = crate::codex_hook_trust::trust(&home);
+            crate::codex_hook_trust::print_human(&trust);
             let status = if done.action == "no-op" {
                 "already-installed"
             } else {
@@ -1693,7 +1695,9 @@ pub fn run_release(json: bool) -> i32 {
     }
 }
 
-/// The dev install: converge onto the built stage.
+/// The dev install: converge onto the built stage. A successful converge is
+/// followed by the hook-trust refresh; its verdict prints beside the install
+/// line and never fails the install.
 pub fn run_dev(stage: &Path, force: bool) -> Result<String, String> {
     let req = Request {
         channel: "dev",
@@ -1703,6 +1707,8 @@ pub fn run_dev(stage: &Path, force: bool) -> Result<String, String> {
     };
     converge(&mut codex_runner, &codex_home(), &req)
         .map(|done| {
+            let trust = crate::codex_hook_trust::trust(&codex_home());
+            crate::codex_hook_trust::print_human(&trust);
             format!(
                 "converged {} {} (action={})",
                 done.plugin_id, done.version, done.action
