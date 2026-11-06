@@ -779,10 +779,12 @@ fn side_pad(inner_w: usize) -> usize {
 
 /// The snapshot guard's read: which framed rows put text beside a border
 /// glyph with no space between. A violation is a non-space cell in the
-/// first or last inner column whose role is chrome text rather than the
-/// border or the scrollbar. Rows too narrow for the two-cell pad degrade
-/// legally and are skipped. `frame` asserts this empty, so every overlay
-/// demo that paints through the shared chrome walks the rule.
+/// first or last inner column that is neither chrome (the border or the
+/// scrollbar, by role) nor a `─` rule glyph (a `PopupRow::Rule` runs
+/// full-width to the right border by design). Rows too narrow for the
+/// two-cell pad degrade legally and are skipped. `frame` asserts this
+/// empty, so every overlay demo that paints through the shared chrome
+/// walks the rule.
 pub(crate) fn pad_violations(lines: &[FramedLine]) -> Vec<String> {
     let mut bad = Vec::new();
     for line in lines {
@@ -802,8 +804,9 @@ pub(crate) fn pad_violations(lines: &[FramedLine]) -> Vec<String> {
         ];
         for (edge, ch, role) in ends {
             if let (Some(ch), Some(role)) = (ch, role) {
-                let chrome_cell =
-                    role == Role::Border || matches!(role, Role::ScrollTrack | Role::ScrollThumb);
+                let chrome_cell = role == Role::Border
+                    || matches!(role, Role::ScrollTrack | Role::ScrollThumb)
+                    || ch == '─';
                 if ch != ' ' && !chrome_cell {
                     bad.push(format!("{edge} edge of {:?}", line.text));
                 }
@@ -1234,6 +1237,15 @@ mod tests {
         )));
         assert_eq!(bad.len(), 1, "the right edge fails: {bad:?}");
         assert!(bad[0].starts_with("right edge"), "{bad:?}");
+
+        // A rule run flush to the right border is the `PopupRow::Rule`
+        // idiom, chrome and not text: it passes where a letter fails.
+        let mut rule = vec![('│', Role::Border)];
+        rule.extend(segs("  ", Role::Text(TextStyle::Item)));
+        rule.extend(segs("────────", Role::Text(TextStyle::Meta)));
+        rule.push(('│', Role::Border));
+        let rule_row = flatten(rule);
+        assert!(pad_violations(std::slice::from_ref(&rule_row)).is_empty());
 
         // Rows too narrow for the two-cell pad degrade legally.
         let mut row = vec![('│', Role::Border)];
