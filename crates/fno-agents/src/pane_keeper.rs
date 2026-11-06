@@ -693,19 +693,30 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { break };
                     let gen = keeper.client_gen.fetch_add(1, Ordering::SeqCst) + 1;
+                    // First come, first seated - claimed HERE, in the accept
+                    // loop. Accept order is FIFO; the per-connection threads'
+                    // start order is the scheduler's. Claiming inside the
+                    // thread let two connections accepted back to back race
+                    // for the empty seat, and a probe winning that race took
+                    // the subscriber seat from the real subscriber (the mux
+                    // server at spawn or re-adoption), then cleared it on
+                    // exit - the keeper read an empty seat for the pane's
+                    // whole life and ended itself at the idle bound.
+                    let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut is_subscriber = slot.is_none();
+                    if is_subscriber {
+                        match stream.try_clone() {
+                            Ok(clone) => *slot = Some((gen, clone)),
+                            // No descriptor to write to, no seat: serve as a
+                            // probe instead of losing the accept loop.
+                            Err(_) => is_subscriber = false,
+                        }
+                    }
+                    drop(slot);
                     let keeper = Arc::clone(&keeper);
                     std::thread::Builder::new()
                         .name("fno-keeper-cli".into())
                         .spawn(move || {
-                            // First come, first seated: an empty subscriber
-                            // slot takes THIS connection.
-                            let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
-                            let is_subscriber = slot.is_none();
-                            if is_subscriber {
-                                *slot =
-                                    Some((gen, stream.try_clone().expect("clone keeper client")));
-                            }
-                            drop(slot);
                             serve_client(&keeper, stream, gen, is_subscriber);
                         })
                         .expect("spawn keeper client thread");
