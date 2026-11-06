@@ -114,6 +114,56 @@ pub(crate) fn legacy_suffix_handle(session_id: &str) -> String {
     }
 }
 
+/// The bus address forms `session_id` drains, minus the short forms a second
+/// stored session also answers to. Same-window codex ids share the first-eight
+/// head, so a durable row staged under the head answers to both workers and
+/// the first to drain it reads the sibling's mail. A short form with two
+/// stored answers is therefore refused, never read; the full-id form carries
+/// the session's own mail and never refuses. `stored` is every
+/// `harness_session_id` the registry carries; an empty slice (an unreadable
+/// registry) refuses nothing, because an unprovable ambiguity is not a proven
+/// one. Returns `(forms, refused_short_forms)`.
+pub(crate) fn bus_drain_forms(session_id: &str, stored: &[String]) -> (Vec<String>, Vec<String>) {
+    let full = crate::spawn_context::session_identity_key(session_id);
+    let mut forms: Vec<String> = Vec::new();
+    for form in [
+        canonical_handle(session_id),
+        full.clone(),
+        legacy_suffix_handle(session_id),
+    ] {
+        if !forms.contains(&form) {
+            forms.push(form);
+        }
+    }
+    let mut kept = Vec::new();
+    let mut refused = Vec::new();
+    for form in forms {
+        if form == full {
+            kept.push(form);
+            continue;
+        }
+        let lowered = form.to_ascii_lowercase();
+        let mut answers: std::collections::HashSet<String> = Default::default();
+        for sid in stored {
+            let sid = sid.trim();
+            if sid.is_empty() {
+                continue;
+            }
+            let hit = canonical_handle(sid).to_ascii_lowercase() == lowered
+                || legacy_suffix_handle(sid).to_ascii_lowercase() == lowered;
+            if hit {
+                answers.insert(crate::spawn_context::session_identity_key(sid));
+            }
+        }
+        if answers.len() > 1 {
+            refused.push(form);
+        } else {
+            kept.push(form);
+        }
+    }
+    (kept, refused)
+}
+
 /// Full id, canonical (first-8), and retired suffix (last-8) tiers shared across
 /// Rust paths. Tier 1 is the canonical address; tier 2 is the read-only
 /// transition lookup.
@@ -353,6 +403,34 @@ mod tests {
         for (input, expected) in FROZEN_HANDLES {
             assert_eq!(&canonical_handle(input), expected, "input {input:?}");
         }
+    }
+
+    #[test]
+    fn a_short_form_two_stored_sessions_answer_to_is_refused_from_the_drain_forms() {
+        // Same-window codex ids: both start with the shared head.
+        let a = "01a1ad25-f04f-7220-8b8e-6c41a3bad0dd";
+        let b = "01a1ad25-7752-7020-a858-4253ed259833";
+        let stored = vec![a.to_string(), b.to_string()];
+        let (kept, refused) = super::bus_drain_forms(a, &stored);
+        assert!(
+            !kept.iter().any(|f| f == "01a1ad25"),
+            "the shared head drains nothing: {kept:?}"
+        );
+        assert_eq!(refused, vec!["01a1ad25".to_string()]);
+        assert!(
+            kept.contains(&crate::spawn_context::session_identity_key(a)),
+            "the full-id form still drains: {kept:?}"
+        );
+        // A unique head keeps its short form.
+        let (kept, refused) = super::bus_drain_forms(a, &[a.to_string()]);
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(kept.contains(&"01a1ad25".to_string()));
+        // An unreadable registry (empty store) refuses nothing.
+        let (kept, refused) = super::bus_drain_forms(a, &[]);
+        assert!(
+            refused.is_empty() && kept.len() >= 2,
+            "{kept:?} {refused:?}"
+        );
     }
 
     #[test]

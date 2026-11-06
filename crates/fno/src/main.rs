@@ -20,6 +20,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
@@ -508,9 +509,9 @@ fn exit_mux(code: i32) -> ! {
     std::process::exit(code)
 }
 
-/// The carried tail runs through the native owner: stdio inherited, the
-/// child's exit code returned. A missing binary is a refusal, never a silent
-/// empty read.
+/// The carried tail runs through the native owner in place: inherited stdio
+/// and the owner's exit status stay intact without another process slot. A
+/// missing binary is a refusal, never a silent empty read.
 fn fno_agents_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
     fno_agents_exec_bin(label, action, rest, &fno::digest_overlay::fno_agents_bin())
 }
@@ -522,13 +523,9 @@ fn fno_agents_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Pa
     let mut cmd = std::process::Command::new(bin);
     cmd.args(action);
     cmd.args(rest);
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("{label}: could not run fno-agents: {e}");
-            1
-        }
-    }
+    let error = cmd.exec();
+    eprintln!("{label}: could not run fno-agents: {error}");
+    1
 }
 
 /// Parse `serve` flags into [`fno::web::WebArgs`]. One of `--web`, `--stop`,
@@ -2494,6 +2491,41 @@ mod tests {
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn native_fno_agents_handoff_replaces_front_pid() {
+        if std::env::var_os("test_front_handoff_pid_path").is_some() {
+            let script = "printf '%s' \"$$\" > \"$test_front_handoff_pid_path\" && exit 19";
+            let rest = [OsString::from(script)];
+            std::process::exit(fno_agents_exec_bin(
+                "test native handoff",
+                &["-c"],
+                &rest,
+                Path::new("/bin/sh"),
+            ));
+        }
+
+        let pid_path =
+            std::env::temp_dir().join(format!("fno-front-handoff-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pid_path);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tests::native_fno_agents_handoff_replaces_front_pid")
+            .arg("--nocapture")
+            .env("test_front_handoff_pid_path", &pid_path)
+            .spawn()
+            .unwrap();
+        let child_pid = child.id();
+        let status = child.wait_with_output().unwrap();
+        let owner_pid: u32 = std::fs::read_to_string(&pid_path)
+            .expect("native owner wrote its pid")
+            .parse()
+            .expect("native owner pid is numeric");
+        let _ = std::fs::remove_file(&pid_path);
+
+        assert_eq!(status.status.code(), Some(19), "native owner exit status");
+        assert_eq!(owner_pid, child_pid, "native owner replaced the front pid");
     }
 
     #[test]

@@ -948,10 +948,7 @@ pub fn project(
     // Scope -> CURRENT team name, read once per fold beside the themes: the
     // lead column resolves at render time, never from the event-time holder.
     let lead_names = crate::paths::AgentsHome::from_env_opt()
-        .map(|home| {
-            crate::team_names::live_names(&home.team_names_json(), &home.registry_json())
-                .unwrap_or_default()
-        })
+        .map(|home| crate::team_names::live_names(&home.registry_json()).unwrap_or_default())
         .unwrap_or_default();
     let rank = |level: i64, scope: &str| -> String {
         let theme = themes
