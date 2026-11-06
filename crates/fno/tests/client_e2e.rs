@@ -534,7 +534,16 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
         .unwrap();
     }
     h.type_bytes(b"\x02!");
-    h.wait_screen(5, |s| s.contains("report a problem"));
+    let report_screen = h.wait_screen(5, |s| s.contains("report a problem"));
+    let body_column = report_screen
+        .lines()
+        .find_map(|line| line.find("Includes screen"))
+        .expect("report capture notice");
+    let footer_column = report_screen
+        .lines()
+        .find_map(|line| line.find("Tab type"))
+        .expect("report action hints");
+    assert_eq!(footer_column, body_column, "report footer aligns with body");
     let cursor_deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         h.screen();
