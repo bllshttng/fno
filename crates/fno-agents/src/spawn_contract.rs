@@ -595,5 +595,4 @@ mod tests {
         let err = validate(&req).expect_err("sob is retired");
         assert!(err.message().contains("sob is retired"), "{err}");
     }
-
 }

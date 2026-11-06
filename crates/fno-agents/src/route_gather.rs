@@ -1062,7 +1062,6 @@ mod tests {
         drop(guard);
         clear_sandbox_env(saved);
     }
-
 }
 
 /// Where a slot's `lanes` list came from: `{"from": <file>, "overrides":

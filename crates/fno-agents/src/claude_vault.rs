@@ -1739,5 +1739,4 @@ mod tests {
         // already re-saved the slot's newest blob into it. The stamp is the
         // contract - the moved slot carries no active stamp for `makers`.
     }
-
 }

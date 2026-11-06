@@ -1529,7 +1529,6 @@ mod tests {
             ("org_board/claims.rs", 1),
             ("hook/session_state.rs", 1),
             ("operator_turns.rs", 1),
-            ("client_tests.rs", 2),
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),

@@ -1567,5 +1567,4 @@ mod acceptance_evidence_tests {
             other => panic!("a satisfied required binding must pass, got {other:?}"),
         }
     }
-
 }
