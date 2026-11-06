@@ -85,6 +85,12 @@ struct Args {
     steps: bool,
 }
 
+fn append_advisory_init_flag(init_args: &mut Vec<String>, advisory: bool) {
+    if advisory {
+        init_args.push("--advisory".into());
+    }
+}
+
 fn parse_args(rest: &[String]) -> Result<Args, Fail> {
     let mut node: Option<String> = None;
     let mut plan_path = None;
@@ -2101,9 +2107,7 @@ fn start_codex_native(
     if args.no_merge {
         init_args.push("--no-merge".into());
     }
-    if args.advisory {
-        init_args.push("--advisory".into());
-    }
+    append_advisory_init_flag(&mut init_args, args.advisory);
     if let Some(n) = args.deliverables {
         init_args.extend(["--deliverables".into(), n.to_string()]);
     }
@@ -2464,9 +2468,7 @@ fn init_from_worktree(
     if args.no_merge {
         init_args.push("--no-merge".into());
     }
-    if args.advisory {
-        init_args.push("--advisory".into());
-    }
+    append_advisory_init_flag(&mut init_args, args.advisory);
     if let Some(p) = plan_path {
         init_args.extend(["--plan-path".into(), p.to_string()]);
     }
@@ -2641,6 +2643,14 @@ mod advisory_flag_tests {
     fn advisory_flag_parses_for_target_start() {
         let args = parse_args(&["x-1".into(), "--advisory".into()])
             .unwrap_or_else(|error| panic!("{}", error.message));
-        assert!(args.advisory);
+        let mut init_args = vec!["--input".into(), "x-1".into()];
+        append_advisory_init_flag(&mut init_args, args.advisory);
+        assert_eq!(init_args, ["--input", "x-1", "--advisory"]);
+
+        let defaults =
+            parse_args(&["x-1".into()]).unwrap_or_else(|error| panic!("{}", error.message));
+        let mut default_init_args = vec!["--input".into(), "x-1".into()];
+        append_advisory_init_flag(&mut default_init_args, defaults.advisory);
+        assert_eq!(default_init_args, ["--input", "x-1"]);
     }
 }
