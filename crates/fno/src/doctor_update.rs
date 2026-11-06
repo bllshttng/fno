@@ -33,9 +33,9 @@ const GUARD_MSG: &str = "[fno doctor update] refused: target-state.md shows stat
 /// legacy classifier must NOT reopen the unsafe cache path.
 const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agents could not answer source-pin (missing, pre-source-pin, or malformed); re-run the update with an explicit --source pointing at the canonical checkout, or rebuild the rust bins from it, so a stale helper cannot reopen the unsafe cache path";
 
-const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]]
+const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]] [--adopt DIR]
 
-A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/install/bin first. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
+A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/install/bin first. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `--adopt DIR` swaps an already-downloaded unpacked release into ~/.fno/install/bin (postinstall's staging door; no uv required). `fno doctor update` is the same command.";
 
 const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UV_INSTALL_ATTEMPTS: u32 = 3;
@@ -109,6 +109,9 @@ pub(crate) struct Flags {
     pub(crate) published: bool,
     /// `--published <rev>`: that exact published build, older included.
     pub(crate) published_rev: Option<String>,
+    /// `--adopt <dir>`: the unpacked release dir postinstall.sh staged; the
+    /// Rust side owns proof, swap, links, marker and uv retire.
+    pub(crate) adopt: Option<PathBuf>,
 }
 
 pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
@@ -138,6 +141,12 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
                 {
                     f.published_rev = Some(rev.to_string());
                 }
+            }
+            "--adopt" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| "--adopt requires a value".to_string())?;
+                f.adopt = Some(PathBuf::from(v));
             }
             other => return Err(format!("unknown flag: {other}")),
         }
@@ -2326,6 +2335,19 @@ fn upgrade_release(dry_run: bool) -> i32 {
     }
 }
 
+/// The bridge hook `main` calls before any door: a wheel install that has
+/// not yet moved runs the move here and execs the binary front door with
+/// this argv. Lives on the update surface module so the bin target reaches
+/// a pub(crate) helper through the pub API.
+pub fn first_run_move(args: &[std::ffi::OsString]) {
+    crate::release_install::first_run_move(args);
+}
+
+/// The floor gate `main` runs after the bridge hook: see release_install.
+pub fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
+    crate::release_install::floor_refusal(args)
+}
+
 /// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
@@ -2341,6 +2363,20 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             return 2;
         }
     };
+    if let Some(dir) = flags.adopt.as_ref() {
+        if flags.check
+            || flags.source.is_some()
+            || flags.published
+            || flags.rust
+            || flags.no_rust
+            || flags.force
+            || flags.dry_run
+        {
+            eprintln!("fno doctor update: --adopt takes no other flag");
+            return 2;
+        }
+        return crate::release_install::adopt_release(dir);
+    }
     if flags.check {
         if flags.dry_run || flags.rust || flags.force {
             eprintln!("--check cannot be combined with --dry-run, --rust, or --force");

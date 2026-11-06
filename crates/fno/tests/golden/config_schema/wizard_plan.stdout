@@ -2087,6 +2087,15 @@
       "question": "",
       "default_source": "",
       "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
+    },
+    {
+      "path": "telemetry.install_count.enabled",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing."
     }
   ]
 }

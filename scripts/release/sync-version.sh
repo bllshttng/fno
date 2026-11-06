@@ -73,6 +73,11 @@ if [[ "$arg" == "--check" ]]; then
     [[ "$got" == "$want_semver" ]] || { echo "drift: $cf = $got (want $want_semver)"; bad=1; }
   done
   for j in "${JSON_MANIFESTS[@]}"; do
+    # The bridge wheel's VERSION file must also agree with __init__.py; the
+    # Python deletion re-anchors this check on VERSION alone.
+    if ! grep -qx "$want_pep" packaging/pypi/VERSION 2>/dev/null; then
+      echo "drift: packaging/pypi/VERSION = $(tr -d '[:space:]' < packaging/pypi/VERSION 2>/dev/null || echo missing) (want $want_pep)"; bad=1
+    fi
     matches="$(perl -ne 'print "$1\n" while /"version"\s*:\s*"([^"]*)"/g' "$j")"
     # Zero version fields is itself drift: a dropped/renamed key would otherwise
     # pass silently (the while loop just never runs).
@@ -93,6 +98,12 @@ is_release_version "$ver" || {
   exit 2
 }
 semver="$(pep_to_semver "$ver")"
+
+# 0. The bridge wheel's VERSION file: one PEP 440 line, read by
+#    hatchling's regex version source. Sits first so every surface below is
+#    stamped from the same call.
+mkdir -p packaging/pypi
+printf '%s\n' "$ver" > packaging/pypi/VERSION
 
 # 1. Python wheel (the source of truth; cli/pyproject.toml reads it dynamically).
 perl -i -pe "s/^__version__ = \".*\"/__version__ = \"${ver}\"/" cli/src/fno/__init__.py

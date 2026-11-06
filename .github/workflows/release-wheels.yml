@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin, wheel-platform: "" }
+          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin, wheel-platform: macosx_11_0_arm64 }
           # macos-x64 is cross-compiled on the Apple Silicon runner (the native
           # Intel macos-13 image is retired). The arm64 leg infers its tag from
           # the host; this leg must set wheel-platform explicitly, else the build
@@ -108,30 +108,34 @@ jobs:
         working-directory: crates/fno
         run: cargo build --release --target ${{ matrix.target.rust-target }} --bin fno
 
-      - name: Stage binaries for the wheel build hook
+      - name: Stage binaries for the bridge wheel
         shell: bash
         run: |
-          mkdir -p cli/src/fno/_bin
-          # US6 + x-538e: stage the fno front door (the mux binary that owns
-          # `fno` on PATH) plus the client + daemon + worker so the wheel is
-          # binary-complete - the advertised `fno` command AND daemon-backed
-          # commands work on a pip-only machine with no second install. The build hook
-          # hard-fails if any is missing (a partial set never ships).
+          mkdir -p packaging/pypi/staged
+          # The bridge wheel ships the four binaries plus the force-included
+          # Python package until the runtime deletion. The cp set is all-or-nothing:
+          # a missing binary fails this step and names itself (AC2-ERR).
           cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
-             "cli/src/fno/_bin/fno"
+             "packaging/pypi/staged/fno"
           for b in fno-agents fno-agents-daemon fno-agents-worker; do
             cp "crates/fno-agents/target/${{ matrix.target.rust-target }}/release/${b}" \
-               "cli/src/fno/_bin/${b}"
+               "packaging/pypi/staged/${b}"
           done
 
       - name: Build wheel
-        working-directory: cli
-        # FNO_AGENTS_WHEEL_PLATFORM forces the manylinux tag on Linux (PyPI rejects
-        # plain linux_* tags; the musl-static binary is portable enough to claim
-        # manylinux). Empty on mac/windows -> the hook infers the platform tag.
-        env:
-          FNO_AGENTS_WHEEL_PLATFORM: ${{ matrix.target.wheel-platform }}
+        working-directory: packaging/pypi
+        shell: bash
         run: uv build --wheel
+
+      - name: Retag the wheel to its platform tag
+        # The TOML-only build is tag-less (py3-none-any) until this step: the
+        # `wheel` CLI renames the file and rewrites its WHEEL + RECORD tags in
+        # place, so PyPI accepts it and uv picks it for this platform.
+        working-directory: packaging/pypi
+        shell: bash
+        run: |
+          uvx wheel tags --platform-tag '${{ matrix.target.wheel-platform }}' --remove dist/*.whl
+          ls -1 dist
 
       - name: Note - run-the-binary smokes skipped on the cross-compiled x86_64 leg
         if: matrix.target.name == 'macos-x64'

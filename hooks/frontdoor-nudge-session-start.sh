@@ -74,12 +74,12 @@ if [[ ! -f "$INSTALLER" ]]; then
 fi
 
 # Say what the install would do to this machine, so the user can consent to
-# THIS machine's shape: with uv present the installer skips the astral.sh step
-# entirely and touches nothing but the fno tool.
+# THIS machine's shape: the direct download touches only ~/.fno and ~/.local/bin;
+# only its fallback needs uv, and only a uv-less fallback runs astral.sh.
 if command -v uv >/dev/null 2>&1; then
-  UV_STEP="uv is already installed (\`$(command -v uv)\`), so that step is skipped and the install touches nothing but the fno tool."
+  UV_STEP="uv is already installed (\`$(command -v uv)\`), so the PyPI wheel fallback touches nothing but the fno tool."
 else
-  UV_STEP="It first runs the uv installer from https://astral.sh/uv/install.sh, which installs uv and edits your shell profile to put it on PATH."
+  UV_STEP="If the download fails it falls back to \`uv tool install fno\` from PyPI, first installing uv from https://astral.sh/uv/install.sh (that installer edits your shell profile)."
 fi
 
 cat <<EOF
@@ -87,7 +87,7 @@ cat <<EOF
 
 \`fno\` (the footnote CLI) is not installed on this machine. The plugin ships an installer, but nothing runs it without the user's explicit yes.
 
-What the installer does: $UV_STEP Then it runs \`uv tool install fno\`, which downloads \`fno\` from PyPI into the uv tool environment and puts the \`fno\` commands in the tool bin directory (usually \`~/.local/bin\`).
+What the installer does: it downloads the fno release tarball from GitHub Releases, verifies its sha256, installs the binaries into \`~/.fno/install/bin\`, and links them into \`~/.local/bin\`. $UV_STEP
 EOF
 
 # The probe already resolved a Python-only `fno-py` (rc 2): say so, so the

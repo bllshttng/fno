@@ -158,6 +158,9 @@
        "enabled": false,
        "host": "https://us.i.posthog.com",
        "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
+      },
+      "install_count": {
+       "enabled": true
       }
      }
     },
@@ -3190,6 +3193,7 @@
   "telemetry.eval_events.host",
   "telemetry.eval_events.token_env",
   "telemetry.eval_events.token_file",
+  "telemetry.install_count.enabled",
   "attention.enabled",
   "attention.sinks",
   "research.output_dir",

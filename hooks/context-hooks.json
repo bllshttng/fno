@@ -10,6 +10,7 @@
         {"id": "inject-project-vision", "argv": ["${PLUGIN_ROOT}/hooks/inject-project-vision.sh"]},
         {"id": "setup-nudge-session-start", "argv": ["${PLUGIN_ROOT}/hooks/setup-nudge-session-start.sh"]},
         {"id": "frontdoor-nudge-session-start", "argv": ["${PLUGIN_ROOT}/hooks/frontdoor-nudge-session-start.sh"]},
+        {"id": "wheel-move-session-start", "argv": ["${PLUGIN_ROOT}/hooks/wheel-move-session-start.sh"]},
         {"id": "inject-fno-agent-whoami", "argv": ["${PLUGIN_ROOT}/hooks/inject-fno-agent-whoami.sh"]},
         {"id": "worktree-peers-session-start", "argv": ["${PLUGIN_ROOT}/hooks/worktree-peers-session-start.sh"]},
         {"id": "cache-keepalive-inject", "argv": ["${PLUGIN_ROOT}/hooks/cache-keepalive-inject.sh"]},
@@ -32,7 +33,8 @@
       "event": "SessionStart",
       "producers": [
         {"id": "session-start-combined", "argv": ["${PLUGIN_ROOT}/hooks/session-start.sh"]},
-        {"id": "frontdoor-nudge-session-start", "argv": ["${PLUGIN_ROOT}/hooks/frontdoor-nudge-session-start.sh"]}
+        {"id": "frontdoor-nudge-session-start", "argv": ["${PLUGIN_ROOT}/hooks/frontdoor-nudge-session-start.sh"]},
+        {"id": "wheel-move-session-start", "argv": ["${PLUGIN_ROOT}/hooks/wheel-move-session-start.sh"]}
       ]
     },
     "codex-whoami": {

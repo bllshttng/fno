@@ -5,14 +5,16 @@
 # the plugin channel this tree came from (the version in plugin.json, which
 # release.yml keeps distinct per channel):
 #
-#   stable (0.4.0)      1. `uv tool install fno` BY NAME - the published PyPI
-#                          platform wheel, binary-complete in one step.
-#   rc (0.4.0rcN)       1. `uv tool install fno==0.4.0rcN` - pinned, because a
-#                          plain by-name install skips pre-releases.
-#   nightly (0.4.0-dev.N) 1. the matching wheel from the nightly GitHub
-#                          Release (no registry holds a nightly). Any fallback
-#                          to the source build says so out loud - an rc or dev
-#                          install never silently downgrades.
+#   every channel        1. fetch the release tarball for this plugin's
+#                          version from GitHub Releases, verify its sha256,
+#                          unpack to staging, run the staged front door's
+#                          `fno update --adopt`. The Rust side owns
+#                          the proof, swap, links, marker and uv retire.
+#   fallback             2. the uv wheel path (by name, pinned rc, nightly
+#                          wheel) and then the source build, exactly as
+#                          before; any fallback to the source build says so
+#                          out loud - an rc or dev install never silently
+#                          downgrades.
 #
 # Guarded for name-collision safety (AC7-FR) on every channel: we verify the
 # installed package is OURS (its version matches this plugin's declared
@@ -348,6 +350,77 @@ install_source_via_uv() {
   return 1
 }
 
+# The release tag whose tarball ships this plugin's
+# version. stable v<ver>, rc v<core>rc<n>, nightly the rolling tag.
+release_tag_for_version() { # release_tag_for_version <PEP 440 version> <channel>
+  local base n
+  case "$2" in
+    nightly) printf '%s\n' "nightly" ;;
+    rc) base="${1%%rc*}"; n="${1##*rc}"; printf '%s\n' "v${base}rc${n}" ;;
+    *) printf '%s\n' "v$1" ;;
+  esac
+}
+
+# The primary install path on every channel: fetch the release tarball for
+# THIS plugin's version plus its .sha256, verify the sum, unpack to staging,
+# and let the staged front door adopt it (`fno update --adopt`: Rust owns the
+# proof, swap, links, marker and uv retire). Returns non-zero on any failure;
+# every failure prints its cause and the caller falls back to the uv wheel
+# path (AC3-ERR: a checksum mismatch swaps nothing and names itself).
+try_binary_install() {
+  local plat tag url sum_url stage sum_file tarball want got door
+  plat="$(plugin_tarball_platform "$(uname -s)" "$(uname -m)")"
+  [[ -n "$plat" ]] || { log "no release tarball is built for $(uname -s)/$(uname -m); skipping the direct install."; return 1; }
+  [[ -n "$SRC_VERSION" ]] || return 1
+  command -v curl >/dev/null 2>&1 || { log "curl is not available; skipping the direct install."; return 1; }
+  command -v tar >/dev/null 2>&1 || { log "tar is unavailable; skipping the direct install."; return 1; }
+  tag="$(release_tag_for_version "$SRC_VERSION" "$CHANNEL")"
+  url="https://github.com/${FNO_RELEASE_REPO}/releases/download/${tag}/fno-agents-${plat}.tar.gz"
+  stage="${FNO_STATE_DIR:-$HOME/.fno}/install/adopt-$$"
+  mkdir -p "$stage"
+  log "fetching the release binaries: $url"
+  if ! curl -fsSL --max-time 300 -o "$stage/tarball" "$url"; then
+    err "the release tarball fetch failed (offline, or the release does not exist yet); falling back to the uv wheel path."
+    rm -rf "$stage"
+    return 1
+  fi
+  sum_url="${url}.sha256"
+  sum_file="$stage/tarball.sha256"
+  if ! curl -fsSL --max-time 60 -o "$sum_file" "$sum_url"; then
+    err "the .sha256 fetch failed; falling back to the uv wheel path."
+    rm -rf "$stage"
+    return 1
+  fi
+  mv "$stage/tarball" "$stage/fno-agents-$plat.tar.gz"
+  want="$(cut -d' ' -f1 "$sum_file")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    got="$(sha256sum "$stage/fno-agents-$plat.tar.gz" | cut -d' ' -f1)"
+  else
+    got="$(shasum -a 256 "$stage/fno-agents-$plat.tar.gz" | cut -d' ' -f1)"
+  fi
+  if [[ "$got" != "$want" ]]; then
+    err "sha256 mismatch for fno-agents-$plat.tar.gz (expected ${want:-none}, got ${got:-none}); swapping nothing and falling back to the uv wheel path (AC3-ERR)."
+    rm -rf "$stage"
+    return 1
+  fi
+  if ! tar -xzf "$stage/fno-agents-$plat.tar.gz" -C "$stage"; then
+    err "the tarball did not unpack; falling back to the uv wheel path."
+    rm -rf "$stage"
+    return 1
+  fi
+  door="$stage/fno"
+  [[ -x "$door" ]] || { err "the tarball carries no executable fno front door; falling back to the uv wheel path."; rm -rf "$stage"; return 1; }
+  export FNO_INSTALL_DIR="${FNO_INSTALL_DIR:-$HOME/.local/bin}"
+  log "installing the binaries into ~/.fno/install/bin and linking them into $FNO_INSTALL_DIR..."
+  if ! "$door" update --adopt "$stage" >&2; then
+    err "the staged front door's --adopt run failed; falling back to the uv wheel path."
+    rm -rf "$stage"
+    return 1
+  fi
+  rm -rf "$stage"
+  return 0
+}
+
 SRC_VERSION="$(src_version)"
 CHANNEL="stable"
 # Not a bare `[[ ]] &&` list: an empty SRC_VERSION would trip set -e there.
@@ -370,6 +443,18 @@ if [[ "$(cat "${FNO_STATE_DIR:-$HOME/.fno}/install/channel" 2>/dev/null)" == "bi
   log "binary install at $FNO_BINARY_DIR; skipping the uv wheel install (fno update updates it)."
   wire_and_setup "$FNO_BINARY_DIR/fno"
   finish_success
+  exit 0
+fi
+
+# The direct install: the primary path on every channel. Only its
+# failure falls through to the uv wheel path and the source build below.
+if try_binary_install; then
+  log "binary install adopted; the uv wheel path is not needed."
+  shim_sweep || exit 1
+  wire_and_setup "$FNO_BINARY_DIR/fno"
+  log "restart your shell (or source your env) to pick up PATH."
+  finish_success
+  next_steps
   exit 0
 fi
 

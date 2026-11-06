@@ -198,6 +198,10 @@ token_env = "FNO_POSTHOG_PROJECT_TOKEN"
 # Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME.
 token_file = "~/.fno/secrets/posthog-project-token"
 
+[telemetry.install_count]
+# Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing.
+enabled = true
+
 [attention]
 # Kill switch for the attention arm (question pages and sinks; default on).
 enabled = true
