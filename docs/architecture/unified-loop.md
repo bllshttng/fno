@@ -251,7 +251,7 @@ Gated by `config.lead.enabled` (default false), visible as the `lead loop` row i
 
 ### Runs that owe no PR
 
-`fno do target init --advisory` or plan `gates: advisory` marks a run as owing no PR. A promise then ends as `DoneAdvisory`. If a node closes as `done` or `superseded` with no numbered PR row, loop-check takes the no-PR shortcut on a promise. That shortcut still holds for operator findings, dirty or unpushed work, and failing probes. Any numbered PR row, including closed or history-marked rows, keeps the regular PR gate while `gh` is available. If `gh` is unavailable, an attended session retains the existing promise-and-budget fallback. Company work can use `completion: delivery` with `company_work` evidence for `DoneDelivery`. See [Generic delivery evidence](generic-delivery-evidence.md).
+`fno do target init --advisory` or plan `gates: advisory` marks a run as owing no PR. A promise then ends as `DoneAdvisory`. If a node closes as `done` or `superseded` with no PR record, loop-check takes the no-PR shortcut on a promise. That shortcut still holds for operator findings, dirty or unpushed work, and failing probes. Any PR record, including URL-only, closed, or history-marked rows, keeps the regular PR gate while `gh` is available. If `gh` is unavailable, an attended session retains the existing promise-and-budget fallback. Company work can use `completion: delivery` with `company_work` evidence for `DoneDelivery`. See [Generic delivery evidence](generic-delivery-evidence.md).
 
 ### `done_probes`: the operational-evidence conjunct
 
