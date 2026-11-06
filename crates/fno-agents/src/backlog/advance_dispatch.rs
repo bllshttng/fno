@@ -960,6 +960,12 @@ fn resolve_node_spawn_inner(
             for key in ambient_scrub_names() {
                 run_env.remove(key);
             }
+            // The terminal-host keys ride run_env like identity would: an
+            // overlay env() lands after the child spawn's own scrub, and
+            // last-wins would hand the REX_* markers straight back.
+            for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+                run_env.remove(key);
+            }
             for key in crate::claude_supervisor::SEED_PROVENANCE_KEYS {
                 run_env.remove(key);
             }
