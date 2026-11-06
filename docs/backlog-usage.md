@@ -414,7 +414,7 @@ The board shows one lane per project or epic, and a card for each node. `Tab` cy
 
 The graph shows the focused node's family. Parent and contained edges form its layers. Done children fold into one count under each parent. A one-hop `blocked_by` or `related` link outside the family appears as a stub. The graph displays at most 80 nodes. Press `h` or `l` to move between layers. Press `j` or `k` to move between nodes. Other node actions use the selected node.
 
-![The mux backlog graph: an epic family with parent and contained edges, done children folded, and an outside blocker stub](images/backlog-mux-graph.png)
+![The mux backlog graph: three layers of parent-linked nodes, a selected node, and an outside blocker stub](images/backlog-mux-graph.png)
 
 The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
 
