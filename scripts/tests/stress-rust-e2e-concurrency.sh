@@ -154,12 +154,12 @@ count_daemons() {
 }
 daemon_baseline="$(count_daemons)"
 
-# The two verdict greps below are vacuity guards: a binary can exit 0 because
-# it ran nothing. The workspace grep reads a probe marker from a test that
-# must run; the daemon grep reads the binary's own `test result` line for a
-# nonzero pass count. Neither stops this harness pointing at an older
-# revision: read the trial tails, not the verdicts, when comparing across
-# revisions.
+# The two marker greps below are vacuity guards: a binary can exit 0 because
+# the test that carries the proof never ran. The daemon marker is the restart
+# keeper's completion line; the workspace marker is its probe's sentinel. A
+# revision whose sources never print the marker line reads `fail` for a
+# binary whose own output says `test result: ok`, so read the trial tails,
+# not the verdicts, when comparing across revisions.
 echo "stress_setup=ready sha=$head_sha parallel_binaries=3 per_binary_threads=1 trials=$trials skip_slow=$skip_slow daemon_baseline=$daemon_baseline logs=$log_root"
 failures=0
 for ((trial = 1; trial <= trials; trial++)); do
@@ -189,7 +189,7 @@ for ((trial = 1; trial <= trials; trial++)); do
         # trial while the remaining race-sensitive cases stay repeated.
         if [[ "$key" == daemon_e2e && "$skip_slow" == 1 ]]; then
             runner_args+=(
-                --skip daemon_on_sandbox_home_starts_no_active_backlog_supervisor
+                --skip daemon_on_sandbox_home_runs_no_fleet_arm
                 --skip daemon_stays_resident_while_a_worker_socket_is_live
             )
         fi
@@ -210,11 +210,7 @@ for ((trial = 1; trial <= trials; trial++)); do
     daemon_verdict=pass
     persistence_verdict=pass
     workspace_verdict=pass
-    # The daemon probe that once printed `daemon_child_env_isolated` left with
-    # the keep-rule lane cap, so the vacuity guard reads the surviving
-    # evidence instead: the binary's own `test result` line must name a
-    # nonzero pass count, not just exit 0 on a run that executed nothing.
-    [[ "$daemon_rc" == 0 ]] && grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$trial_dir/daemon_e2e.log" || daemon_verdict=fail
+    [[ "$daemon_rc" == 0 ]] && grep -Eq '^daemon_restart_served_during_sweep ' "$trial_dir/daemon_e2e.log" || daemon_verdict=fail
     [[ "$persistence_rc" == 0 ]] || persistence_verdict=fail
     [[ "$workspace_rc" == 0 ]] && grep -Eq 'old_server_reaped_before_rebind old_pid=' "$trial_dir/workspace_persistence_e2e.log" || workspace_verdict=fail
 

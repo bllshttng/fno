@@ -22,7 +22,7 @@ impl Core {
                 continue;
             }
             if let Err(e) = entry.pty.resize(rows, cols, 0, 0) {
-                eprintln!("fno mux: grid reconcile resize failed: {e}");
+                crate::mux_log!(error; "fno mux: grid reconcile resize failed: {e}");
             }
             entry.vt.resize(rows, cols);
         }

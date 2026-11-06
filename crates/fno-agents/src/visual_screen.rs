@@ -251,7 +251,10 @@ pub(crate) fn prep(node: &str, head: &str, shots: &[String], dir: &Path) -> Crit
     }
     let boxed_dir = dir.join(format!("{node}-shots/boxed"));
     for p in pairs {
-        let read = decode(&dir.join(&p.before)).and_then(|b| Ok((b, decode(&dir.join(&p.after))?)));
+        // A shot may live in a sibling vault project's mux dir, where the
+        // asking session captured it; the name resolves across candidates.
+        let read = decode(&crate::merge_gates::resolve_shot(dir, &p.before))
+            .and_then(|b| Ok((b, decode(&crate::merge_gates::resolve_shot(dir, &p.after))?)));
         let (b, a) = match read {
             Ok(both) => both,
             Err(e) => {

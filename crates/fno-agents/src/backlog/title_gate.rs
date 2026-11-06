@@ -28,7 +28,7 @@ static LEAK_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         (
             "session-id",
             Regex::new(
-                r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|ses-[A-Za-z0-9_-]+)\b",
+                r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|ses[-_][A-Za-z0-9_-]+)\b",
             )
             .expect("static regex"),
         ),

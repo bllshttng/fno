@@ -259,6 +259,7 @@ pub(super) async fn keys(
                         )
                         .await
                         .map_err(|e| format!("reply input send failed: {e}"))?;
+                        view.health.input(std::time::Instant::now());
                         view.pending_reply_journals.insert(
                             request_id,
                             PendingJournal {

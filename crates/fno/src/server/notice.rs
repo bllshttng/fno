@@ -30,7 +30,7 @@ impl super::Core {
             // teardowns never pay N layout pushes.
             self.clients.retain(|c| !wedged.contains(&c.id));
             for id in wedged {
-                eprintln!(
+                crate::mux_log!(error;
                     "fno mux: client {id} reliable channel wedged on DesktopNotice; dropping it"
                 );
             }
