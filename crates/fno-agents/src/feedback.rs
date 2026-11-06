@@ -611,13 +611,13 @@ mod tests {
         Ctx {
             projects: vec!["acmecorp".into(), "fno".into()],
             user: Some("jdoe42".into()),
-            host: None,
+            host: Some("privatehost".into()),
         }
     }
 
     const FIXTURE: &str = "token=ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8 mail jane@example.com \
         at /Users/jane/x/y session 0f8e2f4a-1b2c-4d5e-8f90-123456789abc \
-        in acmecorp, vault internal/notes/a.md, login jdoe42";
+        in acmecorp, vault internal/notes/a.md, login jdoe42, host privatehost session ses_abc123Private";
 
     #[test]
     fn draft_masks_every_private_class() {
@@ -630,13 +630,15 @@ mod tests {
             "acmecorp",
             "internal/",
             "jdoe42",
+            "privatehost",
+            "ses_abc123Private",
         ] {
             assert!(
                 !draft.title.contains(leaked) && !draft.body.contains(leaked),
                 "{leaked}"
             );
         }
-        assert_eq!(draft.counts.values().sum::<usize>(), 7);
+        assert_eq!(draft.counts.values().sum::<usize>(), 9);
         assert!(draft.url_has_body && draft.url.len() <= LINK_MAX_CHARS);
         let padded = format!("{FIXTURE} {}", "word ".repeat(2000));
         let long = build(&Source::Text(&padded), None, &ctx(), "o/r", None).unwrap();

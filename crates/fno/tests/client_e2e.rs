@@ -389,6 +389,7 @@ fn mux_report_submits_context_and_keeps_text_after_a_refusal() {
     std::fs::write(
         &door,
         r#"#!/bin/sh
+if [ "$1 $2" = 'do feedback' ]; then printf '%s\n' "$@" > "$RECORD_DIR/draft-argv"; cat "$RECORD_DIR/draft.json"; exit 0; fi
 if [ "$1 $2" != 'backlog idea' ]; then exit 0; fi
 printf '%s\n' "$@" > "$RECORD_DIR/argv"
 cat > "$RECORD_DIR/body"
@@ -401,6 +402,34 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     )
     .unwrap();
     std::fs::set_permissions(&door, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let draft_body = format!("## What happened?\n\nportal stopped\n{}\n[session] <local path> [host]\nreport-frame-evidence feedback-row probe-bbbb server-log-evidence client-log-evidence\nfno-feedback-ref: report-preview-ref\n", (0..50).map(|n| format!("diagnostic line {n}")).collect::<Vec<_>>().join("\n"));
+    std::fs::write(scratch.0.join("draft.json"), serde_json::json!({"title":"[bug] portal stopped", "body":draft_body, "ref":"report-preview-ref"}).to_string()).unwrap();
+    let gh = scratch.0.join("gh");
+    std::fs::write(
+        &gh,
+        r#"#!/bin/sh
+case "$1 $2" in
+ 'auth status') [ ! -e "$RECORD_DIR/no-auth" ]; exit $? ;;
+ 'issue list')
+  if [ -e "$RECORD_DIR/issue-found" ]; then echo '[{"url":"https://github.com/fnodotdev/fno/issues/12345"}]'; else echo '[]'; fi
+  exit 0 ;;
+ 'issue create')
+  printf '%s\n' "$@" > "$RECORD_DIR/issue-argv"
+  cat > "$RECORD_DIR/issue-body"
+  echo call >> "$RECORD_DIR/issue-calls"
+  if [ -e "$RECORD_DIR/issue-no-receipt" ]; then exit 1; fi
+  echo 'https://github.com/fnodotdev/fno/issues/12345'; exit 0 ;;
+esac
+exit 1
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let report_path = format!(
+        "{}:{}",
+        scratch.0.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let config_root = scratch.0.join("config-root");
     std::fs::create_dir_all(config_root.join(".fno")).unwrap();
     std::fs::write(
@@ -513,6 +542,7 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
         &[
             ("FNO_BIN", door.to_str().unwrap()),
             ("RECORD_DIR", scratch.0.to_str().unwrap()),
+            ("PATH", &report_path),
             ("FNO_REPO_ROOT", config_root.to_str().unwrap()),
         ],
     );
@@ -558,6 +588,14 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     }
     h.type_bytes(b"\x1b[<0;100;7M\x1b[<0;100;7m");
     h.type_bytes(b"portal stopped\r");
+    h.wait_screen(15, |s| s.contains("review GitHub issue"));
+    assert!(
+        !scratch.0.join("issue-calls").exists(),
+        "preview must not publish"
+    );
+    h.type_bytes(b"\x1b[F");
+    h.wait_screen(5, |s| s.contains("report-preview-ref"));
+    h.type_bytes(b"\r");
     h.wait_screen(15, |s| s.contains("report: graph is busy"));
     assert!(
         h.screen().contains("portal stopped"),
@@ -580,13 +618,29 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     );
     std::fs::remove_file(scratch.0.join("delay")).unwrap();
     std::fs::write(scratch.0.join("allow"), "").unwrap();
-    h.type_bytes(b"\t\r");
+    h.type_bytes(b"\r");
     h.wait_screen(15, |s| {
         s.contains("probe-abcd") && !s.contains("report a problem")
     });
     let argv = std::fs::read_to_string(scratch.0.join("argv")).unwrap();
     let args: Vec<_> = argv.lines().collect();
-    assert!(args.windows(2).any(|w| w == ["--type", "feature"]));
+    assert!(args.windows(2).any(|w| w == ["--type", "bug"]));
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-body")).unwrap(),
+        draft_body,
+        "publish exactly the complete preview body"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "backlog retries must not duplicate the issue"
+    );
+    let issue_args = std::fs::read_to_string(scratch.0.join("issue-argv")).unwrap();
+    assert!(issue_args.contains("https://github.com/fnodotdev/fno"));
+    assert!(issue_args.contains("--body-file\n-"));
     assert!(args
         .windows(2)
         .any(|w| w == ["--source-kind", "operator_request"]));
@@ -597,17 +651,85 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
         "portal stopped",
         "report-frame-evidence",
         "feedback-row",
-        session,
         "probe-bbbb",
         "server-log-evidence",
         "client-log-evidence",
-        env!("FNO_MUX_GIT_REV"),
     ] {
         assert!(
             body.contains(evidence),
             "missing report evidence {evidence}: {body}"
         );
     }
+    assert_eq!(
+        body, draft_body,
+        "the backlog keeps the reviewed redacted body too"
+    );
+    assert!(!body.contains(session));
+    let captured = std::fs::read_to_string(scratch.0.join("draft-argv")).unwrap();
+    for evidence in [
+        session,
+        "report-frame-evidence",
+        "feedback-row",
+        "server-log-evidence",
+        "client-log-evidence",
+    ] {
+        assert!(
+            captured.contains(evidence),
+            "the native drafter receives captured evidence {evidence}"
+        );
+    }
+    std::fs::write(scratch.0.join("issue-no-receipt"), "").unwrap();
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("report a problem"));
+    h.type_bytes(b"portal stopped\r");
+    h.wait_screen(15, |s| s.contains("review GitHub issue"));
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("GitHub returned no issue receipt") && s.contains("probe-abcd")
+    });
+    assert!(
+        h.screen().contains("review GitHub issue"),
+        "a partial report keeps the preview"
+    );
+    std::fs::remove_file(scratch.0.join("issue-no-receipt")).unwrap();
+    std::fs::write(scratch.0.join("issue-found"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("issues/12345") && !s.contains("review GitHub issue")
+    });
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        5,
+        "issue retry retains the successful backlog receipt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "lookup recovers the unknown issue receipt without another create"
+    );
+    std::fs::write(scratch.0.join("no-auth"), "").unwrap();
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("No gh authentication"));
+    h.type_bytes(b"portal stopped\r");
+    h.wait_screen(15, |s| s.contains("Enter backlog only"));
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("probe-abcd") && !s.contains("review GitHub issue")
+    });
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "backlog-only confirmation does not call GitHub"
+    );
     h.type_bytes(b"\x02!");
     h.wait_screen(5, |s| s.contains("report a problem"));
     h.type_bytes(b"\x1b");
@@ -628,7 +750,7 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
             .unwrap()
             .lines()
             .count(),
-        4
+        6
     );
     h.type_bytes(b"\x02d");
     assert!(h.wait_exit(10).success());

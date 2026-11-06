@@ -17,25 +17,23 @@ The default prefix is `Ctrl-b`. Press it, release it, then press `!` to open the
 
 1. Press `prefix+!`. If you changed `mux.prefix`, use your configured prefix.
 2. Describe the problem. The form starts with the bug type. Press `Tab` to switch between bug and idea.
-3. Press `Enter` to file the report. The form closes, and the notice shows the new backlog node ID.
+3. Press `Enter` to prepare the redacted issue. Nothing is sent yet. The preview names the destination, `fnodotdev/fno`, and shows the issue title and complete body.
+4. Use the arrow keys to scroll through the body. `Home` returns to the start, and `End` shows the end. Press `Esc` to return to your description before sending.
+5. Press `Enter` again to create the GitHub issue and keep a backlog node. The form uses GitHub CLI (`gh`) authentication. It shows both receipts after a successful submission.
 
-To cancel before filing, press `Esc`. Cancellation discards the draft. If filing refuses or exceeds 10 seconds, the form keeps your text and shows the reason. Read the reason before retrying. After a timeout, check the backlog first: the report can already exist.
+If `gh` is not authenticated, the form says so. If needed, install the [GitHub CLI](https://cli.github.com/). Run `gh auth login` in a terminal, then reopen the form to check authentication again. Closing and reopening discards the current draft, so copy your description first. When the preview footer says `Enter backlog only`, press `Enter` to file without signing in. That creates a backlog node and does not create a GitHub issue.
 
-After a timeout, press `Esc` to close the form. In a terminal in the same project, search with words from your description. Replace `<REPORT_WORDS>` with those words:
+Press `Esc` in the description form to cancel. If a submission fails, the preview keeps your report and shows the reason at the top. A successful GitHub or backlog receipt is kept, so pressing `Enter` to retry in the same preview sends only to the destination that failed. After a partial submission, `Esc` closes the preview. It cannot undo the issue or node already created.
+
+Each command has a 10-second limit. A timeout can happen after a write landed. Check [the repository issues](https://github.com/fnodotdev/fno/issues) and the local backlog before retrying. Before creating an issue, the form searches for the feedback reference shown at the end of the preview. You can also copy that reference into the repository issue search box. To search the backlog, replace `<REPORT_WORDS>` with words from your description:
 
 ```bash
 fno backlog find "<REPORT_WORDS>"
 ```
 
-A match shows its title and node ID. Read a matching report before filing again. Replace `<REPORT_ID>` with the ID from the search result:
+A match shows its title and node ID. Read it with `fno backlog get <REPORT_ID>` before filing again. The [backlog reference](backlog-usage.md#finding-work) explains the search.
 
-```bash
-fno backlog get "<REPORT_ID>"
-```
-
-If its description matches, the report was filed. If search gives no clear answer, ask your lead to check before you file again. The [backlog reference](backlog-usage.md#finding-work) explains the search.
-
-A report includes your description, the build version and revision, and a text snapshot of the screen before the form opened. It also includes the focused agent's name, session ID and node, plus the last 40 lines of both logs. A selected agent row takes priority over the focused pane. If no agent row matches, the report names the pane instead.
+The report captures your description, build version and revision, and a text snapshot from before the form opened. It adds the focused agent's name and node, plus up to 40 lines from each log. A selected agent row takes priority over the focused pane. If no row matches, it names the pane instead. Both destinations receive the same reviewed, redacted body. Before the issue preview is shown, the native feedback drafter redacts home paths, session IDs, the local hostname and secrets. The exact body you review is the body sent to GitHub and stored in the backlog. Inspect it before sending because other private text can remain in the screen or logs.
 
 Reports enter the backlog as `operator_request`. The optional `mux.report_parent` setting names their parent epic. By default, reports have no parent. Add `report_parent` to the existing `[mux]` table in your project's `.fno/config.toml`. If that table is absent, add this block. Replace `<EPIC_ID>` with your epic's ID:
 
