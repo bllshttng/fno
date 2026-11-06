@@ -69,6 +69,7 @@
     "hooks/target-stop-hook.sh",
     "hooks/target-stopfailure.sh",
     "hooks/target-subagent-guard.sh",
+    "hooks/wheel-move-session-start.sh",
     "hooks/worktree-env-reload.sh",
     "hooks/worktree-peers-session-start.sh",
     "hooks/worktree-relocation-allow.sh",

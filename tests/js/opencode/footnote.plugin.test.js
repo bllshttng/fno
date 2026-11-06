@@ -1,5 +1,5 @@
 // Behavioral tests for the OpenCode native stop-hook bridge plugin.
-// Run: bun test cli/tests/opencode/footnote.plugin.test.js
+// Run: bun test tests/js/opencode/footnote.plugin.test.js
 //
 // The plugin speaks both OpenCode contracts through one handler body. The 1.x
 // arm is driven with a stubbed SDK `client` and shell `$`; the 2.x arm is
@@ -12,7 +12,7 @@ import { describe, test, expect } from "bun:test"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import footnote, { resolveHookRoot, FOREIGN_SESSION_MARKERS } from "../../src/fno/setup/assets/opencode/footnote.js"
+import footnote, { resolveHookRoot, FOREIGN_SESSION_MARKERS } from "../../../cli/src/fno/setup/assets/opencode/footnote.js"
 
 const FootnotePlugin = footnote.server
 const setupV2 = footnote.setup
@@ -738,7 +738,7 @@ describe("opencode 2 setup arm", () => {
   })
 
   test("AC2-ONEEXPORT: a default export with id, server and setup, plus the test seams", async () => {
-    const m = await import("../../src/fno/setup/assets/opencode/footnote.js")
+    const m = await import("../../../cli/src/fno/setup/assets/opencode/footnote.js")
     expect(Object.keys(m).filter((k) => k !== "default").sort()).toEqual([
       "FOREIGN_SESSION_MARKERS",
       "resolveHookRoot",
@@ -750,7 +750,7 @@ describe("opencode 2 setup arm", () => {
 
   test("AC2-SHARED: the gate body exists once; both adapters reach it through io", () => {
     const src = readFileSync(
-      join(import.meta.dir, "..", "..", "src", "fno", "setup", "assets", "opencode", "footnote.js"),
+      join(import.meta.dir, "..", "..", "..", "cli", "src", "fno", "setup", "assets", "opencode", "footnote.js"),
       "utf8",
     )
     // One scheduler, one transcript synthesizer, one loop-check argv, one

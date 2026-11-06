@@ -10,9 +10,10 @@ export NO_COLOR=1
 dir="${1:-$(cd "$(dirname "$0")/../.." && pwd)/tests/py}"
 cd "$dir"
 python_files="$(find . -type f -name '*.py' -print | wc -l | tr -d '[:space:]')"
+# Zero files means the target moved, not that the code is clean.
 if [ "$python_files" -eq 0 ]; then
-    echo "python-static: no Python files under $dir; nothing to check"
-    exit 0
+    echo "python-static: no Python files under $dir; the target drifted and the check is vacuous" >&2
+    exit 1
 fi
 ${RUFF:-uvx ruff} check --no-respect-gitignore --color=never --output-format=concise \
     --isolated --select E9,F63,F7,F82 .

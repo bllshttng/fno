@@ -10,9 +10,9 @@
 # hand-built root write that skips those doors, in either language:
 #
 #   - Python `state_dir() / "<leaf>"` with a bare leaf: refused unless the
-#     leaf is rowed (the shrink-only baseline, or the fence inside paths.py).
-#   - Python `root_state_file("<leaf>")` naming a leaf outside the fence:
-#     refused here rather than at the first runtime call.
+#     leaf is rowed in the shrink-only baseline.
+#   - Python `root_state_file("<leaf>")`: the door is deleted, so any call
+#     refuses.
 #   - Rust `place(<root>, "<name>")` for a name the layout table does not
 #     carry: place() answers root/<name> unchanged for an unknown row, which
 #     is exactly the silent root write this gate exists to catch.
@@ -41,14 +41,15 @@ LAYOUT="$REPO_ROOT/docs/state-root-layout.tsv"
 
 # ADDED_LINES BASELINE_FILE LAYOUT_FILE -> verdict. Exit 0 pass, 1 refused.
 check_lines() {
-    (cd "$REPO_ROOT/cli" && uv run --frozen python - "$1" "$2" "$3" <<'PY'
+    python3 - "$1" "$2" "$3" <<'PY'
 import fnmatch
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "src")
-from fno.paths import _ROOT_STATE_FILE_ROWS
+# The Python paths module and its root_state_file() fence are deleted, so no
+# leaf is fenced: every Python root write needs a baseline row.
+_ROOT_STATE_FILE_ROWS: frozenset = frozenset()
 
 added_text, baseline_path, layout_path = (
     Path(sys.argv[1]).read_text(encoding="utf-8"),
@@ -134,7 +135,6 @@ if refused:
     sys.exit(1)
 print("check-state-root-writes: ok - every added write is rowed or subfoldered")
 PY
-    )
 }
 
 if [[ "$SELF_TEST" == 1 ]]; then
@@ -206,7 +206,7 @@ trap 'rm -f "$ADDED"' EXIT
 # gate excludes itself: its self-test strings and header examples quote the
 # exact shapes it refuses.
 git diff -U0 "origin/${BASE_REF}...HEAD" \
-    -- cli/src/fno hooks scripts crates \
+    -- hooks scripts crates \
     ':(exclude)scripts/ci/check-state-root-writes.sh' >"$ADDED"
 
 check_lines "$ADDED" "$BASELINE" "$LAYOUT"

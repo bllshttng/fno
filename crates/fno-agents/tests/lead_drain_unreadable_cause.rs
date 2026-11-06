@@ -50,7 +50,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// quiet board, resolving epic scope, fast board subprocesses, and a
 /// `--read-timeout-ms` small enough that a hanging drain dies inside it.
 /// The env guards must outlive the fire, so the caller drops them.
-fn quiet_fire(body: &str) -> (tempfile::TempDir, [EnvGuard; 6], Vec<String>) {
+fn quiet_fire(body: &str) -> (tempfile::TempDir, [EnvGuard; 5], Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let bin = dir.path().join("bin");

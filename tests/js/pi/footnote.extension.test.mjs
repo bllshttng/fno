@@ -1,5 +1,5 @@
 // Behavioral tests for the pi bridge extension (transport contract).
-// Run: node --test cli/tests/pi/footnote.extension.test.mjs   (node 24)
+// Run: node --test tests/js/pi/footnote.extension.test.mjs   (node 24)
 //
 // A fake pi host records `on`, `sendUserMessage` and `appendEntry` calls, and
 // FNO_AGENTS_BIN points at a scratch shell stub that answers `state path`,
@@ -12,7 +12,7 @@ import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import footnote from "../../src/fno/setup/assets/pi/footnote.ts"
+import footnote from "../../../cli/src/fno/setup/assets/pi/footnote.ts"
 
 // The scratch stub binary: logs its argv, then answers from fixtures.
 // `state path target-state` prints $STUB_STATE_PATH when set; `loop-check`

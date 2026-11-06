@@ -76,14 +76,16 @@ jobs:
             expect: pass
             node: ''
             readme: ['curl -fsSL fno.sh | sh']
+          # Passes since the source update lost its Python step: run inside
+          # the checkout, the released fno updates from source cleanly.
           - id: fno-update-released
             runs-on: ubuntu-24.04
-            expect: fail
+            expect: pass
             node: ''
             readme: []
           - id: fno-update-released-macos
             runs-on: macos-15
-            expect: fail
+            expect: pass
             node: ''
             readme: []
           - id: fno-sh-head

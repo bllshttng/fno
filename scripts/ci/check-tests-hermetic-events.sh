@@ -5,11 +5,11 @@
 # live global journal - fixtures a green run had written to production. The
 # conftest fixture _plan_hermetic_events_journal does the per-test pinning;
 # this guard proves the marker on the test-file side did not rot. Keep the
-# file list in step with _PLAN_JOURNAL_PINNED_MODULES in cli/tests/conftest.py.
+# file list in step with _PLAN_JOURNAL_PINNED_MODULES in tests/py/conftest.py.
 set -euo pipefail
 
 files=(
-  "cli/tests/unit/test_epic_status.py"
+  "tests/py/unit/test_epic_status.py"
 )
 
 fail=0
