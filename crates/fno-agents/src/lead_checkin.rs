@@ -517,6 +517,7 @@ fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
         json!(sum_active("owned_counts"))
     };
     let mut rows: Vec<Value> = Vec::new();
+    let numbers = crate::numbers::labels();
     for n in fold
         .get("nodes")
         .and_then(|n| n.as_array())
@@ -534,8 +535,10 @@ fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
             .and_then(|s| s.first())
             .cloned()
             .unwrap_or(Value::Null);
+        let id = n.get("id").and_then(Value::as_str);
         rows.push(json!({
             "id": n.get("id"),
+            "number": id.and_then(|id| numbers.get(id)),
             "status": n.get("status"),
             "worker": n.get("worker"),
             "pr_number": n.get("pr_number"),
