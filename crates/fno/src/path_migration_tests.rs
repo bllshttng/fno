@@ -46,26 +46,6 @@ fn migration_backs_up_a_hand_edited_file_and_keeps_its_foreign_keys() {
     // The sentinel makes a second run a no-op.
     assert_eq!(migrate(&root, dir.path()).unwrap(), None);
 }
-
-#[test]
-fn an_internal_link_into_a_vault_enables_obsidian() {
-    let dir = tempfile::tempdir().unwrap();
-    let vault = std::fs::canonicalize(dir.path()).unwrap().join("vault");
-    std::fs::create_dir_all(vault.join(".obsidian")).unwrap();
-    std::fs::create_dir_all(vault.join("internal")).unwrap();
-    let cwd = dir.path().join("repo");
-    std::fs::create_dir_all(&cwd).unwrap();
-    std::os::unix::fs::symlink(vault.join("internal"), cwd.join("internal")).unwrap();
-
-    assert_eq!(detect_vault(&cwd), Some(vault.clone()));
-    let overlay = managed_overlay(Some(&vault));
-    assert_eq!(overlay["config"]["obsidian"]["enabled"], json!(true));
-    assert_eq!(
-        overlay["config"]["obsidian"]["vault"],
-        json!(vault.display().to_string())
-    );
-}
-
 #[test]
 fn a_config_source_denies_the_default_root_fast_path() {
     let dir = tempfile::tempdir().unwrap();

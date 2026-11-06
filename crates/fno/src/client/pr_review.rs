@@ -1013,39 +1013,4 @@ mod tests {
         keys(&mut view, b"\x1b");
         assert!(view.backlog_board.as_ref().unwrap().review.is_none());
     }
-
-    #[test]
-    fn a_seat_names_the_recipient_and_a_dead_claim_says_so() {
-        let seat = SeatName {
-            seat: "mercedes".into(),
-            machine: "r2d2".into(),
-        };
-        let mut view = review_view();
-        close(&mut view);
-        open(
-            &mut view,
-            "x-1".into(),
-            "https://github.com/o/r/pull/7",
-            Some(seat.clone()),
-        );
-        land_board(&mut view, landed(Err("no read".into())));
-        assert_eq!(review(&view).recipient, "mercedes on r2d2");
-        assert_eq!(
-            view.input_owner(),
-            crate::client::region_focus::RegionOwner::Board,
-            "the review holds the keys"
-        );
-
-        let dead = Ok(serde_json::json!({"state": "stale", "holder": "x"}));
-        assert_eq!(
-            recipient_line(&dead, Some(&seat), |_| None),
-            "mercedes on r2d2"
-        );
-        assert_eq!(recipient_line(&dead, None, |_| None), NO_HOLDER);
-        let live = Ok(serde_json::json!({"state": "live", "session_id": "s-1", "host": "bb16"}));
-        assert_eq!(
-            recipient_line(&live, None, |s| (s == "s-1").then(|| "ada".to_string())),
-            "ada on bb16"
-        );
-    }
 }

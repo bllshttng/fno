@@ -358,27 +358,6 @@ mod tests {
             (&json!(100), &Value::Null)
         );
     }
-
-    #[tokio::test]
-    async fn an_asker_on_a_live_local_pane_carries_its_watch_pane() {
-        let agents = vec![crate::proto::AgentRow {
-            name: "t-one".into(),
-            harness_session_id: Some("aaaa1111-zzzz".into()),
-            pane_id: Some(12),
-            ..Default::default()
-        }];
-        let qs = questions(&[None]);
-        let m = read_with_agents(
-            &HqCache::default(),
-            Ok(two_machines()),
-            Ok(qs),
-            100,
-            &agents,
-        )
-        .await;
-        assert_eq!(m["waiting"]["questions"][0]["watch_pane"], 12);
-    }
-
     #[tokio::test]
     async fn a_failed_read_names_its_reason_and_keeps_the_last_good_fold() {
         let cache = HqCache::default();

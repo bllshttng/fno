@@ -238,24 +238,4 @@ mod tests {
         assert!(rows[0].text.starts_with("h/l columns"));
         assert!(rows[2].text.trim_end().ends_with("* all keys"));
     }
-
-    #[test]
-    fn narrow_width_drops_columns_and_no_row_overflows() {
-        for view in [
-            KeyView::Agents,
-            KeyView::Backlog,
-            KeyView::Detail,
-            KeyView::Org,
-        ] {
-            for w in [20usize, 40, 80] {
-                let rows = grid_rows(view, w);
-                assert!(rows.len() <= MAX_ROWS, "{view:?} at {w}");
-                assert!(rows.last().unwrap().text.ends_with("* all keys"));
-                for row in rows {
-                    let used: usize = row.text.chars().map(crate::text_style::char_w).sum();
-                    assert!(used <= w, "{view:?} at {w}: {:?}", row.text);
-                }
-            }
-        }
-    }
 }

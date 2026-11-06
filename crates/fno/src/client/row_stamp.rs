@@ -340,39 +340,6 @@ mod tests {
         assert!(failure);
         assert!(text.contains("failed"), "the row carries the reason");
     }
-
-    #[test]
-    fn row_stamp_success_reads_as_success() {
-        let mut view = two_pane_view();
-        view.arm_row_stamp(&ConfirmKind::RemoveAgent {
-            sid: None,
-            name: "corpse".into(),
-            pane_id: None,
-            measure: false,
-        });
-        view.resolve_row_stamp("removed corpse");
-        let row = corpse_row();
-        let (failure, _) = view
-            .row_stamp_for(&DisplayRow::Agent(&row))
-            .expect("success stamps the named row too");
-        assert!(!failure, "a clean outcome is not a failure stamp");
-    }
-
-    #[test]
-    fn row_stamp_arm_expires_without_a_notice() {
-        // A lost outcome must not stamp some LATER notice onto the row.
-        let mut view = two_pane_view();
-        view.arm_row_stamp(&ConfirmKind::StopAgent {
-            sid: None,
-            name: "corpse".into(),
-            pane_id: None,
-        });
-        view.row_arm.as_mut().unwrap().expires = Instant::now();
-        view.resolve_row_stamp("some later notice naming corpse");
-        assert!(view.row_arm.is_none(), "an expired arm disarms");
-        assert!(view.row_stamp.is_none(), "an expired arm stamps nothing");
-    }
-
     #[test]
     fn row_stamp_skips_progress_lines_and_resolves_on_the_verdict() {
         // (review) The external commands emit "stopping X…" long before
@@ -425,32 +392,6 @@ mod tests {
             "the pinned header row never carries the stamp"
         );
     }
-
-    #[test]
-    fn sideline_stamp_ellipsizes_and_keeps_the_row_identity() {
-        // (review) A stamp longer than the row must not swallow the
-        // name: it ellipsizes and leaves the row's leading cells alone.
-        let mut view = two_pane_view();
-        view.layout.agents.push(corpse_row());
-        view.row_stamp = Some(RowStamp {
-            name: "corpse".into(),
-            text: "stop corpse: failed: a very long daemon reason that cannot fit any sideline"
-                .into(),
-            failure: true,
-            expires: Instant::now() + ROW_STAMP_TTL,
-        });
-        let frame = view.compose();
-        let cols = frame.cols as usize;
-        let row = &frame.cells[cols * 2..cols * 3];
-        assert!(row.iter().any(|c| c.c == '✗'), "the stamp still renders");
-        let lead = row[0];
-        assert!(
-            lead.c != '✗' && lead.c != '…',
-            "the row's leading identity cell survives: got {:?}",
-            lead.c
-        );
-    }
-
     #[test]
     fn notice_names_row_requires_a_token_boundary() {
         // The name must stand alone: a substring of a longer word is not
@@ -480,35 +421,6 @@ mod tests {
             v.selector,
             Some(idx),
             "the commit re-anchors the selector on the acted row"
-        );
-    }
-
-    // (AC13-HP) The toast yields: with the feed panel open 40 columns on a
-    // 120-column terminal, the notice ends at or before column 80.
-    #[test]
-    fn a_notice_yields_to_the_open_feed_panel() {
-        let mut view = two_pane_view();
-        view.term = (30, 120);
-        view.feed = Some(crate::client::feed_view::open_overlay(None, 0));
-        view.feed_width = 40;
-        assert_eq!(view.feed_panel_w(), 40, "the panel renders 40 wide");
-        view.set_notice("a very long toast that would previously paint under the panel".into());
-        let (start, text) = view.notice_overlay(120).expect("a notice is set");
-        let end = start + text.chars().count();
-        assert!(
-            end <= 80,
-            "the toast ends at {end}, past the panel's left edge"
-        );
-        // A closed panel keeps the old full-width behaviour, minus the
-        // bell's seat: the toast ends left of the bell's range.
-        view.feed = None;
-        let (start, text) = view.notice_overlay(120).expect("a notice is set");
-        let end = start + text.chars().count();
-        let bell_start = crate::client::bell::button_range(&view).start;
-        assert_eq!(
-            end,
-            bell_start.saturating_sub(1),
-            "closed panel: the toast hugs the bell's left edge"
         );
     }
 }

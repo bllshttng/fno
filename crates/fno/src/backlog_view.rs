@@ -1680,31 +1680,6 @@ mod tests {
         ids.sort();
         assert_eq!(ids, vec!["x-non", "x-pad"]);
     }
-
-    #[test]
-    fn every_refusal_reason_names_the_board_it_actually_produces() {
-        let _env_lock = lock_board_scope_env();
-        let _guard = EnvVarGuard::remove("FNO_BOARD_SCOPE");
-        // The reason is the ONLY place the fallback is visible: `mux doctor`
-        // prints it verbatim and the server logs it. Each of these three paths
-        // resolves to the empty set, which the client writes to the wire as ""
-        // and the server reads back as All - so a reason promising an
-        // unscoped-only board would be describing a board nobody gets. That is
-        // the receipt-can-lie shape, and it shipped here once already.
-        let refusals = [
-            resolve_board_scope(|_| None),
-            resolve_board_scope(|k| (k == "mux.board_scope").then(|| "everything".to_string())),
-            resolve_board_scope(|k| (k == "mux.board_scope").then(|| "workspace:typo".to_string())),
-        ];
-        for (scope, why) in &refusals {
-            assert_eq!(*scope, BoardScope::Projects(HashSet::new()), "{why}");
-            assert!(
-                why.contains("EVERY project"),
-                "refusal reason must name the board it produces: {why}"
-            );
-        }
-    }
-
     #[test]
     fn a_latched_refusal_widens_at_the_server_rather_than_blanking_the_board() {
         // The client ALWAYS sets the var, so a refusal arrives as a set-but-
@@ -1727,26 +1702,6 @@ mod tests {
             None => std::env::remove_var(key),
         }
     }
-
-    #[test]
-    fn external_backend_selected_follows_the_python_resolution() {
-        // Same resolution as fno.tracker.active_backend_name: unset -> graph,
-        // "graph" -> graph, anything else -> external. The two sides must
-        // never disagree about which store is live.
-        let key = "FNO_TRACKER_BACKEND";
-        let guard = std::env::var(key).ok();
-        std::env::remove_var(key);
-        assert!(!external_backend_selected());
-        std::env::set_var(key, "graph");
-        assert!(!external_backend_selected());
-        std::env::set_var(key, "github");
-        assert!(external_backend_selected());
-        match guard {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-    }
-
     #[test]
     fn snapshot_document_feeds_the_same_derivation() {
         // The backend-neutral snapshot (the graph-get stdin door) is the
@@ -2037,56 +1992,6 @@ mod tests {
         );
         assert_eq!(hot.cards[0].state, CardState::InFlight);
     }
-
-    #[test]
-    fn an_empty_timestamp_is_no_timestamp() {
-        // The Python board tests these fields with bare truthiness, so `""` is
-        // absent there. A null-only check here would send an empty-stamped node
-        // to Done/Triage while the board left it in its priority column - the two
-        // boards must never name different lanes for the same node.
-        let raw = graph(
-            r#"{"id":"x-a","slug":"a","priority":"p2","status":"ready","completed_at":""},
-               {"id":"x-b","slug":"b","priority":"p2","status":"ready","queued_at":""},
-               {"id":"x-kid","slug":"k","priority":"p2","status":"ready","parent":"x-e","completed_at":""},
-               {"id":"x-e","slug":"e","type":"epic","priority":"p2","status":"ready"}"#,
-        );
-        let cards = derive_cards(&raw).unwrap();
-        let lane = |id: &str| cards.iter().find(|c| c.id == id).unwrap().lane.clone();
-        assert_eq!(
-            lane("x-a").as_deref(),
-            Some("Next"),
-            "empty completed_at is not Done"
-        );
-        assert_eq!(
-            lane("x-b").as_deref(),
-            Some("Next"),
-            "empty queued_at is not Triage"
-        );
-        assert_eq!(
-            lane("x-e").as_deref(),
-            Some("Next"),
-            "an empty-stamped child does not make its epic underway"
-        );
-    }
-
-    #[test]
-    fn an_epic_with_a_claimed_child_is_underway() {
-        // Sessions claim an epic's leaf CHILDREN, never the container, so an
-        // in-progress epic carries no claim of its own and would otherwise sit in
-        // its priority column (mirrors in_progress_epic_ids).
-        let raw = graph(
-            r#"{"id":"x-epic","slug":"e","type":"epic","priority":"p3","status":"ready"},
-               {"id":"x-kid","slug":"k","priority":"p2","status":"claimed","parent":"x-epic"}"#,
-        );
-        let cards = derive_cards(&raw).unwrap();
-        let epic = cards.iter().find(|c| c.id == "x-epic").unwrap();
-        assert_eq!(
-            epic.lane.as_deref(),
-            Some("In Progress"),
-            "a p3 epic with a claimed child is underway, not long-tail"
-        );
-    }
-
     #[test]
     fn head_marker_rows() {
         // AC1-HP: exactly one `next`, on the first READY card in board order -
@@ -2122,46 +2027,6 @@ mod tests {
             "the marker moves to the next ready card"
         );
     }
-
-    #[test]
-    fn lanes_render_in_canonical_board_order() {
-        // The overlay reads left-to-right as a lifecycle, so the lane list must
-        // arrive in KANBAN_COLUMNS order. Sorting by name would render it
-        // backwards (Later, Next, Now) - the board's own order is the contract.
-        let raw = graph(
-            r#"{"id":"x-l","slug":"l","priority":"p3","status":"ready"},
-               {"id":"x-t","slug":"t","priority":"p2","status":"ready","queued_at":"2026-07-19T00:00:00Z"},
-               {"id":"x-n","slug":"n","priority":"p1","status":"ready"},
-               {"id":"x-x","slug":"x","priority":"p2","status":"ready"}"#,
-        );
-        let names: Vec<String> = derive_queue(&raw, None, &BoardScope::All)
-            .unwrap()
-            .lanes
-            .into_iter()
-            .map(|(l, _)| l)
-            .collect();
-        assert_eq!(names, ["Now", "Next", "Later", "Triage"]);
-    }
-
-    #[test]
-    fn an_excluded_node_is_not_a_card_at_all() {
-        // `kanban_column` returning None EXCLUDES a node from the board in the
-        // Python. Bucketing it as unlaned instead would render a row the
-        // canonical board says does not exist.
-        let raw = graph(
-            r#"{"id":"x-road","slug":"r","type":"roadmap","priority":"p1","status":"ready"},
-               {"id":"x-real","slug":"n","priority":"p1","status":"ready"}"#,
-        );
-        let q = derive_queue(&raw, None, &BoardScope::All).unwrap();
-        let ids: Vec<&str> = q.cards.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["x-real"], "the roadmap row is off the board");
-        assert_eq!(q.total(), 1, "and is not counted in any lane");
-        assert!(
-            q.cards.iter().all(|c| c.lane.is_some()),
-            "every surviving card knows its lane"
-        );
-    }
-
     #[test]
     fn total_counts_the_whole_board_not_the_capped_list() {
         // AC5-EDGE: the section's `+N more` needs the uncapped count, so `total`

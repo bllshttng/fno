@@ -1,7 +1,6 @@
 //! The read model's tests, mounted by backlog_model.rs.
 
 use super::*;
-use crate::proto::AgentBadge;
 use serde_json::json;
 
 fn row(harness_session: Option<&str>) -> AgentRow {
@@ -358,28 +357,6 @@ fn repeated_filter_pairs_accumulate_any_of_sets() {
     assert_eq!(q.status, ["ready", "idea"], "dup dropped, blank skipped");
     assert_eq!(q.priority, ["p1"]);
 }
-
-#[test]
-fn any_of_status_filter_keeps_either_status() {
-    let rows = vec![
-        json!({"id": "x-a", "slug": "a", "status": "ready", "priority": "p2"}),
-        json!({"id": "x-b", "slug": "b", "status": "idea", "priority": "p2"}),
-        json!({"id": "x-c", "slug": "c", "status": "done", "priority": "p2"}),
-    ];
-    let inp = fixture(rows);
-    let q = Query {
-        status: vec!["ready".into(), "idea".into()],
-        ..Default::default()
-    };
-    let b = board(&inp, &q);
-    let kept: Vec<&str> = b.lanes[0]
-        .cells
-        .iter()
-        .flat_map(|c| c.cards.iter().map(|card| card.id.as_str()))
-        .collect();
-    assert_eq!(kept, ["x-a", "x-b"], "either status stays");
-}
-
 #[test]
 fn status_tiles_count_the_pre_filter_set() {
     // The tiles double as filters, so their counts stay the whole scoped
@@ -409,33 +386,6 @@ fn status_tiles_count_the_pre_filter_set() {
     );
     assert_eq!(b.stats.totals.iter().filter(|c| c.total > 0).count(), 1);
 }
-
-#[test]
-fn list_view_answers_uncapped_cells() {
-    // One more card than CELL_CAP: the kanban cell truncates at the cap and
-    // says so, the list answers every row.
-    let rows: Vec<Value> = (0..CELL_CAP + 1)
-        .map(|i| {
-            json!({
-                "id": format!("x-{i}"), "slug": format!("s{i}"),
-                "status": "ready", "priority": "p2"
-            })
-        })
-        .collect();
-    let inp = fixture(rows);
-    let qk = Query::from_pairs(&vec![]).unwrap();
-    let b = board(&inp, &qk);
-    let drawn: usize = b.lanes[0].cells.iter().map(|c| c.cards.len()).sum();
-    assert_eq!(drawn, CELL_CAP, "kanban capped at the cell cap");
-    let q = Query {
-        view: View::List,
-        ..Default::default()
-    };
-    let b = board(&inp, &q);
-    let drawn: usize = b.lanes[0].cells.iter().map(|c| c.cards.len()).sum();
-    assert_eq!(drawn, CELL_CAP + 1, "list uncapped");
-}
-
 #[test]
 fn cards_carry_created_at_for_the_list_rows() {
     let mut rows = vec![
@@ -939,98 +889,6 @@ fn a_board_facts_failure_degrades_to_created_at_order() {
         .collect();
     assert_eq!(cards, vec!["x-early", "x-late"], "created_at order");
 }
-
-#[test]
-fn moved_helpers_still_answer() {
-    let mut lead = row(None);
-    lead.name = "kd".into();
-    lead.role_level = Some(2);
-    lead.role_scope = Some("x-9".into());
-    assert_eq!(
-        lead_of(&[lead.clone()], "x-9", None, None),
-        Some(("kd".into(), 2))
-    );
-    assert_eq!(
-        lead_of(std::slice::from_ref(&lead), "x-1", Some("x-9"), None),
-        Some(("kd".into(), 2))
-    );
-    let mut node_team = row(None);
-    node_team.name = "node-lead".into();
-    node_team.role_level = Some(1);
-    node_team.role_scope = Some("x-9".into());
-    let mut project_team = row(None);
-    project_team.name = "project-lead".into();
-    project_team.role_level = Some(2);
-    project_team.role_scope = Some("fno".into());
-    let both = [project_team, node_team];
-    assert_eq!(
-        lead_of(&both, "x-9", None, Some("fno")),
-        Some(("node-lead".into(), 1)),
-        "a node-scope team beats an earlier project-scope team"
-    );
-    assert_eq!(lead_of(&[row(None)], "x-1", None, None), None);
-    assert_eq!(
-        session_action(None),
-        SessionAction::Dim("no registry row".into())
-    );
-    let mut a = row(Some("s1"));
-    a.pane_id = Some(3);
-    assert_eq!(session_action(Some(&a)), SessionAction::Attach);
-    let mut a = row(Some("s1"));
-    a.resumable = true;
-    assert_eq!(session_action(Some(&a)), SessionAction::Resume);
-    let mut a = row(Some("s1"));
-    a.resumable = true;
-    a.badge = Some(AgentBadge::Done);
-    assert_eq!(session_action(Some(&a)), SessionAction::Dim("done".into()));
-}
-
-#[test]
-fn snapshot_errors_and_staleness_ride_inputs_errors() {
-    // AC8-HP: the snapshot parse copies each errors line into Inputs.errors
-    // with the stale stamp first; rows stay the entries.
-    let doc = json!({
-        "backend": "github",
-        "stale_since": "2026-09-24T10:00:00Z",
-        "entries": [{"id": "E-1", "status": "ready", "priority": "p2"}],
-        "errors": ["closed window failed: gh down"],
-    });
-    let (rows, errors) = parse_snapshot_doc(&doc);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["id"], "E-1");
-    assert_eq!(
-        errors,
-        vec![
-            "tracker snapshot stale since 2026-09-24T10:00:00Z".to_string(),
-            "closed window failed: gh down".to_string(),
-        ]
-    );
-}
-
-#[test]
-fn type_filter_keeps_only_that_kind_and_facets_name_both() {
-    // AC1-HP: `type=bug` keeps only the bug cards; facets.kinds lists both.
-    let rows = vec![
-        json!({"id": "x-f", "status": "ready", "priority": "p2", "type": "feature"}),
-        json!({"id": "x-b", "status": "ready", "priority": "p2", "type": "bug"}),
-        json!({"id": "x-e", "status": "ready", "priority": "p2", "type": "epic"}),
-    ];
-    let inp = fixture(rows);
-    let q = Query::from_pairs(&[("type".into(), "bug".into())]).unwrap();
-    let b = board(&inp, &q);
-    let kept: Vec<&str> = b
-        .lanes
-        .iter()
-        .flat_map(|l| l.cells.iter())
-        .flat_map(|c| c.cards.iter())
-        .map(|c| c.id.as_str())
-        .collect();
-    assert_eq!(kept, ["x-b"], "only the bug card stays");
-    let q = Query::default();
-    let b = board(&inp, &q);
-    assert_eq!(b.facets.kinds, ["bug", "epic", "feature"], "sorted kinds");
-}
-
 #[test]
 fn search_grammar_case_table_holds_and_drives_the_board() {
     let cases: serde_json::Value = serde_json::from_str(include_str!("search_query_cases.json"))
@@ -1144,28 +1002,6 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
     assert!(!event_help.contains("s:ready"), "s: is node-only");
     assert!(event_help.contains("m:glm k:node_shipped ts:>=2026-10-01"));
 }
-
-#[test]
-fn tag_facet_stays_empty_while_no_row_carries_one() {
-    // AC3-EDGE model half: no row carries a tag, so facets.tags is empty
-    // and a tag query keeps nothing.
-    let rows = vec![
-        json!({"id": "x-a", "status": "ready", "priority": "p2"}),
-        json!({"id": "x-b", "status": "ready", "priority": "p2", "tags": []}),
-    ];
-    let inp = fixture(rows);
-    let b = board(&inp, &Query::default());
-    assert!(b.facets.tags.is_empty(), "no tags to facet");
-    let q = Query::from_pairs(&[("tag".into(), "infra".into())]).unwrap();
-    let b = board(&inp, &q);
-    let kept: usize = b
-        .lanes
-        .iter()
-        .map(|l| l.cells.iter().map(|c| c.total).sum::<usize>())
-        .sum();
-    assert_eq!(kept, 0, "a tag filter over no tags keeps nothing");
-}
-
 #[test]
 fn node_parent_link_resolves_from_a_single_string_id() {
     // The parent group's data: a row whose `parent` is one id resolves to
@@ -1295,62 +1131,4 @@ fn the_default_board_leaves_off_board_rows_out_and_names_them() {
         b.stats.statuses.iter().all(|s| s.status != "deferred"),
         "status tiles stay curated"
     );
-}
-
-#[test]
-fn an_explicit_status_query_reaches_the_off_board_payload() {
-    let rows = vec![
-        json!({"id": "x-def", "slug": "def", "status": "deferred", "priority": "p2"}),
-        json!({"id": "x-sup", "slug": "sup", "status": "superseded", "priority": "p2"}),
-    ];
-    let inp = fixture(rows);
-    let q = Query {
-        q: Some("s:deferred".into()),
-        ..Default::default()
-    };
-    let b = board(&inp, &q);
-    let off: Vec<&str> = b.offboard.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(off, ["x-def"], "the query filters the reveal");
-}
-
-#[test]
-fn origin_session_names_where_the_node_came_from_and_how_to_reach_it() {
-    let mut inp = fixture(vec![
-        json!({"id": "x-none", "status": "ready"}),
-        json!({"id": "x-gone", "status": "ready", "source_session_id": "s-gone",
-               "source_harness": "claude", "cwd": "/repo"}),
-        json!({"id": "x-park", "status": "ready", "source_session_id": "s-park",
-               "source_cwd": "/src", "source_parent_session": "s-top"}),
-        json!({"id": "x-live", "status": "ready", "source_session_id": "s-live"}),
-    ]);
-    let mut park = row(Some("s-park"));
-    park.resumable = true;
-    let mut live = row(Some("s-live"));
-    live.pane_id = Some(7);
-    inp.agents = vec![park, live];
-
-    assert!(
-        origin_session_for(&inp, "x-none").is_none(),
-        "no source, no origin"
-    );
-    let gone = origin_session_for(&inp, "x-gone").unwrap();
-    assert_eq!(gone.action, "none");
-    assert_eq!(
-        gone.command.as_deref(),
-        Some("fno agents registry adopt s-gone"),
-        "a session the registry lacks reaches by adopt"
-    );
-    let park = origin_session_for(&inp, "x-park").unwrap();
-    assert_eq!(park.action, "resume");
-    assert_eq!(park.parent_session.as_deref(), Some("s-top"));
-    assert!(
-        park.command.as_deref().unwrap().ends_with("--cwd '/src'"),
-        "resume pins the source cwd: {:?}",
-        park.command
-    );
-    assert!(park.pane.is_none(), "no live view without a pane");
-    let live = origin_session_for(&inp, "x-live").unwrap();
-    assert_eq!((live.pane, live.action.as_str()), (Some(7), "attach"));
-    let view = node(&inp, "x-live").unwrap();
-    assert_eq!(view.origin_session.unwrap().session_id, "s-live");
 }

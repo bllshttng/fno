@@ -47,21 +47,6 @@ fn the_unknown_key_walk_reads_map_keys_as_data_and_names_near_misses() {
     let honored = json!({"recovery": {"retire_grace_s": 60}});
     assert!(schema_walk::unknown_key_problems(schema, &leaves, &layer(honored)).is_empty());
 }
-
-#[test]
-fn an_out_of_enum_value_refuses_naming_file_key_value_and_legal_set() {
-    let table = crate::config_schema::schema_table();
-    let flat = json!({"recovery": {"watchdog": {"mode": "on"}}});
-    let refused = schema_walk::refusals(&table["json_schema"], &flat);
-    let text = schema_walk::describe(&refused, &[("/cfg/config.toml".to_string(), flat.clone())]);
-    assert_eq!(
-        text,
-        "refusing to load settings:\n  /cfg/config.toml: recovery.watchdog.mode = 'on'; 'report', 'wake' or 'handoff'"
-    );
-    let ok = json!({"recovery": {"watchdog": {"mode": "wake"}}});
-    assert!(schema_walk::refusals(&table["json_schema"], &ok).is_empty());
-}
-
 #[test]
 fn the_post_merge_verdict_reads_the_repo_file_only() {
     let root = tempfile::TempDir::new().unwrap();

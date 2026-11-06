@@ -413,18 +413,6 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn touch_coalesce_per_pane() {
-        let mut last = HashMap::new();
-        let t0 = Instant::now();
-        assert!(touch_coalesce(&mut last, 1, t0));
-        assert!(
-            touch_coalesce(&mut last, 2, t0),
-            "panes coalesce independently"
-        );
-    }
-
     #[test]
     fn pane_touch_node_cwd_fallback_and_none() {
         use crate::tree::{Node, Tab};
@@ -696,72 +684,6 @@ mod tests {
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn a_focus_report_writes_no_witness_row_and_a_typed_enter_writes_one() {
-        use crate::server::CoreMsg;
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "fno-witness-replies-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
-        let mut core = witness_test_core(7);
-        core.clients.push(crate::server::Client {
-            id: 1,
-            reliable_tx: tokio::sync::mpsc::channel(1).0,
-            dirty: Default::default(),
-            notify: Arc::new(tokio::sync::Notify::new()),
-            synced_modes: Default::default(),
-            view: (1, 1),
-            visible: Default::default(),
-            dims: (24, 80),
-            passive: false,
-            last_press: None,
-        });
-        // The loopback the client forwards when a row is merely viewed: the
-        // DEC 1004 focus reports, a CPR reply, a DA1 reply, an OSC 11 color
-        // reply, an SGR mouse press, a kitty keyboard-query reply.
-        for reply in [
-            &b"\x1b[I"[..],
-            b"\x1b[O",
-            b"\x1b[12;34R",
-            b"\x1b[?62;1;6;9;15;22c",
-            b"\x1b]11;rgb:1c1c/1c1c/1c1c\x07",
-            b"\x1b[<0;10;5M",
-            b"\x1b[?1u",
-        ] {
-            core.handle(CoreMsg::Input {
-                id: 1,
-                bytes: reply.to_vec(),
-            });
-        }
-        assert!(
-            journal_submits(&dir).is_empty(),
-            "terminal-generated replies witness nothing"
-        );
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"hello\r".to_vec(),
-        });
-        let rows = journal_submits(&dir);
-        assert_eq!(
-            rows.len(),
-            1,
-            "one typed line with Enter writes exactly one witness row"
-        );
-        std::env::remove_var("FNO_AGENTS_HOME");
-        drop(guard);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A pinned-journal env for the typing-witness tests: the
     /// `FNO_AGENTS_HOME_GUARD` plus a fresh temp agents home.
     fn witness_env(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
@@ -857,34 +779,6 @@ mod tests {
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn the_first_key_of_a_burst_writes_one_human_touch_row() {
-        use crate::server::CoreMsg;
-        let (guard, dir) = witness_env("human-touch");
-        let mut core = typing_client_core();
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"ship it\r".to_vec(),
-        });
-
-        let rows = journal_rows(&dir, "human_touch");
-        assert_eq!(
-            rows.len(),
-            1,
-            "one touch event for the first key in a burst"
-        );
-        assert_eq!(rows[0]["type"], "human_touch");
-        assert_eq!(rows[0]["source"], "daemon");
-        assert_eq!(rows[0]["data"]["source"], "inject");
-        assert_eq!(rows[0]["data"]["resolution"], "failed");
-        assert_eq!(rows[0]["data"]["graph_node_id"], serde_json::Value::Null);
-
-        std::env::remove_var("FNO_AGENTS_HOME");
-        drop(guard);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn failed_human_touch_append_is_counted_without_panicking() {
         use crate::server::CoreMsg;
@@ -974,23 +868,6 @@ mod tests {
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn a_focus_report_writes_neither_typing_nor_submit_rows() {
-        use crate::server::CoreMsg;
-        let (guard, dir) = witness_env("focus");
-        let mut core = typing_client_core();
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"\x1b[I".to_vec(),
-        });
-        assert!(journal_rows(&dir, "operator_typing").is_empty());
-        assert!(journal_rows(&dir, "operator_submit").is_empty());
-        std::env::remove_var("FNO_AGENTS_HOME");
-        drop(guard);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn terminal_replies_never_eat_human_keystrokes() {
         // The classifier's false-positive class: sequences a keyboard

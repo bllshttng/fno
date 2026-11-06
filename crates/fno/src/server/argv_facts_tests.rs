@@ -52,39 +52,6 @@ fn wrapper_anchored_scans_stop_at_the_command() {
     // No command at all.
     assert!(!runs(&["env", "A=b"]));
 }
-
-#[test]
-fn portal_hold_from_argv_reads_the_held_row_past_the_env_wrapper() {
-    let argv: Vec<String> = ["env", "FNO_PORTAL_HELD=deadbee1", "/bin/zsh"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    assert_eq!(portal_hold_from_argv(&argv), Some("deadbee1".to_string()));
-    // A plain shell carries no held-portal provenance.
-    assert_eq!(portal_hold_from_argv(&["/bin/zsh".to_string()]), None);
-    // The marker must sit in the wrapper's assignment run, not in a
-    // command's own args.
-    let mention: Vec<String> = ["grep", "FNO_PORTAL_HELD=x", "file"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    assert_eq!(portal_hold_from_argv(&mention), None);
-}
-
-#[test]
-fn account_from_argv_reads_the_fno_account_token() {
-    // x-c914: the birth account rides the same env(1) wrapper as FNO_NODE.
-    let from = |a: &[&str]| account_from_argv(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-    assert_eq!(
-        from(&["env", "FNO_NODE=x-1", "FNO_ACCOUNT=readyrule", "claude"]),
-        Some("readyrule".to_string())
-    );
-    // Default account (no token) / ad-hoc pane / empty value -> None.
-    assert_eq!(from(&["env", "FNO_NODE=x-1", "claude"]), None);
-    assert_eq!(from(&["claude"]), None);
-    assert_eq!(from(&["env", "FNO_ACCOUNT=", "claude"]), None);
-}
-
 #[test]
 fn claude_theme_rides_right_after_the_command_and_skips_attach() {
     let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();

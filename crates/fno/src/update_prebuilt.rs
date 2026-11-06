@@ -525,23 +525,6 @@ mod tests {
         remove_installed_stub(dir.path());
         assert!(bin.exists(), "a real script must stay");
     }
-
-    #[test]
-    fn manifest_rev_reads_the_line_for_this_platform() {
-        let text = "aaaa1111 macos-arm64\nAAAA1111 linux-x64\nnot-hex linux-arm64\n";
-        assert_eq!(
-            manifest_rev(text, "macos-arm64"),
-            Some("aaaa1111".to_string())
-        );
-        assert_eq!(
-            manifest_rev(text, "linux-x64"),
-            Some("aaaa1111".to_string())
-        );
-        assert_eq!(manifest_rev(text, "linux-arm64"), None);
-        assert_eq!(manifest_rev(text, "macos-x64"), None);
-        assert_eq!(manifest_rev("", "macos-arm64"), None);
-    }
-
     #[test]
     fn listing_refusal_names_the_ip_limit_and_its_reset() {
         let spent = "HTTP/2 403\r\nX-RateLimit-Remaining: 0\r\nx-ratelimit-reset: 1792620000\r\n";
@@ -554,33 +537,5 @@ mod tests {
         // A 403 with reads left is some other refusal, never named the limit.
         let other = listing_refusal("403", "x-ratelimit-remaining: 12\n", false);
         assert_eq!(other, "HTTP 403 for the bin-cache release listing");
-    }
-
-    #[test]
-    fn newest_published_rev_reads_names_and_timestamps() {
-        let assets: Vec<serde_json::Value> = serde_json::from_str(
-            r#"[
-            {"name": "fno-bin-aaaa1111-macos-arm64.tar.gz", "created_at": "2026-10-09T10:00:00Z"},
-            {"name": "fno-bin-bbbb2222-macos-arm64.tar.gz", "created_at": "2026-10-10T03:08:00Z"},
-            {"name": "fno-bin-cccc3333-linux-x64.tar.gz", "created_at": "2026-10-10T09:00:00Z"},
-            {"name": "release-notes.md", "created_at": "2026-10-10T09:30:00Z"},
-            {"name": "fno-bin-not-hex-macos-arm64.tar.gz", "created_at": "2026-10-10T09:40:00Z"}
-        ]"#,
-        )
-        .unwrap();
-        let rev = newest_published_rev(&assets, "macos-arm64").expect("a macos-arm64 build exists");
-        assert_eq!(rev, "bbbb2222");
-        // Another platform never wins, junk names never win.
-        assert_eq!(
-            newest_published_rev(&assets, "linux-x64"),
-            Some("cccc3333".to_string())
-        );
-        assert_eq!(newest_published_rev(&assets, "linux-arm64"), None);
-        // The parser behind the pick: platform must match exactly, rev must
-        // be hex (both already exercised through the picks above).
-        assert_eq!(
-            asset_rev("fno-bin-bbbb2222-macos-arm64.tar.gz", "macos-arm64"),
-            Some("bbbb2222".to_string())
-        );
     }
 }

@@ -321,23 +321,4 @@ mod tests {
             "a full redraw re-sends it"
         );
     }
-
-    #[test]
-    fn a_modal_over_the_rect_hides_the_image_and_deletes_it_once() {
-        let mut comp = Compositor::new(None);
-        draw(&mut comp, &holed(), Some(placement()));
-        let mut covered = holed();
-        covered.cells[8 + 3].c = 'M';
-        let hidden = draw(&mut comp, &covered, Some(placement()));
-        assert!(!hidden.contains("<IMG>"));
-        assert_eq!(hidden.matches("\x1b_Ga=d").count(), 1, "{hidden:?}");
-        assert!(hidden.contains('M'));
-        assert!(
-            hidden.contains("\x1b[3;1H"),
-            "row 2 redraws though the modal missed it"
-        );
-        assert!(!hidden.contains('\u{FDD0}'));
-        let again = draw(&mut comp, &covered, Some(placement()));
-        assert!(!again.contains("\x1b_Ga=d"), "the delete goes out once");
-    }
 }

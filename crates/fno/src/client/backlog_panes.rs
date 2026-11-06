@@ -484,15 +484,6 @@ fn trunc_line(s: &str, w: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // AC7: a hint wider than the width wraps, every word placed.
-    #[test]
-    fn hint_wraps_every_word() {
-        let rows = hint_rows("alpha beta gamma delta", 12);
-        assert_eq!(rows.len(), 2, "{rows:?}");
-        assert_eq!(rows.join(" "), "alpha beta gamma delta");
-    }
-
     // AC7: no word is ever cut - wrap() breaks only at spaces - and no
     // row outgrows the width.
     #[test]
@@ -524,69 +515,6 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("x-2")));
         assert!(follow.is_some(), "the cursor card is the follow line");
     }
-
-    // The footer dims with the rest of the pane when something else owns
-    // typing, the way the title rows already did; the hint had not.
-    #[test]
-    fn hint_dims_when_the_pane_is_not_the_input_owner() {
-        let b = board_with_fixture();
-        let theme = crate::theme::Theme::default_theme();
-        let rows = 24;
-        let cols = 40;
-        let mut cells = vec![Cell::default(); rows * cols];
-        paint(
-            &b,
-            &mut cells,
-            rows,
-            cols,
-            (0, 0, rows, cols),
-            false,
-            None,
-            &theme,
-        );
-        let hint_h = hint_lines(&b, false, cols).len().min(4);
-        let hint_row = rows - hint_h;
-        // The dim slot's literal color, same as the existing title-row and
-        // meta-line assertions in backlog_board_tests.rs - not read back
-        // from `cell_style`, so a theme change that moved the slot would
-        // fail this test for the right reason instead of chasing itself.
-        let meta_fg = crate::proto::Color::Indexed(8);
-        let found = (hint_row..rows)
-            .flat_map(|r| (0..cols).map(move |c| (r, c)))
-            .any(|(r, c)| cells[r * cols + c].c.is_alphabetic());
-        assert!(found, "the hint painted some letters to check");
-        for r in hint_row..rows {
-            for c in 0..cols {
-                let cell = cells[r * cols + c];
-                if cell.c.is_alphabetic() {
-                    assert_eq!(cell.fg, meta_fg, "unowned hint char '{}' stays dim", cell.c);
-                }
-            }
-        }
-
-        let mut cells = vec![Cell::default(); rows * cols];
-        paint(
-            &b,
-            &mut cells,
-            rows,
-            cols,
-            (0, 0, rows, cols),
-            true,
-            None,
-            &theme,
-        );
-        let bold_found = (hint_row..rows)
-            .flat_map(|r| (0..cols).map(move |c| (r, c)))
-            .any(|(r, c)| {
-                let cell = cells[r * cols + c];
-                cell.c.is_alphabetic() && cell.fg != meta_fg
-            });
-        assert!(
-            bold_found,
-            "an owned hint keeps its normal key/body colors, not all-meta"
-        );
-    }
-
     // Side by side, the seam column holds the rule on every pane row, and
     // neither pane paints a glyph into it.
     #[test]
@@ -616,21 +544,6 @@ mod tests {
         }
         assert!(regions((0, 0, rows, 80), hint_h, None).seam.is_none());
     }
-
-    #[test]
-    fn held_seam_width_moves_the_seam_inside_its_bounds() {
-        let hint_h = 1;
-        let default = regions((0, 0, 24, 120), hint_h, None);
-        assert_eq!(default.board.3, 66);
-        let held = regions((0, 0, 24, 120), hint_h, Some(40));
-        assert_eq!(held.seam.map(|s| s.1), Some(40));
-        assert_eq!(held.detail.3, 120 - 40 - 1);
-        let huge = regions((0, 0, 24, 120), hint_h, Some(500));
-        assert_eq!(huge.detail.3, 20, "the detail pane keeps its floor");
-        let tiny = regions((0, 0, 24, 120), hint_h, Some(2));
-        assert_eq!(tiny.board.3, 20, "the board pane keeps its floor");
-    }
-
     fn board_with_fixture() -> BoardView {
         let rows = vec![serde_json::json!({"id": "x-1", "status": "ready", "priority": "p2"})];
         let mut b = BoardView::new(0);

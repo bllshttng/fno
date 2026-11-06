@@ -188,7 +188,7 @@ fn capture(
     // Only claude has a principal endpoint; any other proof failure still
     // registers, unbound, so registration works offline.
     let principal: Option<Principal> = if harness == "claude" {
-        match binding::principal_of_blobs(&blobs, probe) {
+        match binding::principal_of_blobs(&blobs, probe, root, now) {
             Ok(p) => Some(p),
             Err("ambiguous-slot") => {
                 return Ok(Capture::Refused(format!(

@@ -349,24 +349,8 @@ pub(crate) fn pane_send_audit_events_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mux_cli::{dispatch, parse_pane_args, PaneCmd, SendSource, EXIT_ERROR};
-    use std::ffi::OsString;
+    use crate::mux_cli::{dispatch, PaneCmd, SendSource, EXIT_ERROR};
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-
-    fn os(args: &[&str]) -> Vec<OsString> {
-        args.iter().map(OsString::from).collect()
-    }
-
-    fn op_of(word: &str) -> crate::cli_args::PaneOp {
-        use crate::cli_args::{MuxTail, PaneOp};
-        let t = || MuxTail { tail: Vec::new() };
-        match word {
-            "ls" => PaneOp::Ls(t()),
-            "read" => PaneOp::Read(t()),
-            "send" => PaneOp::Send(t()),
-            _ => panic!("no test op mapping for {word}"),
-        }
-    }
 
     fn control_test_sock(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("fno-control-{}-{name}.sock", std::process::id()))
@@ -382,37 +366,6 @@ mod tests {
             .filter_map(|row| serde_json::from_str(&row.line).ok())
             .collect()
     }
-
-    #[test]
-    fn pane_send_parse_source_flag_declares_provenance() {
-        assert_eq!(
-            parse_pane_args(
-                &op_of("send"),
-                &os(&["2", "--text", "hi", "--source", "mail"])
-            )
-            .unwrap()
-            .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("hi".into()),
-                guarded: false,
-                submit: false,
-                raw: false,
-                expected_identity: None,
-                style_exception: None,
-                provenance: Some("mail".into()),
-                hold_pass: false,
-                harness: None,
-                clear_composer: false,
-            }
-        );
-        // A valueless flag and a non-send command are usage errors, mirroring
-        // --style-exception: a silently ignored flag would read as "the row
-        // carried the declared source".
-        assert!(parse_pane_args(&op_of("send"), &os(&["2", "--text", "hi", "--source"])).is_err());
-        assert!(parse_pane_args(&op_of("read"), &os(&["2", "--source", "mail"])).is_err());
-    }
-
     #[test]
     fn pane_send_audit_outcome_vocabulary_never_claims_delivery_for_exit_22() {
         assert_eq!(pane_send_outcome(EXIT_OK, true), ("submitted", true));

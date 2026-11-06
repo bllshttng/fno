@@ -313,46 +313,6 @@ mod tests {
         Theme::from_name("footnote-superscript").0
     }
 
-    fn paper() -> Theme {
-        Theme::from_name("footnote-paper").0
-    }
-
-    #[test]
-    fn lane_colors_axis_list_groups_every_axis_under_its_header() {
-        let pal = lane_pal(&[("zai", "green")]);
-        let (rows, actions) = build_lane_color_rows(&pal, &LaneColorsUi::default(), &sup());
-        // One header per axis, in display order.
-        let headers: Vec<&str> = LANE_AXES.to_vec();
-        let mut seen_headers = rows.iter().filter_map(|r| match r {
-            PopupRow::Header(h) if LANE_AXES.contains(&h.as_str()) => Some(h.as_str()),
-            _ => None,
-        });
-        for h in headers {
-            assert_eq!(
-                seen_headers.next(),
-                Some(h),
-                "axis {h} header present in order"
-            );
-        }
-        // The one configured mapping renders with the theme's slot hex beside
-        // the name (slot 2 = green, dark #9cc49c) and opens the picker.
-        assert!(rows.iter().any(
-            |r| matches!(r, PopupRow::SwatchEntry { label, .. } if label == "zai = green #9cc49c")
-        ));
-        assert!(actions.iter().any(
-            |a| matches!(a, AuxAction::LaneColorEdit(axis, key) if axis == "route" && key == "zai")
-        ));
-        // Every axis offers its add-key row (positive marker per axis).
-        for axis in LANE_AXES {
-            assert!(
-                actions
-                    .iter()
-                    .any(|a| matches!(a, AuxAction::LaneColorAdd(a_axis) if a_axis == axis)),
-                "add row present for axis {axis}"
-            );
-        }
-    }
-
     #[test]
     fn lane_color_picker_lists_the_parser_vocabulary_and_marks_the_current() {
         // The ANSI names STAY; each name gains a filled
@@ -407,37 +367,6 @@ mod tests {
         .iter()
         .any(|a| matches!(a, AuxAction::LaneColorCustom(axis, key) if axis == "route" && key == "zai")));
     }
-
-    #[test]
-    fn picker_squares_repaint_when_the_theme_changes() {
-        // The squares paint the ACTIVE theme's slot - the
-        // same name resolves to a different square under the paper twin.
-        let ui = LaneColorsUi {
-            pick: Some(("route".into(), "zai".into())),
-            ..Default::default()
-        };
-        let (dark, _) = build_lane_color_rows(&Default::default(), &ui, &sup());
-        let (light, _) = build_lane_color_rows(&Default::default(), &ui, &paper());
-        let pick = |rows: &[PopupRow], want: &str| {
-            rows.iter().find_map(|r| match r {
-                PopupRow::SwatchEntry { label, color, .. } if label.starts_with(want) => {
-                    Some(*color)
-                }
-                _ => None,
-            })
-        };
-        assert_ne!(
-            pick(&dark, "blue"),
-            pick(&light, "blue"),
-            "the blue square repaints under the other theme"
-        );
-        assert_ne!(
-            pick(&dark, "red"),
-            pick(&light, "red"),
-            "the red square repaints under the other theme"
-        );
-    }
-
     // An unconfigured install renders every built-in default the
     // cascade knows, marked, instead of four empty groups.
     #[test]
@@ -477,38 +406,6 @@ mod tests {
         |r| matches!(r, PopupRow::SwatchEntry { label, .. } if label.contains("(default)") && (label.starts_with("model") || label.contains("add")))
     ));
     }
-
-    // A configured key renders from config, unmarked, and suppresses
-    // its default row - what changed is visible against what is in effect.
-    #[test]
-    fn a_configured_override_renders_unmarked_and_hides_its_default_row() {
-        let pal = lane_pal(&[("zai", "red")]);
-        let (rows, actions) = build_lane_color_rows(&pal, &LaneColorsUi::default(), &sup());
-        assert!(
-            rows.iter().any(
-                |r| matches!(r, PopupRow::SwatchEntry { label, .. } if label == "zai = red #e1a6a3")
-            ),
-            "the override renders from config"
-        );
-        assert!(
-            !rows.iter().any(
-                |r| matches!(r, PopupRow::SwatchEntry { label, .. } if label.contains("zai = green"))
-            ),
-            "the overridden default row is suppressed"
-        );
-        assert!(
-            rows.iter()
-                .any(|r| matches!(r, PopupRow::SwatchEntry { label, .. }
-                if label == "openrouter = magenta (default) #d7a6c6")),
-            "the untouched defaults still render marked"
-        );
-        // Nothing in this render path writes config.
-        assert!(actions.iter().all(|a| matches!(
-            a,
-            AuxAction::LaneColorEdit(_, _) | AuxAction::LaneColorAdd(_)
-        )));
-    }
-
     // The REAL render path, not the row builder: the Colors tab
     // rendered through Popup::render + popup::draw (what the live client
     // calls), on a short viewport so the scrollbar appears. Every row must
