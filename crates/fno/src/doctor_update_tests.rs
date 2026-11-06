@@ -33,6 +33,60 @@ fn only_no_source_without_a_marker_is_a_release_install() {
     assert!(!is_release_install(&pin("no_source"), Some("abc123")));
     assert!(!is_release_install(&pin("invalid_override"), None));
 }
+
+#[test]
+fn receipt_channel_wins_only_over_the_cwd_derived_pin() {
+    use crate::release_install::InstallChannel;
+    let wheel = InstallChannel::Wheel {
+        tool_root: PathBuf::from("/tools/fno"),
+    };
+    // The 2026-11-06 shape: a release install whose pin resolved the checkout
+    // the shell sits in takes the release path, never a source reinstall of
+    // that checkout.
+    assert!(receipt_channel_wins(&wheel, Some("checkout")));
+    assert!(receipt_channel_wins(
+        &InstallChannel::Binary,
+        Some("checkout")
+    ));
+    // Deliberate input and a source-channel exe keep the source path.
+    for origin in ["explicit", "env", "cache", "candidate"] {
+        assert!(!receipt_channel_wins(&wheel, Some(origin)), "{origin}");
+    }
+    assert!(!receipt_channel_wins(&wheel, None));
+    assert!(!receipt_channel_wins(
+        &InstallChannel::Other,
+        Some("checkout")
+    ));
+}
+
+#[test]
+fn parse_args_reads_every_flag() {
+    let f = parse_args(&os(&[
+        "--source",
+        "/tmp/src",
+        "--dry-run",
+        "--force",
+        "--rust",
+    ]))
+    .expect("parses");
+    assert_eq!(f.source, Some(PathBuf::from("/tmp/src")));
+    assert!(f.dry_run && f.force && f.rust && !f.no_rust && !f.check);
+
+    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--published"])).expect("parses");
+    assert!(f.dry_run && f.force && f.no_rust && f.check && f.published);
+    assert_eq!(f.published_rev, None);
+
+    // A rev after --published pins that build; a flag after it does not.
+    let f = parse_args(&os(&["--published", "a3670af2", "-N"])).expect("parses");
+    assert_eq!(f.published_rev.as_deref(), Some("a3670af2"));
+    assert!(f.published && f.dry_run);
+    let f = parse_args(&os(&["--published", "-N"])).expect("parses");
+    assert!(f.published && f.dry_run && f.published_rev.is_none());
+
+    assert!(parse_args(&os(&["--bogus"])).is_err());
+    assert!(parse_args(&os(&["--source"])).is_err());
+}
+
 #[test]
 fn guard_reads_target_state_frontmatter() {
     let _g = crate::model_catalog::state_env_lock();
