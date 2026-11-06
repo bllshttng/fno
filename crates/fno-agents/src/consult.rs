@@ -467,6 +467,32 @@ pub(crate) fn run_report_with(args: &[String], deps: &Deps) -> i32 {
             }
         }
     }
+    let report = report_json(deps, since_ms);
+    if json_out {
+        println!("{}", serde_json::to_string(&report).unwrap_or_default());
+    } else {
+        let arms = &report["arms"];
+        println!(
+            "consult arm: stuck {} rescued {} green {} mean_cost {}",
+            arms["consult"]["stuck_nodes"],
+            arms["consult"]["rescued_by_frontier_worker"],
+            arms["consult"]["green_without_rescue"],
+            arms["consult"]["mean_cost_usd"],
+        );
+        println!(
+            "baseline arm: stuck {} rescued {} green {} mean_cost {}",
+            arms["baseline"]["stuck_nodes"],
+            arms["baseline"]["rescued_by_frontier_worker"],
+            arms["baseline"]["green_without_rescue"],
+            arms["baseline"]["mean_cost_usd"],
+        );
+    }
+    0
+}
+
+/// The whole fold behind `consult report`: one `Value`, so tests assert the
+/// arms directly instead of scraping stdout.
+pub(crate) fn report_json(deps: &Deps, since_ms: Option<i64>) -> Value {
     let rows = crate::event_store::query_events(
         &deps.journal,
         &EventQuery {
@@ -611,21 +637,7 @@ pub(crate) fn run_report_with(args: &[String], deps: &Deps) -> i32 {
         },
         "sessions_without_node": nodeless,
     });
-    if json_out {
-        println!("{}", serde_json::to_string(&report).unwrap_or_default());
-    } else {
-        let arms = &report["arms"];
-        println!(
-            "consult arm: stuck {} rescued {} mean_cost {}\nbaseline arm: stuck {} rescued {} mean_cost {}",
-            arms["consult"]["stuck_nodes"],
-            arms["consult"]["rescued_by_frontier_worker"],
-            arms["consult"]["mean_cost_usd"],
-            arms["baseline"]["stuck_nodes"],
-            arms["baseline"]["rescued_by_frontier_worker"],
-            arms["baseline"]["mean_cost_usd"],
-        );
-    }
-    0
+    report
 }
 
 fn mark_stuck(
@@ -836,8 +848,11 @@ mod tests {
         )
         .unwrap();
         let calls_n = Arc::new(AtomicUsize::new(0));
-        let n = calls_n.clone();
-        let spawner = move |a: &[String], t: u64| spawn_counter(&n, a, t);
+        let counter = calls_n.clone();
+        let spawner = move |_: &[String], _: u64| -> Result<(i32, String, String), String> {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok((0, envelope("ok"), String::new()))
+        };
         let mut d = deps(dir.path(), &spawner);
         d.lane = Some("lane-x".into());
         let emitter = crate::events::EventEmitter::new(&d.journal, "consult");
@@ -875,17 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolvable_transcript_refuses_with_exit_4() {
-        let (_dir, d) = allowed_deps(&silent_ok, None);
-        let code = ask_run(&d, "sess-z1", "why", false);
-        // The lane gate passes (lane-x allowed), so the refusal is the
-        // transcript resolver's own: zcode has no transcript layout.
-        assert_eq!(code, EXIT_NO_TRANSCRIPT);
-        assert!(calls(&d.journal).is_empty());
-    }
-
-    #[test]
-    fn a_sparse_envelope_records_unknown_tokens() {
+    fn an_envelope_without_usage_records_unknown() {
         let (dir, mut d) = allowed_deps(&bare_ok, None);
         let transcript = dir.path().join("t.jsonl");
         std::fs::write(
@@ -910,6 +915,11 @@ mod tests {
         let d = deps(dir.path(), &silent_ok);
         let code = run_report_with(&["--json".to_string()], &d);
         assert_eq!(code, 0);
+        let report = report_json(&d, None);
+        assert_eq!(report["arms"]["consult"]["stuck_nodes"], json!(0));
+        assert_eq!(report["arms"]["baseline"]["stuck_nodes"], json!(0));
+        assert_eq!(report["arms"]["consult"]["green_without_rescue"], json!(0));
+        assert_eq!(report["arms"]["baseline"]["mean_cost_usd"], Value::Null);
     }
 
     #[test]

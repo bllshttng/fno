@@ -992,4 +992,35 @@ mod tests {
         let (_, again) = claims::status("node:x-col-idem", None);
         assert_eq!(again.unwrap(), before);
     }
+
+    #[test]
+    fn consult_worker_line_answers_an_allowed_lane_and_none_off_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("proj");
+        std::fs::create_dir_all(root.join(".fno")).unwrap();
+        std::fs::write(
+            root.join(".fno/config.toml"),
+            "[agents.consult]\nlanes = [\"zai-flash\"]\n\n[[routing.models]]\nname = \"zai-flash\"\nharness = \"claude\"\nmodel = \"glm-5.3-flash[1m]\"\n",
+        )
+        .unwrap();
+        let mut row = RegistryEntry::default();
+        row.harness = Some("claude".into());
+        row.model = Some("glm-5.3-flash[1m]".into());
+        row.project_root = root.display().to_string();
+        row.harness_session_id = Some("sid-1".into());
+        let (to, text) = consult_worker_line(&row).expect("the allowed lane answers");
+        assert!(text.contains("fno agents loop consult"), "text: {text}");
+        assert!(text.contains("(cap 2)"), "text: {text}");
+        assert_eq!(to, "sid-1");
+        // An empty allowlist is the off posture: no worker line at all.
+        let root2 = temp.path().join("proj2");
+        std::fs::create_dir_all(root2.join(".fno")).unwrap();
+        std::fs::write(
+            root2.join(".fno/config.toml"),
+            "[agents.consult]\nlanes = []\n",
+        )
+        .unwrap();
+        row.project_root = root2.display().to_string();
+        assert!(consult_worker_line(&row).is_none());
+    }
 }
