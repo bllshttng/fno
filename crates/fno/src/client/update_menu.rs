@@ -332,7 +332,10 @@ pub(crate) fn build_sideline_menu(
     });
     rows.push(PopupRow::Entry {
         glyph: "↳".into(),
-        label: "group by lead".into(),
+        label: format!(
+            "group by lead: {}",
+            if flags.group_by_lead { "on" } else { "off" }
+        ),
         hint: prefix_hint("toggle-group-by-lead"),
         enabled: true,
     });

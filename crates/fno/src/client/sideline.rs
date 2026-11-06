@@ -1343,7 +1343,8 @@ impl View {
                                     arrow(self.agent_sort.column)
                                 );
                                 let full = format!("{sort} \u{b7} node \u{b7} PR");
-                                if full.chars().count() <= name_w {
+                                // Two spare cells keep the caption off the border.
+                                if full.chars().count() + 2 <= name_w {
                                     full
                                 } else {
                                     sort
@@ -1437,7 +1438,7 @@ impl View {
                         DisplayRow::CardDetail(a),
                         DisplayRow::CardMetrics(a),
                     ]);
-                    out_depths.extend([0, 0, 0]);
+                    out_depths.extend([depth; 3]);
                     // The dashed rule rides between adjacent cards (the
                     // operator's 2026-10-04 spacing mockup): no rule before a
                     // header, a blank, or the section's end.
