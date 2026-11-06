@@ -382,18 +382,25 @@ pub(crate) fn send_verdict(code: Option<i32>, style_refused: impl FnOnce() -> bo
 pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
     serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout))
         .ok()
-        .is_some_and(|receipt| {
-            let excepted = receipt
-                .get("exception")
-                .is_some_and(|exception| !exception.is_null());
-            if excepted {
-                return false;
-            }
-            receipt
-                .get("violations")
-                .and_then(|violations| violations.as_array())
-                .is_some_and(|violations| !violations.is_empty())
-        })
+        .is_some_and(|receipt| receipt_confirms_refusal(&receipt))
+}
+
+/// The refusal verdict for one parsed receipt: a non-null `exception`
+/// makes an excepted body clean whatever the violations carry, and a
+/// clean or empty violations list reads transient. Mirrors the mail
+/// gate's own clean rule, shared by the pull arm's byte-level entry and
+/// the sender-side report so the two consults never disagree.
+fn receipt_confirms_refusal(receipt: &serde_json::Value) -> bool {
+    let excepted = receipt
+        .get("exception")
+        .is_some_and(|exception| !exception.is_null());
+    if excepted {
+        return false;
+    }
+    receipt
+        .get("violations")
+        .and_then(|violations| violations.as_array())
+        .is_some_and(|violations| !violations.is_empty())
 }
 
 /// The retry ladder between a failed delivery and its next attempt. One
@@ -471,27 +478,51 @@ pub(crate) fn style_door_refuses(payload: &str) -> bool {
 /// clean or the door cannot run, which reads clean exactly as the pull
 /// side does.
 pub(crate) fn style_door_report(payload: &str) -> Option<String> {
-    let output = ask_style_door(&style_door_report_argv(mail_word_cap()), payload)?;
-    (output.status.code() == Some(1)).then(|| {
-        // The door prints its human report on stderr; stdout is the
-        // fallback for a door that writes it there.
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        if stderr.trim().is_empty() {
-            String::from_utf8_lossy(&output.stdout).into_owned()
-        } else {
-            stderr
-        }
-    })
+    let output = ask_style_door(&style_door_argv(mail_word_cap()), payload)?;
+    receipt_refusal_report(&output.stdout)
 }
 
-/// The report form of the door consult: the same argv without --json, so
-/// exit 1 with the human report (on stderr) is the refusal and rides to
-/// the sender.
-pub(crate) fn style_door_report_argv(word_cap: Option<i64>) -> Vec<String> {
-    style_door_argv(word_cap)
-        .into_iter()
-        .filter(|word| word != "--json")
-        .collect()
+/// The receipt's refusal report, parsed from the `--json` door's stdout.
+/// The consult rides the receipt rather than the door's human-mode streams,
+/// so the refusal text names the rules even when a door build never prints
+/// the human report where the consult looks. The receipt's own human
+/// `report` wins; a receipt without one renders rule and detail per
+/// violation; a receipt with neither falls back to the raw stdout. `None`
+/// when the receipt reads clean (no violations, or an exception), is
+/// unparseable, or is empty - a door that cannot run reads clean, exactly
+/// as the pull side does.
+pub(crate) fn receipt_refusal_report(stdout: &[u8]) -> Option<String> {
+    let receipt =
+        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout)).ok()?;
+    if !receipt_confirms_refusal(&receipt) {
+        return None;
+    }
+    if let Some(report) = receipt.get("report").and_then(|r| r.as_str()) {
+        if !report.trim().is_empty() {
+            return Some(report.to_string());
+        }
+    }
+    let rendered = receipt
+        .get("violations")
+        .and_then(|violations| violations.as_array())
+        .map(|violations| {
+            violations
+                .iter()
+                .filter_map(|violation| {
+                    let rule = violation.get("rule")?;
+                    let detail = violation.get("detail")?.as_str()?;
+                    let sentence = violation.get("sentence")?.as_str().unwrap_or("");
+                    Some(format!("rule {rule}: {detail} \"{sentence}\""))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if rendered.trim().is_empty() {
+        Some(String::from_utf8_lossy(stdout).into_owned())
+    } else {
+        Some(rendered)
+    }
 }
 
 /// Spawn the door with `argv`, feed it the payload through a writer
