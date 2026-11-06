@@ -44,10 +44,10 @@ impl Grid {
         let mut role = None;
         for cell in row {
             let (ch, next_role) = cell.unwrap_or((' ', TextStyle::Meta));
-            if role.is_some_and(|current| current != next_role) {
+            if let Some(current) = role.filter(|current| *current != next_role) {
                 segs.push(TSeg {
                     text: std::mem::take(&mut text),
-                    role: role.expect("a segment has a role"),
+                    role: current,
                 });
             }
             role = Some(next_role);

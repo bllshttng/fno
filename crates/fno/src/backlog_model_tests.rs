@@ -132,6 +132,27 @@ fn graph_board_returns_the_focused_family_and_collapses_done_children() {
             && edge.to == "x-open"
             && edge.kind == crate::backlog_graph::EdgeKind::Parent
     }));
+
+    let cycle = fixture(vec![
+        json!({"id": "x-a", "status": "ready", "parent": "x-b"}),
+        json!({"id": "x-b", "status": "ready", "parent": "x-a"}),
+    ]);
+    let cycle_graph = board(
+        &cycle,
+        &Query::from_pairs(&[
+            ("view".into(), "graph".into()),
+            ("focus".into(), "x-a".into()),
+        ])
+        .unwrap(),
+    )
+    .graph
+    .unwrap();
+    assert_eq!(cycle_graph.root, "x-a");
+    assert!(cycle_graph.nodes.iter().any(|node| node
+        .card
+        .as_ref()
+        .is_some_and(|card| card.id == "x-a")
+        && node.layer == 0));
 }
 
 #[test]

@@ -103,9 +103,10 @@ pub fn graph(inp: &Inputs, cards: &[Card], requested_focus: Option<&str>) -> Opt
     let mut family_layers: HashMap<&str, u16> = HashMap::new();
     let mut queue = VecDeque::from([(root.as_str(), 0_u16)]);
     while let Some((id, layer)) = queue.pop_front() {
-        if family_layers.insert(id, layer).is_some() {
+        if family_layers.contains_key(id) {
             continue;
         }
+        family_layers.insert(id, layer);
         if let Some(descendants) = children.get(id) {
             for child in descendants {
                 queue.push_back((child.id.as_str(), layer.saturating_add(1)));
