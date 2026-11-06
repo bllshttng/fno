@@ -47,7 +47,7 @@ The signature on r2d2:
 - Aborts were observed 2026-10-28 13:49Z, 2026-10-29 03:20Z and 2026-10-30 20:07Z, each a restart of about 1.5 seconds.
 - A soak that needs one unchanged container start cannot outlast a compaction.
 
-Btrfs gained `RENAME_EXCHANGE` in kernel 4.7, and r2d2 runs 4.4.302+ with the data directory on btrfs. Measured on the primary's data directory on 2026-11-06 with a two-file `renameat2` probe inside the container runtime: btrfs answers `-1 EINVAL`, and the same probe on tmpfs answers `0`.
+Btrfs gained `RENAME_EXCHANGE` in kernel 4.7, and r2d2 runs 4.4.302+ with the data directory on btrfs. Measured on the primary's data directory on 2026-11-06 with a two-file `renameat2` probe inside the container runtime. On btrfs the probe answered `-1 EINVAL`. On tmpfs the same probe answered `0`.
 
 ### Check before you start sqld
 
