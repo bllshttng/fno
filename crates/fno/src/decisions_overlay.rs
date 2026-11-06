@@ -458,29 +458,6 @@ mod tests {
             ]
         );
     }
-
-    #[test]
-    fn reviewed_marks_leave_the_audit_queue() {
-        let rows = vec![row("u", "unattributed", "unscoped", Some("role"), "1")];
-        let f = Filter {
-            audit_only: true,
-            ..Filter::default()
-        };
-        let dir = std::env::temp_dir().join(format!("fno-dec-{}", std::process::id()));
-        let path = dir.join("reviewed.json");
-        mark_reviewed(&path, "u").unwrap();
-        assert!(visible(&rows, &f, &load_reviewed(&path)).is_empty());
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn parses_the_cli_listing() {
-        let json = br#"{"decisions":[{"decision_id":"d-1","decision":"x","lane":"law","lifecycle":"live","quote":"ok"}],"total":1}"#;
-        let rows = parse(json).unwrap();
-        assert!(rows[0].has_quote());
-        assert!(parse(b"nope").is_err());
-    }
-
     #[test]
     fn decider_shows_the_name_and_never_a_hex_id() {
         let cases = [

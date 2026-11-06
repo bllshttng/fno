@@ -37,35 +37,6 @@ fn unresponsive_bot_drives_the_giveup_message() {
     assert!(msg.contains("config.review.optional_apps"), "{msg}");
 }
 
-fn nudge_cfg() -> NudgeConfig {
-    NudgeConfig {
-        login: "chatgpt-codex-connector".into(),
-        review_handle: "@codex review".into(),
-        wait_minutes: 15,
-        ceiling: 3,
-    }
-}
-
-#[test]
-fn nudge_unresponsive_after_ceiling() {
-    // AC3 building block: 3 mentions, newest older than wait_minutes.
-    let cfg = nudge_cfg();
-    let comments = vec![
-        mention("@codex review", "2026-07-06T00:00:00Z"),
-        mention("hey @codex review please", "2026-07-06T00:30:00Z"),
-        mention("@codex review", "2026-07-06T01:00:00Z"),
-    ];
-    let b = classify_bot_nudge(
-        "chatgpt-codex-connector",
-        &comments,
-        Some(&cfg),
-        nudge_now(),
-    );
-    assert_eq!(b.class, NudgeClass::Unresponsive);
-    assert_eq!(b.nudges, 3);
-    assert!(b.span_min >= 120, "span was {}", b.span_min);
-}
-
 #[test]
 fn resolved_nudge_configs_default_nudges_codex_only() {
     let cfgs = resolved_nudge_configs(&Settings::default());

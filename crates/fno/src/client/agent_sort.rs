@@ -95,6 +95,8 @@ pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {
     });
 }
 
+/// With `flat` set (the card layout) every agent is its own level: pins lead
+/// the workspace and the active column orders the rest, with no nesting.
 #[allow(clippy::type_complexity)]
 pub(super) fn append_sorted_agent_group<'a>(
     out: &mut Vec<(DisplayRow<'a>, usize)>,
@@ -103,7 +105,25 @@ pub(super) fn append_sorted_agent_group<'a>(
     needs: &HashMap<String, NeedKind>,
     now_secs: u64,
     order: &AgentOrder<'_>,
+    flat: bool,
 ) {
+    if flat {
+        group.sort_by(|(_, a), (_, b)| {
+            compare_agent_rows(
+                a,
+                b,
+                sort,
+                needs.get(a.name.as_str()).copied(),
+                needs.get(b.name.as_str()).copied(),
+                now_secs,
+                order,
+            )
+        });
+        for (rows, _) in group.drain(..) {
+            out.extend(rows.into_iter().map(|(row, _)| (row, 0)));
+        }
+        return;
+    }
     let mut subtrees: Vec<(
         Vec<(Vec<(DisplayRow<'a>, usize)>, &'a AgentRow)>,
         &'a AgentRow,
@@ -263,4 +283,90 @@ fn apply_direction(order: Ordering, direction: SortDirection) -> Ordering {
 fn row_age(a: &AgentRow, now_secs: u64) -> Option<u64> {
     a.last_activity_age_s
         .or_else(|| a.updated_at.map(|updated| now_secs.saturating_sub(updated)))
+}
+
+/// The notice a sort press posts: the column spelled out and its direction.
+pub(super) fn sort_notice(sort: AgentSort) -> String {
+    let arrow = match sort.direction {
+        SortDirection::Ascending => "\u{2191}",
+        SortDirection::Descending => "\u{2193}",
+    };
+    format!("sort: {} {arrow}", super::sideline::sort_name(sort.column))
+}
+
+impl View {
+    /// Sorts agent runs the way the extended table orders them: each
+    /// contiguous run of agent rows between non-agent rows orders by the
+    /// active column (leads compared against each other, workers ordered
+    /// inside their own lineage level), so the card view and the table read
+    /// in the sorted order and the painted age is the value sorted on.
+    pub(super) fn sort_agent_runs<'a>(
+        &self,
+        rows: Vec<DisplayRow<'a>>,
+        depths: Vec<usize>,
+    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
+        let needs = self.attention_needs();
+        let now = crate::digest_overlay::now_secs();
+        let order = &AgentOrder {
+            manual: &self.manual_order,
+        };
+        let flat =
+            self.sideline_layout == sideline_color::SidelineLayout::Card && !self.group_by_lead;
+        let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
+        let mut group = Vec::new();
+        let mut iter = rows.into_iter().zip(depths).peekable();
+
+        while let Some((row, depth)) = iter.next() {
+            match row {
+                DisplayRow::Agent(agent) => {
+                    let item = vec![(DisplayRow::Agent(agent), depth)];
+                    group.push((item, agent));
+                    if !matches!(iter.peek(), Some((DisplayRow::Agent(_), _))) {
+                        append_sorted_agent_group(
+                            &mut out,
+                            &mut group,
+                            self.agent_sort,
+                            &needs,
+                            now,
+                            order,
+                            flat,
+                        );
+                    }
+                }
+                row => {
+                    append_sorted_agent_group(
+                        &mut out,
+                        &mut group,
+                        self.agent_sort,
+                        &needs,
+                        now,
+                        order,
+                        flat,
+                    );
+                    out.push((row, depth));
+                }
+            }
+        }
+        append_sorted_agent_group(
+            &mut out,
+            &mut group,
+            self.agent_sort,
+            &needs,
+            now,
+            order,
+            flat,
+        );
+        out.into_iter().unzip()
+    }
+
+    /// Flip lead nesting for the card layout and say which way it went.
+    /// Pure local state, like the sort cycle.
+    pub(super) fn toggle_group_by_lead(&mut self) {
+        let held = self.selected_agent_name();
+        self.group_by_lead = !self.group_by_lead;
+        view_store::save_group_by_lead(self.group_by_lead);
+        let word = if self.group_by_lead { "on" } else { "off" };
+        self.set_notice(format!("group by lead: {word}"));
+        self.reanchor_selector(held);
+    }
 }

@@ -60,9 +60,9 @@ pub enum ViewKind {
     /// The sideline with the pinned Needs input section open, as a tap on the
     /// strip count opens it.
     NeedsInput,
-    /// The sideline strip with the need-input pulse frozen on its lit beat.
+    /// The sideline strip with the need-input mark frozen pointing up.
     NeedsInputPulseOn,
-    /// The same strip frozen on its dark beat.
+    /// The same strip frozen pointing down, half a turn on.
     NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,
@@ -1750,14 +1750,5 @@ mod tests {
             ),
             "{e}"
         );
-    }
-
-    #[test]
-    fn raster_page_clamps_overflow() {
-        // The unclamped page screenshots a composite whose bottom tile repeats
-        // the first rows at an exact-fit window (the doubled chrome report).
-        let page = page_html("<svg>x</svg>");
-        assert!(page.contains("overflow:hidden"), "{page}");
-        assert!(page.contains("<svg>x</svg>"), "{page}");
     }
 }

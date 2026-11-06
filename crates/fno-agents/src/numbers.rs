@@ -719,6 +719,24 @@ mod tests {
     }
 
     #[test]
+    fn a_go_node_resolves_its_display_number() {
+        let (_dir, graph, conn) = conn();
+        // The node mint's CTE reads the nodes table for taken numbers.
+        conn.execute_batch("CREATE TABLE nodes AS SELECT 'go-9zzz' AS id")
+            .unwrap();
+        let keys: Vec<String> = ["go-1a2b", "go-3c4d"]
+            .iter()
+            .map(|id| format!("n:{id}"))
+            .collect();
+        assert_eq!(sweep(&graph, None, keys, "h").unwrap(), 2);
+        assert_eq!(label_in(&conn, "go-1a2b", "local").unwrap(), "go-1");
+        assert_eq!(
+            resolve_node_in(Some(&conn), "go-1", "local").as_deref(),
+            Some("go-1a2b")
+        );
+    }
+
+    #[test]
     fn nodes_count_per_prefix_and_skip_numbers_that_are_hashes() {
         let (_dir, graph, conn) = conn();
         // `x-2` is a real hash, so the second `x` node takes 3.

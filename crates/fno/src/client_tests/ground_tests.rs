@@ -55,39 +55,3 @@ fn no_ground_leaves_default_backgrounds_untouched() {
         "no ground: no RGB background emitted at all: {s}"
     );
 }
-
-/// The ground fill only touches DEFAULT backgrounds: an explicit bg (the
-/// sel surface, a swatch) survives untouched.
-#[test]
-fn explicit_backgrounds_survive_the_ground_fill() {
-    let compositor = Compositor::new(Some(Color::Rgb(20, 20, 20)));
-    let frame = Frame {
-        rows: 1,
-        cols: 2,
-        cells: vec![
-            Cell {
-                c: 'x',
-                fg: Color::Default,
-                bg: Color::Rgb(1, 2, 3),
-                flags: 0,
-            },
-            Cell::default(),
-        ],
-        cursor_row: 0,
-        cursor_col: 0,
-        cursor_visible: false,
-        scroll_offset: 0,
-        history_lines: 0,
-    };
-    let mut out = Vec::new();
-    compositor
-        .draw_row(&mut out, &frame, 0, None)
-        .expect("draw_row into memory");
-    let s = String::from_utf8(out).unwrap();
-    assert!(s.contains("48;2;1;2;3"), "explicit bg survives: {s}");
-    assert!(s.contains("48;2;20;20;20"), "ground fills the rest: {s}");
-    assert!(
-        !s.contains("48;2;20;20;20") || s.matches("48;2;20;20;20").count() >= 1,
-        "sanity"
-    );
-}

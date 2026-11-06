@@ -1317,16 +1317,54 @@ pub(crate) fn emit_codex_hooks_report(result: &Value, err: bool) {
             &format!("fno doctor: codex hooks: trust state {state}: {key}"),
         );
     }
+    if let Some(plugin_hooks) = result.get("plugin_hooks").and_then(Value::as_object) {
+        let num = |field: &str| plugin_hooks.get(field).and_then(Value::as_u64).unwrap_or(0);
+        let reason = plugin_hooks
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match plugin_hooks.get("status").and_then(Value::as_str) {
+            Some("ok") => emit(
+                err,
+                &format!(
+                    "fno doctor: codex hooks: plugin-hook trust: ok ({} fno hooks trusted)",
+                    num("trusted")
+                ),
+            ),
+            Some("untrusted") => emit(
+                err,
+                &format!(
+                    "fno doctor: codex hooks: plugin-hook trust: {} of {} fno hooks codex would refuse; fix: `fno doctor --codex-hooks --fix`.",
+                    num("not_trusted"),
+                    num("checked")
+                ),
+            ),
+            _ => emit(
+                err,
+                &format!(
+                    "fno doctor: codex hooks: plugin-hook trust: skipped ({}).",
+                    if reason.is_empty() {
+                        plugin_hooks
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                    } else {
+                        reason
+                    }
+                ),
+            ),
+        }
+    }
     if wired && trust != "verified" {
         if trust_states.contains(&"recorded-unverified") {
             emit(
                 err,
-                "fno doctor: codex hooks: approval record found, but its trusted_hash was not locally verified; confirm it in Codex.",
+                "fno doctor: codex hooks: approval record found, but its trusted_hash was not locally verified; refresh plugin-hook trust with `fno doctor --codex-hooks --fix`.",
             );
         } else {
             emit(
                 err,
-                "fno doctor: codex hooks: approve the footnote SessionStart hook in Codex.",
+                "fno doctor: codex hooks: approve the footnote SessionStart hook in Codex, or refresh plugin-hook trust with `fno doctor --codex-hooks --fix`.",
             );
         }
     }

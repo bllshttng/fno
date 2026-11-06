@@ -330,6 +330,15 @@ pub(crate) fn build_sideline_menu(
         hint: prefix_hint("open-backlog-board"),
         enabled: true,
     });
+    rows.push(PopupRow::Entry {
+        glyph: "↳".into(),
+        label: format!(
+            "group by lead: {}",
+            if flags.group_by_lead { "on" } else { "off" }
+        ),
+        hint: prefix_hint("toggle-group-by-lead"),
+        enabled: true,
+    });
     let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
     rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
@@ -345,6 +354,7 @@ pub(crate) fn build_sideline_menu(
     actions.push(AuxAction::OpenAgentLauncher);
     // Rows and actions pair by index: this answers the backlog row above.
     actions.push(AuxAction::OpenBacklogView);
+    actions.push(AuxAction::ToggleGroupByLead);
     actions.extend(share_actions);
     actions.push(AuxAction::OpenKeybinds);
     actions.push(AuxAction::OpenSettings);

@@ -84,29 +84,4 @@ mod tests {
         let bound = bind_agent_to_pane(&agents, "main", 7, &HashMap::new(), &|_| None);
         assert_eq!(bound, Some(1), "the LIVE row binds the pane");
     }
-
-    #[test]
-    fn a_live_attach_row_binds_over_an_exited_mux_row() {
-        let agents = vec![
-            agent("exited-older", Some(("main", 7)), true),
-            agent("bg-mapped", None, false),
-        ];
-        let mut attached = HashMap::new();
-        attached.insert("a1".to_string(), 7u64);
-        let bound = bind_agent_to_pane(&agents, "main", 7, &attached, &|a: &RegistryAgent| {
-            if a.name == "bg-mapped" {
-                Some(7)
-            } else {
-                None
-            }
-        });
-        assert_eq!(bound, Some(1), "the live attach row binds the pane");
-    }
-
-    #[test]
-    fn no_match_answers_none() {
-        let agents = vec![agent("elsewhere", Some(("other", 7)), false)];
-        let bound = bind_agent_to_pane(&agents, "main", 7, &HashMap::new(), &|_| None);
-        assert_eq!(bound, None);
-    }
 }

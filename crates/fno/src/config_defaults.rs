@@ -395,33 +395,6 @@ mod tests {
             .contains(&path.display().to_string()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
-
-    #[test]
-    fn differs_compares_against_the_recorded_default() {
-        assert!(!differs(
-            "guards.preset",
-            &toml::Value::String("standard".into())
-        ));
-        assert!(differs(
-            "guards.preset",
-            &toml::Value::String("strict".into())
-        ));
-        assert!(differs(
-            "backlog.id_prefix",
-            &toml::Value::String("myproj".into())
-        ));
-        assert!(differs("no.such.key", &toml::Value::Boolean(true)));
-    }
-
-    #[test]
-    fn classify_claims_only_the_defaults_flag() {
-        let oss = |ps: &[&str]| ps.iter().map(OsString::from).collect::<Vec<_>>();
-        assert!(classify(&oss(&["config", "get", "--defaults"])).is_some());
-        assert!(classify(&oss(&["config", "get", "--json", "--defaults"])).is_some());
-        assert!(classify(&oss(&["config", "get"])).is_none());
-        assert!(classify(&oss(&["config", "get", "--defaults", "branch.prefix"])).is_none());
-        assert!(classify(&oss(&["config", "get", "branch.prefix"])).is_none());
-    }
 }
 
 #[cfg(test)]

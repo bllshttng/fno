@@ -58,6 +58,9 @@ state_dir = "~/.fno/"
 # Per-project plans directory. Relative paths are anchored to the
 # git repo root (or cwd if not in a git repo).
 plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/plans/
+# A NEW plan doc refuses to save unless the resolved dir ends in a
+# `plans` component: a template without the /plans segment (the old
+# `internal/{project}` global) scattered plan docs at a vault root.
 
 # Per-resource overrides. TOML has no null: OMIT a key to derive it from
 # state_dir. Each line below names the default an omitted key resolves to.
