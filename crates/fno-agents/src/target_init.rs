@@ -1,8 +1,8 @@
-//! `fno do target init`: the native port of the Python command, with a real
-//! `--steps` flag. The bash helper stays; this module is the decision layer
-//! the Python command was: validate the call, run the gates, build the exact
-//! helper environment, run the helper, propagate its exit, and print the
-//! orientation report.
+//! `fno do target init`: the native port of the Python command, with native
+//! `--steps` and `--advisory` flags. The bash helper stays; this module is the
+//! decision layer. It validates the call, runs the gates, builds the helper
+//! environment, runs the helper, propagates its exit, and prints the orientation
+//! report.
 //!
 //! The parity contract was `tests/golden/target_init/`, frozen from the
 //! Python leg and asserted by `tests/target_init_parity.rs` until the
@@ -39,7 +39,7 @@ fn refuse(message: impl Into<String>) -> Fail {
 }
 
 /// The parsed command surface. Every option the Python command accepted, plus
-/// `--steps`.
+/// the native `--steps` and `--advisory` flags.
 struct Args {
     input: Option<String>,
     plan_path: Option<String>,
@@ -53,7 +53,7 @@ struct Args {
     steps: bool,
 }
 
-/// Hand-rolled parse over the same spellings typer accepted, plus `--steps`.
+/// Hand-rolled parse over the same spellings typer accepted, plus native flags.
 /// An unknown flag or a bare positional exits 2 naming the offending token.
 fn parse_args(rest: &[String]) -> Result<Args, Fail> {
     let mut args = Args {
@@ -109,7 +109,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             other => {
                 if other.starts_with("--") {
                     return Err(usage_fail(&format!(
-                        "unknown flag {other}; --steps is the one flag the Python command did not carry"
+                        "unknown flag {other}; use --help to list supported flags"
                     )));
                 }
                 return Err(usage_fail(&format!(
