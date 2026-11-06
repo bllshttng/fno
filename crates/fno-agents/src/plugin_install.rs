@@ -1028,7 +1028,7 @@ struct RootVerdict {
 /// One old-name registration the rename scan found: a marketplace or plugin
 /// id that still names where fno used to live. The doctor prints the detail
 /// and the remedy verbatim; nothing here mutates the registration.
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct RenameFinding {
     harness: &'static str,
     kind: &'static str,
