@@ -4086,6 +4086,12 @@ async fn handle_rm(ctx: &Ctx, req: &Request) -> Response {
     .await
 }
 
+fn rm_targets_current_session(entry: &state::RegistryEntry, session_id: Option<&str>) -> bool {
+    session_id
+        .filter(|id| !id.trim().is_empty())
+        .is_some_and(|id| entry.harness_session_id.as_deref() == Some(id))
+}
+
 fn cleanup_lead_manifest(entry: &state::RegistryEntry) {
     let Some(scope) = entry.role_scope.as_deref() else {
         return;
@@ -4165,6 +4171,14 @@ async fn handle_rm_with(
             Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
         };
     let name = entry.name.clone();
+    let (own_session_id, _) = crate::claims::resolve_identity();
+    if rm_targets_current_session(&entry, own_session_id.as_deref()) {
+        return Response::err(
+            req.id,
+            ErrorCode::InvalidStatus,
+            format!("agent {name} names this session; a worker cannot remove its own registry row"),
+        );
+    }
     let audit = RemovalAuditContext::from_request(req, &entry);
     if let Some(held) = audit.pin_hold(&ctx.home, &entry) {
         return Response::err(req.id, ErrorCode::InvalidStatus, held);
