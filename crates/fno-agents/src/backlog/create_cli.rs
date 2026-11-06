@@ -1648,17 +1648,17 @@ mod tests {
     #[test]
     fn the_receipt_carries_the_number_only_when_minted() {
         let hash_only = Born {
-            id: "x-aa11".into(),
+            id: "x-aaaa".into(),
             reused: None,
             number: None,
         };
         assert!(receipt_json(&hash_only, "t").get("number").is_none());
         let minted = Born {
-            id: "x-aa11".into(),
+            id: "x-aaaa".into(),
             reused: None,
-            number: Some("x-5904".into()),
+            number: Some("x-5555".into()),
         };
-        assert_eq!(receipt_json(&minted, "t")["number"], "x-5904");
+        assert_eq!(receipt_json(&minted, "t")["number"], "x-5555");
     }
 
     #[test]
