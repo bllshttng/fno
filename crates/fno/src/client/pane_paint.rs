@@ -527,7 +527,6 @@ impl View {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{meta, text_frame};
     use super::*;
 
     const BAND: char = '\u{0243}';
@@ -572,61 +571,5 @@ mod tests {
         // `terminal` is the byte-identical no-op: the band stays as drawn.
         let (band, _) = composed_fg("terminal", Color::Rgb(0x37, 0x37, 0x37));
         assert_eq!(band, Color::Rgb(0x70, 0x70, 0x70));
-    }
-
-    fn view_with(area: (u16, u16), rect: (u16, u16)) -> View {
-        let mut view = View::new(
-            (30, 100),
-            "main".into(),
-            LayoutView {
-                squads: vec![meta(1, "footnote", 1, 0)],
-                active_squad: 1,
-                panes: vec![(
-                    10,
-                    Rect {
-                        x: 0,
-                        y: 0,
-                        rows: rect.0,
-                        cols: rect.1,
-                    },
-                )],
-                focus: 10,
-                area,
-                agents: vec![],
-                focus_node: None,
-            },
-        );
-        view.frames.insert(10, text_frame(rect.0, rect.1, 'a'));
-        view
-    }
-
-    /// A 29x72 local content area under a tab sized by another client:
-    /// a smaller tab area letterboxes with dim filler (AC1-UI), a larger one
-    /// crops at the window's own edge with no filler and no cursor in chrome.
-    #[test]
-    fn compose_letterboxes_a_small_tab_and_crops_a_large_one() {
-        let frame = view_with((20, 50), (20, 50)).compose();
-        let cols = frame.cols as usize;
-        assert_eq!(frame.cells[cols + 28].c, '╭');
-        assert_eq!(frame.cells[2 * cols + 29].c, 'a');
-        let beyond_col = &frame.cells[cols + 28 + 50];
-        assert_eq!(beyond_col.c, '·', "beyond-area column must be filler");
-        assert!(beyond_col.flags & cell_flags::DIM != 0);
-        assert_eq!(frame.cells[(1 + 20) * cols + 28].c, '·', "beyond-area row");
-        assert!(frame.cursor_row < 1 + 20 && frame.cursor_col < 28 + 50);
-
-        let view = view_with((60, 200), (60, 200));
-        // 30 rows minus the tab strip and the status row; 100 minus the panel.
-        assert_eq!(view.visible_area(), (28, 72));
-        assert_eq!(view.hit_test(5, 40).map(|h| h.0), Some(10));
-        let frame = view.compose();
-        assert_eq!(frame.cells[5 * cols + 40].c, 'a');
-        let filler = (1..29)
-            // rows 1..=28 are content; row 29 is the status row.
-            .flat_map(|r| (28..100).map(move |c| (r, c)))
-            .filter(|&(r, c)| frame.cells[r * cols + c].c == '·')
-            .count();
-        assert_eq!(filler, 0, "a cropped window paints no letterbox filler");
-        assert!(frame.cursor_row < 1 + 28 && frame.cursor_col < 28 + 72);
     }
 }

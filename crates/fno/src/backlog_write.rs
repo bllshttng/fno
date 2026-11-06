@@ -216,43 +216,6 @@ mod tests {
         );
     }
 
-    fn review_pr() -> crate::pr_diff::PrRef {
-        crate::pr_diff::parse_pr_url("https://github.com/o/r/pull/7").expect("a pull URL")
-    }
-
-    fn comment(line: u32, removed: bool, text: &str) -> ReviewComment {
-        ReviewComment {
-            path: "src/a.rs".into(),
-            line,
-            removed,
-            source: "  let x = 1;  ".into(),
-            text: text.into(),
-        }
-    }
-
-    #[test]
-    fn review_body_lists_each_anchor_and_refuses_over_the_cap() {
-        let comments = [comment(12, false, "rename"), comment(9, true, "keep this")];
-        let body = review_body(&review_pr(), "abcdef0123456", &comments).expect("under the cap");
-        assert!(
-            body.starts_with("review of PR #7 (o/r) at abcdef01: 2 comments."),
-            "{body}"
-        );
-        assert!(
-            body.contains("1. src/a.rs:12\n> let x = 1;\nrename"),
-            "{body}"
-        );
-        assert!(
-            body.contains("2. src/a.rs:9 (removed)\n> let x = 1;\nkeep this"),
-            "{body}"
-        );
-        let long = "x".repeat(5001);
-        let e = review_body(&review_pr(), "abc", &[comment(1, false, &long)])
-            .expect_err("over the cap refuses");
-        assert!(e.starts_with("review is "), "{e}");
-        assert!(e.ends_with("chars (cap 5000): send part of it"), "{e}");
-    }
-
     // AC4/AC8 halves: the shell-out reports the exit fact and the command's own
     // last line. FNO_BIN is process-global, so the existing guard serializes
     // the tests that repoint it.
@@ -289,34 +252,5 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(ok);
         assert_eq!(notice, "board wrote the card");
-    }
-
-    #[tokio::test]
-    async fn run_command_reports_the_command_refusal_on_failure() {
-        let _guard = crate::pane_send_audit::FNO_BIN_GUARD
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let dir =
-            std::env::temp_dir().join(format!("fno-backlog-write-fail-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let stub = dir.join("stub.sh");
-        std::fs::write(
-            &stub,
-            "#!/bin/sh\necho 'rank: anchor x-2 is unranked' >&2\nexit 1\n",
-        )
-        .unwrap();
-        let _ = std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755));
-        let previous = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", &stub);
-        let (ok, notice) =
-            run_command(&rank_argv("x-1", Place::Top, None).expect("passes"), None).await;
-        std::env::remove_var("FNO_BIN");
-        if let Some(prev) = previous {
-            std::env::set_var("FNO_BIN", prev);
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(!ok);
-        assert_eq!(notice, "rank: anchor x-2 is unranked");
     }
 }

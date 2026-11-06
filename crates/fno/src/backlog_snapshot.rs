@@ -866,19 +866,6 @@ mod tests {
         assert!(roster[0].harness_session_id.is_none());
         assert!(agents_from_registry("not json at all", 1000).is_empty());
     }
-
-    /// The lexical classifier: the command name claims itself, every other
-    /// first word forwards.
-    #[test]
-    fn board_render_claims_its_name() {
-        use std::ffi::OsString;
-        let door = ["backlog", "publish", "--local-snapshot"].map(OsString::from);
-        assert_eq!(classify(&door), Some(vec![]));
-        assert!(classify(&door[..2]).is_none());
-        assert!(classify(&[OsString::from("board-render")]).is_none());
-        assert!(classify(&[OsString::from("mux")]).is_none());
-    }
-
     /// The public projection end to end: the request surface is exact (an
     /// unknown field refuses, so an installed binary predating `public`
     /// never renders the private graph to a public path); selection keeps

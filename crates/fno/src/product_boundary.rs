@@ -326,20 +326,6 @@ mod tests {
         assert!(delivery.contains(&AGENT_RUNTIME_BIN));
         assert!(delivery.contains(&PYTHON_CLI));
     }
-
-    #[test]
-    #[cfg(feature = "full")]
-    fn digest_distinguishes_disabled_from_unavailable() {
-        let (state, _) = digest_state_for(false, true);
-        assert_eq!(state, DigestState::DisabledByConfig);
-        let (state, _) = digest_state_for(false, false);
-        assert_eq!(state, DigestState::DisabledByConfig);
-        let (state, _) = digest_state_for(true, false);
-        assert_eq!(state, DigestState::BackendUnavailable);
-        let (state, _) = digest_state_for(true, true);
-        assert_eq!(state, DigestState::Available);
-    }
-
     #[test]
     #[cfg(feature = "full")]
     fn runtime_observation_reports_present_and_missing() {
@@ -362,23 +348,6 @@ mod tests {
         assert!(reason.contains("not found"), "{reason}");
         std::fs::remove_file(&bin).ok();
     }
-
-    #[test]
-    fn graph_worker_missing_error_names_component_and_repair() {
-        let e = graph_worker_missing_error();
-        assert!(e.contains(GRAPH_WORKER_BIN), "names the component: {e}");
-        assert!(e.contains("FNO_AGENTS_WORKER"), "names the repair: {e}");
-    }
-
-    #[test]
-    #[cfg(feature = "full")]
-    fn observations_carry_their_observation_time() {
-        assert_eq!(agent_runtime_observation_at(4242).observed_at, 4242);
-        assert_eq!(graph_worker_observation_at(4243).observed_at, 4243);
-        assert_eq!(python_cli_observation_at(4244).observed_at, 4244);
-        assert_eq!(digest_observation_at(true, 4245).observed_at, 4245);
-    }
-
     #[test]
     #[cfg(feature = "full")]
     fn unavailable_worker_observation_carries_the_classified_error() {

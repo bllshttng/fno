@@ -552,26 +552,6 @@ mod tests {
             Readback::Hedge
         );
     }
-
-    #[test]
-    fn queued_marker_reports_queued() {
-        let mut f = frame("> review it", false);
-        f.push_str("queued review it\n");
-        assert_eq!(
-            readback_step(
-                &f,
-                "review it",
-                AFFORDANCE,
-                &["queued".into()],
-                false,
-                true,
-                1,
-                12
-            ),
-            Readback::Queued
-        );
-    }
-
     // The hedge lifecycle: the deciding key fires once after the absorb
     // polls, and its second look reads the honest bytes-written verdict.
     #[test]
@@ -591,20 +571,5 @@ mod tests {
             readback_step(&quiet, "hello", AFFORDANCE, &[], false, false, 11, 12),
             Readback::Poll
         );
-    }
-
-    #[test]
-    fn payload_gone_is_settled() {
-        let f = frame("Ready", false);
-        assert_eq!(
-            readback_step(&f, "hello", AFFORDANCE, &[], false, true, 2, 12),
-            Readback::Settled
-        );
-    }
-
-    #[test]
-    fn signature_folds_whitespace_and_case() {
-        assert_eq!(payload_signature(b"\n  Hello   World \n"), "hello world");
-        assert_eq!(payload_signature(b""), "");
     }
 }

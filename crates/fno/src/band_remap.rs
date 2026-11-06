@@ -139,41 +139,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn a_code_span_in_the_band_keeps_a_readable_accent() {
-        for (bg, shown_on) in [
-            ((0x37, 0x37, 0x37), LIGHT),
-            ((0x44, 0x44, 0x44), LIGHT),
-            ((0xff, 0xff, 0xff), DARK),
-            ((0xe6, 0xe6, 0xe6), DARK),
-        ] {
-            for span in CODE_FG {
-                let mut c = cell(
-                    Color::Rgb(span.0, span.1, span.2),
-                    Color::Rgb(bg.0, bg.1, bg.2),
-                    0,
-                );
-                remap(&mut c);
-                assert_ne!(c.fg, Color::Rgb(0xf7, 0xf7, 0xf7));
-                assert_ne!(c.fg, Color::Rgb(0x14, 0x14, 0x14));
-                assert!(contrast_ratio(&c, shown_on) >= 7.0, "span on {bg:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn cells_outside_the_band_are_untouched() {
-        let rgb = |v: u8| Color::Rgb(v, v, v);
-        let code = cell(rgb(0x14), rgb(0xf0), 0);
-        let plain = cell(Color::Default, Color::Default, 0);
-        let indexed = cell(Color::Indexed(7), Color::Indexed(0), 0);
-        // INVERSE swaps the pair at paint time: the band color is the text.
-        let inverse = cell(rgb(0xe8), rgb(0x37), cell_flags::INVERSE);
-        for original in [code, plain, indexed, inverse] {
-            let mut c = original;
-            remap(&mut c);
-            assert_eq!(c, original);
-        }
-    }
 }

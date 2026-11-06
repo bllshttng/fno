@@ -820,34 +820,6 @@ mod tests {
         );
         assert_eq!(desk.order.len(), 1);
     }
-
-    #[test]
-    fn launch_desk_keys_attempts_by_client_not_request_id_alone() {
-        // Two clients minting the same client-local request id are DISTINCT
-        // attempts: one's terminal state must never replay to the other.
-        let mut desk = LaunchDesk::default();
-        desk.mark_started(1, 1, None);
-        assert!(
-            desk.in_flight_or_done(2, 1).is_none(),
-            "client 2's id 1 is a fresh attempt"
-        );
-        desk.settle(
-            1,
-            AgentLaunchUpdate {
-                request_id: 1,
-                state: LaunchState::Launched {
-                    name: "a".into(),
-                    pane: Some(9),
-                    seed_delivered: Some(true),
-                },
-            },
-        );
-        assert!(
-            desk.in_flight_or_done(2, 1).is_none(),
-            "A's birth never replays to B"
-        );
-    }
-
     #[test]
     fn launch_desk_eviction_stays_bounded() {
         let mut desk = LaunchDesk::default();

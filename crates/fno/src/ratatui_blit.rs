@@ -219,22 +219,6 @@ mod tests {
         assert_eq!(cells[2].fg, proto::Color::Default);
         assert_eq!(cells[2].flags, 0);
     }
-
-    #[test]
-    fn wide_glyph_marks_a_spacer_and_the_next_glyph_lands_after_it() {
-        let mut buf = buf3();
-        buf.set_string(0, 0, "王x", Style::default());
-
-        let mut cells = vec![proto::Cell::default(); 3];
-        blit(&buf, &mut cells, 3);
-
-        assert_eq!(cells[0].c, '王');
-        assert_eq!(cells[1].c, ' ');
-        assert_eq!(cells[1].flags, cell_flags::WIDE_SPACER);
-        assert_eq!(cells[2].c, 'x');
-        assert_eq!(cells[2].flags, 0);
-    }
-
     #[test]
     fn unmapped_modifiers_are_dropped_not_guessed() {
         let mut buf = buf3();

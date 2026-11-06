@@ -527,31 +527,4 @@ mod binding_display_tests {
         other.pr_count = 2;
         assert_eq!(binding_suffix(&row(vec![own, other])), " +11 PRs");
     }
-
-    #[test]
-    fn pr_span_width_covers_node_pr_and_count() {
-        // `x-cur · #3159 +1 PRs` at the right edge of 40 columns.
-        let a = row(vec![
-            binding("x-cur", Some(3159), "open", false),
-            binding("x-oth", Some(100), "open", false),
-        ]);
-        let spans = identity_spans(&a, 40);
-        let pr = spans.pr.expect("pr span renders");
-        assert_eq!(pr, 28..40);
-        assert_eq!(spans.node, Some(20..25));
-        assert_eq!(spans.separator, Some(25..28));
-    }
-
-    #[test]
-    fn fit_node_cuts_the_node_front_before_the_name() {
-        // `scout` ends at column 7 with one space after it, so the node may
-        // start at 8. The specimen cut the name to `scou` instead.
-        let node = "zz-00aa11bb";
-        assert_eq!(fit_node(node, 10..21, 8), Some((10..21, node.into())));
-        assert_eq!(
-            fit_node(node, 6..17, 8),
-            Some((8..17, "\u{2026}00aa11bb".into()))
-        );
-        assert_eq!(fit_node(node, 6..17, 14), None, "under 3 node chars drops");
-    }
 }

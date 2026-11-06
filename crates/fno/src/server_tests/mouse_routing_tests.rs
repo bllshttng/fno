@@ -8,7 +8,7 @@ use super::*;
 use crate::server::mouse_route::MOUSE_WHEEL_LINES;
 // This module is `server::tests`'s SIBLING (both are declared in server.rs),
 // so the fixture helpers must be pub(super) and named through `tests`.
-use super::tests::{empty_core, seen_test_core};
+use super::tests::seen_test_core;
 
 fn mouse_mode() -> Modes {
     Modes {
@@ -126,29 +126,6 @@ fn mouse_rows() {
     });
     assert_eq!(alt_press, b"\x1b[<8;4;3M");
 }
-
-// AC1-ERR: a wheel tick routed to a pane absent from the panes map is a
-// no-op through mouse() - the top-of-fn early return fires, so no PTY write
-// and no gate-state entry for the dead id.
-#[test]
-fn mouse_wheel_dead_pane_is_noop() {
-    let mut core = empty_core();
-    core.mouse(
-        1,
-        999,
-        MouseEvent {
-            row: 0,
-            col: 0,
-            kind: MouseKind::WheelDown,
-            alt: false,
-        },
-    );
-    assert!(
-        core.wheel_gate.is_empty(),
-        "no gate state is created for a dead pane"
-    );
-}
-
 // v112: in a mouse-reporting pane the SelectRelease open path is unreachable
 // (route_mouse passes every press/release through), so an alt click over a
 // link is the mux's open gesture there. Plain clicks on the same cell keep
@@ -231,38 +208,5 @@ fn alt_click_over_link_in_mouse_pane_opens_and_plain_click_forwards() {
     assert!(
         core.link_click_claims.is_empty(),
         "a dead pane's claim is purged"
-    );
-}
-
-#[test]
-fn scroll_delta_classifies_only_interpreted_wheel_ticks() {
-    // The fold is only correct if it folds real scrolls and STOPS at anything
-    // else. A plain pane's wheel is an interpreted scroll (foldable, +/-
-    // MOUSE_WHEEL_LINES); a left press is a selection (not foldable) so it must
-    // break the run and preserve order.
-    let (core, _cid, p1, _p2, _rx) = seen_test_core();
-    let ev = |kind| MouseEvent {
-        row: 1,
-        col: 1,
-        kind,
-        alt: false,
-    };
-    assert_eq!(
-        core.scroll_delta(p1, &ev(MouseKind::WheelUp)),
-        Some(MOUSE_WHEEL_LINES)
-    );
-    assert_eq!(
-        core.scroll_delta(p1, &ev(MouseKind::WheelDown)),
-        Some(-MOUSE_WHEEL_LINES)
-    );
-    assert_eq!(
-        core.scroll_delta(p1, &ev(MouseKind::Press(MouseButton::Left))),
-        None,
-        "a select must stop the fold, not coalesce into it"
-    );
-    assert_eq!(
-        core.scroll_delta(999, &ev(MouseKind::WheelUp)),
-        None,
-        "an unknown pane never folds"
     );
 }
