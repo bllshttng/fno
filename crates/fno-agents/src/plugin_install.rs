@@ -1607,6 +1607,10 @@ struct PluginInstallArgs {
     release: bool,
     /// Install the pack profile: no mux skills, no mux hooks.
     pack: bool,
+    /// Skip the post-install reclaim chain. `fno doctor update`'s codex
+    /// refresh runs the janitor itself, after its budget fold, so a big
+    /// reclaim (6.3 GB measured) is not charged to the update's 60 s budget.
+    no_reclaim: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1636,6 +1640,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         dev: false,
         release: false,
         pack: false,
+        no_reclaim: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1688,6 +1693,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
             }
             "--pack" => {
                 parsed.pack = true;
+                i += 1;
+            }
+            "--no-reclaim" => {
+                parsed.no_reclaim = true;
                 i += 1;
             }
             "--json" | "-J" => {
@@ -1762,6 +1771,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         dev,
         release,
         pack,
+        no_reclaim,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1897,9 +1907,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                             stale.iter().map(|p| p.display().to_string()).collect();
                         println!("removed stale copies: {}", joined.join(", "));
                     }
-                    let home = AgentsHome::from_env();
-                    let _ =
-                        crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+                    if !no_reclaim {
+                        let home = AgentsHome::from_env();
+                        let _ = crate::reclaim::run_reclaim(
+                            &RECLAIM_ON_INSTALL.map(String::from),
+                            &home,
+                        );
+                    }
                     0
                 }
                 Err(e) => {
@@ -1910,7 +1924,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--source <dir>]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--no-reclaim] [--source <dir>]"
             );
             eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
