@@ -132,6 +132,16 @@ pub(super) async fn run_with(
     let cwd = l.draft.cwd();
     let request_id = l.next_request_id;
     l.next_request_id += 1;
+    if let Some(host) = &l.draft.host {
+        let reason =
+            format!("shell runs on {host} are not supported; choose Local to run this line");
+        emit(
+            events,
+            &refused_row(&session, &cwd, &line, &reason, "refused"),
+        );
+        l.phase = Phase::Refused { request_id, reason };
+        return Ok(());
+    }
     if cwd.is_empty() {
         let reason = "no project chosen; pick one on the Project chip".to_string();
         emit(
@@ -400,6 +410,18 @@ mod tests {
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "a second send is blocked"
         );
+        let mut v = shell_view("bang-run", "hostname", Some("/tmp/proj-e"));
+        v.launcher.as_mut().unwrap().draft.host = Some("remote-box".into());
+        rt.block_on(async {
+            run_with(&mut v, &mut sock, &events, |_| {
+                panic!("a remote destination must never run a local shell command")
+            })
+            .await
+            .unwrap();
+        });
+        let l = v.launcher.as_ref().unwrap();
+        assert!(matches!(&l.phase, Phase::Refused { reason, .. } if reason.contains("Local")));
+        assert_eq!(l.draft.message, "hostname");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

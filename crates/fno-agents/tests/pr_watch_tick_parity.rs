@@ -23,6 +23,7 @@ mod common;
 const GH_STUB: &str = r#"#!/bin/sh
 # Answers the tick's REST reads for one repo: o/r, PRs 7 (open) and 8 (merged).
 args="$*"
+if [ "${PR_WATCH_TEST_GH_DELAY:-0}" -gt 0 ]; then sleep "$PR_WATCH_TEST_GH_DELAY"; fi
 case " $args " in *" -i "*) printf 'HTTP/2.0 200 OK\r\n\r\n' ;; esac
 case "$args" in
   *rate_limit*) echo '{"resources":{"graphql":{"remaining":4000,"reset":1893456000},"core":{"remaining":4000,"reset":1893456000}}}' ;;
@@ -104,8 +105,7 @@ fn write_case(root: &Path, case: &Case, leg: &str) -> Home {
     }
     let config = format!(
         "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
-        state.display(),
-        case.enabled
+        state.display(), case.enabled
     );
     std::fs::write(state.join("config.toml"), &config).unwrap();
     std::fs::create_dir_all(repo.join(".fno")).unwrap();

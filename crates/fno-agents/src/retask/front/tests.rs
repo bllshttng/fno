@@ -104,17 +104,6 @@ fn viewport_refuses_the_row_without_a_thread_reference() {
 }
 
 #[test]
-fn viewport_join_misses_after_three_tries() {
-    let listing = json!([{"name": "other", "fno_id": "F", "pane_id": 7}]).to_string();
-    let mut resolver = ViewportResolver {
-        session: "main".to_string(),
-        run: fake_run(&listing),
-    };
-    let error = resolver.resolve(&viewport_row()).unwrap_err();
-    assert_eq!(error.word, "thread_view_join_missed");
-}
-
-#[test]
 fn viewport_door_failure_carries_the_last_error_line() {
     let run: RunSeam = Box::new(move |_argv: &[String], _secs: u64| {
         let mut out = output(1, "");

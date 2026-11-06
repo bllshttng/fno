@@ -104,6 +104,14 @@ pub fn recover(
     }
 }
 
+/// The session-id match `persist`, `persist_overwrite` and the resume
+/// re-route's readback share: a row answers to any of its three recorded ids.
+pub fn row_matches_session(e: &crate::state::RegistryEntry, session_id: &str) -> bool {
+    e.harness_session_id.as_deref() == Some(session_id)
+        || e.claude_session_uuid.as_deref() == Some(session_id)
+        || e.related_session_id.as_deref() == Some(session_id)
+}
+
 /// Write a recovered route onto the row the session id names, filling ONLY
 /// empty fields. The session id is the key, never the row name, and the
 /// running `model` is never stored - the birth model is the spawn's request,
@@ -117,11 +125,11 @@ pub fn persist(
 ) -> Result<bool, crate::state::StateError> {
     crate::state::update_registry(registry_path, |reg| {
         let is_blank = |s: &Option<String>| s.as_deref().is_none_or(str::is_empty);
-        let Some(entry) = reg.entries.iter_mut().find(|e| {
-            e.harness_session_id.as_deref() == Some(session_id)
-                || e.claude_session_uuid.as_deref() == Some(session_id)
-                || e.related_session_id.as_deref() == Some(session_id)
-        }) else {
+        let Some(entry) = reg
+            .entries
+            .iter_mut()
+            .find(|e| row_matches_session(e, session_id))
+        else {
             return false;
         };
         let mut changed = false;
@@ -139,6 +147,33 @@ pub fn persist(
         fill(&mut entry.requested_model, r.model.clone());
         fill(&mut entry.launch_account, "default".to_string());
         changed
+    })
+}
+
+/// Overwrite the recorded route on the row the session id names: the re-route
+/// twin of [`persist`]. Same id match, every route slot written, the account
+/// and the running `model` untouched - the account cannot move (the
+/// transcript lives under its config dir) and the relaunched process verifies
+/// its own model. Returns whether the row was found and written.
+pub fn persist_overwrite(
+    registry_path: &Path,
+    session_id: &str,
+    provider: &str,
+    model: &str,
+    route_settings_path: &str,
+) -> Result<bool, crate::state::StateError> {
+    crate::state::update_registry(registry_path, |reg| {
+        let Some(entry) = reg
+            .entries
+            .iter_mut()
+            .find(|e| row_matches_session(e, session_id))
+        else {
+            return false;
+        };
+        entry.route_settings_path = Some(route_settings_path.to_string());
+        entry.provider = Some(provider.to_string());
+        entry.requested_model = Some(model.to_string());
+        true
     })
 }
 

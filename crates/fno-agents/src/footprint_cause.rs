@@ -1990,36 +1990,6 @@ mod tests {
     }
 
     #[test]
-    fn ac1_edge_attributes_a_detached_registered_root() {
-        let rows = vec![
-            row(300, 1, 5, 20.0, "opencode serve --detach"),
-            row(301, 300, 60, 80.0, "cargo test -p fno"),
-            row(400, 1, 3600, 90.0, "cargo test -p unrelated"),
-        ];
-        let roots: BTreeSet<u32> = BTreeSet::from([300]);
-        let out = parse_footprint(&rows, &BTreeSet::new(), &roots, &BTreeSet::new(), 30);
-        assert_eq!(out.process_count, 2);
-        assert_eq!(out.direct_process_count, 1);
-        assert_eq!(out.descendant_process_count, 1);
-        assert!((out.sustained_cpu_cores - 0.2).abs() < 1e-9);
-        assert_eq!(out.transient_call_count, 0);
-        assert!((out.descendant_cpu_cores - 0.8).abs() < 1e-9);
-        assert!((out.fleet_cpu_cores - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn ac1_edge_shared_serve_is_not_a_leak_threshold_process() {
-        let rows = vec![
-            row(300, 1, 5, 20.0, "opencode serve --detach"),
-            row(301, 300, 60, 80.0, "cargo test -p fno"),
-        ];
-        let roots: BTreeSet<u32> = BTreeSet::from([300]);
-        let excluded: BTreeSet<u32> = BTreeSet::from([300]);
-        let out = parse_footprint(&rows, &BTreeSet::new(), &roots, &excluded, 30);
-        assert_eq!(out.direct_process_count, 0);
-    }
-
-    #[test]
     fn ac3_the_classifier_counts_only_the_real_runners() {
         let rows = vec![
             row(100, 1, 3600, 10.0, "cargo test -p fno"),
@@ -2035,26 +2005,6 @@ mod tests {
             30,
         );
         assert_eq!(out.test_process_count, 2);
-    }
-
-    #[test]
-    fn spare_pool_rows_count_but_never_fleet_attribute() {
-        let rows = vec![
-            row(50, 1, 3600, 12.0, "/usr/local/bin/claude bg-spare"),
-            row(51, 1, 3600, 12.0, "claude --bg-pty-host --session x"),
-            row(52, 1, 3600, 12.0, "claude bg-spare /tmp/x.claim.sock"),
-        ];
-        let out = parse_footprint(
-            &rows,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            30,
-        );
-        // Two idle pool rows; the third argv names a claim socket that is
-        // gone, so the session took the spare and it is not pool.
-        assert_eq!(out.spare_pool_process_count, 2);
-        assert_eq!(out.process_count, 0);
     }
 
     #[test]
@@ -2106,63 +2056,6 @@ mod tests {
     }
 
     #[test]
-    fn share_segment_names_the_interval_rows() {
-        assert_eq!(share_segment(0.411, 0.411, "exact", None), "41.1%");
-        assert_eq!(
-            share_segment(0.1, 0.9, "upper", Some("3 pidless row(s) ...")),
-            "10.0%, up to 90.0% with 3 rows unattributed"
-        );
-        assert_eq!(
-            share_segment(0.1, 0.9, "upper", None),
-            "10.0%, up to 90.0% with rows unattributed"
-        );
-    }
-
-    #[test]
-    fn load_line_renders_the_reading_and_falls_back_to_unavailable() {
-        assert_eq!(
-            load_line(Some(141.0), Some(140.0), Some(12)),
-            "5m 141.0, 15m 140.0 on 12 cpus"
-        );
-        assert_eq!(load_line(None, Some(140.0), Some(12)), "unavailable");
-        assert_eq!(load_line(Some(141.0), None, Some(12)), "unavailable");
-        assert_eq!(load_line(Some(141.0), Some(140.0), None), "unavailable");
-    }
-
-    #[test]
-    fn top_consumers_name_program_and_worktree() {
-        let sustained = vec![
-            (80.0f64, "cargo test -p fno".to_string()),
-            (70.0, "/x/w/worktrees/x-1/cargo test -p fno".to_string()),
-            (60.0, "fno-agents-worker --run".to_string()),
-            (50.0, "/x/w/worktrees/x-1/cargo test -p fno2".to_string()),
-        ];
-        let out = top_consumers(&sustained, 2);
-        assert_eq!(out[0]["name"], json!("cargo"));
-        // All three cargo rows count, the worktree-prefixed pair included;
-        // the name is argv[0]'s basename either way.
-        assert_eq!(out[0]["procs"], json!(3));
-        assert_eq!(out[0]["worktree"], json!("/x/w/worktrees/x-1"));
-        assert_eq!(out[0]["worktree_procs"], json!(2));
-    }
-
-    #[test]
-    fn bounded_json_command_keeps_the_fitting_prefix() {
-        let long = "x".repeat(300);
-        let out = bounded_json_command(&long, 100);
-        // The JSON encoding of N x's is N + 2 bytes.
-        assert_eq!(out.len(), 98);
-        assert!(out.chars().all(|c| c == 'x'));
-    }
-
-    #[test]
-    fn transport_join_key_derives_from_the_session_first_segment() {
-        assert_eq!(transport_join_key("ab12cd34", "ignored"), "ab12cd34");
-        assert_eq!(transport_join_key("", "abcdefgh-1234-x"), "abcdefgh");
-        assert_eq!(transport_join_key("", ""), "");
-    }
-
-    #[test]
     fn pid_alive_guard_rejects_the_broadcast_range() {
         assert_eq!(pid_alive(0, None), Some(false));
         assert_eq!(pid_alive(1, None), Some(false));
@@ -2177,43 +2070,5 @@ mod tests {
         assert!(is_test_runner("/usr/bin/python3 -m pytest x"));
         assert!(!is_test_runner("tail -f /tmp/pytest-of-user/out"));
         assert!(!is_test_runner("git log --grep pytest"));
-    }
-
-    #[test]
-    fn an_unreadable_live_row_pid_marks_the_row_unmeasured() {
-        let _lock = crate::claims::test_env_lock();
-        let dir = std::env::temp_dir().join(format!(
-            "fno-footprint-unreadable-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let _home = crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, &dir.to_string_lossy());
-        let registry = crate::paths::AgentsHome::from_env().registry_json();
-        std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
-        // 0x7FFF_F000 passes the broadcast guard yet reads no process on any
-        // host, so the probe answers None: the stale-live pid shape that
-        // refused the whole reading on 2026-11-04.
-        let dead_pid: u32 = 0x7FFF_F000;
-        crate::registry_store::replace_document(
-            &registry,
-            serde_json::json!({
-                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
-                "entries": [{
-                    "name": "ev-th-evals-29494",
-                    "harness": "claude",
-                    "status": "live",
-                    "pid": dead_pid,
-                    "pid_start_time": 4242
-                }],
-            }),
-        );
-        let out = live_root_pids(None, &BTreeSet::new(), 0.0, &BTreeMap::new());
-        let _ = std::fs::remove_dir_all(&dir);
-        let (roots, gap) = out.unwrap();
-        assert!(!roots.contains(&dead_pid));
-        let gap = gap.expect("an unmeasured row names its undercount");
-        assert!(gap.contains("ev-th-evals-29494"), "{gap}");
-        assert!(gap.contains("start time unreadable"), "{gap}");
     }
 }

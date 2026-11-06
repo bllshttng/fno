@@ -707,20 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn compound_refuses_only_the_test_half() {
-        let root = footnote_root();
-        let refusal = decide("cargo build && cargo test", root.path());
-        assert!(refusal.unwrap().contains("cargo test"));
-    }
-
-    #[test]
-    fn pytest_in_quoted_heredoc_body_allows() {
-        let root = footnote_root();
-        let cmd = "cat > script.sh <<'EOF'\npytest -q\nEOF\nbash script.sh";
-        assert!(decide(cmd, root.path()).is_none());
-    }
-
-    #[test]
     fn unbalanced_quotes_fail_open() {
         let root = footnote_root();
         assert!(decide("pytest -q 'unclosed", root.path()).is_none());

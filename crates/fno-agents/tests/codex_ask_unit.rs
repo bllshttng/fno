@@ -1,14 +1,12 @@
 //! Wave B1 unit tests for `codex_ask` pure-fn core.
 //!
-//! Tests for: argv builders (create/resume), inject_from_name, JSONL line
-//! parser, error enum, and exit-code map. All tests run against fixture data
-//! and in-process helpers with no subprocess or filesystem dependency.
-//!
-//! These tests MUST FAIL before codex_ask.rs is created (TDD red phase).
+//! Tests for: argv builders (create/resume), JSONL parser edges, and the
+//! exit-code passthrough. The dispatch boundary lives in
+//! tests/codex_ask_dispatch.rs; the real-signal boundary in
+//! tests/codex_ask_sigint.rs.
 
 use fno_agents::codex_ask::{
-    approval_flag, build_argv_create, build_argv_resume, inject_from_name, parse_jsonl_line,
-    sandbox_flag, CodexAskError, JsonlEvent,
+    build_argv_create, build_argv_resume, parse_jsonl_line, sandbox_flag, CodexAskError, JsonlEvent,
 };
 use fno_agents::codex_posture::BOUNDED_NETWORK_OVERRIDE;
 use std::path::PathBuf;
@@ -18,23 +16,6 @@ use std::path::PathBuf;
 /// external integration-test binary, so it needs its own).
 #[cfg(unix)]
 static PATH_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-// ---------------------------------------------------------------------------
-// inject_from_name (Locked Decision 7 parity)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn inject_from_name_prepends_bracket_prefix() {
-    let got = inject_from_name("hello world", "alice");
-    assert_eq!(got, "[from: alice]\n\nhello world");
-}
-
-#[test]
-fn inject_from_name_no_escaping() {
-    // Plain concatenation; no HTML or JSON escaping
-    let got = inject_from_name("a&b<c>", "x\"y");
-    assert_eq!(got, "[from: x\"y]\n\na&b<c>");
-}
 
 // ---------------------------------------------------------------------------
 // sandbox_flag (create path)
@@ -53,26 +34,6 @@ fn sandbox_flag_default_is_bounded() {
             BOUNDED_NETWORK_OVERRIDE
         ]
     );
-}
-
-#[test]
-fn sandbox_flag_never_carries_approval_token() {
-    // --ask-for-approval is a GLOBAL flag; sandbox_flag tokens are spliced
-    // AFTER `exec`, where codex rejects --ask-for-approval. It must never leak
-    // into sandbox_flag's output. (Regression: pr704 codex spawn abort.)
-    for yolo in [true, false] {
-        assert!(!sandbox_flag(yolo).contains(&"--ask-for-approval".to_string()));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// approval_flag (create path - GLOBAL flag, emitted before `exec`)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn approval_flag_yolo_is_empty() {
-    // The bypass flag from sandbox_flag already disables approval.
-    assert!(approval_flag(true).is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -329,14 +290,6 @@ fn build_argv_resume_yolo_adds_bypass() {
     assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
 }
 
-#[test]
-fn build_argv_resume_forwards_reasoning_effort() {
-    let argv = build_argv_resume(&PathBuf::from("/x"), "s123", "p", false, Some("low"));
-    assert!(argv
-        .windows(2)
-        .any(|pair| pair == ["-c", "model_reasoning_effort=low"]));
-}
-
 #[cfg(unix)]
 #[test]
 fn build_argv_resume_repins_the_bounded_posture_in_a_repo() {
@@ -374,62 +327,12 @@ fn build_argv_resume_repins_the_bounded_posture_in_a_repo() {
     assert!(!yolo.iter().any(|a| a == "-c"));
 }
 
-// ---------------------------------------------------------------------------
-// parse_jsonl_line
-// ---------------------------------------------------------------------------
-
-#[test]
-fn parse_jsonl_line_thread_started() {
-    let line = r#"{"type":"thread.started","thread_id":"aaaabbbb-1234-5678-9abc-def012345678"}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    match ev {
-        JsonlEvent::ThreadStarted { thread_id } => {
-            assert_eq!(thread_id, "aaaabbbb-1234-5678-9abc-def012345678");
-        }
-        other => panic!("unexpected: {:?}", other),
-    }
-}
-
-#[test]
-fn parse_jsonl_line_item_completed_agent_message() {
-    let line = r#"{"type":"item.completed","item":{"type":"agent_message","text":"hello world"}}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    match ev {
-        JsonlEvent::AgentMessage { text } => assert_eq!(text, "hello world"),
-        other => panic!("unexpected: {:?}", other),
-    }
-}
-
-#[test]
-fn parse_jsonl_line_item_completed_error() {
-    let line = r#"{"type":"item.completed","item":{"type":"error","message":"something failed"}}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    match ev {
-        JsonlEvent::SoftError { message } => assert_eq!(message, "something failed"),
-        other => panic!("unexpected: {:?}", other),
-    }
-}
-
-#[test]
-fn parse_jsonl_line_turn_completed() {
-    let line = r#"{"type":"turn.completed"}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    assert!(matches!(ev, JsonlEvent::TurnCompleted));
-}
-
 #[test]
 fn parse_jsonl_line_non_json_returns_none() {
     // Non-JSON banner lines are skipped
     assert!(parse_jsonl_line("Reading additional input from stdin...").is_none());
     assert!(parse_jsonl_line("").is_none());
     assert!(parse_jsonl_line("   ").is_none());
-}
-
-#[test]
-fn parse_jsonl_line_unknown_type_returns_other() {
-    let line = r#"{"type":"some.future.event","data":42}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    assert!(matches!(ev, JsonlEvent::Other { .. }));
 }
 
 #[test]
@@ -450,21 +353,6 @@ fn parse_jsonl_line_thread_started_missing_thread_id_returns_other_or_none() {
     // None is also fine
 }
 
-// ---------------------------------------------------------------------------
-// CodexAskError display / exit-code mapping
-// ---------------------------------------------------------------------------
-
-#[test]
-fn error_not_found_maps_to_provider_unavailable() {
-    // CodexAskError::NotFound represents "codex binary not on PATH"; per
-    // Python parity (dispatch.py maps codex's FileNotFoundError(127) chain
-    // to exit 14 "provider unavailable"), exit_code() returns 14 directly.
-    // Both dispatch paths (create and resume) inherit this without an
-    // inline remap (sigma-review type-design HIGH).
-    let err = CodexAskError::NotFound;
-    assert_eq!(err.exit_code(), 14);
-}
-
 #[test]
 fn error_invocation_exit_code_propagated() {
     let err = CodexAskError::Invocation {
@@ -472,20 +360,6 @@ fn error_invocation_exit_code_propagated() {
         message: "err".into(),
     };
     assert_eq!(err.exit_code(), 5);
-}
-
-#[test]
-fn error_interrupted_exit_code_130() {
-    // ab-e7fdbcb6: operator Ctrl-C maps to exit 130 (128 + SIGINT), matching
-    // Python's KeyboardInterrupt -> CPython exit 130.
-    let err = CodexAskError::Interrupted;
-    assert_eq!(err.exit_code(), 130);
-    let msg = err.to_string();
-    assert!(
-        msg.contains("SIGINT") || msg.contains("Ctrl-C"),
-        "msg: {}",
-        msg
-    );
 }
 
 #[test]

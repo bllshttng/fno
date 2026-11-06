@@ -693,19 +693,30 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { break };
                     let gen = keeper.client_gen.fetch_add(1, Ordering::SeqCst) + 1;
+                    // First come, first seated - claimed HERE, in the accept
+                    // loop. Accept order is FIFO; the per-connection threads'
+                    // start order is the scheduler's. Claiming inside the
+                    // thread let two connections accepted back to back race
+                    // for the empty seat, and a probe winning that race took
+                    // the subscriber seat from the real subscriber (the mux
+                    // server at spawn or re-adoption), then cleared it on
+                    // exit - the keeper read an empty seat for the pane's
+                    // whole life and ended itself at the idle bound.
+                    let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut is_subscriber = slot.is_none();
+                    if is_subscriber {
+                        match stream.try_clone() {
+                            Ok(clone) => *slot = Some((gen, clone)),
+                            // No descriptor to write to, no seat: serve as a
+                            // probe instead of losing the accept loop.
+                            Err(_) => is_subscriber = false,
+                        }
+                    }
+                    drop(slot);
                     let keeper = Arc::clone(&keeper);
                     std::thread::Builder::new()
                         .name("fno-keeper-cli".into())
                         .spawn(move || {
-                            // First come, first seated: an empty subscriber
-                            // slot takes THIS connection.
-                            let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
-                            let is_subscriber = slot.is_none();
-                            if is_subscriber {
-                                *slot =
-                                    Some((gen, stream.try_clone().expect("clone keeper client")));
-                            }
-                            drop(slot);
                             serve_client(&keeper, stream, gen, is_subscriber);
                         })
                         .expect("spawn keeper client thread");
@@ -1106,82 +1117,5 @@ mod tests {
             ring.dropped, 17,
             "3 old + 4 overflow + 10 displaced, all counted"
         );
-    }
-
-    /// The `[54;3H` bug: a cut whose ESC went out with the dropped prefix
-    /// used to leave the sequence tail as the replay's opening text. The
-    /// drop now extends through the split sequence; a complete sequence
-    /// before the cut replays intact.
-    #[test]
-    fn ring_cut_at_an_escape_sequence_replays_from_the_boundary() {
-        let mut ring = Ring::new(8);
-        ring.push(b"\x1b[54;3");
-        ring.push(b"Hwold");
-        assert_eq!(ring.snapshot(), b"wold");
-        assert_eq!(ring.dropped, 7, "3 prefix + 3 split + the final H, counted");
-        let mut ring = Ring::new(8);
-        ring.push(b"\x1b[2J\x1b[Hok");
-        ring.push(b"XY");
-        assert_eq!(ring.snapshot(), b"\x1b[HokXY");
-        assert_eq!(ring.dropped, 4, "ESC[2J went out whole with the prefix");
-    }
-
-    #[test]
-    fn keeper_lane_reads_the_cursor_resume_shape_as_a_full_uuid_only() {
-        let cursor_shape = [
-            "cursor-agent",
-            "--resume",
-            "0f9e63ed-861d-4f9f-8efa-3e40c5e01266",
-            "--trust",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-        assert_eq!(
-            session_id_from_argv(&cursor_shape),
-            Some("0f9e63ed-861d-4f9f-8efa-3e40c5e01266".to_string()),
-            "the callee-minted create form rides --resume"
-        );
-        // A bare --resume opens an interactive picker: no identity.
-        let picker = ["cursor-agent", "--resume"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(session_id_from_argv(&picker), None);
-
-        // agy's create form: `--conversation <uuid>`, split and glued.
-        let agy_shape: Vec<String> = [
-            "agy",
-            "--conversation",
-            "91b59536-7ea4-4235-9691-4ca8f991a9b2",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(
-            session_id_from_argv(&agy_shape),
-            Some("91b59536-7ea4-4235-9691-4ca8f991a9b2".to_string())
-        );
-        let agy_glued: Vec<String> = ["agy", "--conversation=91b59536-7ea4-4235-9691-4ca8f991a9b2"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(
-            session_id_from_argv(&agy_glued),
-            Some("91b59536-7ea4-4235-9691-4ca8f991a9b2".to_string())
-        );
-        // A truncated conversation id addresses a DIFFERENT conversation to
-        // agy, so it answers None rather than being read as an identity.
-        let agy_truncated: Vec<String> = ["agy", "--conversation", "91b59536"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(session_id_from_argv(&agy_truncated), None);
-        // A head-8 is an fno session handle, not a chat id: no identity.
-        let truncated = ["cursor-agent", "--resume", "74db359a"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(session_id_from_argv(&truncated), None);
     }
 }

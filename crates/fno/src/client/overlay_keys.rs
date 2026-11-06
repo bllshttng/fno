@@ -185,6 +185,11 @@ pub(super) async fn route(
         // die in the board's folder behind it.
         return Some(backlog_board::route_board_keys(view, scanner, bytes, sock_w).await);
     }
+    // A lone Esc with no overlay open closes the pinned Needs input section
+    // and still pends for the pane: chrome reacts, the pane loses nothing.
+    if bytes == [0x1b] && view.needs_open {
+        view.needs_open = false;
+    }
     None
 }
 

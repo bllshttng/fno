@@ -2777,3 +2777,112 @@ fn seed_registry(home: &AgentsHome, body: impl AsRef<str>) -> Result<(), String>
     fno_agents::registry_store::replace_document(&home.registry_json(), doc);
     Ok(())
 }
+
+#[test]
+fn daemon_evals_arm_runs_without_a_pr_watch_tick() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let root = temp.path();
+    let home = AgentsHome::at(root.join(".fno/agents"));
+    home.ensure_root().unwrap();
+    std::fs::create_dir_all(root.join("evals/bank")).unwrap();
+    let fno = common::make_script(root, "fno-stub", "exit 0");
+    let client = common::make_script(
+        root,
+        "fno-agents-stub",
+        r#"
+case "$1" in
+  evals-arm)
+    printf '%s\n' start >> "$FNO_AGENTS_HOME/evals-arm.started"
+    sleep 7
+    printf '%s\n' "$*" >> "$FNO_AGENTS_HOME/evals-arm.argv"
+    printf '%s\n' '{"acted":0,"skip_reason":"fresh","detail":"fixture evals-arm"}'
+    ;;
+  *)
+    printf '%s\n' '{}'
+    ;;
+esac
+"#,
+    );
+    let stderr = std::fs::File::create(root.join("daemon.stderr")).unwrap();
+    let mut cmd = Command::new(DAEMON_BIN);
+    cmd.env_clear()
+        .env("HOME", root)
+        .env("FNO_HOME", root)
+        .env("FNO_AGENTS_HOME", home.root())
+        .env("FNO_EVENTS_PATH", home.events_jsonl())
+        .env("FNO_CLAIMS_ROOT", root.join(".fno/claims"))
+        .env("FNO_AGENTS_BIN", &client)
+        .env("FNO_AGENTS_WORKER_BIN", WORKER_BIN)
+        .env("FNO_AGENTS_IDLE_EXIT_SECS", "3600")
+        .env("FNO_AGENTS_NO_STARTUP_RECONCILE", "1")
+        .env("FNO_BIN", &fno)
+        .env(
+            "PATH",
+            "/usr/bin:/bin:/Users/bb16/.cargo/bin:/opt/homebrew/bin",
+        )
+        .current_dir(root)
+        .stderr(std::process::Stdio::from(stderr));
+    let daemon = DaemonChild(cmd.spawn().expect("daemon spawns"));
+
+    common::wait_for_path(&home.supervisor_sock(), Duration::from_secs(10));
+    common::wait_for_event(&home, "daemon_started", Duration::from_secs(10));
+    common::wait_for_event(&home, "daemon_fleet_scope", Duration::from_secs(10));
+    let initial_events = common::event_text(&home);
+    assert!(
+        initial_events.contains("\"scope\":\"shared\""),
+        "fixture daemon must enable fleet arms: {initial_events}"
+    );
+    common::wait_for_path(
+        &home.root().join("evals-arm.started"),
+        Duration::from_secs(20),
+    );
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let response = runtime
+        .block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                fno_agents::client::call_if_running(
+                    &home,
+                    &Request::new(1, "agent.status", json!({})),
+                ),
+            )
+            .await
+        })
+        .expect("daemon keeps serving while evals-arm runs")
+        .expect("agent.status call succeeds");
+    assert!(response.result().is_some(), "agent.status has a result");
+    let marker = home.root().join("evals-arm.argv");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let events = common::event_text(&home);
+    assert!(
+        marker.exists(),
+        "daemon never invoked evals-arm; events={events}; stderr={}",
+        std::fs::read_to_string(root.join("daemon.stderr")).unwrap_or_default()
+    );
+    let argv = std::fs::read_to_string(home.root().join("evals-arm.argv")).unwrap();
+    assert!(
+        argv.contains("--summary-json"),
+        "daemon omitted the history summary: {argv}"
+    );
+    common::wait_for_event(&home, "\"arm\":\"evals\"", Duration::from_secs(5));
+    let events = common::event_text(&home);
+    assert!(
+        events.contains("fixture evals-arm"),
+        "the daemon did not journal the evals-arm receipt: {events}"
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    let calls = std::fs::read_to_string(&home.root().join("evals-arm.started")).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "the daemon stacked evals-arm before its cadence elapsed: {calls}"
+    );
+    drop(daemon);
+}

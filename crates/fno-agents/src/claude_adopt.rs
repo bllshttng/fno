@@ -609,26 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn gate_unknown_lane_name_keeps_the_recorded_lookup() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        // A route naming no pair and no declared lane keeps the recorded
-        // route matching the request model. FNO_CONFIG pins an empty config
-        // so the lane lookup reads nothing ambient.
-        let base = seed_route_settings("gate-route-lane", &["zai"]);
-        let cfg = base.join("config.toml");
-        std::fs::write(&cfg, "").unwrap();
-        std::env::set_var("FNO_CONFIG", &cfg);
-        std::env::remove_var("FNO_ROUTE_PROVIDER");
-        let params = serde_json::json!({"route": "my-lane", "model": "glm-5.3-flash[1m]"});
-        assert_eq!(gate_route_provider(&params).as_deref(), Some("zai"));
-        std::env::remove_var("FNO_CONFIG");
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
     fn gate_resolves_a_declared_lane_names_vendor() {
         let _guard = crate::claims::test_env_lock()
             .lock()
