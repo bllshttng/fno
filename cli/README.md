@@ -218,34 +218,27 @@ its current operating layer. (Formerly `fno agent whoami` / `fno agent status`;
 the `fno agent` singular namespace was retired in ab-12dd2a5d when the
 never-auto-invoked `suggest` / `capabilities` commands were trimmed.)
 
-They detect three layers independently and report on all that are present:
+They detect layers independently and report on those present:
 
 | Layer | Source |
 |-------|--------|
 | fleet | `~/.fno/fleet/*/00-INDEX.md` whose `projects:` cwd matches this repo |
-| walker | `.fno/megawalk-state.md` |
 | session | `.fno/target-state.md` (preferred) or `.fno/session-state.md` |
 
 ### Commands
 
-- `fno whoami` - one-line per layer: project + fleet + walker + session + harness
+- `fno whoami` - one-line per layer: project + fleet + session + harness
 - `fno whoami status` - session phase + status + bounded events tail + inconsistency flags. The immutable post-wedge manifest carries no gate booleans, so phase shows `n/a (collapsed)` and status is derived from the latest `termination` event in `events.jsonl`; a legacy manifest with `*_passed`-style keys still prints a per-gate section
 
 ### Shared options
 
 - `--json` / `-J` - structured output to stdout
 - `--state-file PATH` - override session-state detection (file missing -> rc=2)
-- `--no-walker` - suppress walker layer in output
 - `--no-fleet` - suppress fleet layer in output
 
 ### Invariants
 
-Both commands are read-only. No state is mutated, no events are emitted,
-no side effects. Tests assert this via repeated-invocation paired md5
-hashing across `target-state.md`, `megawalk-state.md`, `events.jsonl`,
-and the fleet `00-INDEX.md`. `--json` emits isoformat strings for any
-datetime parsed out of the manifest frontmatter, so it never crashes on
-a real manifest.
+Both commands are read-only. No state is mutated, no events are emitted, no side effects. Tests assert this via repeated-invocation paired md5 hashing across `target-state.md`, `events.jsonl`, and the fleet `00-INDEX.md`. `--json` emits isoformat strings for any datetime parsed out of the manifest frontmatter, so it never crashes on a real manifest.
 
 ### See also
 

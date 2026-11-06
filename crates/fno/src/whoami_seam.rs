@@ -203,4 +203,24 @@ mod tests {
             assert!(classify(&os(forwarded)).is_none(), "{forwarded:?}");
         }
     }
+
+    #[test]
+    fn the_merge_keeps_python_and_reads_unmeasured_on_failure() {
+        // AC5-HP: every Python key survives, sorted, beside `turns`.
+        let python = "{\n  \"fleet\": {\"a\": 1},\n  \"session\": null\n}\n";
+        let merged = merge_json(python, Ok(r#"{"last_turn": {}, "denied": {}}"#.into())).unwrap();
+        let v: Value = serde_json::from_str(&merged).unwrap();
+        let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["fleet", "session", "turns"]);
+        assert!(v["turns"]["last_turn"].is_object());
+        // AC6-ERR: a missing sibling binary leaves Python's lines unchanged.
+        let text = append_text("project: fno", Err("fno-agents could not run".into()));
+        assert_eq!(
+            text,
+            "project: fno\nturns: unmeasured (fno-agents could not run)\n"
+        );
+        let v: Value =
+            serde_json::from_str(&merge_json(python, Err("bound".into())).unwrap()).unwrap();
+        assert_eq!(v["turns"]["basis"], "unmeasured: bound");
+    }
 }
