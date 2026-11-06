@@ -380,6 +380,13 @@ pub const STEPS: &[Step] = &[
         effect: "prints the Bash(fno:*) permissions.allow example; never edits a harness settings file",
     },
     Step {
+        id: "claude-auto-mode",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Add Footnote's Auto Mode rules to Claude Code user settings?",
+        effect: "merges narrow ~/.fno state and role rules into ~/.claude/settings.json, preserving $defaults and all other settings; does not change permissions, credentials, or sandbox settings",
+    },
+    Step {
         id: "worktree-policy",
         layer: Layer::Project,
         kind: Kind::Act,
@@ -1302,6 +1309,26 @@ fn step_permission_rules(rep: &mut Report) {
     );
 }
 
+fn step_claude_auto_mode(rep: &mut Report) {
+    let path = crate::cli_hooks::user_claude_settings_path();
+    let result = crate::cli_hooks::install_claude_auto_mode_allow(&path);
+    if let Some(error) = result.error {
+        let message = format!("claude-auto-mode: {error}");
+        rep.rows
+            .push(row("needs_human", "config_set_refused", message.clone()));
+        rep.needs_human.push(message);
+    } else if result.changed {
+        rep.done.push(format!(
+            "claude-auto-mode: merged Footnote rules into {}",
+            path.display()
+        ));
+        rep.paths.push(path.display().to_string());
+    } else {
+        rep.skipped
+            .push("claude-auto-mode: required rules are already present".into());
+    }
+}
+
 /// Why a verify read failed, in one short clause: the timeout as
 /// bounded_for words it, else the first line naming a problem and the line
 /// after it (a doctor prints its header lines first), else the command to
@@ -2114,6 +2141,7 @@ pub(crate) fn apply_wizard_pending(
             "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
             "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
+            "claude-auto-mode" => step_claude_auto_mode(&mut rep),
             _ => rep.skipped.push(format!("{}: no runner", p.id)),
         }
         let outcome = step_outcome(p.id, &rep.done[done_len..], &rep.skipped[skipped_len..]);
@@ -2486,6 +2514,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "messaging") => step_messaging(&exe, prompting, None, &mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
+            (Layer::Global, "claude-auto-mode") => step_claude_auto_mode(&mut rep),
             (Layer::Global, "join") => {
                 if let Some(p) = &profile {
                     step_join(&exe, p, &diff_rows, &mut rep);

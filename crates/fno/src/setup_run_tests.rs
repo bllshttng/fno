@@ -90,6 +90,17 @@ fn the_argv_surface_parses_and_refuses() {
 }
 
 #[test]
+fn claude_auto_mode_setup_requires_explicit_approval() {
+    let step = STEPS
+        .iter()
+        .find(|step| step.id == "claude-auto-mode")
+        .expect("Claude Auto Mode setup step");
+    assert_eq!(step.layer, Layer::Global);
+    assert_eq!(step.kind, Kind::Approve);
+    assert!(step.question.to_lowercase().contains("auto mode"));
+}
+
+#[test]
 fn the_no_prompt_decision_never_depends_on_one_signal() {
     // Explicit --yes wins even on a TTY.
     assert!(no_prompt(true, true, false));

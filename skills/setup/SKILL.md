@@ -43,6 +43,8 @@ fno config setup run --dry-run --json
 
 Apply nothing of kind `approve`. An approve needs a person.
 
+The `claude-auto-mode` approve step adds Footnote's narrow state and role rules to `~/.claude/settings.json`. The person must approve that step; unattended runs may report it as proposed but do not write Claude Code settings, credentials, or sandbox options.
+
 ## Read the report
 
 The run writes `<state_dir>/sidecar/wizard-report.json` and prints `wizard-report: <path>` as its last line. Check two things before you speak for the run: `run_id` is newer than your launch, and `status` is not `running` (a run writes a running stub first and the final report over it). Then say three things: the red rows with their fix, the files written, and `next_action`.
