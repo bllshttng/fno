@@ -604,7 +604,7 @@ One row per in-scope file. The contracts column names each kept contract. For fi
 
 Ruling: the lead's fmail-413fa166cae5, recorded on the node. AC3 stop-short is lawful under rule 6. Parity goldens are not keepers by default: where the Python leg is retired, rule 5 and principle 9 delete them. Units below a real-process binary test go under rule 4. The declaration probe (1376 or less) misses at 2020. This section and the PR body record the miss.
 
-Base `fa4eb5d2189` (origin/main at start). 575 files, 2612 declarations at base. After the pass: 492 files, 2020 declarations. The collected-cases and Rust job minutes fill from CI once the PR runs.
+Base `fa4eb5d2189` (origin/main at start). 575 files, 2612 declarations at base. After the pass: 492 files, 2020 declarations. The collected-cases and Rust job minutes below are read from the two cli-ci runs cited in the Counts table.
 
 ### Method
 
@@ -735,8 +735,10 @@ One row per file this pass changed. The contracts column carries the kept test n
 |---|---:|---:|
 | Declarations (path-rule census) | 2612 | 2020 |
 | In-scope files | 575 | 492 |
-| Collected cases | from CI | from CI |
-| Rust job minutes | from CI | from CI |
+| Collected cases | 5,587 (cli-ci run 42170252779) | 5,002 (cli-ci run 42208794990) |
+| Rust job minutes | 103 (same run) | 107 (same run) |
+
+Collected cases are the nextest lib+bins suite plus the four integration shards: 4368+1219 before, 3992+1010 after. The branch carries base and this PR's cuts only (35 main commits behind), so the delta is the G2 cut as CI ran it: 585 fewer collected cases. Job minutes rose four minutes because shard 2 slowed; fewer tests did not make the wall clock shorter.
 
 The declaration probe in the plan frontmatter (1376 or less) misses at 2020. The probe miss is the recorded fact. The kept tests above the half carry their naming in the rows above, per the lead's AC3 ruling.
 
