@@ -97,3 +97,4 @@ codex	SessionStart	context-run.sh	wait	-
 codex	SessionStart	session-start-using-fno.sh	wait	-
 codex	SessionStart	codex-app-server-nudge-session-start.sh	wait	-
 codex	SessionStart	operator-capture-nudge.sh	wait	-
+claude	PostToolUse	ask-push.sh	wait	-
