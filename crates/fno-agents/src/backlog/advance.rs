@@ -684,26 +684,6 @@ pub fn live_worked_overlay() -> Result<BTreeMap<String, Vec<String>>, String> {
         .collect())
 }
 
-/// [`live_worked_overlay`] for one node: the same fold over that node's row
-/// alone, so a spawn guard never waits on a whole-graph strict read.
-pub fn live_worked_overlay_for(node_id: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
-    let graph = super::settings::graph_path();
-    let entries = crate::graph_store::read_rows_where_strict(
-        &graph,
-        &crate::backlog::RowQuery {
-            filter: crate::backlog::api::NodeFilter {
-                id_in: Some(vec![node_id.to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    )
-    .map_err(|_| "the graph is unreadable".to_string())?;
-    Ok(crate::backlog::worked::live_worked_node_ids(&entries)?
-        .into_iter()
-        .collect())
-}
-
 /// The family-2 pre-dispatch verdict shared by every node-dispatch caller.
 #[allow(clippy::too_many_arguments)]
 pub fn observe_node_claim(

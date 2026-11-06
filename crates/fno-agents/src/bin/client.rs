@@ -1618,11 +1618,18 @@ async fn run(
             // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
             // the pane spine answers every harness arm itself - the Python
             // bounce this branch kept for unseated shapes is deleted.
-            return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
-                let code =
-                    fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
-                fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name)
-            });
+            let caller_session =
+                fno_agents::spawn_promote::gate_input(promotion.as_ref()).caller_session;
+            return fno_agents::spawn_guard::run_guarded_pane(
+                &params,
+                &agent_name,
+                caller_session.as_deref(),
+                || {
+                    let code =
+                        fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+                    fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name)
+                },
+            );
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; a spawn no arm takes falls
@@ -2449,8 +2456,14 @@ fn maybe_run_spawn(
     // The family-2 node guard runs after the cwd it judges and before the
     // gate. The caller owns the hold, so a codex thread keeps its keys across
     // the daemon RPC, and every exit before a proven launch releases them.
+    let caller_session = fno_agents::spawn_promote::gate_input(promotion).caller_session;
     let guard_started = std::time::Instant::now();
-    *hold = match fno_agents::spawn_guard::guard_client_spawn(params, name, &cwd) {
+    *hold = match fno_agents::spawn_guard::guard_client_spawn(
+        params,
+        name,
+        &cwd,
+        caller_session.as_deref(),
+    ) {
         Ok(hold) => hold,
         Err(code) => return Some(code),
     };
