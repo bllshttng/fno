@@ -4,6 +4,8 @@ use crate::proto::{AnswerOption, AnswerablePrompt, PaneMeta, Reach, TabMeta};
 mod chrome_hit_helpers;
 #[path = "client/tests/density_button_tests.rs"]
 mod density_button_tests;
+#[path = "client/tests/overlay_pad_tests.rs"]
+mod overlay_pad_tests;
 #[path = "client/tests/sideline_footer_tests.rs"]
 mod sideline_footer_tests;
 use crate::client::{
@@ -13,7 +15,6 @@ use crate::client::{
 use crate::vt::frame_text;
 use chrome_hit_helpers::{chrome_hit_label, cmds};
 
-// x-0719: the nav family lives in its own module.
 #[path = "client/tests/confirm_anchor_tests.rs"]
 mod confirm_anchor_tests;
 #[path = "client/tests/nav_tests.rs"]
@@ -24,7 +25,6 @@ mod sideline_table_tests;
 #[path = "client/tests/sweep_both_tests.rs"]
 mod sweep_both_tests;
 
-// The x-9fd0 portal-placement-picker family lives in its own module too.
 #[path = "client/tests/portal_pick_tests.rs"]
 mod portal_pick_tests;
 
@@ -307,7 +307,6 @@ fn new_tab_prompt_arms_rename_on_the_materialized_tab() {
     );
 }
 
-// x-df4c US4 helper: an AgentRow in squad 1 with the given tab/badge/exit.
 fn tab_agent(tab: Option<TabId>, badge: Option<AgentBadge>, exited: bool) -> AgentRow {
     AgentRow {
         reach: Reach::Locate,

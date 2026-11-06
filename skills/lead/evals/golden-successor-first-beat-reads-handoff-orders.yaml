@@ -1,0 +1,28 @@
+# Required by check-skill-has-evals when the SKILL.md changed: the skill's own
+# lesson, graded - a successor lead reads the handoff orders from the beat
+# output, before it dispatches anything.
+id: golden-successor-first-beat-reads-handoff-orders
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A successor lead takes over a scope mid-term. The predecessor left its merge order in the canon doc's `fno:session` blocks. The successor is about to run its first `fno agents org checkin`, and after that it plans to spawn workers.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `line: <the beat output line that carries the predecessor's session blocks>`. The second line is exactly `beats: first-beat-and-changed` when that line prints on a successor's first beat and on a beat whose blocks changed since its last, otherwise `beats: other`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^line: *(Handoff orders|handoff orders)'"
+  - kind: exit
+    command: "sed -n 2p decision.md | tr -d '`\\r' | grep -Eq '^beats: *first-beat-and-changed'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: ci-gate, ref: "check-skill-has-evals"}
+  quote: "On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds)."
+  expected: "line: Handoff orders (canon doc), beats: first-beat-and-changed."
+  rule: "skills/lead: a successor's first beat reads the handoff orders from the beat output, before it dispatches anything."
+  failure_type: stale-state
+  cost: rework
+  outcome: failed

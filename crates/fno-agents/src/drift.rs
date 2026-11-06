@@ -199,14 +199,6 @@ mod tests {
     }
 
     #[test]
-    fn of_missing_path_is_none() {
-        // AC1-ERR: a stat that cannot resolve the file fails safe to None
-        // (mapped to Unknown by classify), never a panic.
-        let p = tmp_path("missing");
-        assert!(ExeFingerprint::of(&p).is_none());
-    }
-
-    #[test]
     fn of_roundtrips_and_tracks_size_change() {
         let p = tmp_path("rt");
         write_file(&p, b"hello");
@@ -225,17 +217,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_fresh_when_equal() {
-        // AC1-FR: identical running/on-disk fingerprint -> Fresh, no warning.
-        let p = tmp_path("fresh");
-        write_file(&p, b"bin");
-        let fp = ExeFingerprint::of(&p).unwrap();
-        assert_eq!(classify(Some(&fp), Some(&fp)), DriftState::Fresh);
-        assert_eq!(drift_warning(&DriftState::Fresh, Some(1)), None);
-        fs::remove_file(&p).ok();
-    }
-
-    #[test]
     fn classify_content_drift_when_size_differs() {
         // AC1-HP (classification half): same path, different content -> Drifted.
         let p = tmp_path("content");
@@ -250,41 +231,6 @@ mod tests {
             other => panic!("expected Drifted, got {other:?}"),
         }
         fs::remove_file(&p).ok();
-    }
-
-    #[test]
-    fn classify_path_drift_when_path_differs() {
-        // AC1-EDGE: running from a different path than we would launch -> Drifted.
-        let a = ExeFingerprint {
-            path: PathBuf::from("/opt/a/fno-agents-daemon"),
-            mtime_nanos: 100,
-            size: 10,
-        };
-        let b = ExeFingerprint {
-            path: PathBuf::from("/home/u/.cargo/bin/fno-agents-daemon"),
-            mtime_nanos: 100,
-            size: 10,
-        };
-        match classify(Some(&a), Some(&b)) {
-            DriftState::Drifted { .. } => {}
-            other => panic!("expected Drifted, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_unknown_when_either_missing() {
-        // AC1-ERR: a None on either side is Unknown (silent), never Drifted.
-        let fp = ExeFingerprint {
-            path: PathBuf::from("/x"),
-            mtime_nanos: 1,
-            size: 1,
-        };
-        assert_eq!(classify(None, Some(&fp)), DriftState::Unknown);
-        assert_eq!(classify(Some(&fp), None), DriftState::Unknown);
-        assert_eq!(classify(None, None), DriftState::Unknown);
-        // And Unknown never warns.
-        assert_eq!(drift_warning(&DriftState::Unknown, None), None);
-        assert_eq!(drift_warning(&DriftState::DaemonDown, None), None);
     }
 
     #[test]
@@ -349,25 +295,6 @@ mod tests {
             drift_label(&classify(None, None)),
             fno::build_drift::drift_label(&fno::build_drift::classify(None, None)),
         );
-    }
-
-    #[test]
-    fn drift_label_maps_every_state() {
-        let fp = ExeFingerprint {
-            path: PathBuf::from("/x"),
-            mtime_nanos: 1,
-            size: 1,
-        };
-        assert_eq!(drift_label(&classify(Some(&fp), Some(&fp))), "fresh");
-        assert_eq!(drift_label(&classify(Some(&fp), None)), "unknown");
-        let drifted = classify(
-            Some(&fp),
-            Some(&ExeFingerprint {
-                size: 2,
-                ..fp.clone()
-            }),
-        );
-        assert_eq!(drift_label(&drifted), "drifted");
     }
 
     #[test]

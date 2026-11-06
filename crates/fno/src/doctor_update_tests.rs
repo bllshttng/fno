@@ -35,6 +35,31 @@ fn only_no_source_without_a_marker_is_a_release_install() {
 }
 
 #[test]
+fn receipt_channel_wins_only_over_the_cwd_derived_pin() {
+    use crate::release_install::InstallChannel;
+    let wheel = InstallChannel::Wheel {
+        tool_root: PathBuf::from("/tools/fno"),
+    };
+    // The 2026-11-06 shape: a release install whose pin resolved the checkout
+    // the shell sits in takes the release path, never a source reinstall of
+    // that checkout.
+    assert!(receipt_channel_wins(&wheel, Some("checkout")));
+    assert!(receipt_channel_wins(
+        &InstallChannel::Binary,
+        Some("checkout")
+    ));
+    // Deliberate input and a source-channel exe keep the source path.
+    for origin in ["explicit", "env", "cache", "candidate"] {
+        assert!(!receipt_channel_wins(&wheel, Some(origin)), "{origin}");
+    }
+    assert!(!receipt_channel_wins(&wheel, None));
+    assert!(!receipt_channel_wins(
+        &InstallChannel::Other,
+        Some("checkout")
+    ));
+}
+
+#[test]
 fn parse_args_reads_every_flag() {
     let f = parse_args(&os(&[
         "--source",

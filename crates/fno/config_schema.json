@@ -6041,7 +6041,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Days between scheduled regression-tier runs on the pr-watch tick (0 disables)."
+   "doc": "Days between scheduled regression-tier runs; the daemon checks each minute (0 disables)."
   },
   {
    "path": "evals.stale_days",

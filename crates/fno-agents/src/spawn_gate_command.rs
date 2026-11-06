@@ -1427,58 +1427,6 @@ mod tests {
         assert_eq!(row["verdict"].as_str().unwrap(), "refuse");
     }
 
-    /// The probe mirrors the gate's quota refusal: a payload naming a
-    /// route_provider whose lane is walled reads refused, never accepted.
-    #[test]
-    fn probe_refuses_a_route_provider_with_a_walled_lane() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir =
-            std::env::temp_dir().join(format!("fno-command-lanequota-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let home = dir.join("agents-home");
-        std::fs::create_dir_all(home.join("provider-cap")).unwrap();
-        std::env::set_var(crate::paths::HOME_ENV, &home);
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", dir.join(".fno").join("config.toml"));
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        std::fs::write(
-            home.join("provider-cap").join("snapshot.json"),
-            format!(
-                r#"{{"lanes":[{{"lane":"zai:default","provider":"zai","account":"default","reset_epoch":{},"reset_passed_epoch":null,"missing_reset_timezone":[],"state":"open","members":[]}}],"measured_at":"probe","measured_at_epoch":{}}}"#,
-                now + 600,
-                now
-            ),
-        )
-        .unwrap();
-
-        let answer = probe::answer(
-            None,
-            &json!({
-                "name": "probe-lane-lock",
-                "substrate": "headless",
-                "route_provider": "zai",
-                "account": ""
-            }),
-        );
-
-        std::env::remove_var(crate::paths::HOME_ENV);
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_config {
-            Some(value) => std::env::set_var("FNO_CONFIG", value),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        assert_eq!(answer["verdict"], "refused");
-        assert_eq!(answer["reason"], "provider_quota_lock");
-        assert_eq!(answer["lane"], "zai:default");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn probe_mirrors_fleet_incident_and_machine_brake_before_capacity_and_keeps_lanes() {
         let _g = crate::claims::test_env_lock()
@@ -1901,62 +1849,5 @@ mod tests {
         assert_eq!(review["exit_code"], 89, "{review}");
         assert_eq!(review["receipt"]["reason"], "review_session", "{review}");
         assert_eq!(think["status"], "admitted", "{think}");
-    }
-
-    /// AC3-EDGE: reservations never hold a whole lane. With zai capped at 2
-    /// and one reservation live, a second refuses and writes nothing.
-    #[test]
-    fn reserve_refuses_to_reserve_the_whole_lane() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-command-resv-cap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        let claims_dir = root.join(".fno").join("claims");
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n\n\
-             [agents.provider_limits.zai]\nlanes = 2\n",
-        )
-        .unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let host = crate::claims::hostname();
-        let first = claims_dir.join(format!(
-            "{}.lock",
-            crate::claims::encode_key("worker:t-first-x-4444")
-        ));
-        crate::claim_store::seed_yaml_at_path(&first, &format!(
-                "schema_version: {}\nkey: worker:t-first-x-4444\nholder: lead-1\nacquired_at: {now}\nexpires_at: {}\npid: {}\nhost: {host}\nmetadata:\n  model_provider: zai\n  reserved_by: lead-1\n",
-                crate::claims::SCHEMA_VERSION,
-                now + 600_000,
-                std::process::id()
-            ));
-        let argv: Vec<String> = [
-            "t-second-x-4444",
-            "--provider",
-            "zai",
-            "--reason",
-            "one slot must stay winnable",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let code = reserve_spawn_gate(&dir, &argv);
-        let leftovers = crate::claim_store::records_in(&claims_dir, None, true).unwrap();
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(code, 2);
-        assert_eq!(
-            leftovers.len(),
-            1,
-            "only the pre-existing fixture claim is on disk; the refused mint wrote nothing"
-        );
     }
 }

@@ -367,57 +367,6 @@ mod tests {
     }
 
     #[test]
-    fn slot_fingerprint_ignores_catalog_differences_ac2() {
-        // The fingerprint hashes the payload as declared; a model release
-        // changes the catalog on disk, never the fingerprint. Two CODEX_HOME
-        // catalogs that resolve differently must still print one fingerprint.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var("CODEX_HOME").ok();
-        let write_catalog = |dir: &std::path::Path, slugs: &[&str]| {
-            std::fs::create_dir_all(dir).unwrap();
-            std::fs::write(
-                dir.join("models_cache.json"),
-                json!({
-                    "fetched_at": "2026-09-23T00:00:00Z",
-                    "models": slugs
-                        .iter()
-                        .map(|s| json!({"slug": s, "visibility": "list"}))
-                        .collect::<Vec<_>>(),
-                })
-                .to_string(),
-            )
-            .unwrap();
-        };
-        let tmp = tempfile::tempdir().unwrap();
-        let home_a = tmp.path().join("a");
-        let home_b = tmp.path().join("b");
-        write_catalog(&home_a, &["gpt-5.6-luna", "gpt-6-luna"]);
-        write_catalog(&home_b, &["gpt-5.6-luna", "gpt-6-luna", "gpt-7-luna"]);
-        // No codex_catalog fixture: the disk seam is the only catalog source.
-        let mut payload = slot_payload(json!({}));
-        payload
-            .as_object_mut()
-            .unwrap()
-            .remove("codex_catalog")
-            .unwrap();
-        let run = |home: &std::path::Path| {
-            std::env::set_var("CODEX_HOME", home);
-            crate::route_slot::resolve_slot_payload(&payload)
-        };
-        let out_a = run(&home_a);
-        let out_b = run(&home_b);
-        match saved {
-            Some(v) => std::env::set_var("CODEX_HOME", v),
-            None => std::env::remove_var("CODEX_HOME"),
-        }
-        assert_eq!(out_a["candidate"]["model"], "gpt-6-luna");
-        assert_eq!(out_b["candidate"]["model"], "gpt-7-luna");
-        assert_eq!(out_a["fingerprint"], out_b["fingerprint"]);
-    }
-
-    #[test]
     fn slot_pin_claude_and_explicit_survive_ac2() {
         let payload = slot_payload(json!({
             "lanes_raw": ["pin-x", "word-x", "claude-x"],

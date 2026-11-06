@@ -1,10 +1,10 @@
 //! `evals-arm`: the eval bank's scheduled writer, native.
 //!
-//! Two modes behind one command. **Tick mode** (default) is the pr-watch tick's
-//! evals leg: when the newest regression-tier run is older than
+//! Two modes behind one command. **Tick mode** (default) is the daemon's
+//! scheduled evals arm: when the newest regression-tier run is older than
 //! `evals.schedule_days` it launches **run mode** detached (new session,
 //! stdio on /dev/null) and holds the `evals:scheduled-run` claim across
-//! ticks, so the 480s tick budget never bounds the task-timeout sum. The bank holds one reserved slot: a fleet at `max_live` never
+//! daemon ticks, so the pr-watch deadline never bounds the task-timeout sum. The bank holds one reserved slot: a fleet at `max_live` never
 //! blocks the launch (only a fleet incident or low ram does), so a busy
 //! machine cannot starve the bank the way a `fleet_full` skip every tick
 //! did. **Run mode** (`--run`) is the child:

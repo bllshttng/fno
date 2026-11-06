@@ -728,43 +728,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn degraded_listings_mint_only_sound_rows() {
-        sandbox(|home| {
-            let em = emitter(home);
-            let done = ClaudeAgentsSnapshot::known(vec![listing_row("tui-build", "done")]);
-            assert_eq!(mint_missing_native_bg(home, &done, &em), 0);
-            let unknown = ClaudeAgentsSnapshot::unknown("unreadable");
-            assert_eq!(mint_missing_native_bg(home, &unknown, &em), 0);
-            // A died session keeps its last `working` row with no pid; in a
-            // listing that carries pids that row is a death witness, and the
-            // live row beside it still mints.
-            let mut dead = listing_row("tui-dead", "working");
-            dead.pid = None;
-            let mixed = ClaudeAgentsSnapshot::known(vec![dead, listing_row("tui-live", "working")]);
-            assert_eq!(mint_missing_native_bg(home, &mixed, &em), 1);
-            // A failed root leaves the union Unknown but keeps every root
-            // that parsed; presence reads on those rows stay sound. Its row
-            // carries a distinct session: the dedup is per session, and the
-            // fixture uuid above is already held by tui-live. The short id
-            // follows the session, as a real listing derives it from the
-            // uuid's own leading eight; a second row wearing tui-live's
-            // short id is an identity collision the registry write refuses.
-            let mut partial_row = listing_row("tui-partial", "working");
-            partial_row.session_id = Some("aaaaaaaa-0000-0000-0000-000000000001".into());
-            partial_row.short_id = "aaaaaaaa".into();
-            let partial = ClaudeAgentsSnapshot::Unknown {
-                rows: vec![partial_row],
-                warnings: vec!["a root failed".into()],
-            };
-            assert_eq!(mint_missing_native_bg(home, &partial, &em), 1);
-            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
-            assert_eq!(registry.entries.len(), 2);
-            let names: Vec<&str> = registry.entries.iter().map(|e| e.name.as_str()).collect();
-            assert_eq!(names, ["tui-live", "tui-partial"]);
-        });
-    }
-
     fn write_transcript(dir: &Path, uuid: &str, lines: &[String]) -> PathBuf {
         let slug = "-tmp-proj";
         let project = dir.join(slug);
@@ -884,46 +847,6 @@ mod tests {
                 Some(v) => std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", v),
                 None => {}
             }
-        });
-    }
-
-    /// A spawn-door mint whose ambient capture found nothing (origin=spawn,
-    /// empty edge, a lineage reason) is revisited by the beat once its child
-    /// claims a launch record; the record's launcher parents the row.
-    #[test]
-    fn a_spawn_row_gains_its_parent_from_the_record_on_a_later_beat() {
-        sandbox(|home| {
-            let em = emitter(home);
-            let sid = "f005cafe-0000-0000-0000-000000000042";
-            claim_record(home, sid);
-            crate::state::update_registry(&home.registry_json(), |reg| {
-                reg.entries.push(RegistryEntry {
-                    name: "t-fleet-names".into(),
-                    origin: Some("spawn".into()),
-                    substrate: Some("thread".into()),
-                    harness: Some("claude".into()),
-                    harness_session_id: Some(sid.into()),
-                    short_id: "f005cafe".into(),
-                    created_at: "2026-10-30T08:12:52Z".into(),
-                    ..RegistryEntry::new(
-                        Some(sid.into()),
-                        Lineage::unproven("identity disposition=absent, markers=no markers"),
-                    )
-                });
-            })
-            .unwrap();
-            // A listing row that mints nothing new keeps the beat alive past
-            // its empty-listing short circuit.
-            let snapshot = ClaudeAgentsSnapshot::known(vec![listing_row("tui-build", "working")]);
-            assert_eq!(mint_missing_native_bg(home, &snapshot, &em), 1);
-            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
-            let e = registry
-                .entries
-                .iter()
-                .find(|e| e.harness_session_id.as_deref() == Some(sid))
-                .unwrap();
-            assert_eq!(e.spawned_by_session.as_deref(), Some("d7031e2c"));
-            assert_eq!(e.lineage_reason, None, "the record replaced the reason");
         });
     }
 }

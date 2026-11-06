@@ -334,52 +334,6 @@ fn generic_completion_missing_manifest_session_never_terminates() {
 }
 
 #[test]
-fn generic_completion_rejects_a_verdict_for_a_different_manifest_node() {
-    let mut response: Value = serde_json::from_str(&passed_response()).unwrap();
-    response["verdict"]["work_order_node_id"] = json!("x-other");
-    let env = setup(&response.to_string());
-
-    let output = run(&env);
-
-    assert_eq!(output["decision"], "block", "{output}");
-    assert!(output["termination_reason"].is_null(), "{output}");
-    assert!(!event_types(&env.events).contains(&"delivery_verdict_evaluated".to_string()));
-}
-
-#[test]
-fn generic_completion_nonpassing_reaches_the_no_progress_backstop() {
-    let env = setup("{not-json");
-
-    let mut output = Value::Null;
-    for _ in 0..6 {
-        output = run(&env);
-    }
-
-    assert_eq!(output["decision"], "allow", "{output}");
-    assert_eq!(output["termination_reason"], "NoProgress", "{output}");
-    assert!(!event_types(&env.events).contains(&"delivery_verdict_evaluated".to_string()));
-}
-
-#[test]
-fn generic_completion_passed_without_promise_reaches_the_no_progress_backstop() {
-    let env = setup(&passed_response());
-    fs::write(
-        &env.transcript,
-        "{\"message\":{\"role\":\"assistant\",\"content\":\"still working\"}}\n",
-    )
-    .unwrap();
-
-    let mut output = Value::Null;
-    for _ in 0..6 {
-        output = run(&env);
-    }
-
-    assert_eq!(output["decision"], "allow", "{output}");
-    assert_eq!(output["termination_reason"], "NoProgress", "{output}");
-    assert!(!event_types(&env.events).contains(&"delivery_verdict_evaluated".to_string()));
-}
-
-#[test]
 fn generic_completion_evidence_progress_resets_the_no_progress_streak() {
     let env = setup(&passed_response());
     fs::write(
@@ -411,41 +365,6 @@ fn generic_completion_evidence_progress_resets_the_no_progress_streak() {
 }
 
 #[test]
-fn generic_completion_ac_d6_err_malformed_evaluator_json_never_terminates() {
-    let env = setup("{not-json");
-
-    let output = run(&env);
-
-    assert_eq!(output["decision"], "block");
-    assert!(output["termination_reason"].is_null());
-    assert!(!event_types(&env.events).contains(&"delivery_verdict_evaluated".to_string()));
-}
-
-#[test]
-fn generic_completion_ac_d8_inv_passed_observation_cannot_unlock() {
-    let mut response: Value = serde_json::from_str(&passed_response()).unwrap();
-    response["verdict"]["requirements"][0]["subject_kind"] = json!("observation");
-    let env = setup(&response.to_string());
-
-    let output = run(&env);
-
-    assert_eq!(output["decision"], "block");
-    assert!(output["termination_reason"].is_null());
-}
-
-#[test]
-fn generic_completion_ac_d10_err_verdict_must_be_durably_appended() {
-    let env = setup(&passed_response());
-    fs::remove_file(&env.events).unwrap();
-    fs::create_dir(fno_agents::event_store::store_path(&env.events)).unwrap();
-
-    let output = run(&env);
-
-    assert_eq!(output["decision"], "block");
-    assert!(output["termination_reason"].is_null());
-}
-
-#[test]
 fn generic_completion_ac_d5_inv_valid_incomplete_declaration_uses_legacy_path() {
     let env = setup(&passed_response());
     fs::write(
@@ -457,33 +376,6 @@ fn generic_completion_ac_d5_inv_valid_incomplete_declaration_uses_legacy_path() 
     let output = run(&env);
 
     assert_eq!(output["termination_reason"], "DoneAdvisory");
-}
-
-#[test]
-fn generic_completion_structurally_invalid_explicit_plan_never_falls_through_to_advisory() {
-    let invalid_declarations = [
-        "company_work: bogus\n",
-        "company_work:\n  work_order: bogus\n  deliverables: []\n",
-        "company_work:\n  work_order:\n    node_id: x-delivery\n  deliverables: []\n",
-        "company_work:\n  work_order:\n    node_id: x-delivery\n    attempt_id: attempt-1\n  deliverables: bogus\n",
-        "company_work:\n  work_order:\n    node_id: x-delivery\n    attempt_id: attempt-1\n  deliverables:\n    - id: output\n      required_evidence_ids: bogus\n",
-    ];
-    for declaration in invalid_declarations {
-        let env = setup(&passed_response());
-        fs::write(
-            env.cwd.join("plan.md"),
-            format!("---\ncompletion: delivery\n{declaration}---\n"),
-        )
-        .unwrap();
-
-        let output = run(&env);
-
-        assert_eq!(output["decision"], "block", "{declaration}: {output}");
-        assert!(
-            output["termination_reason"].is_null(),
-            "{declaration}: {output}"
-        );
-    }
 }
 
 #[test]

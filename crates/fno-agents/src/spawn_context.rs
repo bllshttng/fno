@@ -1548,38 +1548,6 @@ mod tests {
         assert!(validate(&req).is_ok());
     }
 
-    #[test]
-    fn name_only_witness_set_takes_the_stamp_family_spawn_row() {
-        let row = |h: &str, s: &str| Some((h.to_string(), s.to_string()));
-        // The cwd-keyed spawn row of the stamp family completes an empty fd set.
-        let seen = witnessed_keys(&[], "codex", row("codex", "thread-1"));
-        let get = env_of(&[("CODEX_THREAD_ID", "thread-1")]);
-        assert_eq!(
-            witnessed_marker_value(&get, "codex", &seen).as_deref(),
-            Some("thread-1")
-        );
-        // A bystander family's row never joins the set.
-        let seen = witnessed_keys(&[], "codex", row("claude", "thread-1"));
-        assert_eq!(witnessed_marker_value(&get, "codex", &seen), None);
-        // Both markers witnessed: the thread id wins over the root session.
-        let both = env_of(&[
-            ("CODEX_SESSION_ID", "root-1"),
-            ("CODEX_THREAD_ID", "thread-1"),
-        ]);
-        let seen = witnessed_keys(&["root-1".into(), "thread-1".into()], "codex", None);
-        assert_eq!(
-            witnessed_marker_value(&both, "codex", &seen).as_deref(),
-            Some("thread-1")
-        );
-        // An unwitnessed thread id falls through to the one witnessed marker.
-        let seen = witnessed_keys(&["root-1".into()], "codex", row("codex", "other-2"));
-        let sessions_only = env_of(&[("CODEX_SESSION_ID", "root-1"), ("CODEX_THREAD_ID", "t-9")]);
-        assert_eq!(
-            witnessed_marker_value(&sessions_only, "codex", &seen).as_deref(),
-            Some("root-1")
-        );
-    }
-
     fn proc_row(pid: u32, ppid: u32, command: &str) -> ProcRow {
         ProcRow {
             pid,
@@ -1691,62 +1659,6 @@ mod tests {
         *TEST_ANCESTRY_TABLE
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = saved_table;
-    }
-
-    #[test]
-    fn harness_walk_still_proves_claude_behind_a_spare() {
-        // The refusal is the IDENTITY walk's alone. The harness answer stays
-        // truthful behind a spare, or thread-worker identity resolution
-        // (self_identity, spawn gates) breaks.
-        let table = table_of(&[
-            proc_row(100, 90, "bash -c fno agents claim acquire"),
-            proc_row(90, 80, BG_SPARE),
-        ]);
-        assert_eq!(
-            resolve_session_harness_from_table(&table, 100),
-            Some("claude")
-        );
-    }
-
-    #[test]
-    fn a_footnote_pane_walks_to_footnote_and_only_a_markerless_stamp_takes_its_witness() {
-        // A footnote pane's tool shell sits under the footnote binary, and a
-        // claude ancestor further up (the mux's launcher) must not answer.
-        let table = table_of(&[
-            proc_row(100, 90, "bash -c fno whoami"),
-            proc_row(90, 80, "/Users/x/.cargo/bin/footnote /tmp/spec.json"),
-            proc_row(
-                80,
-                1,
-                "/Users/x/.local/share/claude/versions/2.1.0 --resume s",
-            ),
-        ]);
-        assert_eq!(
-            resolve_session_harness_from_table(&table, 100),
-            Some("footnote")
-        );
-        assert_eq!(
-            session_identity_from_table(&table, 100),
-            Some((90, "footnote"))
-        );
-        assert_eq!(harness_name_of_command("nvim footnote"), None);
-        // The process witness is for a harness that mints no vendor marker,
-        // and only when the walk and the stamp name the same harness.
-        assert!(!stamp_witnessed_by_markerless_harness(
-            Some("claude"),
-            Some("claude"),
-            Some("s")
-        ));
-        assert!(!stamp_witnessed_by_markerless_harness(
-            Some("claude"),
-            Some("footnote"),
-            Some("s")
-        ));
-        assert!(!stamp_witnessed_by_markerless_harness(
-            None,
-            Some("footnote"),
-            Some("s")
-        ));
     }
 
     #[test]

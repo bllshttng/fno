@@ -299,8 +299,10 @@ pub fn sweep(
 /// AB/BA ordering would deadlock both operations. Under the registry lock a
 /// non-terminal row holding the scope refuses the whole vacate; stale team
 /// fields on terminal rows clear. Then, under the manifest flock: re-read
-/// the manifest and refuse a successor armed mid-sweep, remove the manifest
-/// and its cancel sentinel, and journal one `agent_team_vacated` with
+/// the manifest and refuse a successor armed mid-sweep, rename the manifest
+/// to `<name>.md.vacated` (kept, so a boot revival that re-seats the holder
+/// can restore the role) and remove the cancel sentinel, and journal one
+/// `agent_team_vacated` with
 /// cause `holder_dead`. A refusal at the registry write touches nothing; a
 /// refusal at the manifest re-read leaves the manifest standing.
 pub(crate) fn vacate(
@@ -366,8 +368,24 @@ pub(crate) fn vacate(
         let grantor = crate::claude_adopt::manifest_field(&content, "role_grantor");
         let level = crate::claude_adopt::manifest_field(&content, "role_level")
             .and_then(|v| v.parse::<u32>().ok());
-        fs::remove_file(manifest_path)
-            .map_err(|e| format!("cannot remove {}: {e}", manifest_path.display()))?;
+        // The manifest is renamed aside, never destroyed: a boot revival
+        // that re-seats this holder reads the role grant back out of the
+        // .vacated file. A failed rename refuses the whole vacate (the role
+        // is kept and retried next pass) rather than leave the manifest
+        // standing as an always-again candidate.
+        let vacated_path = match manifest_path.file_name() {
+            Some(name) => {
+                manifest_path.with_file_name(format!("{}.vacated", name.to_string_lossy()))
+            }
+            None => {
+                return Err(format!(
+                    "cannot vacate {}: the manifest has no file name",
+                    manifest_path.display()
+                ))
+            }
+        };
+        fs::rename(manifest_path, &vacated_path)
+            .map_err(|e| format!("cannot set aside {}: {e}", manifest_path.display()))?;
         let cancelled = manifest_path.with_extension("cancelled");
         if cancelled.is_file() {
             let _ = fs::remove_file(&cancelled);
@@ -378,6 +396,7 @@ pub(crate) fn vacate(
                 "scope": scope, "level": level, "holder_session": expect_session,
                 "grantor": grantor, "cause": "holder_dead",
                 "evidence": evidence, "inheritor": inheritor,
+                "manifest_vacated": vacated_path.display().to_string(),
             }),
         );
         Ok(cleared)
@@ -450,10 +469,17 @@ pub(crate) fn presiding_holder(
 pub fn transcript_age_now(session: &str) -> Option<i64> {
     let path = crate::claude_drive::find_transcript(session)?;
     let modified = fs::metadata(path).ok()?.modified().ok()?;
-    std::time::SystemTime::now()
-        .duration_since(modified)
-        .ok()
-        .map(|d| d.as_secs() as i64)
+    let anchor = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    // Awake time only: a transcript last written before this boot idles from
+    // the boot, never through the powered-off stretch.
+    Some(crate::awake_idle_secs(anchor, now))
 }
 
 /// The daemon arm and manual command entry: resolve the spaces root, registry
@@ -684,10 +710,37 @@ mod tests {
         assert_eq!(v.inheritor, "operator");
         assert!(v.evidence.contains("state stopped"), "{}", v.evidence);
         assert_eq!(v.cleared_rows, vec!["stale-row".to_string()]);
-        assert!(!manifest.exists(), "manifest must be gone");
+        assert!(!manifest.exists(), "the live manifest must be gone");
+        let vacated = manifest.with_file_name(format!(
+            "{}.vacated",
+            manifest.file_name().unwrap().to_string_lossy()
+        ));
+        assert!(vacated.exists(), "the manifest is kept aside for a re-seat");
+        let kept = fs::read_to_string(&vacated).unwrap();
+        assert!(
+            kept.contains(&format!("harness_session_id: {session}")),
+            "{kept}"
+        );
         assert!(
             !manifest.with_extension("cancelled").exists(),
             "sentinel must be gone"
+        );
+        // A second pass finds no candidate: the set-aside manifest is
+        // invisible to the sweep, so no vacate loop and no event spam.
+        let again = sweep(
+            &dir,
+            &registry,
+            &dir,
+            &emitter,
+            true,
+            &roster,
+            &transcript(Some(30 * 86_400)),
+            Utc::now(),
+        );
+        assert!(
+            again.vacated.is_empty() && again.kept.is_empty(),
+            "{:?}",
+            again
         );
         let events = read_events(&dir);
         let vacated: Vec<_> = events

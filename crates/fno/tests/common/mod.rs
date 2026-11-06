@@ -222,7 +222,11 @@ impl Drop for Scratch {
         // the directory; FNO_E2E's idle exit remains the crash/abort backstop.
         let sock = self.main_sock();
         if sock.exists() {
-            match self.command().args(["mux", "kill-server"]).output() {
+            match self
+                .command()
+                .args(["mux", "kill-server", "--end-unkept"])
+                .output()
+            {
                 Ok(out) if out.status.success() && !sock.exists() => {}
                 Ok(out) => {
                     eprintln!(

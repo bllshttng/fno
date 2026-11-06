@@ -513,13 +513,18 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
         "keeper B unlinks its socket on the SIGTERM exit"
     );
 
-    // Idle-bound leg: C's dir exists the whole time - the throwaway-mux
-    // orphan road. A held subscriber seat keeps it alive past the bound;
-    // dropping the seat ends it inside the bound plus one poll. The exit
-    // unlinks the socket the normal way, since the dir is still standing.
-    // The bound is 3 s and the hold 3.5 s. The connect deadline is 2 s,
-    // inside the bound: the seat always lands before the self-end clock can
-    // fire, so the leg carries no connect-versus-bound race.
+    // Idle-bound leg, split across two keepers. The bound clock starts at
+    // keeper spawn, and a seat defuses it only once the accept loop CLAIMS
+    // the connection: on a starved runner (the 2026-11-06 main red) the
+    // claim landed after a poll past the 3 s bound and the keeper ended
+    // itself by design while the test still held the seat. So the hold
+    // keeper takes a 30 s bound and proves the claim first, and the seated
+    // polls then reset the clock every 200 ms - which is the actual
+    // invariant: the bound cannot fire while a seat is held, so a hold
+    // spanning many polls proves the seat suppresses idle aging. The drop
+    // keeper keeps the 3 s bound and asserts only the post-drop exit; a
+    // claim starved past its bound degrades to a benign false-pass there,
+    // never a red.
     fn connect_seat(sock: &PathBuf, secs: u64) -> std::os::unix::net::UnixStream {
         let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
@@ -532,13 +537,53 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
             }
         }
     }
+    /// Prove the accept loop seated this stream: an Identify frame sent on
+    /// the seat comes back on the seat only once serve_client is running
+    /// for it. The deadline is generous (25 s against the 30 s hold bound)
+    /// so a starved runner surfaces as a loud panic, never a silent red.
+    fn claim_proof(seat: &std::os::unix::net::UnixStream, secs: u64) {
+        let mut stream = seat.try_clone().expect("seat clone");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        stream
+            .write_all(&fno_agents::pane_keeper::encode(
+                &fno_agents::pane_keeper::Frame::Identify,
+            ))
+            .expect("seat identify write");
+        let mut buf: Vec<u8> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            let mut chunk = [0u8; 4096];
+            match stream.read(&mut chunk) {
+                Ok(_) => buf.extend_from_slice(&chunk),
+                Err(_) => {}
+            }
+            let mut consumed = 0usize;
+            loop {
+                match fno_agents::pane_keeper::decode(&buf[consumed..]) {
+                    fno_agents::pane_keeper::Decode::NeedMore => break,
+                    fno_agents::pane_keeper::Decode::Violation(_) => break,
+                    fno_agents::pane_keeper::Decode::Frame(frame, used) => {
+                        consumed += used;
+                        if matches!(frame, fno_agents::pane_keeper::Frame::IdentifyReply(_)) {
+                            return;
+                        }
+                    }
+                }
+            }
+            buf.drain(..consumed);
+        }
+        panic!("seat claim never proved: no IdentifyReply on the seat stream");
+    }
     let dir_c = scratch.join("c/panes");
     std::fs::create_dir_all(&dir_c).unwrap();
     let sock_c = dir_c.join("k.sock");
-    let mut c = spawn_blocked_keeper(&sock_c, 33, Some("3000"));
+    let mut c = spawn_blocked_keeper(&sock_c, 33, Some("30000"));
     // Seat first, then probe: a probe racing the seat could itself be
     // seated, and its own clear would start the bound clock early.
     let seat = connect_seat(&sock_c, 2);
+    claim_proof(&seat, 25);
     let child_c = identify(&sock_c)["child_pid"].as_u64().unwrap() as u32;
     let _child_c = KillGuard(child_c);
     let _keeper_c = KillGuard(c.id());
@@ -547,18 +592,38 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
         c.try_wait().expect("try_wait").is_none(),
         "a seated subscriber holds the keeper past the idle bound"
     );
+    // Release the hold seat; the 30 s bound or the KillGuard at scope end
+    // retires keeper C. The exit assertions live on the drop keeper below.
     drop(seat);
+
+    // Drop leg, on its own keeper: seated then dropped, the keeper ends
+    // itself inside the bound plus one poll, ends its child, and unlinks
+    // the socket the normal way, since the dir is still standing. The
+    // bound is a generous 8 s (not the hold keeper's 30 s, not 3 s): the
+    // exit is measured from the last seated reset, so 8 s costs ~5 s of
+    // wall time while any claim landing inside it keeps the probe safe - a
+    // claim starved past it surfaces as a loud identify failure, never a
+    // silent red.
+    let dir_d = scratch.join("d/panes");
+    std::fs::create_dir_all(&dir_d).unwrap();
+    let sock_d = dir_d.join("k.sock");
+    let mut d = spawn_blocked_keeper(&sock_d, 34, Some("8000"));
+    let seat_d = connect_seat(&sock_d, 2);
+    let child_d = identify(&sock_d)["child_pid"].as_u64().unwrap() as u32;
+    let _child_d = KillGuard(child_d);
+    let _keeper_d = KillGuard(d.id());
+    drop(seat_d);
     assert!(
-        wait_exit(&mut c, 15),
-        "keeper C must end itself once the seat sits empty past the bound"
+        wait_exit(&mut d, 20),
+        "keeper D must end itself once the seat sits empty past the bound"
     );
     assert!(
-        wait_child_gone(child_c, 15),
-        "keeper C must end its child on the idle bound"
+        wait_child_gone(child_d, 20),
+        "keeper D must end its child on the idle bound"
     );
     assert!(
-        !sock_c.exists(),
-        "keeper C unlinks its socket on the idle-bound exit"
+        !sock_d.exists(),
+        "keeper D unlinks its socket on the idle-bound exit"
     );
 
     std::fs::remove_dir_all(&scratch).ok();

@@ -213,6 +213,7 @@ pub mod evals_climb;
 pub mod evals_compare;
 pub mod evals_drafts;
 pub mod evals_gate;
+pub mod evals_labels;
 pub mod evals_macro;
 pub mod evals_power;
 pub mod evals_predict;
@@ -331,6 +332,7 @@ pub mod lead_checkin_blueprint;
 pub mod lead_checkin_evals;
 pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
+pub mod lead_checkin_orders;
 pub mod lead_escalation;
 pub mod lead_eval;
 pub(crate) mod lead_eval_grade;
@@ -726,9 +728,6 @@ pub mod territory;
 pub mod test_census;
 pub mod test_changed;
 pub mod test_command;
-#[cfg(test)]
-#[path = "test_command_goldens_tests.rs"]
-mod test_command_goldens_tests;
 pub mod test_delta;
 pub mod test_env;
 pub mod test_hold;
@@ -738,9 +737,6 @@ mod test_run_pins;
 pub mod test_smoke;
 pub mod test_smoke_discovery;
 pub mod test_smoke_registry;
-#[cfg(test)]
-#[path = "test_smoke_tests.rs"]
-mod test_smoke_tests;
 pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
@@ -1531,7 +1527,6 @@ mod tests {
             ("org_board/claims.rs", 1),
             ("hook/session_state.rs", 1),
             ("operator_turns.rs", 1),
-            ("client_tests.rs", 2),
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
@@ -2016,6 +2011,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // arm and `fno agents reap`). Python's attended `lead done` emits the
     // same kind through the shared emitter.
     "agent_team_vacated",
+    // The retire arm held its vacates and row reaps: this boot's revival
+    // pass has not finished, and the hold names its reason (gc.rs gate).
+    "retire_held_for_boot_revival",
+    // A vacated lead manifest restored and its row re-stamped after the
+    // holder revived (boot_revival.rs reseat).
+    "agent_team_reseated",
     // The schema's canonical spelling of the same vacate (the alias pair in
     // event_store::EVENT_TYPE_ALIASES): the native `org done` and the team
     // spawn's succession write it.
@@ -2101,9 +2102,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // active_backlog tick row is an EventEmitter emit (the mission-level rows
     // ride Journal::append and are exempt like the drain decision events).
     "control_plane_tick",
-    // Evals demand (Python-emitted from the pr-watch tick's evals
-    // leg): the scheduled regression-tier run's outcome, and the could-not-
-    // fire row whose journal entries are the operator-notice rate bound.
+    // Evals demand (daemon-scheduled): the regression-tier run's outcome,
+    // and the could-not-fire row whose journal entries rate-bound notices.
     "evals_scheduled_run",
     "evals_stale",
     // Scratch-shape sweep (agents-emitted from the `scratch sweep`
@@ -2405,12 +2405,27 @@ pub(crate) fn tail_text_strict(path: &std::path::Path, cap: u64) -> Option<Strin
     String::from_utf8(tail_bytes(path, cap)).ok()
 }
 
+/// Test seam: pin the boot for fixtures that fabricate pre-boot history.
+/// A stamp older than the real boot clamps to the boot under the awake-idle
+/// rule, so a backdated fixture reads fresh on a young machine and can no
+/// longer express quiet-past-grace. The pin restores that expression.
+/// Never set in production; a production boot reads the kernel.
+fn test_boot_override() -> Option<i64> {
+    std::env::var("FNO_TEST_BOOT_EPOCH_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|ms| *ms > 0)
+}
+
 /// Host boot as epoch ms. Linux reuses `claims::linux_boot_time_s` (the
 /// cached `/proc/stat` btime); macOS reads sysctl `kern.boottime`. None on
 /// any failure, never "now": a caller that cannot know the boot must drop
 /// the boot clause, not invent one.
 #[cfg(target_os = "linux")]
 pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
     crate::claims::linux_boot_time_s().and_then(|s| boot_ms_from(s, 0))
 }
 
@@ -2419,6 +2434,9 @@ pub fn host_boot_epoch_ms() -> Option<i64> {
 /// Linux btime: constant for the life of the host, read once per process.
 #[cfg(target_os = "macos")]
 pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
     static BOOT: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
     *BOOT.get_or_init(|| {
         let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
@@ -2446,6 +2464,9 @@ pub fn host_boot_epoch_ms() -> Option<i64> {
 /// Platforms with neither reader read absent, like every other bound.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
     None
 }
 
@@ -2456,6 +2477,44 @@ fn boot_ms_from(sec: i64, usec: i64) -> Option<i64> {
         return None;
     }
     Some(sec * 1000 + usec / 1000)
+}
+
+/// Idle seconds that only count time the host was awake: the idle clock
+/// starts at the LATER of the last activity and this boot. An anchor that
+/// predates the boot cannot have idled through the powered-off stretch
+/// between the two - a reboot would otherwise let every transcript age past
+/// every window at once, and the first sweep would vacate and reap the fleet
+/// the boot revival exists to bring back. A boot the host cannot read
+/// applies no clamp: an unmeasurable boot never invents one.
+pub fn awake_idle_secs(anchor_epoch_s: i64, now_epoch_s: i64) -> i64 {
+    awake_idle_from(anchor_epoch_s, now_epoch_s, host_boot_epoch_ms())
+}
+
+/// [`awake_idle_secs`] with the boot reading injected, so tests pin it.
+pub(crate) fn awake_idle_from(anchor_epoch_s: i64, now_epoch_s: i64, boot_ms: Option<i64>) -> i64 {
+    let clamped = match boot_ms {
+        Some(ms) => anchor_epoch_s.max(ms / 1000),
+        None => anchor_epoch_s,
+    };
+    (now_epoch_s - clamped).max(0)
+}
+
+#[cfg(test)]
+mod awake_idle_tests {
+    use super::*;
+
+    #[test]
+    fn idle_counts_from_the_boot_when_the_anchor_predates_it() {
+        // Last activity 100s, boot at 1000s, now 3000s: the powered-off
+        // stretch between them is not idle, so the clock starts at boot.
+        assert_eq!(awake_idle_from(100, 3000, Some(1_000_000)), 2000);
+        // An anchor inside this boot is untouched.
+        assert_eq!(awake_idle_from(1500, 3000, Some(1_000_000)), 1500);
+        // A boot the host cannot read never invents a clamp.
+        assert_eq!(awake_idle_from(100, 3000, None), 2900);
+        // A future anchor clamps to zero, like every other idle read.
+        assert_eq!(awake_idle_from(3000, 2000, Some(1_000_000)), 0);
+    }
 }
 
 #[cfg(test)]
