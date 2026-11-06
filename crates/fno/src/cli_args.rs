@@ -1062,7 +1062,7 @@ mod tests {
         );
         // A non-UTF-8 payload refuses by its lossy spelling, never a panic.
         let mut raw = os(&["config"]);
-        raw.push(os_raw(&[0xff]));
+        raw.push(std::os::unix::ffi::OsStringExt::from_vec(vec![0xff]));
         assert!(matches!(classify(&raw), FrontDoor::Usage { .. }));
     }
 
