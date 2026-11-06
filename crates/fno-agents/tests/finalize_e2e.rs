@@ -1352,15 +1352,6 @@ const GH_OPTIONAL_OUTSTANDING: &str = "#!/bin/sh\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
-const GH_OPTIONAL_USAGE_LIMITED: &str = "#!/bin/sh\n\
-     echo \"gh $*\" >> calls.log\n\
-     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
-     case \"$*\" in\n\
-       *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":\"You have reached your Codex usage limits for code reviews\"}]}' ;;\n\
-       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
-       *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
-     esac\n";
-
 /// Rewrite the manifest with an explicit merge posture, keeping the node id.
 fn set_posture(env: &Env, session_id: &str, approved: bool) {
     set_posture_source(env, session_id, approved, "config");
