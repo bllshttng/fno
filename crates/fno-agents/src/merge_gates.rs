@@ -787,7 +787,23 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                 "run `fno-agents visual critique-prep {node}`, then the `design-critic` skill on \
                  {node}-critique.json, fix every high finding, and re-read status at the new head"
             );
-            match visual_screen::read_critique(&mux, node, head, &headings) {
+            match {
+                // The critique may live in the asking session's vault
+                // project: a Ready one wins, else the own dir's verdict
+                // names the remedy.
+                let mut verdict = visual_screen::CritiqueRead::Missing;
+                for d in shot_candidates(&mux) {
+                    match visual_screen::read_critique(&d, node, head, &headings) {
+                        r @ visual_screen::CritiqueRead::Ready(_) => {
+                            verdict = r;
+                            break;
+                        }
+                        visual_screen::CritiqueRead::Missing => {}
+                        r => verdict = r,
+                    }
+                }
+                verdict
+            } {
                 visual_screen::CritiqueRead::Missing => detail.push_str(&format!(
                     "; no design critique at this head, so the gate files no page: {remedy}"
                 )),
@@ -801,8 +817,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                     high.join("; ")
                 )),
                 visual_screen::CritiqueRead::Ready(c) => {
-                    let mut images: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
-                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| mux.join(b)));
+                    let mut images: Vec<PathBuf> = shots.iter().map(|s| resolve_shot(&mux, s)).collect();
+                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| resolve_shot(&mux, b)));
                     detail.push_str(&file_visual_question(
                         &root,
                         pr,
@@ -996,29 +1012,61 @@ fn vault_root(cwd: &Path) -> PathBuf {
 pub(crate) fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
     let dir = crate::escalation::vault_dir_with_home(root, home, "mux");
     let mut out = shots_in_dir(&dir, node);
-    // A sibling vault project's mux folder may hold shots filed where
-    // the asking session lived; the node id is unique across the vault,
-    // so the scan is unambiguous.
-    let internal = dir.parent().and_then(|p| p.parent());
-    if let Some(internal) = internal {
-        if internal.file_name().and_then(|n| n.to_str()) == Some("internal") {
-            let own = dir.parent().unwrap();
-            let mut siblings: Vec<std::path::PathBuf> = std::fs::read_dir(internal)
-                .map(|rd| {
-                    rd.flatten()
-                        .map(|e| e.path())
-                        .filter(|p| p.is_dir() && p != own)
-                        .collect()
-                })
-                .unwrap_or_default();
-            siblings.sort();
-            for s in siblings {
-                out.extend(shots_in_dir(&s.join("mux"), node));
-            }
-        }
+    for s in sibling_mux_dirs(&dir) {
+        out.extend(shots_in_dir(&s.join("mux"), node));
     }
     out.sort();
     out
+}
+
+/// The sibling vault projects' mux dirs for a mux dir whose project folder
+/// sits under a vault `internal/` root: shots filed where the asking session
+/// lived, found by node id, which is unique across the vault. Empty for a
+/// mux dir outside that layout (the space fallback).
+pub(crate) fn sibling_mux_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
+    let internal = dir.parent().and_then(|p| p.parent());
+    let Some(internal) = internal else {
+        return Vec::new();
+    };
+    if internal.file_name().and_then(|n| n.to_str()) != Some("internal") {
+        return Vec::new();
+    }
+    let own = dir.parent().unwrap_or(internal);
+    let mut siblings: Vec<std::path::PathBuf> = std::fs::read_dir(internal)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && p != own)
+                .collect()
+        })
+        .unwrap_or_default();
+    siblings.sort();
+    siblings
+}
+
+/// The mux dirs a critique or shot may live in: the own project's mux dir
+/// first, then any sibling vault project's.
+pub(crate) fn shot_candidates(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut v = vec![dir.to_path_buf()];
+    v.extend(sibling_mux_dirs(dir));
+    v
+}
+
+/// Resolve a mux-relative shot or boxed-critique name to its file: the own
+/// project's mux dir first, then any sibling vault project's. Falls back to
+/// the own-dir join so a missing shot keeps its own path in error text.
+pub(crate) fn resolve_shot(dir: &Path, name: &str) -> std::path::PathBuf {
+    let direct = dir.join(name);
+    if direct.exists() {
+        return direct;
+    }
+    for s in sibling_mux_dirs(dir) {
+        let p = s.join("mux").join(name);
+        if p.exists() {
+            return p;
+        }
+    }
+    direct
 }
 
 /// The node-prefixed captures in one mux folder: top-level `<node>*.png`
@@ -1878,6 +1926,30 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    #[test]
+    fn a_shot_filed_in_a_sibling_project_resolves_to_its_file() {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tmp, repo) = cross_vault_fixture("resolve");
+        let mux = crate::escalation::vault_dir_with_home(&repo, None, "mux");
+        let sibling = tmp.join("vault").join("internal").join("fno").join("mux");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("x-aaaa-dark.png"), "x").unwrap();
+        let got = resolve_shot(&mux, "x-aaaa-dark.png");
+        assert_eq!(got, sibling.join("x-aaaa-dark.png"));
+        std::fs::write(mux.join("x-aaaa-dark.png"), "own").unwrap();
+        assert_eq!(
+            resolve_shot(&mux, "x-aaaa-dark.png"),
+            mux.join("x-aaaa-dark.png")
+        );
+        assert_eq!(
+            resolve_shot(&mux, "x-never-shot.png"),
+            mux.join("x-never-shot.png")
+        );
+        drop(lock);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
     #[test]
     fn an_unreconciled_manifest_of_a_contract_node_holds() {
         // AC6's gate half: mocks would ship; the merge holds by code.
