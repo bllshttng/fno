@@ -17,11 +17,13 @@ pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
     let bare_w = a.pr.map(|n| format!("#{n}").width()).filter(|w| *w <= 6);
     let suffix = binding_suffix(a);
     let pr_w = bare_w.map(|w| w + suffix.width());
-    let pr = pr_w.filter(|w| *w <= text_w).map(|w| text_w - w..text_w);
+    // One cell stays spare, so the node and PR never touch the rail border.
+    let edge = text_w.saturating_sub(1);
+    let pr = pr_w.filter(|w| *w <= edge).map(|w| edge - w..edge);
     let gap = usize::from(node_w > 0 && pr.is_some()) * 3;
     let node_end = pr
         .as_ref()
-        .map_or(text_w, |span| span.start.saturating_sub(gap));
+        .map_or(edge, |span| span.start.saturating_sub(gap));
     let node_span = (node_w > 0 && node_end >= node_w).then(|| node_end - node_w..node_end);
     let separator = node_span
         .as_ref()
@@ -530,16 +532,16 @@ mod binding_display_tests {
 
     #[test]
     fn pr_span_width_covers_node_pr_and_count() {
-        // `x-cur · #3159 +1 PRs` at the right edge of 40 columns.
+        // `x-cur · #3159 +1 PRs` one cell off the right edge of 40 columns.
         let a = row(vec![
             binding("x-cur", Some(3159), "open", false),
             binding("x-oth", Some(100), "open", false),
         ]);
         let spans = identity_spans(&a, 40);
         let pr = spans.pr.expect("pr span renders");
-        assert_eq!(pr, 28..40);
-        assert_eq!(spans.node, Some(20..25));
-        assert_eq!(spans.separator, Some(25..28));
+        assert_eq!(pr, 27..39);
+        assert_eq!(spans.node, Some(19..24));
+        assert_eq!(spans.separator, Some(24..27));
     }
 
     #[test]
