@@ -108,6 +108,12 @@ ambient_names = [
     "HELP_ROUTING_BLESS",
     "BUDDY_HOME",
     "BUDDY_KEY",
+    # Self-re-exec test sentinels (main.rs, mail_remote.rs): set by the repo's
+    # own tests on a raw Command, never present in a developer's shell. The
+    # ambient-surface test names the scrub as the classification; the tests
+    # that use them set them explicitly, so the scrub cannot starve them.
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
 ]
 
 # Read by source but NOT ambient state: the process needs these to run.
