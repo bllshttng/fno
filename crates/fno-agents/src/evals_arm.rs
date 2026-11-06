@@ -185,6 +185,15 @@ fn bank_repo(o: &Opts) -> Option<PathBuf> {
     if let Some(repo) = &o.repo {
         return Some(repo.clone()).filter(has_bank);
     }
+    any_bank_repo()
+}
+
+/// The repo resolution minus the explicit `--repo` override: the plugin
+/// root, the cwd and its ancestors, the registered projects - the first
+/// checkout with a bank. The daemon's settle arm resolves the gate's repo
+/// with this, since no caller hands it one.
+pub(crate) fn any_bank_repo() -> Option<PathBuf> {
+    let has_bank = |root: &PathBuf| root.join("evals").join("bank").is_dir();
     let plugin = crate::provider::plugin_root().filter(|root| root.join(".git").exists());
     let cwd = std::env::current_dir().ok();
     plugin

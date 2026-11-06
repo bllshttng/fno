@@ -80,11 +80,22 @@ impl DecisionRow {
     }
 
     /// Who decided, as a person reads it: the session's name, else the
-    /// stamped label (an old row may hold only an id), else the author class.
+    /// stamped label (operator, unattributed-caller), else the author class.
+    /// A stamp of only hex and dashes is a session id, and ids are
+    /// provenance, never display (ruling d-ec54d863): it falls to the
+    /// author class.
     pub fn decider(&self) -> String {
         match (&self.decided_by_name, self.decided_by.as_deref()) {
             (Some(n), _) if !n.is_empty() => n.clone(),
-            (_, Some(d)) if !d.is_empty() => d.chars().take(8).collect(),
+            (_, Some(d))
+                if !d.is_empty()
+                    && !d
+                        .chars()
+                        .filter(|c| *c != '-')
+                        .all(|c| c.is_ascii_hexdigit()) =>
+            {
+                d.to_string()
+            }
             _ => match self.author() {
                 Author::User => "user",
                 Author::Agent => "agent",
@@ -468,5 +479,30 @@ mod tests {
         let rows = parse(json).unwrap();
         assert!(rows[0].has_quote());
         assert!(parse(b"nope").is_err());
+    }
+
+    #[test]
+    fn decider_shows_the_name_and_never_a_hex_id() {
+        let cases = [
+            (Some("t-foo"), None, Some("role"), "t-foo"),
+            (None, Some("119e3c52"), Some("role"), "agent"),
+            (
+                None,
+                Some("7c1e9a02-1111-4222-8333-444455556666"),
+                Some("role"),
+                "agent",
+            ),
+            (None, Some("operator"), Some("operator"), "operator"),
+            (None, None, None, "?"),
+        ];
+        for (name, id, auth, want) in cases {
+            let r = DecisionRow {
+                decided_by_name: name.map(str::to_string),
+                decided_by: id.map(str::to_string),
+                authority_source: auth.map(str::to_string),
+                ..Default::default()
+            };
+            assert_eq!(r.decider(), want, "name={name:?} id={id:?} auth={auth:?}");
+        }
     }
 }

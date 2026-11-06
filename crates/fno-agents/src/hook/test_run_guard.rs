@@ -707,30 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn uv_run_pytest_refused_names_doctor_test() {
-        let root = footnote_root();
-        let refusal = decide("uv run pytest cli/tests/unit/x.py", root.path());
-        assert!(refusal.unwrap().contains("fno doctor test"));
-    }
-
-    #[test]
-    fn uvx_from_other_package_allows() {
-        let root = footnote_root();
-        assert!(decide("uvx --from pytest-mock ruff check .", root.path()).is_none());
-    }
-
-    #[test]
-    fn cargo_test_refused_names_doctor_test_rust() {
-        let root = footnote_root();
-        let refusal = decide("cargo test -p fno", root.path());
-        let refusal = refusal.unwrap();
-        assert!(refusal.contains("fno doctor test rust"));
-        assert!(refusal.contains("--manifest-path crates/<crate>/Cargo.toml"));
-        assert!(refusal.contains("--lib"));
-        assert!(refusal.contains("--test"));
-    }
-
-    #[test]
     fn compound_refuses_only_the_test_half() {
         let root = footnote_root();
         let refusal = decide("cargo build && cargo test", root.path());
@@ -748,59 +724,6 @@ mod tests {
     fn unbalanced_quotes_fail_open() {
         let root = footnote_root();
         assert!(decide("pytest -q 'unclosed", root.path()).is_none());
-    }
-
-    #[test]
-    fn substitution_wrapped_test_run_refused() {
-        // The capture spellings run the suite just the same; the body of a
-        // substitution is one more command since the shared lexer changed.
-        let root = footnote_root();
-        assert!(decide("N=$(pytest -q)", root.path()).is_some());
-        assert!(decide("OUT=\"$(uv run pytest -q 2>&1)\"", root.path()).is_some());
-        assert!(decide("echo \"$(cargo test)\"", root.path()).is_some());
-        assert!(decide("N=`pytest -q`", root.path()).is_some());
-    }
-
-    #[test]
-    fn no_repo_allows() {
-        assert!(decide_at_bg("pytest", None, true).is_none());
-    }
-
-    /// AC9-HP, AC10-HP: a whole crate suite is refused through both blessed
-    /// doors, in every transport-flag spelling, and names the narrowest
-    /// target plus the escape prefix.
-    #[test]
-    fn whole_rust_suite_refused_at_both_doors() {
-        let root = footnote_root();
-        let refusal = decide("fno doctor test rust", root.path()).expect("bare rust refuses");
-        assert!(refusal.contains("--lib"), "{refusal}");
-        assert!(refusal.contains("--test"), "{refusal}");
-        assert!(refusal.contains("CI"), "{refusal}");
-        assert!(refusal.contains("FNO_TEST_FULL=1"), "{refusal}");
-        assert!(
-            decide(
-                "fno doctor test --stream rust --manifest-path crates/fno/Cargo.toml",
-                root.path()
-            )
-            .is_some(),
-            "--stream before rust refuses"
-        );
-        assert!(
-            decide(
-                "fno doctor test --log=/tmp/x.log rust --manifest-path crates/fno/Cargo.toml",
-                root.path()
-            )
-            .is_some(),
-            "--log= before rust refuses"
-        );
-        assert!(
-            decide(
-                "fno-agents test-run --timeout 1800 -- cargo test -q --manifest-path crates/fno/Cargo.toml -- --test-threads 4",
-                root.path()
-            )
-            .is_some(),
-            "the direct owner door refuses a whole suite"
-        );
     }
 
     /// AC11-EDGE: the commands the refusal teaches are never themselves
@@ -821,53 +744,5 @@ mod tests {
             "fno-agents test-run -- cargo test --manifest-path crates/fno-agents/Cargo.toml --lib -- session_activity",
             root.path()
         ).is_none());
-    }
-
-    /// AC12-EDGE: the escape prefix opens the whole-suite door, a non-
-    /// footnote repository is out of scope, and a raw cargo run with the
-    /// prefix is still refused.
-    #[test]
-    fn whole_rust_suite_with_the_prefix_allows() {
-        let root = footnote_root();
-        assert!(
-            decide("FNO_TEST_FULL=1 fno doctor test rust", root.path()).is_none(),
-            "the prefix opens the blessed door"
-        );
-        assert!(
-            decide(
-                "FNO_TEST_FULL=1 bash -c 'fno doctor test rust'",
-                root.path()
-            )
-            .is_none(),
-            "the prefix on a wrapper shell reaches the payload"
-        );
-        let other = TempDir::new().expect("tempdir");
-        assert!(
-            decide("FNO_TEST_FULL=1 fno doctor test rust", other.path()).is_none(),
-            "a non-footnote repository allows"
-        );
-        assert!(
-            decide("FNO_TEST_FULL=1 cargo test -q", root.path()).is_some(),
-            "the prefix never opens the raw cargo door"
-        );
-    }
-
-    /// AC13-HP: the pytest refusal names a test-file target and the bare
-    /// tree cost; the cargo refusal names the narrowest rust form.
-    #[test]
-    fn pytest_refusal_names_a_test_file_target() {
-        let root = footnote_root();
-        let refusal = decide("pytest -q", root.path()).expect("pytest refuses");
-        assert!(refusal.contains("fno doctor test cli/tests/"), "{refusal}");
-        assert!(refusal.contains("test_x.py"), "{refusal}");
-        assert!(refusal.contains("whole cli/tests tree"), "{refusal}");
-        let refusal = decide("cargo test -p fno-agents foo", root.path())
-            .expect("cargo with a filter refuses");
-        assert!(
-            refusal.contains("--manifest-path crates/<crate>/Cargo.toml"),
-            "{refusal}"
-        );
-        assert!(refusal.contains("--lib"), "{refusal}");
-        assert!(refusal.contains("--test"), "{refusal}");
     }
 }

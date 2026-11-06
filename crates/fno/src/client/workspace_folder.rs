@@ -231,12 +231,22 @@ impl View {
         }
     }
 
-    /// The create overlay's footer: the folder it will send.
-    pub(super) fn create_hint(&self, name: &str) -> String {
-        if let Some(path) = &self.folder_pick.path {
-            return format!("folder: {path}▏ tab completes, esc back");
+    /// The create form's footer: what the keys do.
+    pub(super) fn create_hint(&self) -> &'static str {
+        if self.folder_pick.path.is_some() {
+            "tab completes the path, esc goes back to the name"
+        } else {
+            "enter creates, ↑↓ pick a folder, tab types a path"
         }
-        let shown = match self.create_folder(name) {
+    }
+
+    /// The create form's folder row: the folder it will send, or the path
+    /// being typed (with its caret).
+    pub(super) fn create_folder_row(&self, name: &str) -> String {
+        if let Some(path) = &self.folder_pick.path {
+            return format!("{path}▏");
+        }
+        match self.create_folder(name) {
             Ok(CreateOrigin::Folder(p)) => abbrev_home(&p),
             Ok(CreateOrigin::NoFolder) => "none (rows join by a move only)".to_string(),
             _ => {
@@ -248,8 +258,61 @@ impl View {
                 };
                 format!("same as {ws} ({folder})")
             }
+        }
+    }
+
+    /// The new-workspace form: the name row, then the folder row. Each row
+    /// is a `label  value` line; the caret sits on the field that takes keys.
+    pub(super) fn create_modal_layout(&self, name: &str) -> OverlayLayout {
+        let (origin, dims) = self.overlay_viewport();
+        let viewport_w = dims.1.saturating_sub(chrome::Chrome::FRAME_COLS);
+        let chrome = chrome::Chrome::new("new workspace", Anchor::Center)
+            .footer(self.create_hint())
+            .fit_to(viewport_w);
+        let body_w = chrome.min_inner_w().max(40).min(viewport_w).max(1);
+        let caret = if self.folder_pick.path.is_some() {
+            ""
+        } else {
+            "_"
         };
-        format!("folder: {shown} ↑↓ tab to type")
+        let rows = [
+            ("name", format!("{name}{caret}")),
+            ("folder", self.create_folder_row(name)),
+        ];
+        // The label is bold and the typed value plain, so the eye finds where
+        // the typing goes. A long value keeps its tail, where the caret is, so
+        // the row never pushes the border off the frame.
+        let label_w = 8;
+        let lines = rows.map(|(label, value)| {
+            let limit = body_w.saturating_sub(4 + label_w).max(2);
+            let n = value.chars().count();
+            let value = if n > limit {
+                let tail: String = value.chars().skip(n - (limit - 1)).collect();
+                format!("…{tail}")
+            } else {
+                value
+            };
+            let value = format!("{value:<w$}", w = body_w.saturating_sub(label_w));
+            let label = format!("{label:<label_w$}");
+            TLine::parts(&[(&label, TextStyle::Title), (&value, TextStyle::Item)])
+        });
+        layout_lines_overlay(origin, dims, &chrome, &lines, None, OverlayAnchor::Center)
+    }
+
+    pub(super) fn draw_create_modal(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        name: &str,
+    ) {
+        if rows > 0 {
+            for c in 0..cols {
+                cells[(rows - 1) * cols + c] = Cell::default();
+            }
+        }
+        let layout = self.create_modal_layout(name);
+        draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
     }
 
     /// A workspace section's Add folder: the picker of live-row folders.
@@ -301,7 +364,7 @@ mod tests {
         assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::Viewed));
         v.cycle_create_folder("fnh", false);
         assert_eq!(v.create_folder("fnh"), folder("/code/fnh"));
-        assert!(v.create_hint("fnh").starts_with("folder: "));
+        assert_eq!(v.create_folder_row("fnh"), "/code/fnh");
     }
 
     #[test]

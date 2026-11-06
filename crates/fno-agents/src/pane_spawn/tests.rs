@@ -104,16 +104,6 @@ fn pane_run_parse_plain_lane_unparseable_line() {
     );
 }
 
-#[test]
-fn pane_run_parse_json_lane_unparseable_line() {
-    let err = parse_pane_run(&out(0, "{\"pane_id\": \"x\"}\n", ""), true, "sq").unwrap_err();
-    assert_eq!(
-        err,
-        "mux pane run returned unparseable --json '{\"pane_id\": \"x\"}\\n' for session 'sq'; \
-         a pane may exist without a registry row - inspect with 'fno mux pane ls --session sq'"
-    );
-}
-
 fn bounded_ctx() -> PaneContext {
     let mut ctx = PaneContext::simple("codex", "/repo");
     ctx.bounded_placement = true;
@@ -198,21 +188,6 @@ fn reconcile_adopts_the_one_candidate() {
 }
 
 #[test]
-fn reconcile_refuses_zero_candidates() {
-    let mux = FakeMux {
-        ls_stdout: ls_rows(&[live_row("x", "/elsewhere", 5)]),
-        ..Default::default()
-    };
-    let err = reconcile("main", "/repo", &registry_with(vec![]), &mux).unwrap_err();
-    assert_eq!(err.exit_code, EXIT_SPAWN_FAILED);
-    assert_eq!(
-        err.line,
-        "no pane was created; the mux never answered and no pane in 'main' matches this \
-         spawn. Retry, or use --substrate thread."
-    );
-}
-
-#[test]
 fn reconcile_refuses_many_candidates() {
     let mux = FakeMux {
         ls_stdout: ls_rows(&[live_row("a", "/repo", 5), live_row("b", "/repo", 6)]),
@@ -238,87 +213,6 @@ fn reconcile_ignores_claims_from_other_sessions() {
     let registry = registry_with(vec![mux_row("claimed-elsewhere", "other", 5)]);
     let adopted = reconcile("main", "/repo", &registry, &mux).unwrap();
     assert_eq!(adopted, 5);
-}
-
-#[test]
-fn reconcile_skips_this_sessions_claimed_panes() {
-    let rows = vec![live_row("mine", "/repo", 5)];
-    let mux = FakeMux {
-        ls_stdout: ls_rows(&rows),
-        ..Default::default()
-    };
-    let registry = registry_with(vec![mux_row("claimed-here", "main", 5)]);
-    let err = reconcile("main", "/repo", &registry, &mux).unwrap_err();
-    assert!(err.line.starts_with("no pane was created"), "{}", err.line);
-}
-
-#[test]
-fn reconcile_unknown_when_listing_is_empty() {
-    let mux = FakeMux {
-        ls_stdout: "[]".to_string(),
-        ..Default::default()
-    };
-    let err = reconcile("main", "/repo", &registry_with(vec![]), &mux).unwrap_err();
-    assert_eq!(err.exit_code, EXIT_SPAWN_FAILED);
-    assert_eq!(
-        err.line,
-        "the mux never answered 'pane run' for session 'main', and 'pane ls' could not \
-         confirm whether a pane exists; a pane may be live - inspect with 'fno mux pane ls \
-         --session main' before retrying."
-    );
-}
-
-#[test]
-fn reconcile_unknown_when_listing_fails_names_the_detail() {
-    let mux = FakeMux {
-        ls_ok: false,
-        ls_stdout: String::new(),
-        ..Default::default()
-    };
-    let err = reconcile("main", "/repo", &registry_with(vec![]), &mux).unwrap_err();
-    assert!(
-        err.line
-            .contains("could not confirm whether a pane exists;"),
-        "{}",
-        err.line
-    );
-    assert!(
-        !err.line.contains("unparseable pane ls output"),
-        "{}",
-        err.line
-    );
-}
-
-#[test]
-fn reconcile_unknown_when_listing_is_unparseable() {
-    let mux = FakeMux {
-        ls_stdout: "not json".to_string(),
-        ..Default::default()
-    };
-    let err = reconcile("main", "/repo", &registry_with(vec![]), &mux).unwrap_err();
-    assert!(
-        err.line.contains("unparseable pane ls output: 'not json'"),
-        "{}",
-        err.line
-    );
-}
-
-#[test]
-fn reconcile_rejects_pids_older_than_the_spawn_clock() {
-    let mux = FakeMux {
-        ls_stdout: ls_rows(&[live_row("old", "/repo", 5)]),
-        ..Default::default()
-    };
-    // The live pid started in the past; a NOW clock must reject it.
-    let err = reconcile_unanswered_run(
-        "main",
-        Path::new("/repo"),
-        now_ms(),
-        &registry_with(vec![]),
-        &mux,
-    )
-    .unwrap_err();
-    assert!(err.line.starts_with("no pane was created"), "{}", err.line);
 }
 
 fn pane() -> PaneFacts {

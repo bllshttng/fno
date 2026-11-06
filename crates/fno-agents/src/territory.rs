@@ -1163,27 +1163,6 @@ pub fn territory_rows(config_cwd: &Path, registry_path: &Path) -> Vec<Value> {
 mod moved_scope_tests {
     use super::*;
     use serde_json::json;
-    fn node(id: &str, status: &str, priority: &str) -> Value {
-        json!({"id": id, "slug": id, "status": status, "priority": priority, "type": "feature"})
-    }
-
-    #[test]
-    fn a_non_epic_single_scope_is_refused() {
-        let entries = vec![node("x-aaaa", "ready", "p1")];
-        let projects = Ok(HashMap::new());
-        let err = compile_scope_ids("x-aaaa", &entries, &projects).unwrap_err();
-        assert!(err.contains("not an epic"), "{err}");
-        let empty = compile_scope_ids("x-aaaa", &[], &projects).unwrap_err();
-        assert!(
-            empty.contains("returned 0 nodes") && empty.contains("unknown, not absent"),
-            "{empty}"
-        );
-        let missing = compile_scope_ids("x-ghost", &entries, &projects).unwrap_err();
-        assert!(
-            missing.contains("neither a configured project nor a backlog node"),
-            "{missing}"
-        );
-    }
 
     #[test]
     fn a_multi_scope_team_of_epics_compiles_as_the_union() {

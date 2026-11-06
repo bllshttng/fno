@@ -500,9 +500,19 @@ pub(super) async fn serve(
     let accept_conns = conns_alive.clone();
     tokio::spawn(async move {
         let mut next_id: u64 = 1;
+        // Descriptor starvation is a STATE, not an event stream: while it
+        // holds, every accept fails, and a 100ms retry would log ten lines
+        // a second for as long as the famine holds. Log the two edges once,
+        // retry at 1s inside the state, and stay silent between; other
+        // accept errors keep today's 100ms + line.
+        let mut starved = false;
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
+                    if starved {
+                        starved = false;
+                        eprintln!("fno mux: accept recovered after fd exhaustion");
+                    }
                     let id = next_id;
                     next_id += 1;
                     // Peer pid names WHICH client process this is (the e2e
@@ -524,8 +534,21 @@ pub(super) async fn serve(
                     });
                 }
                 Err(e) => {
-                    eprintln!("fno mux: accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Inside the starvation state every error kind stays
+                    // silent; edges log once and the sleep follows the state.
+                    let famine = crate::process_admission::no_descriptor_left(&e);
+                    if famine && !starved {
+                        starved = true;
+                        eprintln!("fno mux: accept starved: {e}; retrying every second until a descriptor frees");
+                    } else if !famine && !starved {
+                        eprintln!("fno mux: accept failed: {e}");
+                    }
+                    tokio::time::sleep(Duration::from_millis(if famine || starved {
+                        1000
+                    } else {
+                        100
+                    }))
+                    .await;
                 }
             }
         }
@@ -641,7 +664,7 @@ pub(super) async fn serve(
                 // Deferred repaint requests ride the same 1s pass.
                 core.fire_due_nudges();
                 core.reconcile_grid_sizes();
-                core.follow_portal_viewer_titles();
+                core.refresh_portal_viewer_labels();
                 // Snapshot first: reader completion guarantees all output for
                 // these panes was enqueued before this point. Drain it, then
                 // close exactly the snapshot even if another reader finishes

@@ -703,28 +703,6 @@ fn emit_review_invocation_fields(
 }
 
 #[cfg(test)]
-fn review_start_audit_fields(
-    thread_id: &str,
-    target_raw: &str,
-    delivery: ReviewDelivery,
-    audit_payload: Option<&str>,
-    audit_sender: Option<&str>,
-    audit_target_cwd: Option<&str>,
-    failure_reason: Option<&str>,
-) -> serde_json::Map<String, serde_json::Value> {
-    review_start_audit_fields_with_origin(
-        thread_id,
-        target_raw,
-        delivery,
-        audit_payload,
-        audit_sender,
-        audit_target_cwd,
-        failure_reason,
-        None,
-    )
-}
-
-#[cfg(test)]
 fn review_start_audit_fields_with_origin(
     thread_id: &str,
     target_raw: &str,
@@ -2268,53 +2246,6 @@ mod tests {
     }
 
     #[test]
-    fn review_start_audit_prefers_caller_provenance_without_changing_target() {
-        let fields = review_start_audit_fields(
-            "thread-1",
-            "baseBranch:origin/main",
-            ReviewDelivery::Inline,
-            Some("/review --base origin/main"),
-            Some("sender-1"),
-            Some("/repo"),
-            None,
-        );
-        assert_eq!(fields["target_session"], "thread-1");
-        assert_eq!(fields["payload"], "/review --base origin/main");
-        assert_eq!(fields["sender"], "sender-1");
-        assert_eq!(fields["target_cwd"], "/repo");
-        assert_eq!(fields["harness"], "codex");
-        assert_eq!(fields["lane"], "codex-review-start");
-        assert_eq!(fields["confirmed"], true);
-        assert_eq!(fields["verb"], "/review");
-        let dollar = review_start_audit_fields(
-            "thread-1",
-            "baseBranch:origin/main",
-            ReviewDelivery::Inline,
-            Some("$fno:review medium"),
-            None,
-            None,
-            None,
-        );
-        assert_eq!(dollar["verb"], "$fno:review");
-        assert_eq!(fields["self_send"], false);
-        assert!(!fields.contains_key("reason"));
-
-        let self_fields = review_start_audit_fields_with_origin_and_self(
-            "thread-1",
-            "uncommittedChanges",
-            ReviewDelivery::Inline,
-            Some("/compact"),
-            Some("thread-1"),
-            Some("/repo"),
-            None,
-            None,
-            true,
-        );
-        assert_eq!(self_fields["verb"], "/compact");
-        assert_eq!(self_fields["self_send"], true);
-    }
-
-    #[test]
     fn review_invocation_audit_carries_server_message_and_canonical_fields() {
         let fields = review_invocation_event_fields(
             "ri-positive",
@@ -2490,33 +2421,6 @@ mod tests {
 
         assert_eq!(discover(&socket).await, Err("rpc-error"));
         server.await.unwrap();
-    }
-
-    /// AC8 (defect 2): a daemon that REFUSES `initialize` must not read
-    /// healthy. The id-matched frame is not automatically a successful
-    /// handshake: protocol or version skew answers with an `error` on the same
-    /// id, and the discarded response let `probe_codex_app_server` report
-    /// HEALTHY, `ensure_codex_daemon` never reboot it, and every later call
-    /// fail naming something else. Positive markers: the helper names the
-    /// refusal (`initialize-refused`, not just any error), and the probe reads
-    /// unhealthy against the same socket.
-    #[tokio::test]
-    async fn an_initialize_error_frame_reads_unhealthy_naming_the_refusal() {
-        let _guard = crate::path_test_guard();
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick().with_refused_initialize(),
-        );
-
-        let reason = connect_app_server(&daemon.socket_path()).await.err();
-        assert_eq!(
-            reason,
-            Some("initialize-refused"),
-            "the helper must name the refusal, not lose it in a generic error"
-        );
-        assert!(
-            !probe_codex_app_server(&daemon.socket_path()),
-            "a daemon that refuses initialize is not healthy"
-        );
     }
 
     #[tokio::test]

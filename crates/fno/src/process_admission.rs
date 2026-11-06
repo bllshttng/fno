@@ -878,7 +878,7 @@ enum AcquireFailure {
 /// True when an open error means this process has no descriptor left to read
 /// the process table with. A fact about this process, not a race, so it
 /// never earns a retry.
-fn no_descriptor_left(error: &io::Error) -> bool {
+pub(crate) fn no_descriptor_left(error: &io::Error) -> bool {
     matches!(
         error.raw_os_error(),
         Some(libc::EMFILE) | Some(libc::ENFILE)

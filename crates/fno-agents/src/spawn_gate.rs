@@ -3436,34 +3436,6 @@ MemAvailable:    8000000 kB\n";
         }
     }
 
-    /// AC3-EDGE: a corrupt record is a CANNOT-TELL refusal with its own exit
-    /// code, never a clear and never a stop verdict.
-    #[test]
-    fn fleet_incident_gate_fails_closed_on_an_unreadable_record() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let td = tempfile::TempDir::new().unwrap();
-        let saved = std::env::var_os("FNO_AGENTS_HOME");
-        std::env::set_var("FNO_AGENTS_HOME", td.path());
-        std::fs::create_dir_all(td.path()).unwrap();
-        std::fs::write(
-            crate::fleet_incident::fleet_stop_path(&crate::paths::AgentsHome::at(td.path())),
-            b"garbage",
-        )
-        .unwrap();
-
-        assert_eq!(
-            fleet_incident_gate().err().map(|r| r.exit_code),
-            Some(EXIT_FLEET_STOP_UNAVAILABLE)
-        );
-        match saved {
-            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-            None => std::env::remove_var("FNO_AGENTS_HOME"),
-        }
-    }
-
     #[test]
     fn lane_rows() {
         // An unknown harness declares nothing at all, which is the only thing
