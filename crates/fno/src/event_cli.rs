@@ -1230,14 +1230,9 @@ fn run_find(args: &[OsString]) -> i32 {
             .unwrap_or_default()
         {
             matches.push(row);
-            if last_mode && matches.len() > cap {
-                matches.remove(0);
-            }
-        }
-        if !last_mode {
-            matches.truncate(cap);
         }
     }
+    let matches = last_tail(matches, cap, last_mode);
     // kind_counts fold across files, at output time, from per-file entries.
     let mut kind_counts = serde_json::Map::new();
     for entry in &file_entries {
@@ -1442,8 +1437,33 @@ fn find_exit_code(
     0
 }
 
-/// Query and fold one journal's store into its file entry: counts, per-key
-/// hits, span, kind counts, matching rows, and the store's coverage receipt.
+/// The print cap over the combined per-journal candidates. A first-cap keeps
+/// fold order; `--last` orders by ts newest first, because the fold order is
+/// journal sort order where a live journal sorts before its own rotations
+/// and a fold-order tail would let an older rotation evict newer live rows.
+fn last_tail(
+    mut matches: Vec<serde_json::Value>,
+    cap: usize,
+    last_mode: bool,
+) -> Vec<serde_json::Value> {
+    if last_mode {
+        matches.sort_by(|a, b| row_ts_ms(b).cmp(&row_ts_ms(a)));
+    }
+    matches.truncate(cap);
+    matches
+}
+
+/// A row's ts as millis for cross-journal ordering; an unparsable ts sorts
+/// last (i64::MIN).
+fn row_ts_ms(row: &serde_json::Value) -> i64 {
+    row.get("ts")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(i64::MIN)
+}
+
+/// Query and fold one journal's store into its file entry/// hits, span, kind counts, matching rows, and the store's coverage receipt.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fold_journal(
     journal: &PathBuf,
@@ -1772,9 +1792,20 @@ mod tests {
         );
         let mut a3 = base.to_vec();
         a3.extend(["--last", "0"]);
-        assert_eq!(
-            run_find(&a3.iter().map(OsString::from).collect::<Vec<_>>()),
-            2
-        );
+        assert_eq!(run_find(&a3.iter().map(OsString::from).collect::<Vec<_>>()), 2);
+    }
+
+    #[test]
+    fn last_tail_prefers_newest_ts_over_fold_order() {
+        let live = serde_json::json!({"ts": "2026-11-06T11:00:00.000Z"});
+        let old_rotation = serde_json::json!({"ts": "2026-11-05T09:00:00.000Z"});
+        // Fold order puts the live journal first, so the old rotation row
+        // arrives last: a fold-order tail would keep exactly the wrong row.
+        let got = last_tail(vec![live, old_rotation.clone()], 1, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], old_rotation);
+        let newer = serde_json::json!({"ts": "2026-11-06T12:00:00.000Z"});
+        let got = last_tail(vec![old_rotation, newer], 1, true);
+        assert_eq!(got[0], newer);
     }
 }

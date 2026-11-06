@@ -150,8 +150,7 @@ Options:
                 eprintln!("error: unknown flag {other}");
                 return 2;
             }
-            other => {
-                let _ = other;
+            _other => {
                 eprintln!("error: no positional arguments; pass --branch and --head");
                 return 2;
             }
