@@ -1092,7 +1092,14 @@ mod tests {
             "pr_url": "https://github.com/o/r/pull/1720",
             "cwd": ".",
         }));
-        let entries = vec![done];
+        let entries = vec![
+            done,
+            open_node(json!({
+                "id": "x-bbbb",
+                "completed_at": "2026-09-12T00:00:00Z",
+                "cwd": "/nonexistent-dead-cwd",
+            })),
+        ];
         let mut row = pr_row(1813, "shrink/x-aaaa-cli-net", "");
         row["body"] = json!("");
         let cache = ListingCache::new();
@@ -1103,7 +1110,13 @@ mod tests {
             collect_open_binding_heals(&entries, None, Some(&cache), |_, _, _, _| {
                 panic!("query owed nothing: no primary-closed read was owed")
             });
-        assert!(advisories.is_empty(), "{advisories:?}");
+        // The dead-cwd candidate is skipped, and the skip is loud.
+        assert!(
+            advisories
+                .iter()
+                .any(|a| a.contains("x-bbbb") && a.contains("cwd")),
+            "{advisories:?}"
+        );
         assert_eq!(heals.len(), 1, "{heals:?}");
         assert_eq!(heals[0].node_id, "x-aaaa");
         assert_eq!(heals[0].pr_number, 1813);
@@ -1142,7 +1155,8 @@ pub(crate) fn collect_open_binding_heals(
     // The repo_keys RefMut must drop before the loop: rows_for re-borrows
     // it, and a borrow held across the loop panicked (exit 101) on every
     // daemon sweep once the graph held a ref-less open-bound node.
-    let (groups, cwd_by_nid, _skipped) = {
+    let mut advisories: Vec<String> = Vec::new();
+    let (groups, cwd_by_nid, skipped_dead_cwd) = {
         let mut fallback = HashMap::new();
         let mut cache_memo;
         let memo: &mut HashMap<String, String> = match listings {
@@ -1154,9 +1168,16 @@ pub(crate) fn collect_open_binding_heals(
         };
         group_refless_by_repo(entries, scope, memo, true, true)
     };
+    // A candidate the scan dropped for a dead cwd still names its warning
+    // forever; say why it was skipped, with the remedy, instead of silence.
+    for nid in &skipped_dead_cwd {
+        advisories.push(format!(
+            "open-binding scan skipped {nid}: its recorded cwd is missing or \
+             not a checkout (heal with: fno backlog update {nid} cwd=<path>)"
+        ));
+    }
 
     let mut heals: Vec<OpenBindingHeal> = Vec::new();
-    let mut advisories: Vec<String> = Vec::new();
     let deadline = Instant::now() + REVERSE_MAP_BUDGET;
     for (_key, nodes) in &groups {
         if Instant::now() >= deadline {
