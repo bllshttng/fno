@@ -504,7 +504,7 @@ fn request(effect: Effect) -> Request {
 }
 
 fn granted_decisions() -> Vec<u8> {
-    br#"{"decisions":[{"authority_source":"operator","decision":"merge authorized for this head"}]}"#
+    br#"{"decisions":[{"authority_source":"operator","ts":"2026-11-01T00:00:00Z","decision":"merge authorized for this head"}]}"#
         .to_vec()
 }
 
@@ -820,16 +820,17 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
     let receipt = outcome.to_json();
     assert_eq!(
         receipt["merge_grant"],
-        json!("operator head grant abc123"),
+        json!("user head grant abc123"),
         "{}",
         receipt
     );
 }
 
 #[test]
-fn an_absent_grant_refuses_and_names_only_the_attended_command() {
-    // AC2-ERR: absence refuses, the remedy is the one sanctioned grant
-    // command, and the out-of-band escape is gone from the refusal.
+fn an_absent_grant_refuses_and_names_both_sanctioned_doors() {
+    // AC2-ERR: absence refuses, and the refusal names both sanctioned grant
+    // doors - the attended operator command and the user's own chat approval
+    // recorded through the law door - while the out-of-band escape is gone.
     let mut req = request(Effect::Merge);
     req.approved = Some(false);
     req.auto_merge_source = Some("flag-no-merge".to_string());
@@ -847,7 +848,9 @@ fn an_absent_grant_refuses_and_names_only_the_attended_command() {
         detail.contains("'merge authorized for this head'"),
         "{detail}"
     );
-    assert!(detail.ends_with("--authority operator"), "{detail}");
+    assert!(detail.contains("--authority operator"), "{detail}");
+    assert!(detail.contains("fno inbox law set"), "{detail}");
+    assert!(detail.contains("user in chat:"), "{detail}");
     assert!(!detail.contains("out-of-band"), "{detail}");
     assert!(fake.gh_calls.borrow().is_empty());
 }
