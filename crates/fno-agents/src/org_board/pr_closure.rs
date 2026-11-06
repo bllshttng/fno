@@ -230,7 +230,11 @@ pub(crate) fn retargeted_from_with(
 /// `x-5555 (x-aaaa)`: the number leads, the hash stays beside it as the
 /// durable key. A qualified (`@store`) or missing label falls back to the
 /// hash alone.
-pub(crate) fn render<I, S>(node_ids: I) -> String {
+pub(crate) fn render<I, S>(node_ids: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     render_with(node_ids, &crate::numbers::label)
 }
 
@@ -258,7 +262,7 @@ where
                 // hash: only an unqualified number rides the line, so a
                 // reader on another machine never sees a token the grammar
                 // refuses.
-                Some(number) if !number.contains('@') && number != id => {
+                Some(number) if !number.contains('@') && number != *id => {
                     format!("{number} ({id})")
                 }
                 _ => id.clone(),
@@ -370,7 +374,8 @@ mod tests {
                 .expect("case body");
             let labels: std::collections::HashMap<String, String> = case
                 .get("labels")
-                .and_then(|v| serde_json::from_value(v.clone()).unwrap_or_default());
+                .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+                .unwrap_or_default();
             let resolve = |t: &str| labels.get(t).map(|s| s.to_string());
             let want: Vec<String> = case
                 .get("claims")
