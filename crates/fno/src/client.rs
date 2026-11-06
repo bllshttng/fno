@@ -733,6 +733,9 @@ pub(crate) struct View {
     machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
+    /// Nest workers under their lead in the card layout (prefix+t),
+    /// persisted. Off = flat cards; the list layout always nests.
+    group_by_lead: bool,
     /// The manual reorder sequence (agent names in display order) behind the
     /// Manual sort column, persisted.
     manual_order: Vec<String>,
@@ -1700,6 +1703,8 @@ pub(crate) enum AuxAction {
     ToggleExperimental(experimental::Flag),
     Share(share_flow::Act),
     OpenBacklogView,
+    /// Nest workers under their lead in the card layout (the prefix+t toggle).
+    ToggleGroupByLead,
     /// Flip the sideline's row shape (list <-> card) live: swap the view's
     /// in-memory layout, persist `sideline.layout` through the CLI, then
     /// invalidate the palette cache. A failed save keeps the in-memory shape
@@ -1828,6 +1833,7 @@ impl View {
         let (density, agent_sort, stored_width) = view_store::load_prefs();
         let agent_group = view_store::load_agent_group();
         let show_card_head = view_store::load_card_head();
+        let group_by_lead = view_store::load_group_by_lead();
         let manual_order = view_store::load_manual_order();
         // The stored intent, resolved once. Deliberately NOT clamped to
         // the current terminal here: `panel_w` clamps transiently on every paint,
@@ -1850,6 +1856,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             show_card_head,
+            group_by_lead,
             manual_order,
             status_on: true,
             resource_meter_on: false,
@@ -3987,6 +3994,7 @@ impl View {
         let held = self.selected_agent_name();
         self.agent_sort = self.agent_sort.advance();
         view_store::save_prefs(self.density, self.agent_sort);
+        self.set_notice(agent_sort::sort_notice(self.agent_sort));
         self.reanchor_selector(held);
     }
 
@@ -5134,58 +5142,6 @@ impl View {
         }
     }
 
-    /// Sorts agent runs the way the extended table orders them: each
-    /// contiguous run of agent rows between non-agent rows orders by the
-    /// active column (leads compared against each other, workers ordered
-    /// inside their own lineage level), so the card view and the table read
-    /// in the sorted order and the painted age is the value sorted on.
-    fn sort_agent_runs<'a>(
-        &self,
-        rows: Vec<DisplayRow<'a>>,
-        depths: Vec<usize>,
-    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
-        let needs = self.attention_needs();
-        let now = crate::digest_overlay::now_secs();
-        let order = &AgentOrder {
-            manual: &self.manual_order,
-        };
-        let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
-        let mut group = Vec::new();
-        let mut iter = rows.into_iter().zip(depths).peekable();
-
-        while let Some((row, depth)) = iter.next() {
-            match row {
-                DisplayRow::Agent(agent) => {
-                    let item = vec![(DisplayRow::Agent(agent), depth)];
-                    group.push((item, agent));
-                    if !matches!(iter.peek(), Some((DisplayRow::Agent(_), _))) {
-                        append_sorted_agent_group(
-                            &mut out,
-                            &mut group,
-                            self.agent_sort,
-                            &needs,
-                            now,
-                            order,
-                        );
-                    }
-                }
-                row => {
-                    append_sorted_agent_group(
-                        &mut out,
-                        &mut group,
-                        self.agent_sort,
-                        &needs,
-                        now,
-                        order,
-                    );
-                    out.push((row, depth));
-                }
-            }
-        }
-        append_sorted_agent_group(&mut out, &mut group, self.agent_sort, &needs, now, order);
-        out.into_iter().unzip()
-    }
-
     // The sideline tree, with the top-K idle cap applied. A PURE
     // function of state: a squad shows its idle overflow only when the operator
     // toggled its `+N more` row open (`idle_expanded`). No per-frame,
@@ -5959,11 +5915,15 @@ fn attention_key(a: &AgentRow, need: Option<NeedKind>) -> (u8, u8, std::cmp::Rev
 /// measurement nothing took, on the surface this branch exists to fix. The
 /// label carries it instead, and it asserts only that the rows are hidden.
 ///
+/// A pinned row never folds: the pin is the operator's promise that the row
+/// leads its workspace, and a fold would hide it behind `+N more`.
+///
 /// This predicate is display density, not truth. Attention states (`Blocked`,
 /// `Working`, `DoneUnseen`) are enumerated by exclusion on purpose - a state
 /// added later does not fold, so a new signal fails VISIBLE, never hidden.
 fn is_idle_row(a: &AgentRow) -> bool {
     !a.exited
+        && !a.pinned
         && matches!(
             pane_state(a.badge, a.seen, a.pane_activity),
             PaneState::Idle | PaneState::Empty | PaneState::Unmeasured
@@ -8140,6 +8100,7 @@ async fn dispatch_event(
             view_store::save_agent_group(view.agent_group);
             view.set_notice(format!("grouping by {}", view.agent_group.word()));
         }
+        Event::ToggleGroupByLead => view.toggle_group_by_lead(),
         Event::ToggleCardHead => {
             // Pure local state: the head row is one display row, and the
             // scroll math reads painted_rows() every pass.
@@ -8586,6 +8547,10 @@ async fn execute_aux_action(
         AuxAction::Detach => {
             view.aux = None;
             return Ok(DispatchFlow::Detach);
+        }
+        AuxAction::ToggleGroupByLead => {
+            view.aux = None;
+            view.toggle_group_by_lead();
         }
         AuxAction::LiftHold => hold::lift(view).await,
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
@@ -9583,5 +9548,3 @@ mod needs_queue;
 
 #[path = "client/header_band.rs"]
 mod header_band;
-
-use agent_sort::{append_sorted_agent_group, AgentOrder};

@@ -2767,7 +2767,7 @@ fn caret_rows() {
     // The strip is line 0; the always-on card head leads line 1, squad 1
     // line 2, spacer line 3, squad 2 line 4.
     assert!(lines[0].contains("A   M"), "{:?}", lines[0]);
-    assert!(lines[1].contains("node \u{b7} PR"), "{:?}", lines[1]);
+    assert!(lines[1].contains("sort: status"), "{:?}", lines[1]);
     assert!(lines[2].contains("▾*empty"), "{:?}", lines[2]);
     assert!(lines[4].contains("▸ notes"), "no tab rows in between");
 }

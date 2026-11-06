@@ -17,11 +17,13 @@ pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
     let bare_w = a.pr.map(|n| format!("#{n}").width()).filter(|w| *w <= 6);
     let suffix = binding_suffix(a);
     let pr_w = bare_w.map(|w| w + suffix.width());
-    let pr = pr_w.filter(|w| *w <= text_w).map(|w| text_w - w..text_w);
+    // One cell stays spare, so the node and PR never touch the rail border.
+    let edge = text_w.saturating_sub(1);
+    let pr = pr_w.filter(|w| *w <= edge).map(|w| edge - w..edge);
     let gap = usize::from(node_w > 0 && pr.is_some()) * 3;
     let node_end = pr
         .as_ref()
-        .map_or(text_w, |span| span.start.saturating_sub(gap));
+        .map_or(edge, |span| span.start.saturating_sub(gap));
     let node_span = (node_w > 0 && node_end >= node_w).then(|| node_end - node_w..node_end);
     let separator = node_span
         .as_ref()
