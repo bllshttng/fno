@@ -61,17 +61,12 @@ pub(crate) struct SessionMark {
 pub(crate) fn session_marks(cwd: &Path) -> Vec<SessionMark> {
     let build_lock = crate::claims::claim_path(crate::test_run::BUILD_SLOT_KEYS[0], None);
     let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashMap::<String, SessionMark>::new();
     for job in crate::cargo_builds::collect_jobs(cwd) {
         let Some(session) = crate::cargo_builds::manifest_ids(&job.worktree).1 else {
             continue;
         };
         let key = crate::mail_hold::identity_key(&session);
-        if !seen.insert(key.clone()) {
-            // Two cargo jobs in one checkout fold to one mark; the pid-ordered
-            // fold keeps the first.
-            continue;
-        }
         let (state, position) = match job.waiting.as_deref() {
             Some(lane) => {
                 let pos = lane_position(build_lock.as_deref(), lane, job.marker_pid);
@@ -79,13 +74,22 @@ pub(crate) fn session_marks(cwd: &Path) -> Vec<SessionMark> {
             }
             None => ("compiling", None),
         };
-        out.push(SessionMark {
-            session: key,
+        let mark = SessionMark {
+            session: key.clone(),
             state,
             position,
-        });
+        };
+        // Two cargo jobs in one checkout fold to one mark: compiling wins
+        // over waiting (the throbber is the busier truth), else the first
+        // in the pid-ordered fold stands.
+        match seen.get(&key) {
+            Some(prev) if prev.state == "compiling" => {}
+            _ => {
+                seen.insert(key, mark);
+            }
+        }
     }
-    out
+    seen.into_values().collect()
 }
 
 /// The waiter's 1-based position: its index among `waiter_pids` (ticket order,
