@@ -654,6 +654,10 @@ jobs:
           fi
           echo "fno version: ${VERSION}"
           git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/bllshttng/homebrew-fno.git" tap
+          # The seed is the structure source: copy it over the tap formula
+          # before the patch, so the tap's url shape and install block move
+          # with this repo's seed on every release instead of diverging.
+          cp scripts/install/homebrew/fno.rb tap/Formula/fno.rb
           python3 scripts/release/update-homebrew-formula.py "${VERSION}" tap/Formula/fno.rb
           cd tap
           if git diff --quiet; then
