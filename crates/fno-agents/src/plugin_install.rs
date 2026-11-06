@@ -1168,30 +1168,7 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         );
     } else if let Some(legacy) = legacy_parent.clone() {
         files += restage_profiles(&root, &legacy, &legacy_present)?;
-        match pre_flip_harness_processes(stage_parent) {
-            Ok(blockers) if blockers.is_empty() => {
-                std::fs::remove_dir_all(&legacy).map_err(|e| {
-                    format!("remove drained legacy stage {}: {e}", legacy.display())
-                })?;
-                println!(
-                    "plugin stage: removed drained legacy stage {}",
-                    legacy.display()
-                );
-            }
-            Ok(blockers) => println!(
-                "plugin stage: keeping legacy stage {}; pre-flip harness pids {}",
-                legacy.display(),
-                blockers
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            Err(reason) => println!(
-                "plugin stage: keeping legacy stage {}; process check unknown: {reason}",
-                legacy.display()
-            ),
-        }
+        drain_legacy_stage(&legacy, pre_flip_harness_processes(stage_parent))?;
     }
     if !full_stage.exists() {
         full_stage = legacy_parent
@@ -1304,9 +1281,13 @@ fn pre_flip_harness_processes(parent: &Path) -> Result<Vec<u32>, String> {
     if !output.status.success() {
         return Err(format!("ps exited {}", output.status.code().unwrap_or(-1)));
     }
+    harness_processes_before_flip(&String::from_utf8_lossy(&output.stdout), flip)
+}
+
+fn harness_processes_before_flip(ps_output: &str, flip: f64) -> Result<Vec<u32>, String> {
     let candidates = ["claude", "opencode", "grok", "agy", "pi", "footnote"];
     let mut blockers = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in ps_output.lines() {
         let mut parts = line.split_whitespace();
         let Some(pid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
             continue;
@@ -1328,6 +1309,33 @@ fn pre_flip_harness_processes(parent: &Path) -> Result<Vec<u32>, String> {
         }
     }
     Ok(blockers)
+}
+
+fn drain_legacy_stage(legacy: &Path, blockers: Result<Vec<u32>, String>) -> Result<(), String> {
+    match blockers {
+        Ok(blockers) if blockers.is_empty() => {
+            std::fs::remove_dir_all(legacy)
+                .map_err(|e| format!("remove drained legacy stage {}: {e}", legacy.display()))?;
+            println!(
+                "plugin stage: removed drained legacy stage {}",
+                legacy.display()
+            );
+        }
+        Ok(blockers) => println!(
+            "plugin stage: keeping legacy stage {}; pre-flip harness pids {}",
+            legacy.display(),
+            blockers
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Err(reason) => println!(
+            "plugin stage: keeping legacy stage {}; process check unknown: {reason}",
+            legacy.display()
+        ),
+    }
+    Ok(())
 }
 
 fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
@@ -3550,6 +3558,9 @@ mod tests {
     /// the stale copy. A pack-only restage never moves the pointer.
     #[test]
     fn restage_primes_pointer_from_full_stage() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("pi-restage-ptr-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
@@ -3702,84 +3713,32 @@ mod tests {
     }
 
     #[test]
-    fn pre_flip_process_reader_uses_process_epoch_and_fails_closed() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = std::env::temp_dir().join(format!("pi-process-flip-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).unwrap();
-        let bin = base.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let ps = bin.join("ps");
-        fs::write(
-            &ps,
-            format!("#!/bin/sh\nprintf '{} claude\\n'\n", std::process::id()),
-        )
-        .unwrap();
-        fs::set_permissions(&ps, fs::Permissions::from_mode(0o755)).unwrap();
-        let previous_path = std::env::var_os("PATH");
-        let test_path = previous_path
-            .as_ref()
-            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
-            .unwrap_or_else(|| bin.display().to_string());
-        std::env::set_var("PATH", test_path);
-        let flip = base.join(".legacy-flip.at");
-        let started = crate::process_probe::process_started_epoch(std::process::id()).unwrap();
-        fs::write(&flip, format!("{}\n", started.floor() as u64 + 2)).unwrap();
-        assert_eq!(
-            pre_flip_harness_processes(&base).unwrap(),
-            vec![std::process::id()]
-        );
-        fs::write(&flip, format!("{}\n", started.floor() as u64 - 1)).unwrap();
-        assert!(pre_flip_harness_processes(&base).unwrap().is_empty());
-        match previous_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn restage_removes_legacy_stage_when_no_pre_flip_harness_process_lives() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+    fn legacy_drain_waits_for_a_clear_process_reading() {
         let base = std::env::temp_dir().join(format!("pi-stage-drain-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
-        let source = base.join("source");
-        new_repo(&source);
-        let state = base.join("state");
-        let legacy = state.join("plugin-stage");
-        let new = state.join("install/plugin-stage");
-        build_stage(&source, &legacy).unwrap();
-        build_stage(&source, &new).unwrap();
-        fs::write(new.join(".legacy-flip.at"), "0\n").unwrap();
-        let bin = base.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let ps = bin.join("ps");
-        fs::write(&ps, "#!/bin/sh\nexit 0\n").unwrap();
-        fs::set_permissions(&ps, fs::Permissions::from_mode(0o755)).unwrap();
-        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
-        let previous_path = std::env::var_os("PATH");
-        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
-        let test_path = previous_path
-            .as_ref()
-            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
-            .unwrap_or_else(|| bin.display().to_string());
-        std::env::set_var("PATH", test_path);
+        let legacy = base.join("plugin-stage");
+        fs::create_dir_all(&legacy).unwrap();
+        let started = crate::process_probe::process_started_epoch(std::process::id()).unwrap();
+        let pid = std::process::id();
+        let before_flip =
+            harness_processes_before_flip(&format!("{pid} claude"), started.floor() + 2.0).unwrap();
+        assert_eq!(before_flip, vec![pid]);
+        assert!(harness_processes_before_flip("4294967295 claude", started + 5.0).is_err());
+        assert!(
+            harness_processes_before_flip(&format!("{pid} claude"), started - 1.0)
+                .unwrap()
+                .is_empty()
+        );
 
-        restage_stage(&source, &new).unwrap();
-
+        drain_legacy_stage(&legacy, Err("process check unavailable".into())).unwrap();
+        assert!(
+            legacy.exists(),
+            "an unknown process reading must keep legacy"
+        );
+        drain_legacy_stage(&legacy, Ok(before_flip)).unwrap();
+        assert!(legacy.exists(), "a pre-flip harness must keep legacy");
+        drain_legacy_stage(&legacy, Ok(Vec::new())).unwrap();
         assert!(!legacy.exists(), "a drained legacy stage should be removed");
-        match previous_root {
-            Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
-            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
-        }
-        match previous_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
         let _ = fs::remove_dir_all(&base);
     }
 
