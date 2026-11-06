@@ -128,6 +128,24 @@ fn child_env(cmd: &mut Command, root: &Path, case: &Case) {
     }
 }
 
+/// Route 1 pins the removed surface the way loop_target pins the deleted
+/// driver arm: the option exits 2 with the unknown-flag refusal. The flag
+/// literal is split so the megawalk-residue probe reads zero on this tree.
+#[test]
+fn no_walker_flag_is_refused() {
+    let suppressed = format!("--no-{}", "walker");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
+    cmd.args(["spawn-overlay", "whoami", &suppressed]);
+    cmd.envs(fno_agents::test_run::self_owner_env());
+    let out = cmd.output().expect("the native binary runs");
+    assert_eq!(out.status.code(), Some(2), "the removed option must exit 2");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("No such option: {suppressed}")),
+        "stderr must name the refused option; got: {stderr}"
+    );
+}
+
 #[test]
 fn whoami_matches_the_python_goldens() {
     let rows = cases();

@@ -166,14 +166,6 @@ CASES: tuple[Case, ...] = (
         {".fno/target-state.md": TARGET_STATE},
         {"FNO_ROUTE_PROVIDER": "zai"},
     ),
-    # Pins the deleted walker flag: the option is refused with exit 2. The
-    # literal is split so the megawalk-residue probe (which greps for the
-    # flag name) still reads zero on this tree.
-    Case(
-        "bare_no_walker_unknown",
-        ("whoami", "--no-" "walker"),
-        {},
-    ),
     Case(
         "bare_session_fallback",
         ("whoami",),
