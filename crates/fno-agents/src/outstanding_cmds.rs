@@ -1201,6 +1201,16 @@ fn run_ask(args: &[String]) -> i32 {
                 .take(200)
                 .collect::<String>();
             let _ = crate::notify_dispatch::send_notification(&title, &body, qid);
+            // The mobile handoff rides the same gate as the toast: the
+            // hook in hooks/ask-push.sh turns this line into exactly one
+            // PushNotification from the filing session.
+            let payload = crate::question_ladder::push_payload(
+                qid,
+                text,
+                request.subject.as_deref(),
+                &request.options,
+            );
+            println!("{}", crate::question_ladder::push_line(qid, &payload));
         }
     }
     0
