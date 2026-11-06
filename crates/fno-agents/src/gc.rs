@@ -1275,6 +1275,15 @@ mod tests {
         let home = AgentsHome::at(&dir);
         home.ensure_root().unwrap();
         crate::paths::pin_test_claims_root(&dir.join("claims-root"));
+        // The retire arm reads the boot-revival receipt before it may sweep;
+        // a fixture with no receipt holds every pass. Stamp one finished so
+        // these tests exercise the arm itself.
+        crate::boot_revival::write_receipt(
+            &home.root().join("boot-revival.json"),
+            crate::boot_revival::boot_time().unwrap_or(0),
+            &[],
+            true,
+        );
         (dir, home)
     }
 
@@ -1411,6 +1420,9 @@ mod tests {
     #[test]
     fn the_retire_arm_holds_its_sweeps_until_this_boots_revival_finished() {
         let (dir, home) = retirement_sweep_tmp_home("revival-gate");
+        // This test owns the gate's own legs: clear the helper's finished
+        // receipt so the first pass reads the no-receipt hold.
+        std::fs::remove_file(home.root().join("boot-revival.json")).ok();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
