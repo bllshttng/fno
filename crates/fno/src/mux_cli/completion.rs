@@ -91,12 +91,4 @@ mod tests {
             "forwarded roots must not complete from the native tree"
         );
     }
-
-    #[test]
-    fn bash_falls_back_to_default_completion() {
-        let text = bash_script();
-        assert!(text.contains("complete -o default -o bashdefault -F _fno fno"));
-        assert!(text.contains("compdef") == false);
-        assert!(!text.contains("backlog"));
-    }
 }

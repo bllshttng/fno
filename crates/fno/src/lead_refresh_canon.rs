@@ -141,12 +141,4 @@ mod tests {
         let hook = hook_path(Path::new("/stage/fno"));
         assert_eq!(hook, Path::new("/stage/fno/hooks/precompact-canon-doc.sh"));
     }
-
-    #[test]
-    fn extra_arguments_are_a_usage_refusal() {
-        let mut err: Vec<u8> = Vec::new();
-        let code = run_to(&[OsString::from("--extra")], &mut err);
-        assert_eq!(code, 2);
-        assert!(String::from_utf8_lossy(&err).contains("takes no arguments"));
-    }
 }

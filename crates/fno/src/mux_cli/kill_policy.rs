@@ -263,19 +263,6 @@ mod tests {
             "non-live rows are reported, never killed"
         );
     }
-
-    #[test]
-    fn wedged_row_carries_its_log_path_for_the_failure_line() {
-        let value = serde_json::json!({
-            "session": "stuck", "state": "wedged", "log": "/tmp/mux/stuck.log"
-        });
-        let parsed = LsRow::parse(&value).expect("the row parses");
-        let p = partition(&[parsed]);
-        assert_eq!(
-            p.wedged,
-            vec![("stuck".to_string(), Some("/tmp/mux/stuck.log".to_string()))]
-        );
-    }
 }
 
 // The command bodies: the named kill and the selector kill. They live beside

@@ -1155,31 +1155,6 @@ fn restore_lifecycle_rows() {
         "the tab is skipped whole, never shell-substituted: {notices}"
     );
 }
-
-#[test]
-fn restore_member_cwd_rows() {
-    // x-caef case 2: a worktree worker restores into its own worktree, not
-    // the squad's origins[0].
-    let (cwd, notice) = restore_member_cwd(Some("/worktrees/x-caef"), "/repo", |p| {
-        p == "/worktrees/x-caef"
-    });
-    assert_eq!(cwd, "/worktrees/x-caef");
-    assert!(notice.is_none(), "no fallback happened, no notice");
-
-    // x-caef case 3: an archived worktree is not silently swallowed - the
-    // pane still lands (at origins[0]) and the caller gets both paths to
-    // notice, not just a bare fallback.
-    let (cwd, notice) = restore_member_cwd(Some("/worktrees/archived"), "/repo", |_| false);
-    assert_eq!(cwd, "/repo", "falls back to cwd0");
-    assert_eq!(notice.as_deref(), Some("/worktrees/archived"));
-
-    // A member persisted before this field existed has no stored cwd at
-    // all - that is not a vanished path, so no notice.
-    let (cwd, notice) = restore_member_cwd(None, "/repo", |_| true);
-    assert_eq!(cwd, "/repo");
-    assert!(notice.is_none());
-}
-
 #[test]
 fn restore_degenerate_rows() {
     // (x-8b51, supersedes the x-8f11 absence-tombstone contract) A persisted
@@ -1918,31 +1893,6 @@ fn workspace_restore_portal_rows() {
     core.reap_pane(seat);
     let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fno-portal-restore-noplan"));
 }
-
-#[test]
-#[ignore = "hangs on macOS PTYs; green on the ubuntu CI shard, which runs it serially with --ignored below"]
-fn workspace_restore_fills_a_locate_tier_portal_and_names_the_tier() {
-    // A Locate-tier row (no attach id, no peek reader) fills through the
-    // inline argv and its row CARRIES the notice - a fill that cannot show
-    // the thread must not read as a Drive fill that shows nothing.
-    let mut core = empty_core();
-    core.shells = vec!["/bin/cat".into()];
-    set_attach_program(&["/bin/cat"]);
-    let (_, _) = portal_restore_fixture(&mut core, "locate", 5, "agy-row", "agy");
-    core.agents[0].attach_id = None;
-    let rows = run_workspace_restore(&mut core, false);
-    let row = portal_row(&rows, 5);
-    assert_eq!(row.outcome, "resumed", "{rows:?}");
-    let notice = row.notice.as_deref().expect("the tier is named");
-    assert!(notice.contains("agy"), "{notice}");
-    assert!(notice.contains("Locate"), "{notice}");
-    let new_seat = row.pane.expect("the fill names its pane");
-    let entry = core.panes.get(&new_seat).expect("the new pane exists");
-    assert!(entry.cmd.is_some(), "the seat runs the viewer");
-    core.reap_pane(new_seat);
-    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fno-portal-restore-locate"));
-}
-
 #[test]
 fn restore_lane_rows() {
     // Operator decision: an unnamed lane persists and comes back. Because

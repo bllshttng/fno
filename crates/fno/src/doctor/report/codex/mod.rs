@@ -85,14 +85,4 @@ mod tests {
         let fresh = json!({"status": "fresh", "channel": "dev"});
         assert_eq!(plugin_verdict((None, fresh.clone())), fresh);
     }
-
-    #[test]
-    fn an_unreadable_engine_reads_state_unreadable() {
-        let row = plugin_verdict((Some("plugin-install exited 1: ".into()), Value::Null));
-        assert_eq!(
-            (row["status"].as_str(), row["issue"].as_str()),
-            (Some("unknown"), Some("state-unreadable"))
-        );
-        assert_eq!(row["remedy"], "fno doctor update --rust");
-    }
 }

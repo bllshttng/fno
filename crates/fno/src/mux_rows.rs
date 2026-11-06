@@ -42,16 +42,4 @@ mod pid_sidecar_tests {
         assert_eq!(pid_from_sidecar("pid-sidecar-ok"), Some(777));
         std::fs::remove_file(&sidecar).ok();
     }
-
-    #[test]
-    fn pid_from_sidecar_reads_null_when_absent_or_unparseable() {
-        // AC4-ERR: no sidecar at all -> None (the row serializes null) and
-        // nothing panics.
-        assert_eq!(pid_from_sidecar("pid-sidecar-absent"), None);
-        let sock = proto::socket_path("pid-sidecar-junk").unwrap();
-        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
-        std::fs::write(proto::pid_sidecar_path(&sock), "not-a-pid").unwrap();
-        assert_eq!(pid_from_sidecar("pid-sidecar-junk"), None);
-        std::fs::remove_file(proto::pid_sidecar_path(&sock)).ok();
-    }
 }

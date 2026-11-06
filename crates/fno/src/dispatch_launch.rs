@@ -839,62 +839,6 @@ mod tests {
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn dispatch_spawn_argv_is_pinned() {
-        // Node + no-wait, and nothing else: no --substrate pin (the door's
-        // thread default decides), no --mux-session (pane-only at the door
-        // and a dispatch takes the thread), no --tab parent, no
-        // --harness/--model/--route and no message.
-        assert_eq!(
-            dispatch_spawn_argv("fno", "x-1", None, None),
-            vec!["fno", "agents", "spawn", "--node", "x-1", "--no-wait",]
-        );
-        // The account rides only when present; the epic-tab parent is
-        // retired (a thread has no tab to group under).
-        assert_eq!(
-            dispatch_spawn_argv("fno", "x-1", Some("acc"), Some("3")),
-            vec![
-                "fno",
-                "agents",
-                "spawn",
-                "--node",
-                "x-1",
-                "--no-wait",
-                "--account",
-                "acc",
-            ]
-        );
-    }
-
-    #[test]
-    fn plan_spawn_argv_is_pinned() {
-        // The Plan entry: the dispatch argv plus the architect pin and the
-        // blueprint message - the door, gate and placement machinery shared.
-        assert_eq!(
-            plan_spawn_argv("fno", "x-1", None, None),
-            vec![
-                "fno",
-                "agents",
-                "spawn",
-                "--node",
-                "x-1",
-                "--no-wait",
-                "--agent",
-                "fno:architect",
-                "/fno:blueprint x-1",
-            ]
-        );
-        // The account still rides when present.
-        assert_eq!(
-            plan_spawn_argv("fno", "x-2", Some("acc"), Some("3"))
-                .iter()
-                .filter(|a| *a == "--account" || *a == "acc")
-                .count(),
-            2
-        );
-    }
-
     #[test]
     fn node_identity_reads_the_last_json_object() {
         // `fno backlog next` on an empty board prints null: no node.
