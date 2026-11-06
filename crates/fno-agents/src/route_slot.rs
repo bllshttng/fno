@@ -133,6 +133,7 @@ fn fold(
     let mut plan = Vec::new();
     let mut rows = Map::new();
     let mut fields_by_rung: Map<String, Value> = Map::new();
+    let mut referenced: Vec<String> = Vec::new();
     let fault = |rung: &str, why: String| format!("slot=config {rung} {why}");
 
     for (index, raw) in lanes_raw.iter().enumerate() {
@@ -144,6 +145,7 @@ fn fold(
                     return Err(fault(&rung, "is an empty lane name".into()));
                 }
                 plan.push((rung, name.to_string()));
+                referenced.push(name.to_string());
             }
             Value::Object(table) => {
                 let lanes = lane_vocabulary();
@@ -228,16 +230,19 @@ fn fold(
     }
     for (name, row) in declared_rows {
         // A named row's args validates where the fold happens, exactly like
-        // an inline table's, so both lane shapes refuse the same bad entry.
-        if let Some(args) = row.get("args") {
-            let ok = args
-                .as_array()
-                .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_string));
-            if !ok {
-                return Err(fault(
-                    &name,
-                    format!(".args must be a non-empty list of strings; got {args}"),
-                ));
+        // an inline table's, but only for rows the profile's lanes name: a
+        // malformed row nobody uses never faults an unrelated walk.
+        if referenced.contains(name) {
+            if let Some(args) = row.get("args") {
+                let ok = args
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_string));
+                if !ok {
+                    return Err(fault(
+                        &name,
+                        format!(".args must be a non-empty list of strings; got {args}"),
+                    ));
+                }
             }
         }
         rows.insert(name.clone(), row.clone());
@@ -3675,6 +3680,19 @@ mod tests {
         assert!(chain_of(&out)
             .iter()
             .any(|l| l.contains(".args must be a non-empty list of strings")));
+
+        // The same malformed row left unreferenced faults no walk: the
+        // validation reaches only the rows a profile's lanes name.
+        let out = resolve_slot_payload(&payload(json!({
+            "declared_rows": {
+                "bad-x": {"name": "bad-x", "harness": "claude", "model": "m",
+                           "args": "opus"},
+                "flash-x": {"name": "flash-x", "harness": "claude", "model": "glm",
+                             "band": "low", "account": "zai-main", "route": "zai/glm"},
+            },
+            "lanes_raw": ["flash-x"],
+        })));
+        assert_eq!(out["status"], "pick");
 
         let out = resolve_slot_payload(&payload(json!({
             "profile": {"on_exhausted": "refuse", "on_low": "maybe",

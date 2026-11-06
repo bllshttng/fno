@@ -221,12 +221,17 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         ),
     };
     let path = match transcript.path {
-        Some(p) if transcript.resolved => p,
+        Some(p) if transcript.resolved && !transcript.ambiguous => p,
         _ => {
+            let reason = if transcript.ambiguous {
+                "ambiguous"
+            } else {
+                transcript.reason.unwrap_or("not-found")
+            };
             eprintln!(
                 "consult: no transcript for {harness} session {}: {}",
                 short(session),
-                transcript.reason.unwrap_or("not-found")
+                reason
             );
             return EXIT_NO_TRANSCRIPT;
         }
@@ -459,7 +464,16 @@ pub(crate) fn run_report_with(args: &[String], deps: &Deps) -> i32 {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--since" => since_ms = it.next().and_then(|v| parse_since(v)),
+            "--since" => {
+                let value = it.next().cloned().unwrap_or_default();
+                match parse_since(&value) {
+                    Some(ms) => since_ms = Some(ms),
+                    None => {
+                        eprintln!("consult report: invalid --since '{value}'");
+                        return 2;
+                    }
+                }
+            }
             "--json" | "-J" => json_out = true,
             other => {
                 eprintln!("consult report: unknown argument {other}");
@@ -705,9 +719,14 @@ fn node_rescued(row: Option<&Value>, stuck_at: i64) -> bool {
                     && s.get("started_at")
                         .and_then(started_at)
                         .is_some_and(|at| at > stuck_at)
-                    && s.pointer("/observed_model/kind")
-                        .and_then(Value::as_str)
-                        .is_some_and(|k| k.contains("opus") || k.contains("fable"))
+                    && s.get("observed_model")
+                        .and_then(Value::as_object)
+                        .is_some_and(|m| {
+                            m.values().any(|v| {
+                                v.as_str()
+                                    .is_some_and(|k| k.contains("opus") || k.contains("fable"))
+                            })
+                        })
             })
         })
 }
@@ -750,25 +769,6 @@ mod tests {
             lane: None,
             cwd: dir.to_path_buf(),
             spawner,
-        }
-    }
-
-    fn with_lane<'a>(
-        dir: &Path,
-        spawner: &'a (dyn Fn(&[String], u64) -> Result<(i32, String, String), String> + Sync),
-        transcript: Option<PathBuf>,
-    ) -> Deps<'a> {
-        let config_dir = dir.join(".fno");
-        std::fs::create_dir_all(&config_dir).unwrap();
-        std::fs::write(
-            config_dir.join("config.toml"),
-            "[agents.consult]\nlanes = [\"lane-x\"]\n",
-        )
-        .unwrap();
-        Deps {
-            lane: Some("lane-x".into()),
-            transcript,
-            ..deps(dir, spawner)
         }
     }
 
@@ -868,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn an_allowed_call_spawns_and_records_usage() {
+    fn a_call_records_its_envelope_usage_or_unknown() {
         let (dir, d) = allowed_deps(&silent_ok, None);
         let transcript = dir.path().join("t.jsonl");
         std::fs::write(
@@ -887,21 +887,18 @@ mod tests {
         assert_eq!(data["output_tokens"], json!(7));
         assert_eq!(data["cost_usd"], json!(0.02));
         assert_eq!(data["question_chars"], json!(3));
-    }
-
-    #[test]
-    fn an_envelope_without_usage_records_unknown() {
-        let (dir, mut d) = allowed_deps(&bare_ok, None);
-        let transcript = dir.path().join("t.jsonl");
+        // A bare envelope records unknown, never 0.
+        let (dir2, mut d3) = allowed_deps(&bare_ok, None);
+        let transcript2 = dir2.path().join("t.jsonl");
         std::fs::write(
-            &transcript,
+            &transcript2,
             json!({"type": "user", "message": {"content": "q"}}).to_string(),
         )
         .unwrap();
-        d.transcript = Some(transcript);
-        let code = ask_run(&d, "sess-bare", "why", false);
+        d3.transcript = Some(transcript2);
+        let code = ask_run(&d3, "sess-bare", "why", false);
         assert_eq!(code, 0);
-        let rows = calls(&d.journal);
+        let rows = calls(&d3.journal);
         assert_eq!(rows.len(), 1);
         let data = &rows[0]["data"];
         assert_eq!(data["input_tokens"], json!("unknown"));
@@ -920,6 +917,16 @@ mod tests {
         assert_eq!(report["arms"]["baseline"]["stuck_nodes"], json!(0));
         assert_eq!(report["arms"]["consult"]["green_without_rescue"], json!(0));
         assert_eq!(report["arms"]["baseline"]["mean_cost_usd"], Value::Null);
+    }
+
+    #[test]
+    fn an_unresolvable_transcript_refuses_with_exit_4() {
+        let (_dir, d) = allowed_deps(&silent_ok, None);
+        let code = ask_run(&d, "sess-z1", "why", false);
+        // The lane gate passes (lane-x allowed), so the refusal is the
+        // transcript resolver's own: zcode has no transcript layout.
+        assert_eq!(code, EXIT_NO_TRANSCRIPT);
+        assert!(calls(&d.journal).is_empty());
     }
 
     #[test]
