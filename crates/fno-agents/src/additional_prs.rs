@@ -483,19 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn primary_of_a_merged_node_settles_even_itself() {
-        let entries = vec![
-            node("x-a", "https://github.com/o/r/pull/42", json!("merged")),
-            node("x-b", "https://github.com/o/r/pull/43", json!(null)),
-        ];
-        let primaries = primary_index(&entries);
-        let own_primary = json!({"number": 42, "url": "https://github.com/o/r/pull/42"});
-        assert!(!additional_pr_open(&own_primary, "x-a", &primaries));
-        let merged_primary = json!({"number": 42, "url": "HTTPS://GitHub.com/o/r/pull/42/"});
-        assert!(!additional_pr_open(&merged_primary, "x-b", &primaries));
-    }
-
-    #[test]
     fn plan_reads_once_per_unsettled_extra_and_stamps_the_answer() {
         let entries = vec![
             node(

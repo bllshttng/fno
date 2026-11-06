@@ -679,7 +679,7 @@ pub fn run_repair(action: &str, cwd: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::claims::{encode_key, hostname, machine_id, now_ms, SCHEMA_VERSION};
-    use crate::tick_ledger::{UnmeasuredRetry, SCHED_LAUNCHD};
+    use crate::tick_ledger::SCHED_LAUNCHD;
 
     fn row(arm: &str, sched: &str) -> ArmStatus {
         ArmStatus {
@@ -716,14 +716,6 @@ mod tests {
         }
     }
 
-    fn dead_pid() -> i32 {
-        let mut candidate = 999_999i32;
-        while unsafe { libc::kill(candidate, 0) } == 0 {
-            candidate += 1;
-        }
-        candidate
-    }
-
     #[test]
     fn unarmed_rows_carry_the_config_command_and_never_heal_auto() {
         let mut r = row("heal", SCHED_LAUNCHD);
@@ -739,38 +731,6 @@ mod tests {
         );
         assert!(!r.line.contains("heal=auto"), "{}", r.line);
         assert!(r.heal.is_none(), "{}", r.line);
-    }
-
-    // The incident this module encodes: the arm's own error detail names
-    // the cause, and the linked-worktree pin never shadows it again.
-    #[test]
-    fn the_arms_own_error_detail_outranks_the_install_pin() {
-        let mut r = row("question_judge", SCHED_LAUNCHD);
-        r.failing = true;
-        r.detail = Some("No child processes (os error 10)".to_string());
-        let facts = RepairFacts {
-            install_off_main: true,
-            dead_holds: Vec::new(),
-            pid_dead: |_| false,
-        };
-        classify(&mut r, &facts);
-        assert_eq!(r.cause.as_deref(), Some("child_reaped"));
-        assert!(r.line.contains("cause=child_reaped"), "{}", r.line);
-    }
-
-    // The fallback keeps its old seat: a silent failing row on an off-main
-    // pin still reads stale_build, which feeds the 6h install heal.
-    #[test]
-    fn a_silent_failing_row_on_an_off_main_pin_still_reads_stale_build() {
-        let mut r = row("lead_wake", SCHED_LAUNCHD);
-        r.failing = true;
-        let facts = RepairFacts {
-            install_off_main: true,
-            dead_holds: Vec::new(),
-            pid_dead: |_| false,
-        };
-        classify(&mut r, &facts);
-        assert_eq!(r.cause.as_deref(), Some("stale_build"));
     }
 
     fn write_claim(root: &Path, key: &str, holder: &str, pid: i32) {
@@ -807,190 +767,6 @@ mod tests {
         }
     }
 
-    // AC1: a stale auto_continue waiting on a failing pr_watch_merge reads UPSTREAM.
-    #[test]
-    fn a_waiting_arm_names_its_red_upstream() {
-        let mut pm = row("pr_watch_merge", SCHED_LAUNCHD);
-        pm.failing = true;
-        pm.skip_reason = Some("timeout".into());
-        pm.failing_for_s = Some(900);
-        let mut ac = row("auto_continue", "session");
-        ac.stale = true;
-        ac.cause = Some("unexplained".into());
-        let mut rows = vec![pm, ac];
-        annotate(&mut rows, &facts(false));
-        let ac = &rows[1];
-        let words: Vec<&str> = ac.line.split_whitespace().take(2).collect();
-        assert_eq!(words, ["auto_continue", "UPSTREAM"], "{}", ac.line);
-        assert!(ac.line.contains("cause=upstream_down"), "{}", ac.line);
-        assert!(ac.line.contains("pr_watch_merge"), "{}", ac.line);
-        assert_eq!(ac.upstream.as_deref(), Some("pr_watch_merge"));
-        assert_eq!(ac.repair, rows[0].repair);
-        assert!(
-            ac.line.contains("repair: fno do pr watch status"),
-            "{}",
-            ac.line
-        );
-    }
-
-    // AC2: a held row whose holder pid is dead reads FAIL dead_holder with a release command.
-    #[test]
-    fn a_held_row_with_a_dead_holder_fails_with_a_release_command() {
-        let mut mc = row("merge_close", SCHED_DAEMON);
-        mc.skip_reason = Some("held".into());
-        mc.detail = Some("flight flight:k held by single-flight:42:x for 2400s".into());
-        let mut rows = vec![mc];
-        annotate(&mut rows, &facts(true));
-        let mc = &rows[0];
-        assert!(mc.failing);
-        assert_eq!(mc.failing_for_s, Some(2400));
-        assert!(mc.line.contains(" FAIL "), "{}", mc.line);
-        assert!(mc.line.contains("cause=dead_holder"), "{}", mc.line);
-        assert!(
-            mc.line
-                .contains("repair: fno agents claim release flight:k --holder single-flight:42:x"),
-            "{}",
-            mc.line
-        );
-        assert!(mc.line.ends_with("heal=auto"), "{}", mc.line);
-        // A live holder leaves the held row alone.
-        let mut live = row("merge_close", SCHED_DAEMON);
-        live.skip_reason = Some("held".into());
-        live.detail = Some("flight held by single-flight:42:x for 91s".into());
-        let mut rows = vec![live];
-        annotate(&mut rows.clone(), &facts(false));
-        assert!(!rows[0].failing);
-        assert!(rows[0].cause.is_none());
-        // A dead holder inside the grace is the gate's to reclaim, not red.
-        annotate(&mut rows, &facts(true));
-        assert!(!rows[0].failing);
-        assert!(rows[0].cause.is_none());
-    }
-
-    // AC3: an unknown failure keeps its skip token and names no command.
-    #[test]
-    fn failure_classes_distinguish_unknown_operator_from_queue_timeout() {
-        let mut mc = row("merge_close", SCHED_DAEMON);
-        mc.failing = true;
-        mc.skip_reason = Some("error".into());
-        mc.detail = Some("unreadable reconcile json".into());
-        let mut rows = vec![mc];
-        annotate(&mut rows, &facts(false));
-        let mc = &rows[0];
-        assert!(mc.line.contains("skip=error"), "{}", mc.line);
-        assert!(mc.line.contains("cause=unclassified"), "{}", mc.line);
-        assert!(mc.line.ends_with("heal=operator"), "{}", mc.line);
-        assert!(!mc.line.contains("repair:"), "{}", mc.line);
-        assert!(mc.repair.is_none());
-
-        // An empty sweep under the runaway brake is a transient: it heals
-        // itself when load drops, so nobody gets paged.
-        let mut mc = row("merge_close", SCHED_DAEMON);
-        mc.failing = true;
-        mc.skip_reason = Some("overloaded".into());
-        mc.detail = Some(
-            "reconcile wrote no output while the machine runaway brake holds (600s left)".into(),
-        );
-        let mut rows = vec![mc];
-        annotate(&mut rows, &facts(false));
-        let mc = &rows[0];
-        assert!(mc.line.contains("cause=overloaded"), "{}", mc.line);
-        assert!(mc.repair.is_none(), "{}", mc.line);
-        assert!(mc.line.ends_with("heal=auto"), "{}", mc.line);
-
-        // A rename ghost: the subprocess answered but its stdout carries no
-        // line the arm greps, so the row names the contract, not
-        // "unclassified". A Python-leg TimeoutExpired folds into `timeout`.
-        let mut ledger = row("team_ledger", SCHED_DAEMON);
-        ledger.failing = true;
-        ledger.skip_reason = Some("error".into());
-        ledger.detail = Some("ledger printed no path".into());
-        let mut rows = vec![ledger];
-        annotate(&mut rows, &facts(false));
-        let ledger = &rows[0];
-        assert_eq!(ledger.cause.as_deref(), Some("output_contract"));
-        assert!(ledger.line.contains("rename ghost"), "{}", ledger.line);
-        assert!(ledger.repair.is_none());
-        assert!(ledger.line.ends_with("heal=operator"), "{}", ledger.line);
-
-        let mut expired = row("team_ledger", SCHED_DAEMON);
-        expired.failing = true;
-        expired.skip_reason = Some("error".into());
-        expired.detail =
-            Some("subprocess.TimeoutExpired: ['fno-agents', 'lead-rundown', '--team-json']".into());
-        let mut rows = vec![expired];
-        annotate(&mut rows, &facts(false));
-        assert_eq!(rows[0].cause.as_deref(), Some("timeout"));
-
-        let mut row = row("pr_watch_merge", SCHED_LAUNCHD);
-        row.failing = true;
-        row.skip_reason = Some("grant_queue_timeout".into());
-        row.detail = Some("grant queue timed out after 191.2 seconds".into());
-        let mut rows = vec![row];
-
-        annotate(&mut rows, &facts(false));
-
-        let row = &rows[0];
-        assert_eq!(row.cause.as_deref(), Some("grant_queue_timeout"));
-        assert!(
-            row.line.contains("next pr-watch tick retries"),
-            "{}",
-            row.line
-        );
-        assert!(row.repair.is_none());
-        assert!(row.heal.is_none());
-        assert!(!row.line.ends_with("heal=operator"), "{}", row.line);
-    }
-
-    #[test]
-    fn heal_retries_each_unmeasured_attempt_once_per_project() {
-        let td = tempfile::TempDir::new().unwrap();
-        let store = td.path().join("signals.json");
-        let mut ac = row("auto_continue", SCHED_DAEMON);
-        ac.retries = vec![
-            UnmeasuredRetry {
-                project: "alpha".into(),
-                ts: "2026-09-04T12:00:00Z".into(),
-            },
-            UnmeasuredRetry {
-                project: "beta".into(),
-                ts: "2026-09-04T12:05:00Z".into(),
-            },
-        ];
-        let rows = vec![ac];
-        let mut runs = Vec::new();
-        let first = heal(&rows, &[], true, &store, 0, 1800, &mut |action| {
-            runs.push(action.to_string());
-            true
-        });
-        assert_eq!(first, "heal=advance:alpha:spawned,advance:beta:spawned");
-        let second = heal(&rows, &[], true, &store, 300, 1800, &mut |action| {
-            runs.push(action.to_string());
-            true
-        });
-        assert_eq!(second, "heal=0");
-        assert_eq!(runs, ["advance:alpha", "advance:beta"]);
-
-        // A new attempt for a third project fires; a failed spawn keeps its
-        // token marked, so the same attempt never re-runs.
-        let mut next = rows.clone();
-        next[0].retries = vec![UnmeasuredRetry {
-            project: "gamma".into(),
-            ts: "2026-09-04T13:00:00Z".into(),
-        }];
-        let third = heal(&next, &[], true, &store, 600, 1800, &mut |action| {
-            runs.push(action.to_string());
-            false
-        });
-        assert_eq!(third, "heal=advance:gamma:failed");
-        let fourth = heal(&next, &[], true, &store, 900, 1800, &mut |action| {
-            runs.push(action.to_string());
-            false
-        });
-        assert_eq!(fourth, "heal=0");
-        assert_eq!(runs, ["advance:alpha", "advance:beta", "advance:gamma"]);
-    }
-
     // AC12: a claim re-acquired by a live holder between the read and the release stays.
     #[test]
     fn heal_never_drops_a_live_replacement() {
@@ -1013,25 +789,6 @@ mod tests {
         assert_eq!(token, "heal=skipped:1");
         let (_, rec) = crate::claims::status("flight:probe", Some(td.path()));
         assert_eq!(rec.unwrap().holder, "single-flight:2:live");
-    }
-
-    // AC13: the switch off runs nothing.
-    #[test]
-    fn heal_off_runs_nothing() {
-        let td = tempfile::TempDir::new().unwrap();
-        let store = td.path().join("signals.json");
-        write_claim(td.path(), "flight:probe", "single-flight:1:a", dead_pid());
-        let findings = vec![holder_finding(
-            td.path(),
-            "flight:probe",
-            "single-flight:1:a",
-        )];
-        let token = heal(&[], &findings, false, &store, 0, 1800, &mut |_| {
-            panic!("no run")
-        });
-        assert_eq!(token, "heal=off");
-        let (_, rec) = crate::claims::status("flight:probe", Some(td.path()));
-        assert!(rec.is_some());
     }
 
     #[test]

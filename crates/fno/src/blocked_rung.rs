@@ -1,16 +1,11 @@
 //! The blocked rung: how an agent row decides Blocked, and the one merge
 //! where the screen-manifest rung outranks the hook rung.
 //!
-//! The hook rung (inside_leg) owns working/done everywhere. It owns blocked
-//! only where the harness's session-state wiring names a blocked event
-//! (`blocked = "Notification"` et al). Where the wiring says `none` - the
-//! payload shape was never captured (codex) - the hook lane structurally
-//! cannot state blocked, so the screen manifest owns that rung: the daemon
-//! sweep keeps scraping such rows (`fno-agents` scrape.rs reads the same
-//! wiring) and this module lets a FRESH screen `blocked` verdict outrank the
-//! leg's last working/done word. Fail-closed on harness, freshness and
-//! state, so a leftover verdict under a hook-capable row of a harness that
-//! DOES wire a blocked event can never badge from the screen.
+//! The hook rung owns working/done. A harness whose session-state wiring
+//! declares `screen_backstop` or no blocked producer also admits a fresh
+//! screen `blocked` verdict over its last working/done report. This keeps a
+//! parked permission prompt visible when its notification was missed.
+//! Unknown harnesses and expired screen evidence never gain that authority.
 
 use crate::agents_view::{report_is_live, resolved_rows};
 use crate::proto::{AgentBadge, AnswerablePrompt};
@@ -117,12 +112,9 @@ pub(crate) fn leg_badge(
     (badge, reason, None)
 }
 
-/// The full Some(leg) arm of the agents view's badge decision, including the
-/// one merge: a fresh screen `blocked` verdict outranks the leg's last
-/// working/done word for a no-blocked-producer harness. Only `blocked`
-/// merges - the hook owns working/done everywhere, and a hook-blocked leg
-/// outranks the screen trivially (such a row is never scraped). One
-/// sweep-tick lag after the user answers resolves on the next pass.
+/// A fresh blocked screen may override working/done on a declared backstop
+/// harness. A hook-blocked leg keeps its own authority. Answering the prompt
+/// resolves the screen override on the next sweep.
 pub(crate) fn merged_badge(
     leg: &serde_json::Value,
     row: &serde_json::Value,
@@ -169,13 +161,10 @@ mod tests {
 
     const NOW_STAMP: &str = "2027-01-15T08:00:00Z";
 
-    // The screen-manifest rung for hook-less rows (moved from agents_view):
-    // a fresh scrape verdict badges (blocked/working); `idle` renders as a
-    // plain live row; a lapsed or malformed verdict ages to liveness-only;
-    // and ANY inside_leg report - even TTL-lapsed - keeps a leftover verdict
-    // from badging on a harness that wires a blocked event (claude here).
+    // Fresh screens badge hookless rows and back up a lapsed Claude hook.
+    // Invalid or expired screen evidence never supplies a badge.
     #[test]
-    fn agent_rows_screen_state_rung_badges_only_hookless_rows() {
+    fn agent_rows_screen_state_rung_requires_fresh_evidence() {
         let raw = reg(&format!(
             r#"{{"name":"scraped-blocked","cwd":"/w","status":"live",
                  "screen_state":{{"state":"blocked","rule":"permission_prompt",
@@ -189,7 +178,7 @@ mod tests {
                {{"name":"scraped-corrupt","cwd":"/w","status":"live",
                  "screen_state":{{"state":"working","rule":"busy","seq":1,
                                   "at":"garbage","ttl_ms":120000}}}},
-               {{"name":"hook-wins","cwd":"/w","status":"live","provider":"claude",
+               {{"name":"hook-lapsed","cwd":"/w","status":"live","provider":"claude",
                  "inside_leg":{{"state":"working","seq":9,
                                 "received_at":"2020-01-01T00:00:00Z","ttl_ms":60000}},
                  "screen_state":{{"state":"blocked","rule":"leftover","seq":1,
@@ -206,22 +195,19 @@ mod tests {
         assert_eq!(get("scraped-lapsed").badge, None, "TTL lapse ages out");
         assert_eq!(get("scraped-corrupt").badge, None, "corrupt stamp closed");
         assert_eq!(
-            get("hook-wins").badge,
-            None,
-            "a hook-capable row of a harness that wires a blocked event (claude) \
-             never badges from a scrape verdict"
+            get("hook-lapsed").badge,
+            Some(AgentBadge::Blocked),
+            "a parked prompt stays blocked after the hook report lapses"
         );
     }
 
-    // The no-blocked-producer merge: a codex row (wiring `blocked = "none"`)
-    // whose hook lane last said working (live) or whose leg lapsed reads
-    // Blocked from a FRESH screen verdict - the pane sitting at the
-    // request_user_input dialog or a permission prompt the hook lane can
-    // never state.
+    // Screen backstops survive working and lapsed hook reports on every
+    // wired harness; the answer payload still reaches the client.
     #[test]
-    fn screen_blocked_outranks_working_leg_for_no_blocked_producer_rows() {
-        let raw = reg(&format!(
-            r#"{{"name":"cx-live-leg","cwd":"/w","status":"live","provider":"codex",
+    fn parked_prompts_outrank_working_and_lapsed_hook_reports() {
+        for harness in ["claude", "opencode", "codex", "agy", "pi"] {
+            let raw = reg(&format!(
+                r#"{{"name":"cx-live-leg","cwd":"/w","status":"live","provider":"codex",
                  "inside_leg":{{"state":"working","seq":9,
                                 "received_at":"{recent}","ttl_ms":60000}},
                  "screen_state":{{"state":"blocked","rule":"question_prompt",
@@ -235,19 +221,21 @@ mod tests {
                                 "received_at":"2020-01-01T00:00:00Z","ttl_ms":60000}},
                  "screen_state":{{"state":"blocked","rule":"approval_prompt",
                                   "seq":1,"at":"{recent}","ttl_ms":120000}}}}"#,
-            recent = "2027-01-15T07:59:30Z",
-        ));
-        let now = crate::agents_view::rfc3339_like_to_secs(NOW_STAMP).unwrap();
-        let rows = derive_rows(&raw, now).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        let merged = get("cx-live-leg");
-        assert_eq!(merged.badge, Some(AgentBadge::Blocked));
-        assert_eq!(merged.reason.as_deref(), Some("question_prompt"));
-        let ans = merged.answerable.as_ref().expect("payload parsed");
-        assert_eq!(ans.options.len(), 1);
-        let lapsed = get("cx-lapsed-leg");
-        assert_eq!(lapsed.badge, Some(AgentBadge::Blocked));
-        assert_eq!(lapsed.reason.as_deref(), Some("approval_prompt"));
+                recent = "2027-01-15T07:59:30Z",
+            ));
+            let now = crate::agents_view::rfc3339_like_to_secs(NOW_STAMP).unwrap();
+            let raw = raw.replace("codex", harness);
+            let rows = derive_rows(&raw, now).unwrap();
+            let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+            let merged = get("cx-live-leg");
+            assert_eq!(merged.badge, Some(AgentBadge::Blocked));
+            assert_eq!(merged.reason.as_deref(), Some("question_prompt"));
+            let ans = merged.answerable.as_ref().expect("payload parsed");
+            assert_eq!(ans.options.len(), 1);
+            let lapsed = get("cx-lapsed-leg");
+            assert_eq!(lapsed.badge, Some(AgentBadge::Blocked));
+            assert_eq!(lapsed.reason.as_deref(), Some("approval_prompt"));
+        }
     }
 
     // The merge's fail-closed guard: a LAPSED screen verdict, a NON-blocked

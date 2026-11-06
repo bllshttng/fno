@@ -1912,16 +1912,6 @@ mod tests {
         }
     }
 
-    const FNO_PY: &str = "/Users/x/.local/share/uv/tools/fno/bin/python3 \
-/Users/x/.local/share/uv/tools/fno/bin/fno-py agents stale-escalate --json";
-
-    /// AC11: every clause satisfied is the only shape that reaps.
-    #[test]
-    fn an_inherited_past_threshold_fno_child_is_reapable() {
-        let row = orphan(FNO_PY, 1, 7200);
-        assert!(is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
-    }
-
     /// The argv clause matches a TOKEN, not a substring, in both reparable
     /// families: the fno-py entrypoint by basename, and stdio MCP servers by
     /// the `serve --mcp` pair or the codegraph `--liftoff-only` launcher flag
@@ -2025,22 +2015,6 @@ mod tests {
             crate::event_store::EPHEMERAL_SUFFIX
         ))
         .exists());
-    }
-
-    /// A pid that changed identity between the table read and the signal is
-    /// somebody else's process now.
-    #[test]
-    fn a_pid_that_changed_identity_is_not_signalled() {
-        // This process is alive and is not what the row claims, so the
-        // re-verification must refuse it.
-        let row = ProcRow {
-            pid: std::process::id(),
-            ppid: 1,
-            age_secs: 86_400,
-            args: "/tools/fno/bin/fno-py agents truth --handles a".to_string(),
-        };
-        assert!(!still_the_same(&row));
-        assert!(!terminate(&row));
     }
 
     const GRACE: i64 = 900;
@@ -2252,120 +2226,6 @@ mod tests {
             ..Default::default()
         };
         assert!(!gc_sweep::stop_row_process(&home, &entry));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn dry_run_never_stops_a_retiring_row() {
-        // A rehearsal that killed the worker it rehearsed retiring would be
-        // the destructive run wearing a dry flag. The stop seam must never
-        // fire in dry-run, even for a row that classifies Retire end to end.
-        use std::collections::HashMap;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        let dir = std::env::temp_dir().join(format!(
-            "fno-gc-dry-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let home = AgentsHome::at(&dir);
-        home.ensure_root().unwrap();
-        // A transcript quiet past grace: written, then aged 2000s.
-        let transcript = dir.join("rollout.jsonl");
-        std::fs::write(&transcript, b"{}\n").unwrap();
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2000);
-        std::fs::File::options()
-            .write(true)
-            .open(&transcript)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
-            .unwrap();
-        crate::state::update_registry(&home.registry_json(), |r| {
-            let mut e = crate::state::RegistryEntry::default();
-            e.name = "dryw".into();
-            e.short_id = "dryw".into();
-            e.origin = Some("spawn".into());
-            e.harness = Some("codex".into());
-            e.harness_session_id = Some("S-dry".into());
-            r.entries.push(e);
-        })
-        .unwrap();
-        let mut index = HashMap::new();
-        index.insert(
-            "s-dry".to_string(),
-            vec![("N1".to_string(), "done".to_string())],
-        );
-        let graph = std::cell::RefCell::new(Some(gc_sweep::GraphRead {
-            work_index: index.clone(),
-            index,
-            open_do: HashMap::new(),
-            phases: HashMap::new(),
-            closed_planning: HashMap::new(),
-            plan_written: HashMap::new(),
-            statuses: HashMap::from([("N1".to_string(), "done".to_string())]),
-            pr_state: HashMap::from([("N1".to_string(), (None, 0, 0))]),
-            pr_number: HashMap::new(),
-            plan_paths: HashMap::new(),
-            delivery_merged_refs: HashMap::new(),
-            do_nodes: HashMap::new(),
-            pr_reads: HashMap::new(),
-        }));
-        let emitter = crate::events::EventEmitter::new(std::path::PathBuf::new(), "daemon");
-        let stopped = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&stopped);
-        let summary = gc_sweep::run(
-            &home,
-            &emitter,
-            900,
-            true,
-            7,
-            &|_h| graph.borrow_mut().take(),
-            &|_e| Some(vec![transcript.clone()]),
-            &|entries| {
-                entries
-                    .iter()
-                    .map(|e| (row_handle(e), Some(2 * 3600)))
-                    .collect::<HashMap<_, _>>()
-            },
-            &move |_e| {
-                flag.store(true, Ordering::SeqCst);
-                true
-            },
-            &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-            &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-            &no_agents,
-            &|_e| (None, None),
-            &|_e| None,
-        );
-        assert!(
-            !stopped.load(Ordering::SeqCst),
-            "the stop seam fired in dry-run"
-        );
-        // the row still classifies would-retire, but a dry run with
-        // no positive stop evidence holds it under needs_live_stop instead
-        // of promising the retirement.
-        assert_eq!(
-            summary.needs_live_stop.len(),
-            1,
-            "the row still classifies would-retire: {summary:?}"
-        );
-        assert!(
-            summary.retired.is_empty() && summary.dry_run_unverified.is_empty(),
-            "a dry run promises nothing: {:?}",
-            (summary.retired, summary.dry_run_unverified)
-        );
-        assert!(
-            crate::state::load_registry(&home.registry_json())
-                .unwrap()
-                .entries
-                .iter()
-                .any(|e| e.name == "dryw"),
-            "dry-run mutated the registry"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -203,6 +203,50 @@ fn seed_slot(toks: &[String]) -> Option<(usize, &'static str)> {
         .map(|first| (*first, "positional"))
 }
 
+/// Read a file or stdin prompt once, before admission and name minting need
+/// its text. The internal message flag never enters the process's OS argv.
+pub(crate) fn resolve_prompt_file(mut args: Vec<String>) -> Result<Vec<String>, (String, i32)> {
+    let end = args
+        .iter()
+        .position(|t| t == "--" || t == "--argv")
+        .unwrap_or(args.len());
+    let head = &args[1..end];
+    if head.iter().any(|t| t == "--help" || t == "-h") {
+        return Ok(args);
+    }
+    let files: Vec<_> = spawn_tokens(head)
+        .into_iter()
+        .filter(|(_, token)| token == "--prompt-file" || token.starts_with("--prompt-file="))
+        .collect();
+    if files.is_empty() {
+        return Ok(args);
+    }
+    if files.len() > 1 {
+        return Err((
+            "error: provide the prompt once - one --prompt-file only".into(),
+            1,
+        ));
+    }
+    let (index, token) = &files[0];
+    let (path, width) = if let Some((_, path)) = token.split_once('=') {
+        (path.to_string(), 1)
+    } else {
+        (
+            head.get(index + 1)
+                .cloned()
+                .ok_or_else(|| ("--prompt-file needs a value".to_string(), 2))?,
+            2,
+        )
+    };
+    let inline = seed_of(head);
+    let text = crate::text_or_file::read_text_arg(inline.as_deref(), Some(&path), "the prompt")
+        .map_err(|reason| (reason, 1))?
+        .unwrap_or_default();
+    let at = index + 1;
+    args.splice(at..at + width, [format!("--message={text}")]);
+    Ok(args)
+}
+
 /// The MESSAGE seed: the `--message` value, else the sole positional.
 pub(crate) fn seed_of(toks: &[String]) -> Option<String> {
     let (i, form) = seed_slot(toks)?;
@@ -608,11 +652,11 @@ pub fn normalize(
         .any(|t| t == "--name" || t.starts_with("--name="));
     let toks = if !hand_off && !named {
         let names: HashSet<String> = existing_names.cloned().unwrap_or_default();
-        let seeds = positional_indices(head);
+        let seed = seed_of(head);
         let minted = mint_node_name(
             cwd,
             flag_value(head, &["--node"]).as_deref(),
-            seeds.first().map(|i| head[*i].as_str()),
+            seed.as_deref(),
             flag_value(head, &["--slug"]).as_deref(),
             &names,
         );

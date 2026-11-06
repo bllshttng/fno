@@ -6,9 +6,7 @@
 //! front dispatches.
 
 use crate::mail_header::{render_held_release, HeldMessage, HeldRelease};
-use crate::mail_hold::{
-    clock_description, hold_sidecar_path, identity_key, read_clock, row_matches_token,
-};
+use crate::mail_hold::{clock_description, hold_sidecar_path, identity_key, read_clock};
 use crate::mail_notify_self::read_bus;
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
@@ -269,14 +267,30 @@ pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
     let home = AgentsHome::from_env();
     let entry = entry_for(handle);
     let sid = entry.as_ref().and_then(|e| e.harness_session_id.clone());
-    let forms: Vec<String> = match &sid {
-        Some(sid) => dedupe_keep_order(vec![
-            crate::spawn_context::session_identity_key(sid),
-            crate::identity::canonical_handle(sid),
-            handle.to_string(),
-        ]),
-        None => vec![handle.to_string()],
+    let stored: Vec<String> = crate::state::load_registry(&AgentsHome::shared_registry_json())
+        .map(|registry| {
+            registry
+                .entries
+                .iter()
+                .filter_map(|e| e.harness_session_id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let (mut forms, refused) = match &sid {
+        Some(sid) => crate::identity::bus_drain_forms(sid, &stored),
+        None => (vec![handle.to_string()], Vec::new()),
     };
+    // A legacy timer may still pass the short handle as --handle: it is the
+    // row's head, so a second session answering to it keeps the handle in
+    // `refused` and the release never drains under it.
+    if !forms.contains(&handle.to_string()) && !refused.contains(&handle.to_string()) {
+        forms.push(handle.to_string());
+    }
+    for form in &refused {
+        eprintln!(
+            "note: held-mail release skips short form {form}: more than one stored session answers to it; mail addressed to a full session id still releases"
+        );
+    }
 
     let bus = crate::mail_paths::state_bus_dir(&home);
     let msgs = read_bus(&bus);
@@ -397,11 +411,7 @@ fn emit_release_marker(handle: &str, held_count: usize, outcome: &str, held_for_
 fn clear_policy(session_id: &str) -> bool {
     let path = AgentsHome::shared_registry_json();
     crate::state::update_registry(&path, |registry| {
-        if let Some(i) = registry
-            .entries
-            .iter()
-            .position(|e| row_matches_token(e, session_id))
-        {
+        if let Some(i) = crate::mail_hold::sole_row_for_token(registry, session_id) {
             registry.entries[i].delivery_policy = None;
         }
     })
@@ -410,10 +420,7 @@ fn clear_policy(session_id: &str) -> bool {
 
 fn entry_for(session_id: &str) -> Option<crate::state::RegistryEntry> {
     let registry = crate::state::load_registry(&AgentsHome::shared_registry_json()).ok()?;
-    registry
-        .entries
-        .into_iter()
-        .find(|e| row_matches_token(e, session_id))
+    crate::mail_hold::sole_row_for_token(&registry, session_id).map(|i| registry.entries[i].clone())
 }
 
 /// The register refusals, checked alone so the hold command can refuse before
@@ -556,17 +563,6 @@ fn str_field(m: &Value, key: &str, blank: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(blank)
         .to_string()
-}
-
-fn dedupe_keep_order(items: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for item in items {
-        if seen.insert(item.clone()) {
-            out.push(item);
-        }
-    }
-    out
 }
 
 fn dedupe_keep_order_by_id(messages: Vec<Value>) -> Vec<Value> {

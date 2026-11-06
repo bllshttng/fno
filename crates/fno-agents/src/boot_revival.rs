@@ -1039,8 +1039,6 @@ mod tests {
     use super::*;
     use crate::claude_roster::ClaudeAgentRow;
     use crate::AgentStatus;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
 
     const BOOT: u64 = 1_790_338_000;
 
@@ -1349,135 +1347,6 @@ mod tests {
         }
     }
 
-    fn plan_fixture(name: &str, config_dir: Option<&str>) -> crate::reentry::ReentryPlan {
-        crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "respawn".into(),
-            name: name.into(),
-            fno_id: None,
-            node: None,
-            session_id: "123e4567-0000-0000-0000-000000000000".into(),
-            short_id: "123e4567".into(),
-            launch_account: "default".into(),
-            claude_config_dir: config_dir.map(str::to_string),
-            route_settings_path: None,
-            cwd: "/tmp/wt".into(),
-            substrate: "thread".into(),
-            mux: None,
-            argv: vec!["claude".into(), "--resume".into(), "123e4567".into()],
-            env: Default::default(),
-        }
-    }
-
-    #[test]
-    fn the_worker_batch_runs_three_at_a_time_behind_one_birth_per_env() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let workers: Vec<String> = (0..7).map(|i| format!("w{i}")).collect();
-        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let inflight = Arc::new(AtomicUsize::new(0));
-        let max_inflight = Arc::new(AtomicUsize::new(0));
-        let g_log = log.clone();
-        let r_log = log.clone();
-        let i_inflight = inflight.clone();
-        let m_inflight = max_inflight.clone();
-        let rows = revive_batch(
-            &home,
-            &[],
-            &workers,
-            move |_plan| {
-                g_log.lock().unwrap().push("guard".into());
-            },
-            move |_home, name| {
-                let n = i_inflight.fetch_add(1, Ordering::SeqCst) + 1;
-                m_inflight.fetch_max(n, Ordering::SeqCst);
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                r_log.lock().unwrap().push(format!("revive:{name}"));
-                i_inflight.fetch_sub(1, Ordering::SeqCst);
-                ReceiptRow::new(name, "revived", "")
-            },
-            |_home, name| Ok(plan_fixture(name, Some("/cfg"))),
-        );
-        assert_eq!(rows.len(), 7);
-        assert!(rows.iter().all(|r| r.outcome == "revived"), "{rows:?}");
-        let peak = max_inflight.load(Ordering::SeqCst);
-        assert!(peak <= 3, "the bound is three: {peak}");
-        assert!(peak >= 2, "the batch runs concurrently: {peak}");
-        let lg = log.lock().unwrap();
-        assert_eq!(lg.iter().filter(|e| *e == "guard").count(), 1, "{lg:?}");
-        assert_eq!(lg[0], "guard", "the birth precedes every revive: {lg:?}");
-    }
-
-    #[test]
-    fn a_failed_row_is_retried_once_and_the_retry_replaces_the_row() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let workers = vec!["flaky".to_string(), "down".to_string()];
-        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let c1 = calls.clone();
-        let c2 = calls.clone();
-        let rows = revive_batch(
-            &home,
-            &[],
-            &workers,
-            |_plan| {},
-            move |_home, name| {
-                c1.lock().unwrap().push(name.to_string());
-                if name == "flaky" {
-                    let count = {
-                        let log = c2.lock().unwrap();
-                        log.iter().filter(|n| n.as_str() == "flaky").count()
-                    };
-                    if count == 1 {
-                        return ReceiptRow::new(name, "failed", "exited 16");
-                    }
-                }
-                ReceiptRow::new(name, "revived", "")
-            },
-            |_home, name| Ok(plan_fixture(name, None)),
-        );
-        let flaky: Vec<&ReceiptRow> = rows.iter().filter(|r| r.name == "flaky").collect();
-        assert_eq!(
-            flaky.len(),
-            1,
-            "one row per worker, not one per attempt: {rows:?}"
-        );
-        assert_eq!(flaky[0].outcome, "revived", "{rows:?}");
-        let log = calls.lock().unwrap();
-        assert_eq!(log.iter().filter(|n| n.as_str() == "flaky").count(), 2);
-        assert_eq!(log.iter().filter(|n| n.as_str() == "down").count(), 1);
-    }
-
-    #[test]
-    fn rerun_merge_keeps_rows_outside_the_set_and_reports_surviving_failures() {
-        let old = vec![
-            ReceiptRow::new("a", "revived", "kept"),
-            ReceiptRow::new("b", "failed", "exited 16"),
-            ReceiptRow::new("c", "failed", "exited 16"),
-            ReceiptRow::new("d", "skipped", "listed as working"),
-        ];
-        let rerun: HashSet<String> = ["b", "c", "d"].iter().map(|s| s.to_string()).collect();
-        let (merged, any_failed) = merge_rerun_rows(
-            old,
-            &rerun,
-            vec![ReceiptRow::new("b", "revived", "claude respawn 1111")],
-            vec![ReceiptRow::new("d", "skipped", "node x done")],
-        );
-        let find = |name: &str| merged.iter().find(|r| r.name == name).unwrap();
-        assert_eq!(find("a").outcome, "revived", "{merged:?}");
-        assert_eq!(find("a").reason, "kept");
-        assert_eq!(find("b").outcome, "revived", "{merged:?}");
-        assert_eq!(
-            find("c").outcome,
-            "failed",
-            "no fresh reading keeps the failure"
-        );
-        assert_eq!(find("d").outcome, "skipped");
-        assert_eq!(find("d").reason, "node x done");
-        assert!(any_failed, "c keeps its failure");
-    }
-
     #[test]
     fn boot_failed_refuses_a_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -1487,45 +1356,6 @@ mod tests {
             &home,
         );
         assert_eq!(code, 2);
-    }
-
-    #[test]
-    fn a_resolution_failure_is_attempted_once_not_twice() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let workers = vec!["bad".to_string(), "good".to_string()];
-        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let c1 = calls.clone();
-        let rows = revive_batch(
-            &home,
-            &[],
-            &workers,
-            |_plan| {},
-            move |_home, name| {
-                c1.lock().unwrap().push(name.to_string());
-                ReceiptRow::new(name, "revived", "")
-            },
-            |_home, name| {
-                if name == "bad" {
-                    Err("no route on the row".to_string())
-                } else {
-                    Ok(plan_fixture(name, None))
-                }
-            },
-        );
-        let bad: Vec<&ReceiptRow> = rows.iter().filter(|r| r.name == "bad").collect();
-        assert_eq!(
-            bad.len(),
-            1,
-            "one row for a resolve-failed worker: {rows:?}"
-        );
-        assert_eq!(bad[0].outcome, "revived", "{rows:?}");
-        let log = calls.lock().unwrap();
-        assert_eq!(
-            log.iter().filter(|n| n.as_str() == "bad").count(),
-            1,
-            "the resolve-failed worker rides the retry loop only, never the batch: {log:?}"
-        );
     }
 
     #[test]

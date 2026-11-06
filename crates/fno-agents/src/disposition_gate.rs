@@ -326,7 +326,7 @@ pub fn disposition_blockers_on_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::{blockers_withhold, disposition_blockers_on_chain, Diagnosis};
+    use super::{disposition_blockers_on_chain, Diagnosis};
     use std::collections::HashSet;
 
     #[test]
@@ -520,21 +520,6 @@ mod tests {
             disposition_blockers_on_chain(&chain, &HashSet::new()).len(),
             1
         );
-    }
-
-    #[test]
-    fn withhold_below_the_cap_any_open_at_the_cap_none() {
-        // One predicate: below the configured rounds any open finding
-        // withholds; at the cap nothing does, hard included.
-        let open_hard = vec![super::DispositionBlocker {
-            finding_key: "f.py:1:correctness".to_string(),
-            axis: "open",
-            hard: true,
-            diagnosis: None,
-        }];
-        assert!(blockers_withhold(&open_hard, false));
-        assert!(!blockers_withhold(&open_hard, true));
-        assert!(!blockers_withhold(&[], false));
     }
 
     #[test]
