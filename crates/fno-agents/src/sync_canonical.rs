@@ -2007,9 +2007,11 @@ mod tests {
         let deps = catchup_deps(ListStub::Rows(rows), shell, Rc::new(|_| json!({})));
         let out = run_catchup(&deps, tmp.path());
         assert_eq!(out.outcome, "failed");
+        // The wrapped sync labels its captured line, and the detail keeps the
+        // label so the cause stays traceable to its source.
         assert_eq!(
             out.detail,
-            "exit 1: fatal: could not read from remote repository"
+            "exit 1: stderr: fatal: could not read from remote repository"
         );
         // The summary line still trails the captured output.
         let stderr = out.stderr.join("\n");
