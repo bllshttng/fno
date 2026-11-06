@@ -16,24 +16,7 @@ for _bin_dir in "$REPO_ROOT/crates/fno/target/debug" "$REPO_ROOT/crates/fno-agen
     PATH="$_bin_dir:$PATH"
   fi
 done
-# The worktree venv stays on PATH for the suite's own `fno-py` helpers; an
-# ambient deployed `fno` predating the command fold would empty every reading
-# without failing a single setup assert. Reuse the venv when present, else
-# shim python3.
-if [ -x "$REPO_ROOT/cli/.venv/bin/fno-py" ]; then
-  PATH="$REPO_ROOT/cli/.venv/bin:$PATH"
-  export PATH
-else
-  _PY="$(command -v python3 || true)"
-  if [ -n "$_PY" ] && PYTHONPATH="$REPO_ROOT/cli/src" "$_PY" -c 'import fno.cli' >/dev/null 2>&1; then
-    _BIN="$(mktemp -d)"
-    printf '#!/usr/bin/env bash\nexec env PYTHONPATH="%s/cli/src" "%s" -m fno.cli "$@"\n' "$REPO_ROOT" "$_PY" \
-      > "$_BIN/fno-py"
-    chmod +x "$_BIN/fno-py"
-    PATH="$_BIN:$PATH"
-    export PATH
-  fi
-fi
+export PATH
 
 pass=0
 fail=0

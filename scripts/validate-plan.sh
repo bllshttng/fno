@@ -161,7 +161,7 @@ _plan_rung() {
     printf '%s' "$_out"
 }
 
-# Echo the checkout root that holds `cli/src/fno`, or nothing. Three callers
+# Echo the checkout root that holds the fno crates, or nothing. Three callers
 # asked this the same way in three places, so it is one function.
 _fno_source_root() {
     local repo_root="" script_dir="" candidate=""
@@ -171,7 +171,7 @@ _fno_source_root() {
         "$repo_root" \
         "$script_dir/.." \
         "$script_dir/../../.."; do
-        if [[ -n "$candidate" && -d "$candidate/cli/src/fno" ]]; then
+        if [[ -n "$candidate" && -f "$candidate/crates/fno-agents/Cargo.toml" ]]; then
             (cd "$candidate" && pwd)
             return 0
         fi
@@ -301,7 +301,7 @@ _plan_node_id() {
 }
 
 # The node id encoded by the plan's own filename, by the same trailing
-# -<prefix>-<hex>.md rule cli/src/fno/paths.py plan_filename_node_id applies.
+# -<prefix>-<hex>.md rule the plan-path resolver applies.
 # A name that only mentions an id mid-slug is not a filename-encoded id.
 _plan_filename_node_id() {
     local base

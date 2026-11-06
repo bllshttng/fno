@@ -103,7 +103,7 @@ def events_schema_projection(text):
         import yaml
     except ImportError:
         raise SystemExit(
-            "events_schema.json needs PyYAML: uv run --project cli python "
+            "events_schema.json needs PyYAML: uv run --with pyyaml python "
             "scripts/regen-generated-copies.py"
         )
 

@@ -2,8 +2,8 @@
 # test-context-nudge.sh - Stop hook: context nudge for EVERY session + role-only
 # orphan check.
 #
-# Drives the REAL hook against the REAL worktree fno (PATH wrapper, like
-# test-handoff's FNO_PYTHON discovery) with isolated state, a REAL fixture
+# Drives the REAL hook against the REAL checkout fno build (a PATH wrapper)
+# with isolated state, a REAL fixture
 # transcript the probe reads, and a real-shape Claude Stop payload. Covers:
 #   AC5  promoted real fire path -> decision:block whose reason carries the pct
 #   AC7  negative controls (below trigger, same-band latch, next band)
@@ -24,10 +24,10 @@
 #        sweeps for the dead role command and the raw transport name, each with a
 #        positive control so a passing absent-assertion proves the file was read
 #
-# No python that can import fno.cli is a HARD FAIL here, not a skip. This file is
-# the only thing pinning the hook's behaviour, so an exit-0 skip makes every claim
-# resting on it decorative; a fresh worktree with no cli/.venv once "passed" this
-# suite having run none of it.
+# A missing checkout build is a HARD FAIL here, not a skip. This file is the
+# only thing pinning the hook's behaviour, so an exit-0 skip makes every claim
+# resting on it decorative; a fresh worktree once "passed" this suite having
+# run none of it.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,65 +43,27 @@ assert_contains() { [[ "$2" == *"$3"* ]] && ok "$1" || bad "$1 (needle='$3' not 
 assert_absent()   { [[ "$2" != *"$3"* ]] && ok "$1" || bad "$1 (unexpected '$3')"; }
 assert_eq()       { [[ "$2" == "$3" ]] && ok "$1" || bad "$1 (expected='$3' actual='$2')"; }
 
-# --- FNO_PYTHON discovery (mirror test-handoff.sh): an interpreter that can ---
-# --- import the worktree CLI, plus a PATH wrapper mapping fno -> fno-py.    ---
-export FNO_SRC="$REPO_ROOT/cli/src"
-FNO_PYTHON=""
-for _cand in \
-  "$REPO_ROOT/cli/.venv/bin/python" \
-  "$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")/cli/.venv/bin/python" \
-  "$(command -v python3 || true)" \
-  "$(command -v python || true)"
-do
-  [ -n "$_cand" ] && [ -x "$_cand" ] || continue
-  if PYTHONPATH="$FNO_SRC" "$_cand" -c 'import fno.cli' >/dev/null 2>&1; then
-    FNO_PYTHON="$_cand"; break
-  fi
-done
-if [ -z "$FNO_PYTHON" ]; then
-  # NOT a skip, and deliberately not exit 0. This file is the only thing that pins
-  # the hook's behaviour, so an exit-0 skip makes every claim resting on it
-  # decorative: a fresh worktree with no cli/.venv "passed" this suite while
-  # running none of it. Fail loudly and name the fix.
-  echo "FAIL: no python can import fno.cli from $FNO_SRC" >&2
-  echo "      This suite cannot verify the hook without it, and a silent pass here" >&2
-  echo "      is worth less than a red run. Fix: (cd cli && uv sync)" >&2
-  exit 1
-fi
-BINDIR="$(mktemp -d)"
-# PYTHONPATH pinned INSIDE the shim, not just for the discovery probe above:
-# without it, `python -m fno.cli` resolves the `fno` package however this
-# interpreter already has it installed (a shared/editable venv can point at
-# the canonical checkout), so the hook would silently exercise a DIFFERENT
-# tree's fno.cli than the worktree fno being tested - invisible whenever the
-# two trees agree, and a false pass the moment they diverge (x-1b75: it
-# masked registry-json's Rust port entirely, taking four AC31 assertions
-# down with it before this line existed).
-printf '#!/usr/bin/env bash\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
-# The paths commands emit-shell, shell-stub, verify and handoff answer natively
-# (crates/fno-agents/src/paths_cli.rs behind crates/fno/src/paths_route.rs):
-# `agents mail` and `backlog carveout` have no Python leg either, so they take the same route.
-# the shim routes exactly those to the built Rust front + worker, the way
-# production resolves them, while every other command keeps the worktree Python
-# front this suite pins. Without the routing, the retired Python legs die and
-# the canon ask names no doc (AC5). Spell
-# target/debug/fno contiguously: the smoke runner greps this file for
-# `target/debug/fno-agents` when it selects the harness's cargo build step,
-# and a split spelling selects the harness without its build (the red this
-# comment prevents).
+# --- The fno on PATH is this checkout's built front door. ---
+# Every command the hook calls answers natively, so the shim execs the build
+# directly. Spell target/debug/fno contiguously: the smoke runner greps this
+# file for `target/debug/fno-agents` when it selects the harness's cargo build
+# step, and a split spelling selects the harness without its build.
 FRONT_BIN="$REPO_ROOT/crates/fno/target/debug/fno"
 WORKER_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker"
-if [ ! -x "$FRONT_BIN" ] || [ ! -x "$WORKER_BIN" ]; then
-  echo "FAIL: the native paths lane needs both built:" >&2
+AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+if [ ! -x "$FRONT_BIN" ] || [ ! -x "$WORKER_BIN" ] || [ ! -x "$AGENTS_BIN" ]; then
+  # NOT a skip, and deliberately not exit 0: this file is the only thing that
+  # pins the hook's behaviour, so a silent pass is worth less than a red run.
+  echo "FAIL: this suite needs the checkout builds:" >&2
   echo "      $FRONT_BIN" >&2
-  echo "      $WORKER_BIN" >&2
+  echo "      $AGENTS_BIN (and fno-agents-worker)" >&2
   echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agents && cargo build --bins)" >&2
   exit 1
 fi
-printf '#!/usr/bin/env bash\nif { [ "$1" = agents ] && [ "$2" = mail ]; } || { [ "$1" = backlog ] && [ "$2" = carveout ]; } || { [ "$1" = config ] && [ "$2" = paths ] && { [ "$3" = emit-shell ] || [ "$3" = shell-stub ] || [ "$3" = verify ] || [ "$3" = handoff ]; }; }; then\n  export FNO_AGENTS_WORKER="%s"\n  exec "%s" "$@"\nfi\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$WORKER_BIN" "$FRONT_BIN" "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
-# fno-py is the console script name; provide it too in case anything resolves it.
-cp "$BINDIR/fno" "$BINDIR/fno-py"
-chmod +x "$BINDIR/fno" "$BINDIR/fno-py"
+export FNO_AGENTS_BIN="$AGENTS_BIN"
+BINDIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexport FNO_AGENTS_WORKER="%s"\nexec "%s" "$@"\n' "$WORKER_BIN" "$FRONT_BIN" > "$BINDIR/fno"
+chmod +x "$BINDIR/fno"
 export PATH="$BINDIR:$PATH"
 
 # x-1b75: registry-json now dispatches through the Rust client (no Python leg
@@ -158,18 +120,18 @@ export FNO_REPO_ROOT="$SBX"
 # Pin the primary hook identity to the fixture Claude session. Record the real
 # parent harness for the compact probe below, where --to-self refuses a
 # contradicted marker as inherited identity.
-_SESSION_HARNESS="$(PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-  'import json, subprocess; from fno.rust_binary import resolve_binary; b = resolve_binary(); print((json.loads(subprocess.run([str(b), "claim", "session-pid", "--json"], capture_output=True, text=True).stdout or "{}").get("harness") or "") if b else "")')"
+_SESSION_HARNESS="$("$AGENTS_BIN" claim session-pid --json 2>/dev/null | jq -r '.harness // ""' 2>/dev/null || true)"
 unset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID CLAUDE_SESSION_ID
 export CLAUDE_CODE_SESSION_ID="$LEAD_SID"
 cd "$SBX"   # isolate: hook latches (.fno/), git root (carveouts), and events all land under $SBX
 
-# Clear the carveouts ledger through the accessor that owns it (the repo's
-# space), not the retired checkout path - a truncate of .fno/carveouts.jsonl
-# is inert now that write and read both resolve project_log().
+# Clear the carveouts ledger wherever project_log() resolves it: the repo's
+# space under the sandbox state root, or the checkout's .fno. HOME is the
+# sandbox, so every copy lives under $SBX.
 clear_carveouts() {
-  PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-    'from fno.paths import project_log; p = project_log("carveouts.jsonl"); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")'
+  mkdir -p "$SBX/.fno"
+  : > "$SBX/.fno/carveouts.jsonl"
+  find "$SBX" -name carveouts.jsonl -type f -exec sh -c ': > "$1"' _ {} \;
 }
 
 # registry.json on disk at state_dir/agents/registry.json: {"schema_version":<current>,"agents":[...]}.
@@ -815,10 +777,9 @@ assert_contains "hook: sweep positive control" "$HOOK_SRC" 'fno agents spawn -k'
 # on one. Reused for both trigger discrimination and the boot count.
 COUNT_BINDIR="$(mktemp -d)"
 COUNTER="$SBX/fno-invocations.txt"
-printf '#!/usr/bin/env bash\nexport PYTHONPATH="%s"\nprintf "%%s\\n" "$*" >> "%s"\n. "%s"\nexec "%s" -m fno.cli "$@"\n' \
-  "$FNO_SRC" "$COUNTER" "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_PYTHON" > "$COUNT_BINDIR/fno"
-cp "$COUNT_BINDIR/fno" "$COUNT_BINDIR/fno-py"
-chmod +x "$COUNT_BINDIR/fno" "$COUNT_BINDIR/fno-py"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexport FNO_AGENTS_WORKER="%s"\nexec "%s" "$@"\n' \
+  "$COUNTER" "$WORKER_BIN" "$FRONT_BIN" > "$COUNT_BINDIR/fno"
+chmod +x "$COUNT_BINDIR/fno"
 
 # Configure BOTH triggers away from their defaults (50/40) so a stale-value bug
 # (e.g. a fold that reads the block but keeps hardcoded defaults) cannot pass.

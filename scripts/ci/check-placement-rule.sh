@@ -441,7 +441,6 @@ scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
 scripts/lint/no-invalid-events.sh
 scripts/metrics/port-order.sh
-scripts/migrate-events-shape.py
 scripts/rename/rename-to-fno.sh
 scripts/setup/archive-worktree.sh
 scripts/setup/setup-worktree.sh

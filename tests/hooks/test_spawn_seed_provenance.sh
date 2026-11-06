@@ -12,17 +12,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/hooks/spawn-seed-provenance-session-start.sh"
-# A linked worktree has no venv of its own; the canonical checkout owns it, the
-# same way `fno doctor test` resolves an interpreter and then pins THIS tree's
-# PYTHONPATH. Falling straight to a bare python3 would run against a system
-# interpreter with no fno dependencies and fail for a reason unrelated to the hook.
-PY="$REPO_ROOT/cli/.venv/bin/python"
-if [[ ! -x "$PY" ]]; then
-    CANONICAL="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-    CANONICAL="${CANONICAL%/.git}"
-    PY="$CANONICAL/cli/.venv/bin/python"
-fi
-[[ -x "$PY" ]] || PY="python3"
+# The checks below use only the standard library, so any python3 runs them.
+PY="python3"
 
 fail=0
 check() {

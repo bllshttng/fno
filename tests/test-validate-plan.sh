@@ -500,7 +500,7 @@ fi
 # interpreter cannot import the CLI and `uv run` must run the SOURCE validator
 # rather than falling through to the refusal.
 if command -v uv >/dev/null 2>&1; then
-    OUTPUT=$(FNO_PYTHON=/usr/bin/python3 bash "$VALIDATE" "$PLAN_SEMANTIC" 2>&1) \
+    OUTPUT=$(bash "$VALIDATE" "$PLAN_SEMANTIC" 2>&1) \
         && EXIT_CODE=0 || EXIT_CODE=$?
     if [[ $EXIT_CODE -eq 0 ]] && grep -q "semantic execution contract valid" <<< "$OUTPUT"; then
         pass "AC8g: uv fallback runs the source validator when no venv interpreter works"
@@ -561,7 +561,7 @@ done
 SEM_NOBIN="$TMPDIR_BASE/sem-nobin"
 mkdir -p "$SEM_NOBIN/scripts"
 cp "$VALIDATE" "$SEM_NOBIN/scripts/validate-plan.sh"
-OUTPUT=$(cd "$SEM_NOBIN" && env -u FNO_AGENTS_BIN -u FNO_BIN PATH=/usr/bin:/bin FNO_PYTHON=/usr/bin/python3 \
+OUTPUT=$(cd "$SEM_NOBIN" && env -u FNO_AGENTS_BIN -u FNO_BIN PATH=/usr/bin:/bin \
     bash "$SEM_NOBIN/scripts/validate-plan.sh" "$PLAN_SEMANTIC" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 if [[ $EXIT_CODE -eq 2 ]] && grep -q "fno CLI not found" <<< "$OUTPUT"; then
     pass "AC8e: No reachable validator refuses with exit 2"
@@ -894,7 +894,7 @@ fi
 WALK_NOBIN="$TMPDIR_BASE/nobin"
 mkdir -p "$WALK_NOBIN/scripts"
 cp "$VALIDATE" "$WALK_NOBIN/scripts/validate-plan.sh"
-OUTPUT=$(cd "$WALK_NOBIN" && env -u FNO_AGENTS_BIN PATH=/usr/bin:/bin FNO_PYTHON=/usr/bin/python3 bash "$WALK_NOBIN/scripts/validate-plan.sh" "$PLAN_SURFACE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+OUTPUT=$(cd "$WALK_NOBIN" && env -u FNO_AGENTS_BIN PATH=/usr/bin:/bin bash "$WALK_NOBIN/scripts/validate-plan.sh" "$PLAN_SURFACE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 if [[ $EXIT_CODE -eq 0 ]] && grep -q "surface block NOT CHECKED (no fno-agents binary)" <<< "$OUTPUT" && ! grep -q "surface block (step 2b-bis gate): question" <<< "$OUTPUT"; then
     pass "AC10o: No reachable binary warns NOT CHECKED with no pass receipt"
 else

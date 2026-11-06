@@ -3,7 +3,7 @@
 #
 # The populated lane claims a green means the populated state shape is
 # faithfully replayed, not silently skipped. That claim rests on the lane
-# being ABLE to fail: the pytest-side positive control (the state canary)
+# being ABLE to fail: the positive control (tests/ci/canaries/state-canary.sh)
 # must fail when the profile is populated and pass when it is not.
 #
 # This drives the NATIVE smoke runner over a one-step registry (the
@@ -37,12 +37,12 @@ fi
 SEAM="$(mktemp -d)"
 trap 'rm -rf "$SEAM"' EXIT
 cat > "$SEAM/registry.json" <<'JSON'
-{"steps": [["state canary pytest control", ".", "uv run --project cli pytest -q -p no:cacheprovider cli/tests/unit/test_state_canary.py"]]}
+{"steps": [["state canary control", ".", "bash tests/ci/canaries/state-canary.sh"]]}
 JSON
 
 run_lane() {
   SMOKE_REGISTRY_FILE="$SEAM/registry.json" "$BIN" test-run doctor smoke --state "$1" \
-    --only 'state canary pytest control' >/dev/null 2>&1
+    --only 'state canary control' >/dev/null 2>&1
   return $?
 }
 

@@ -187,40 +187,17 @@ _json_array() {
 }
 
 candidate_fno() {
-    if [[ -x "$INVOKING_ROOT/cli/.venv/bin/python" ]]; then
-        PYTHONPATH="$INVOKING_ROOT/cli/src" \
-            "$INVOKING_ROOT/cli/.venv/bin/python" -m fno.cli "$@"
-    elif [[ -f "$INVOKING_ROOT/cli/pyproject.toml" ]]; then
-        if ! command -v uv >/dev/null 2>&1; then
-            echo "preflight: candidate CLI source exists but uv is unavailable" >&2
-            return 127
-        fi
-        PYTHONPATH="$INVOKING_ROOT/cli/src" uv run --project "$INVOKING_ROOT/cli" fno-py "$@"
+    if [[ -x "$INVOKING_ROOT/crates/fno/target/debug/fno" ]]; then
+        "$INVOKING_ROOT/crates/fno/target/debug/fno" "$@"
     else
         fno "$@"
-    fi
-}
-
-candidate_python() {
-    if [[ -x "$INVOKING_ROOT/cli/.venv/bin/python" ]]; then
-        PYTHONPATH="$INVOKING_ROOT/cli/src" \
-            "$INVOKING_ROOT/cli/.venv/bin/python" "$@"
-    elif [[ -f "$INVOKING_ROOT/cli/pyproject.toml" ]]; then
-        if ! command -v uv >/dev/null 2>&1; then
-            echo "preflight: candidate CLI source exists but uv is unavailable" >&2
-            return 127
-        fi
-        PYTHONPATH="$INVOKING_ROOT/cli/src" \
-            uv run --project "$INVOKING_ROOT/cli" python "$@"
-    else
-        python3 "$@"
     fi
 }
 
 # The receipt path writes the live events store under ~/.fno. The candidate
 # build is fenced out of live stores (live_store_fence in both crates), so the
 # store-touching receipt calls ride the INSTALLED fno, not the candidate build:
-# FNO_BIN outranks the checkout build in the Python store client, and the
+# FNO_BIN outranks the checkout build in the store readers, and the
 # journal commit calls the one native binary directly. Candidate code still
 # serves every command that touches no live store.
 INSTALLED_FNO_BIN="$(command -v fno 2>/dev/null || true)"
@@ -234,10 +211,10 @@ receipt_fno() {
 }
 
 # One native binary for the receipt commit: the installed fno, else the
-# checkout build, else PATH - the same chain the Python store client walks,
-# pinned once. The commit skips the Python detour on purpose: validation
-# already ran in this shell, and a Python re-resolution would ride the
-# candidate interpreter and re-walk the same chain per call.
+# checkout build, else PATH - the same chain the store readers walk,
+# pinned once. The commit calls the binary directly on purpose: validation
+# already ran in this shell, and a re-resolution would ride the
+# candidate build and re-walk the same chain per call.
 RECEIPT_NATIVE_BIN="$INSTALLED_FNO_BIN"
 if [[ -z "$RECEIPT_NATIVE_BIN" ]]; then
     for _profile in debug release; do
@@ -922,7 +899,7 @@ fi
 # of .fno would leave stale per-run state (e.g. triage-log.jsonl a smoke test
 # reads) that could mask a regression a fresh CI checkout would catch, so we
 # scope the exclusion to the single retry-record file.
-git -C "$PREFLIGHT_WT" clean -fdx -e target -e cli/.venv -e .fno/preflight-last-failures.txt >/dev/null 2>&1 || {
+git -C "$PREFLIGHT_WT" clean -fdx -e target -e .fno/preflight-last-failures.txt >/dev/null 2>&1 || {
     emit_setup_unavailable "git clean failed" || true
     echo "preflight: git clean failed in the preflight worktree" >&2; exit 1; }
 
@@ -931,7 +908,7 @@ REAL_HOME="$HOME"
 TMPHOME="$(mktemp -d)"
 
 # The env deliberately mirrors a fresh CI checkout: temp HOME (no ~/.fno, no
-# ~/.claude, no ~/.gitconfig), FNO_* scrubbed, worktree-pinned PYTHONPATH, and
+# ~/.claude, no ~/.gitconfig), FNO_* scrubbed, and
 # the pytest spawn-leak guard. We intentionally do NOT pin FNO_CONFIG or
 # FNO_GLOBAL_SETTINGS_PATH: pinning either one diverges from CI and breaks the
 # suite's own config-fixture tests (an empty FNO_CONFIG clobbers a test's
@@ -960,7 +937,7 @@ TMPHOME="$(mktemp -d)"
 # past an emptiness-only check), warn, and fall back to a hardcoded literal -
 # never silently skip the scrub. The fallback is a literal because it exists for
 # the case where Python cannot run at all;
-# cli/tests/smoke/test_preflight_hermetic.sh executes this derivation and checks
+# tests/smoke/test_preflight_hermetic.sh executes this derivation and checks
 # the literal against the same constant, which is what keeps both honest.
 if HARNESS_MARKERS="$(python3 -c \
     'import tomllib,sys; print(" ".join(tomllib.load(open(sys.argv[1],"rb"))["identity_markers"]))' \
@@ -981,7 +958,6 @@ run_hermetic() {
         export HOME="$TMPHOME"
         export FNO_THINK_SPAWN=0
         export FNO_NO_CANONICAL_CONFIG=1
-        export PYTHONPATH="$PREFLIGHT_WT/cli/src"
         export CARGO_HOME="${CARGO_HOME:-$REAL_HOME/.cargo}"
         export RUSTUP_HOME="${RUSTUP_HOME:-$REAL_HOME/.rustup}"
         export UV_CACHE_DIR="${UV_CACHE_DIR:-$REAL_HOME/.cache/uv}"
@@ -1151,9 +1127,9 @@ if retry_run_leg smoke; then
     echo "preflight: === smoke suite ($([[ $RETRY_FAILED -eq 1 ]] && echo retry-failed || echo keep-going)) ==="
     SMOKE_ARGS=(--keep-going); [[ $RETRY_FAILED -eq 1 ]] && SMOKE_ARGS=(--retry-failed --keep-going)
     s0="$SECONDS"
-    # Bootstrap via `uv run --project cli`: there is no repo-root pyproject and
-    # no global fno-py in a hermetic env, so a bare `fno doctor test smoke` is not on
-    # PATH until uv syncs the cli project (uv auto-syncs). The attestation
+    # The smoke runs through the deployed fno-agents: a hermetic env carries
+    # no checkout build on PATH, so a bare `fno doctor test smoke` could read a
+    # stale front door. The attestation
     # logic below is unchanged: a FULL GREEN records, a RED deletes, a subset
     # mints nothing.
     # The smoke registry auto-discovers scripts/tests/stress-rust-e2e-concurrency.sh

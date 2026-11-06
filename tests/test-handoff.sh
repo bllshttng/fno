@@ -32,32 +32,26 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$REPO_ROOT/skills/target/scripts/handoff.sh"
 CONTEXT_PROBE="$REPO_ROOT/skills/target/scripts/context-probe.sh"
 
-# The `fno` stub delegates `do plan rung` to the real CLI (see the stub body), so
-# it needs this checkout's sources and an interpreter that can import them.
-# Prefer the worktree venv; a bare python3 works when the deps are present.
-export FNO_SRC="$REPO_ROOT/cli/src"
-# Pick an interpreter that can actually IMPORT the CLI, and refuse to run if
-# none can. Choosing one that merely exists is how this suite silently went
-# ~60% vacuous: a linked worktree has no cli/.venv, the bare-python3 fallback
-# lacked typer, `fno do plan rung` died, and every scenario parked at that gate
-# while still matching its loose "parked" assertion (x-f804).
-export FNO_PYTHON=""
-for _cand in \
-  "$REPO_ROOT/cli/.venv/bin/python" \
-  "$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")/cli/.venv/bin/python" \
-  "$(command -v python3 || true)" \
-  "$(command -v python || true)"
-do
-  [ -n "$_cand" ] && [ -x "$_cand" ] || continue
-  if PYTHONPATH="$FNO_SRC" "$_cand" -c 'import fno.cli' >/dev/null 2>&1; then
-    export FNO_PYTHON="$_cand"
-    break
-  fi
+# The `fno` stub delegates `do plan rung`, `agents name` and `whoami` to the
+# real binaries (see the stub body), so it needs this checkout's builds, or an
+# installed pair. Refuse to run when none answers: a missing door is how this
+# suite once went ~60% vacuous, every scenario parking at the rung gate while
+# still matching its loose "parked" assertion (x-f804).
+export FNO_AGENTS_REAL="" FNO_FRONT_REAL=""
+for _cand in "${FNO_AGENTS_BIN:-}" \
+  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
+  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
+  "$(command -v fno-agents || true)"; do
+  if [ -n "$_cand" ] && [ -x "$_cand" ]; then FNO_AGENTS_REAL="$_cand"; break; fi
 done
-if [ -z "$FNO_PYTHON" ]; then
-  echo "test-handoff: no interpreter can import fno.cli (tried the worktree venv," >&2
-  echo "  the canonical checkout's venv, and python3/python on PATH)." >&2
-  echo "  Fix: create cli/.venv (cd cli && uv sync) - refusing to run vacuously." >&2
+for _cand in "$REPO_ROOT/crates/fno/target/debug/fno" \
+  "$REPO_ROOT/crates/fno/target/release/fno" \
+  "$(command -v fno || true)"; do
+  if [ -n "$_cand" ] && [ -x "$_cand" ]; then FNO_FRONT_REAL="$_cand"; break; fi
+done
+if [ -z "$FNO_AGENTS_REAL" ] || [ -z "$FNO_FRONT_REAL" ]; then
+  echo "test-handoff: no fno and fno-agents binaries (build crates/fno and" >&2
+  echo "  crates/fno-agents, or install fno) - refusing to run vacuously." >&2
   exit 1
 fi
 
@@ -126,8 +120,7 @@ check_file_exists() {
 
 # The fno-agents binary the claim seeds and reads run through.
 fno_agents_bin() {
-  PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-    'from fno.rust_binary import resolve_binary; print(resolve_binary() or "")' 2>/dev/null
+  printf '%s' "$FNO_AGENTS_REAL"
 }
 
 # The node claim's state in a sandbox home's claim table ("free" when none).
@@ -268,7 +261,7 @@ expected_child_name() {
   # (`status --name`), the same call the stub router and handoff.sh itself
   # make.
   local bin out
-  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  bin="$FNO_AGENTS_REAL"
   [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
   out="$("$bin" status --name --source sh --command t "$NODE_ID" --slug "$TEST_NODE_SLUG" --discriminator g2)"
   printf '%s' "${out##*$'\n'}"
@@ -395,7 +388,7 @@ if [ "$subcmd1 $subcmd2 ${3:-}" = "do plan rung" ]; then
   # gate's entire contract IS the rung vocabulary, so a stub that re-derived
   # it would test the stub - and a second copy of the vocabulary is the exact
   # thing `fno do plan rung` exists to delete.
-  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  bin="$FNO_AGENTS_REAL"
   exec "$bin" plan-cli rung "${4:-}"
 fi
 
@@ -409,7 +402,7 @@ if [ "$subcmd1 $subcmd2" = "agents name" ]; then
   # to the real implementation exactly like `do plan rung` above. The name
   # door is native, and the default router never execs a dev build, so the
   # stub calls this checkout's binary itself.
-  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  bin="$FNO_AGENTS_REAL"
   [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
   exec "$bin" status --name "${@:3}"
 fi
@@ -543,7 +536,7 @@ case "$subcmd1 $subcmd2" in
     # pass vacuously - the x-f804 hazard through a different door. The probe's
     # contract IS reading real context, so a stub that fakes a reading tests the
     # stub. Same precedent and reasoning as `do plan rung` above.
-    exec env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -m fno.cli "$@"
+    exec "$FNO_FRONT_REAL" "$@"
     ;;
   *)
     # Any other fno command: succeed silently
@@ -552,14 +545,6 @@ case "$subcmd1 $subcmd2" in
 esac
 STUBEOF
   chmod +x "$sbx/stub-bin/fno"
-
-  # The probe prefers `fno-py`, and an ambient deployed fno-py predating the
-  # command fold does not know `fno whoami context`, so scenarios 7/7b would read
-  # empty and park without the measurement. Delegate to the same FNO_PYTHON
-  # the stub's doors use, keeping the suite hermetic against the machine.
-  printf '#!/usr/bin/env bash\nexec env PYTHONPATH="%s" "%s" -m fno.cli "$@"\n' \
-    "$FNO_SRC" "$FNO_PYTHON" > "$sbx/stub-bin/fno-py"
-  chmod +x "$sbx/stub-bin/fno-py"
 
   echo "$sbx"
 }

@@ -1,26 +1,27 @@
-# Capability tier: a hill to climb. The worker must add a working `fno hello`
+# Capability tier: a hill to climb. The worker must add a working `fno do hello`
 # command from scratch. We currently fail this (the command does not exist); it stays
 # capability until it saturates, then graduates to regression. The grade is
 # mechanical: the new command runs and prints the expected string.
 id: capability-add-hello-command
 tier: capability
 prompt: |
-  Add a new CLI subcommand `fno hello` to the fno Python CLI.
+  Add a new command `fno do hello` to the Rust front door in crates/fno.
 
   Requirements:
-  - Running `cd cli && uv run fno-py hello` must exit 0 and print exactly
-    `hello from fno` on stdout.
-  - Wire it into the existing lazy command registry in cli/src/fno/cli.py the
-    same way the other commands are wired (a `fno.<module>:<app>` entry).
-  - Match the surrounding Typer style; no new dependencies.
+  - Running `cargo run -q --manifest-path crates/fno/Cargo.toml --bin fno -- do hello`
+    must exit 0 and print exactly `hello from fno` on stdout.
+  - Claim it in decide_role in crates/fno/src/main.rs the same way the other
+    `do` commands are claimed, and list it in the `do` menu in
+    crates/fno/src/group_help.rs.
+  - Match the surrounding style; no new dependencies.
 
   Commit your work. Report your result in the fenced JSON contract.
 grade:
   - kind: exit
-    command: "cd cli && uv run fno-py hello"
+    command: "cargo run -q --manifest-path crates/fno/Cargo.toml --bin fno -- do hello"
     expect: 0
   - kind: grep
-    path: "cli/src/fno/cli.py"
+    path: "crates/fno/src/group_help.rs"
     pattern: "hello"
 timeout_minutes: 20
 tags: [cli, greenfield]

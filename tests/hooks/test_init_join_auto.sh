@@ -116,13 +116,6 @@ STUB
   # other command to the join fiction above.
   cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
   chmod 755 "${_dir}/bin/fno-agents"
-
-  # Other init paths may resolve Python; they must stay inside the fixture.
-  cat > "${_dir}/bin/fakepython" << STUB
-#!/usr/bin/env bash
-exit 2
-STUB
-  chmod +x "${_dir}/bin/fakepython"
 }
 
 run_init() {
@@ -132,7 +125,6 @@ run_init() {
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
     FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
-    FNO_PYTHON="${_dir}/bin/fakepython" \
     TARGET_START=1 \
     TARGET_INPUT="x-d4ab" \
     TARGET_PLAN_PATH="${_dir}/plan.md" \

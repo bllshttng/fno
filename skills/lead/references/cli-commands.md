@@ -3,7 +3,7 @@
 
 Curated for the role: the commands an adjudicator actually uses, each with the one gotcha that makes it non-obvious.
 
-`fno <group> --help` is the source of truth for every command this page does not list, and `fno-py help <group> --all` adds the hidden Python leaves.
+`fno <group> --help` is the source of truth for every command this page does not list, and `fno --help --all` adds the retired root names with their new spellings.
 
 A command with no gotcha earns no line here, because the help surface already covers it.
 
@@ -17,7 +17,7 @@ A stale line is worse than no page. Before you act on a load-bearing claim, re-v
 
 | You need | The truth lives in |
 |---|---|
-| The full command surface | `fno help --all` (hidden commands included) |
+| The full command surface | `fno --help --all` (retired names included) |
 | Flags on one command | `fno <command> --help` |
 | Behavior of a command | The source: `cli/src/fno/`, `crates/` |
 | A registry fact | The live lockfile or transcript, never a receipt snapshot |

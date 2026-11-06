@@ -8,9 +8,9 @@
 #   AC10 no manifest (or one without a shape) -> the nudge fires
 #   AC11 the manifest sits only in the role ROW's cwd space -> no nudge
 #
-# Drives the REAL hook against the REAL worktree fno (same FNO_PYTHON discovery
-# and sandbox shape as test-context-nudge.sh). No python that can import fno.cli
-# is a HARD FAIL here, not a skip, for the same reason as its sibling suite.
+# Drives the REAL hook against the REAL checkout fno build (same sandbox shape
+# as test-context-nudge.sh). A missing build is a HARD FAIL here, not a skip,
+# for the same reason as its sibling suite.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,48 +25,22 @@ bad()  { echo "FAIL: $1"; fail=$((fail+1)); }
 assert_contains() { [[ "$2" == *"$3"* ]] && ok "$1" || bad "$1 (needle='$3' not in output)"; }
 assert_absent()   { [[ "$2" != *"$3"* ]] && ok "$1" || bad "$1 (unexpected '$3')"; }
 
-export FNO_SRC="$REPO_ROOT/cli/src"
-FNO_PYTHON=""
-for _cand in \
-  "$REPO_ROOT/cli/.venv/bin/python" \
-  "$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")/cli/.venv/bin/python" \
-  "$(command -v python3 || true)" \
-  "$(command -v python || true)"
-do
-  [ -n "$_cand" ] && [ -x "$_cand" ] || continue
-  if PYTHONPATH="$FNO_SRC" "$_cand" -c 'import fno.cli' >/dev/null 2>&1; then
-    FNO_PYTHON="$_cand"; break
-  fi
-done
-if [ -z "$FNO_PYTHON" ]; then
-  echo "FAIL: no python can import fno.cli from $FNO_SRC" >&2
-  echo "      Fix: (cd cli && uv sync)" >&2
+# The checkout's builds. Spell the binary paths contiguously: the smoke runner
+# greps this file for `target/debug/fno-agents` to decide whether selecting
+# this harness must carry the cargo build step, and a split spelling selects
+# the harness without its build.
+FRONT_BIN="$REPO_ROOT/crates/fno/target/debug/fno"
+AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agents/target/debug"
+if [ ! -x "$FRONT_BIN" ] || [ ! -x "$AGENTS_BIN" ]; then
+  echo "FAIL: this suite needs the checkout builds $FRONT_BIN and $AGENTS_BIN." >&2
+  echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agents && cargo build --bins)" >&2
   exit 1
 fi
 BINDIR="$(mktemp -d)"
-# PYTHONPATH pinned INSIDE the shim (see test-context-nudge.sh sibling
-# comment): without it `python -m fno.cli` can silently resolve a DIFFERENT
-# tree's fno.cli than the worktree being tested.
-printf '#!/usr/bin/env bash\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
-cp "$BINDIR/fno" "$BINDIR/fno-py"
-chmod +x "$BINDIR/fno" "$BINDIR/fno-py"
-export PATH="$BINDIR:$PATH"
-
-# x-1b75: registry-json has no Python leg left; resolve THIS checkout's Rust
-# binary, not a stale one elsewhere on PATH (see test-context-nudge.sh sibling
-# comment for the full reasoning).
-AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agents/target/debug"
-# Spell the binary path contiguously: the smoke runner greps this file for
-# `target/debug/fno-agents` to decide whether selecting this harness must
-# carry the cargo build step, and a split spelling selects the harness
-# without its build (the red this comment prevents).
-AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
-if [ ! -x "$AGENTS_BIN" ]; then
-  echo "FAIL: $AGENTS_BIN not built." >&2
-  echo "      Fix: (cd crates/fno-agents && cargo build --bin fno-agents)" >&2
-  exit 1
-fi
-export PATH="$AGENTS_BIN_DIR:$PATH"
+printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$FRONT_BIN" > "$BINDIR/fno"
+chmod +x "$BINDIR/fno"
+export PATH="$BINDIR:$AGENTS_BIN_DIR:$PATH"
 export REGISTRY_SEED_BIN="$AGENTS_BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 # Seed at this writer's schema. HOME is the sandbox, so this IS the shared
@@ -140,7 +114,13 @@ reset_events() {
 # keys the row, so the fixture computes the same root the resolver makes,
 # with the same shim + env rather than re-deriving the slug here.
 space_leads() {  # space_leads <dir> - the leads dir of <dir>'s space
-  (cd "$SBX" && SBX="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'import os; from pathlib import Path; from fno.paths import space_dir; print(space_dir(Path(os.environ["SBX"])) / "leads")')
+  # The space resolver's rule: the canonical repo root (the first `git
+  # worktree list` row), else the dir itself, with every / swapped for -,
+  # under <state_dir>/spaces.
+  local root
+  root="$(git -C "$1" worktree list --porcelain 2>/dev/null | awk 'NR==1{sub(/^worktree /,"");print}')"
+  [ -n "$root" ] || root="$1"
+  printf '%s/.fno/spaces/%s/leads\n' "$SBX" "${root//\//-}"
 }
 LEADS_DIR="$(space_leads "$SBX")"
 mkdir -p "$LEADS_DIR"

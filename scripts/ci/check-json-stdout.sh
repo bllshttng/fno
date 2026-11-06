@@ -9,7 +9,7 @@
 # commands and asserts the house contract: stdout is exactly one JSON document; the
 # pinned rows also check the shape (error doc, empty list).
 #
-# Commands run through the repo CLI (uv run --project cli fno-py) with the FNO home
+# Commands run through the checkout build of fno with the FNO home
 # pinned to a temp dir, so no machine state feeds the verdict. The native get
 # execs fno-agents; the binary resolves FNO_AGENTS_BIN, then the checkout build,
 # then the deployed binary, so the get row tests this tree's fix.
@@ -36,9 +36,9 @@ cd "$ROOT"
 
 CHECKER="scripts/ci/json_stdout_check.py"
 
-# The repo CLI tests source truth; the fallback reads the deployed fno.
-if command -v uv >/dev/null 2>&1; then
-    CLI=(uv run --project cli fno-py)
+# The checkout build tests source truth; the fallback reads the deployed fno.
+if [[ -x "$ROOT/crates/fno/target/debug/fno" ]]; then
+    CLI=("$ROOT/crates/fno/target/debug/fno")
 else
     CLI=(fno)
 fi

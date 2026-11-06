@@ -4,7 +4,7 @@
 # The user path is what an installed plugin runs: hooks/, skills/,
 # plugins/buddy/ and the user-path scripts named below. In it this counts
 # every python start: a `python`/`python3` command word, an absolute-path
-# start like `/usr/bin/python3`, `run-python.sh`, `FNO_PYTHON`, a `.py` file
+# start like `/usr/bin/python3`, `run-python.sh`, a `.py` file
 # run as a command, and each tracked `.py` file
 # itself (one unit per file; its own lines are not scanned). Comment lines,
 # markdown, tests/ trees, and a line marked `user-project-python` (the
@@ -48,7 +48,7 @@ SCAN='
     /user-project-python/ { next }
     /(^|[^A-Za-z0-9_.\/-])python3?([[:space:]]|$|["\047);|&])/ \
       || /\/(usr\/)?bin\/python3?([[:space:]]|$|["\047);|&])/ \
-      || /run-python\.sh/ || /FNO_PYTHON/ \
+      || /run-python\.sh/ \
       || /(^[[:space:]]*|exec[[:space:]]+|\$\()"?[$A-Za-z0-9_{}\/.-]*\.py"?([[:space:]]|$)/ {
         print f "\t" NR
     }'

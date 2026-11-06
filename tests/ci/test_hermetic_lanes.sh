@@ -9,8 +9,8 @@
 # So this asserts both halves against the canary, which reads a channel
 # the env builder deliberately does not scrub:
 #
-#   clean lane -> canary unset  -> the canary test PASSES
-#   dirty lane -> canary leaks  -> the canary test FAILS
+#   clean lane -> canary unset  -> the canary step PASSES
+#   dirty lane -> canary leaks  -> the canary step FAILS
 #
 # A failure of the second half means the positive control has been disarmed -
 # usually by someone widening a scrub rule until it swallows the canary - and
@@ -27,47 +27,26 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-CANARY_TEST="cli/tests/unit/test_ambient_canary.py"
-PY="$REPO_ROOT/cli/.venv/bin/python"
-[ -x "$PY" ] || PY="python3"
+BIN="${FNO_AGENTS_BIN:-fno-agents}"
+if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
+  echo "hermetic lanes: fno-agents is not on PATH; install the crate first"
+  exit 2
+fi
 
-# Run the canary through the native test-env door, in one lane, and report
-# the pytest exit code. Going through the door is the point: that is the
-# boundary the real smoke run uses, so this exercises the shipped path rather
-# than a re-implementation of it.
+SEAM="$(mktemp -d)"
+trap 'rm -rf "$SEAM"' EXIT
+cat > "$SEAM/registry.json" <<'JSON'
+{"steps": [["ambient canary control", ".", "bash tests/ci/canaries/ambient-canary.sh"]]}
+JSON
+
+# Run the canary through the native smoke runner, in one lane. Going through
+# the runner is the point: that is the boundary the real smoke run uses. The
+# clean lane must be clean BY CONSTRUCTION, so the canary is dropped from this
+# process first: under `--ambient dirty` this script is itself a poisoned child.
 run_lane() {
-  local mode="$1"
-  PYTHONPATH="$REPO_ROOT/cli/src" "$PY" - "$mode" "$CANARY_TEST" <<'PYEOF' >/dev/null 2>&1
-import json, os, subprocess, sys, tempfile
-from pathlib import Path
-
-from fno.test_env_door import apply_env
-from fno.hermetic import AMBIENT_LEAK_CANARY
-
-mode, test_path = sys.argv[1], sys.argv[2]
-root = Path.cwd()
-
-# The clean lane has to be clean BY CONSTRUCTION, not by assuming this
-# process's own parent was. When the whole smoke runs under `--ambient dirty`,
-# THIS script is itself a poisoned child: the canary is in its environment by
-# design (it is the one thing the env builder deliberately lets through), so
-# a clean sub-lane built from os.environ inherits it and the clean half
-# fails. That is the same defect the suite is being checked for, in the
-# checker. Drop it explicitly; the dirty lane gets it back from the poison
-# door a line later.
-os.environ.pop(AMBIENT_LEAK_CANARY, None)
-
-sandbox = Path(tempfile.mkdtemp(prefix="fno-lane-sandbox-"))
-env = apply_env("neutralise", dict(os.environ), sandbox=sandbox)
-if mode == "dirty":
-    env = apply_env(
-        "poison", env, fixtures=str(Path("cli/tests/fixtures/ambient-poison").resolve())
-    )
-sys.exit(subprocess.run(
-    [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", test_path],
-    env=env, cwd=root,
-).returncode)
-PYEOF
+  env -u AMBIENT_LEAK_CANARY SMOKE_REGISTRY_FILE="$SEAM/registry.json" \
+    "$BIN" test-run doctor smoke --ambient "$1" \
+    --only 'ambient canary control' >/dev/null 2>&1
   return $?
 }
 
@@ -76,19 +55,19 @@ echo "hermetic lanes: the dirty lane must be able to go red"
 run_lane clean
 clean_rc=$?
 if [ "$clean_rc" -eq 0 ]; then
-  pass "clean lane: canary test passes (no ambient state reaches a test)"
+  pass "clean lane: canary passes (no ambient state reaches a step)"
 else
-  fail "clean lane: canary test failed (rc=$clean_rc); something poisons the env outside --ambient dirty"
+  fail "clean lane: canary failed (rc=$clean_rc); something poisons the env outside --ambient dirty"
 fi
 
 run_lane dirty
 dirty_rc=$?
 if [ "$dirty_rc" -ne 0 ]; then
-  pass "dirty lane: canary test fails (rc=$dirty_rc) - the lane can detect a leak"
+  pass "dirty lane: canary fails (rc=$dirty_rc) - the lane can detect a leak"
 else
-  fail "dirty lane: canary test PASSED, so the positive control is disarmed.
+  fail "dirty lane: canary PASSED, so the positive control is disarmed.
        The dirty lane can no longer prove it detects anything, and a green run
-       from it is not evidence. Check whether a scrub rule in fno/hermetic.py
+       from it is not evidence. Check whether a scrub rule in the env builder
        widened far enough to swallow AMBIENT_LEAK_CANARY."
 fi
 

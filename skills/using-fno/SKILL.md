@@ -12,7 +12,7 @@ This workspace has the `footnote` plugin installed. Two surfaces compose: skills
 
 ## Missing `fno` CLI
 
-Nothing installs `fno` unasked: the session-start hook only prints the install plan. If `fno` is absent, tell the user it installs uv from astral.sh (edits the shell profile) then `fno` from PyPI, and ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`. Output ending `installer exit 0` means done. A non-zero exit line means failed. With `uv` present the run touches only the fno tool. While `fno` is absent its commands fail: say what is blocked and stop cleanly.
+Nothing installs `fno` unasked: the session-start hook only prints the install plan. If `fno` is absent, tell the user the installer downloads the release tarball from GitHub Releases, checks its sha256, and links the binaries into `~/.local/bin`, then ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`. Output ending `installer exit 0` means done. A non-zero exit line means failed. The run uses no Python and no uv, and edits no shell profile. While `fno` is absent its commands fail: say what is blocked and stop cleanly.
 
 ## Relay compression contract
 

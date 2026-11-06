@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
-# The canonical scrub lists live in cli/src/fno/hermetic.py and
-# cli/src/fno/agents/mux_spawn.py; keep this tuple aligned with their
+# The canonical scrub list lives in crates/fno-agents/src/model_env_scrub.rs;
+# keep this tuple aligned with its
 # credential set. AUTH_TOKEN and BASE_URL are here for the same reason they
 # are there: a token or a redirected base URL makes a green PASS a lie.
 KEYS = (
@@ -31,31 +32,54 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _native_fno() -> str | None:
+    """``FNO_BIN`` first, then this checkout's build, then ``PATH``."""
+    if os.environ.get("FNO_BIN"):
+        return os.environ["FNO_BIN"]
+    root = Path(__file__).resolve().parents[2]
+    for profile in ("debug", "release"):
+        candidate = root / "crates" / "fno" / "target" / profile / "fno"
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("fno")
+
+
+def _journal_paths(path: Path) -> list[Path]:
+    # Resolve first: a worktree journal can be a symlink into the repo space,
+    # and the sibling lives beside the real file.
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path.absolute()
+    return [resolved, resolved.with_name(resolved.name + ".ephemeral")]
+
+
 def _journal_text(path: Path) -> str:
     """A journal plus its .ephemeral sibling (retention routing):
     ephemeral-class rows like claim_acquired land in the sibling, so a reader
-    that wants the full stream reads both files. The shared derivation resolves
-    the journal first so a symlinked journal still finds its sibling.
+    that wants the full stream reads both files.
 
     The store commit is the write boundary, so each sibling is read through
     the native rows command (raw fallback built in); the raw bytes only serve a
     machine with no binary at all."""
-    from fno.paths import journal_and_ephemeral_sibling
-
-    try:
-        from fno.events.store_client import native_rows
-
-        parts = []
-        for p in journal_and_ephemeral_sibling(path):
-            committed = native_rows(p, legacy_fallback=True)
-            parts.append("\n".join(committed) if committed is not None else "")
-        return "".join(parts)
-    except Exception:
-        pass
-    parts = [
-        p.read_text(encoding="utf-8") if p.exists() else ""
-        for p in journal_and_ephemeral_sibling(path)
-    ]
+    bin_path = _native_fno()
+    parts = []
+    for p in _journal_paths(path):
+        committed = None
+        if bin_path:
+            try:
+                proc = subprocess.run(
+                    [bin_path, "doctor", "event", "rows", "--events", str(p), "--legacy-fallback"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if proc.returncode == 0:
+                    committed = json.loads(proc.stdout)
+            except (OSError, subprocess.SubprocessError, ValueError):
+                committed = None
+        if committed is not None:
+            parts.append("\n".join(committed))
+        elif p.exists():
+            parts.append(p.read_text(encoding="utf-8"))
     return "".join(parts)
 
 

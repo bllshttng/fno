@@ -54,7 +54,7 @@ chmod +x "$scratch/bin/claude"
 # checkout's CLI (a deployed stale binary lacks --print-binding).
 cat > "$scratch/bin/fno" <<EOF
 #!/usr/bin/env bash
-exec uv run --project "$root_dir/cli" fno-py "\$@"
+exec "$root_dir/crates/fno/target/debug/fno" "\$@"
 EOF
 chmod +x "$scratch/bin/fno"
 export PATH="$scratch/bin:$PATH"

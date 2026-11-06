@@ -6,7 +6,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
-VENV_PY="$ROOT/cli/.venv/bin/python"
+FRONT="$ROOT/crates/fno/target/debug/fno"
 
 # Exit 77, not 0: a skip must not read as a green run. `smoke.sh --only '*heal*'`
 # selects this step without the build/sync steps that produce its prerequisites,
@@ -15,8 +15,8 @@ if [[ ! -x "$BIN" ]]; then
   echo "SKIP: no debug fno-agents binary (cargo build --manifest-path crates/fno-agents/Cargo.toml)"
   exit 77
 fi
-if [[ ! -x "$VENV_PY" ]]; then
-  echo "SKIP: no cli venv (uv sync --project cli)"
+if [[ ! -x "$FRONT" ]]; then
+  echo "SKIP: no debug fno binary (cargo build --manifest-path crates/fno/Cargo.toml --bin fno)"
   exit 77
 fi
 
@@ -33,11 +33,9 @@ mkdir -p "$tmp/bin" "$FIXCWD" "$tmp/projects/$FIXSLUG" "$tmp/codex/2026/07/20" "
 # crates/fno-agents/tests/registry_commands_parity.rs.
 cd "$tmp" || { echo "FAIL: could not enter tmp"; exit 1; }
 
-# Shim `fno` to this worktree's source. `mux` never
-# forwards: the Python front execs the `fno` on PATH for that command, which is
-# this shim again, and the recursion runs until the runner kills it. attach
-# reaches the mux through `fno mux thread`, so the shim answers as a machine with
-# no live mux server.
+# Shim `fno` to this worktree's build. attach reaches the mux through
+# `fno mux thread`, so the shim answers `mux` as a machine with no live mux
+# server instead of reaching the developer's real one.
 restore_fno() {
   cat > "$tmp/bin/fno" <<EOF
 #!/bin/sh
@@ -45,7 +43,7 @@ if [ "\$1" = mux ]; then
   echo "fno mux: no live mux server (heal-token shim)" >&2
   exit 24
 fi
-exec "$VENV_PY" -c 'from fno.cli import app; app()' "\$@"
+exec "$FRONT" "\$@"
 EOF
   chmod +x "$tmp/bin/fno"
 }
@@ -70,7 +68,6 @@ export HOME="$tmp/home"
 export FIXCWD="$FIXCWD"
 export FNO_CLAUDE_PROJECTS_DIR="$tmp/projects"
 export FNO_CODEX_SESSIONS_DIR="$tmp/codex"
-export PYTHONPATH="$ROOT/cli/src"
 export PATH="$tmp/bin:$PATH"
 export FNO_AGENTS_BIN="$BIN"
 REGISTRY="$tmp/home/.fno/agents/registry.json"
@@ -102,7 +99,7 @@ reg_clear() {
 out=$("$BIN" resume c655c326 --print-command 2>&1) || fail "resume of a stored session: $out"
 grep -q -- "--resume $CLAUDE_UUID" <<<"$out" || fail "dead arm did not build the uuid argv: $out"
 grep -qF "cd $FIXCWD" <<<"$out" || fail "healed row lost its recorded cwd: $out"
-reg_rows | "$VENV_PY" -c '
+reg_rows | python3 -c '
 import json, os, sys
 rows = json.load(sys.stdin)
 assert len(rows) == 1, rows

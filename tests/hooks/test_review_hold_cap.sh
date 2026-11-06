@@ -11,8 +11,8 @@
 # base sha, so the interdiff carveout measures real patches; the hook runs
 # for real with FNO pointed at a wrapper that serves the two commands the hook
 # drives: the review-hold door answers natively now (the worker binary; the
-# Python front no longer carries the surface), and every other argv still
-# rides the checkout CLI (fno-py: the deployed cargo shim shadows the source
+# front no longer carries the surface), and every other argv rides the
+# checkout build of the front door (the deployed fno shadows the source
 # `fno` on PATH).
 set -uo pipefail
 
@@ -26,7 +26,6 @@ trap 'rm -rf "$WORK"' EXIT
 # fixture pins ONE spaces root and seeds the path the resolver answers.
 export FNO_SPACES_DIR="$WORK/spaces"
 
-CLI_DIR="$REPO/cli"
 cat > "$WORK/fno-wrapper" <<WRAPPER
 #!/usr/bin/env bash
 AGENTS="\${FNO_AGENTS_BIN:-}"
@@ -40,7 +39,7 @@ if [ "\$1 \$2 \$3" = "do pr review-hold" ] && [ -n "\$AGENTS" ] && [ -x "\$AGENT
   shift 3
   exec "\$AGENTS" do pr review-hold "\$@"
 fi
-exec uv run --quiet --project "$CLI_DIR" fno-py "\$@"
+exec "$REPO/crates/fno/target/debug/fno" "\$@"
 WRAPPER
 chmod +x "$WORK/fno-wrapper"
 
@@ -72,12 +71,8 @@ sys.exit(0 if denied else 1)
 append_attestation() { # <repo> <head> <base> <branch>
   mkdir -p "$1/.fno"
   local journal
-  journal="$(uv run --quiet --project "$CLI_DIR" python3 -c "
-import sys
-from pathlib import Path
-from fno.paths import project_log
-print(project_log('events.jsonl', project_root=Path(sys.argv[1]).resolve()))
-" "$1")"
+  journal="$(cd "$1" && env -u FNO_EVENTS_PATH \
+    "${FNO_AGENTS_BIN:-$REPO/crates/fno-agents/target/debug/fno-agents}" state path events)"
   python3 - "$journal" "$2" "$3" "$4" <<'PYEOF'
 import json, sys, pathlib
 journal, head, base, branch = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
