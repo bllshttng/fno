@@ -780,13 +780,16 @@ fn side_pad(inner_w: usize) -> usize {
 }
 
 /// The snapshot guard's read: which framed rows put text beside a border
-/// glyph with no space between. A violation is a non-space cell in the
-/// first or last inner column that is neither chrome (the border or the
-/// scrollbar, by role) nor a `─` rule glyph (a `PopupRow::Rule` runs
-/// full-width to the right border by design). Rows too narrow for the
-/// two-cell pad degrade legally and are skipped. `frame` asserts this
-/// empty, so every overlay demo that paints through the shared chrome
-/// walks the rule.
+/// glyph with no space between. The check is the LEFT edge only: the shared
+/// pad always precedes the text when a row carries it, so a text cell at
+/// the first inner column is the unpadded-row defect this guard exists for
+/// (the pre-fix subtitle and footer painted exactly that shape). The right
+/// edge is not checkable here: every framed row is padded to full width, so
+/// a text cell at the last inner column is a deliberately clipped or
+/// exactly-filled line (truncation, a fullwidth label, a `PopupRow::Rule`
+/// run, a scrollbar cell), all legal. Rows too narrow for the two-cell pad
+/// degrade legally and are skipped. `frame` asserts this empty, so every
+/// overlay demo that paints through the shared chrome walks the rule.
 pub(crate) fn pad_violations(lines: &[FramedLine]) -> Vec<String> {
     let mut bad = Vec::new();
     for line in lines {
@@ -794,24 +797,14 @@ pub(crate) fn pad_violations(lines: &[FramedLine]) -> Vec<String> {
         if cols.saturating_sub(2) < 4 {
             continue;
         }
-        let chars: Vec<char> = line.text.chars().collect();
-        let last = chars.len().checked_sub(2);
-        let ends = [
-            ("left", chars.get(1).copied(), line.roles.get(1).copied()),
-            (
-                "right",
-                last.and_then(|i| chars.get(i).copied()),
-                last.and_then(|i| line.roles.get(i).copied()),
-            ),
-        ];
-        for (edge, ch, role) in ends {
-            if let (Some(ch), Some(role)) = (ch, role) {
-                let chrome_cell = role == Role::Border
-                    || matches!(role, Role::ScrollTrack | Role::ScrollThumb)
-                    || ch == '─';
-                if ch != ' ' && !chrome_cell {
-                    bad.push(format!("{edge} edge of {:?}", line.text));
-                }
+        let ch = line.text.chars().nth(1);
+        let role = line.roles.get(1).copied();
+        if let (Some(ch), Some(role)) = (ch, role) {
+            let chrome_cell = role == Role::Border
+                || matches!(role, Role::ScrollTrack | Role::ScrollThumb)
+                || ch == '─';
+            if ch != ' ' && !chrome_cell {
+                bad.push(format!("left edge of {:?}", line.text));
             }
         }
     }
@@ -1208,40 +1201,39 @@ mod tests {
     fn the_guard_reports_text_beside_a_border_and_skips_legal_rows() {
         // `content_row` pads the tail and never the head, so an unpadded
         // call is exactly the defect the guard exists to catch (the
-        // pre-fix subtitle painted this shape).
+        // pre-fix subtitle painted this shape). The check is the LEFT edge:
+        // every framed row is padded to full width, so right-edge text is a
+        // deliberately clipped or exactly-filled line, always legal.
         let segs = |cs: &str, r: Role| cs.chars().map(|c| (c, r)).collect::<Vec<Seg>>();
         let mut row = vec![('│', Role::Border)];
         row.extend(segs("hint", Role::Subtitle));
         row.push(('│', Role::Border));
         let touching = flatten(row);
         let bad = pad_violations(std::slice::from_ref(&touching));
-        assert_eq!(bad.len(), 2, "both edges name the row: {bad:?}");
-        assert!(bad.iter().all(|b| b.contains("hint")), "{bad:?}");
+        assert_eq!(bad.len(), 1, "the left edge names the row: {bad:?}");
+        assert!(bad[0].contains("hint"), "{bad:?}");
 
         // The padded shape is clean.
         let padded = content_row(" hint ", Role::Subtitle, 8);
         assert!(pad_violations(std::slice::from_ref(&padded)).is_empty());
 
-        // A scrollbar cell is chrome, not text: a thumb at the right edge
-        // passes, while the same glyphs in a text role fail (the exemption
-        // is the ROLE, never the glyph).
-        let scrolled = |right: char, role: Role| {
+        // Right-edge text in any role is legal: a scrollbar cell, a rule
+        // run, and a clipped or exactly-filled label all end flush there.
+        let right_edge = |right: char, role: Role| {
             let mut row = vec![('│', Role::Border)];
             row.extend(segs(" ab ", Role::Text(TextStyle::Item)));
             row.push((right, role));
             row.push(('│', Role::Border));
             flatten(row)
         };
-        assert!(pad_violations(std::slice::from_ref(&scrolled('░', Role::ScrollTrack))).is_empty());
-        let bad = pad_violations(std::slice::from_ref(&scrolled(
+        assert!(
+            pad_violations(std::slice::from_ref(&right_edge('░', Role::ScrollTrack))).is_empty()
+        );
+        assert!(pad_violations(std::slice::from_ref(&right_edge(
             '█',
-            Role::Text(TextStyle::Item),
-        )));
-        assert_eq!(bad.len(), 1, "the right edge fails: {bad:?}");
-        assert!(bad[0].starts_with("right edge"), "{bad:?}");
-
-        // A rule run flush to the right border is the `PopupRow::Rule`
-        // idiom, chrome and not text: it passes where a letter fails.
+            Role::Text(TextStyle::Item)
+        )))
+        .is_empty());
         let mut rule = vec![('│', Role::Border)];
         rule.extend(segs("  ", Role::Text(TextStyle::Item)));
         rule.extend(segs("────────", Role::Text(TextStyle::Meta)));
