@@ -1,9 +1,6 @@
 use fno_agents::codex_fake_daemon::{Behavior, FakeDaemon, Interrupt, Steer};
 use fno_agents::codex_posture::CodexPosture;
-use fno_agents::codex_thread::{
-    parse_thread_start_response, thread_start_request_json, CodexThread, CodexThreadActor,
-    InterruptOutcome, ThreadStartError,
-};
+use fno_agents::codex_thread::{CodexThread, CodexThreadActor, InterruptOutcome};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

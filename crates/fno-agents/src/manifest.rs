@@ -1069,8 +1069,6 @@ mod tests {
 
     // ---- E6.3: bundled rule files (claude/codex/gemini) ----
 
-    use crate::readiness::{CodexReadinessDetector, GeminiReadinessDetector, ReadinessDetector};
-
     fn bundled(agent: &str) -> Manifest {
         Manifest::parse(bundled_manifest(agent).expect("bundled manifest exists"))
             .expect("bundled manifest parses")

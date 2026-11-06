@@ -841,7 +841,7 @@ mod tests {
 
     use super::claim::{claim_pass, command_of, parse_match, ClaimIn, ClaimPass, Command, Judge};
     use crate::backlog::requests::ClaimOp;
-    use chrono::{DateTime, Duration, Utc};
+    use chrono::Utc;
 
     fn comment(hub: &Arc<Mutex<Hub>>, login: &str, body: &str) {
         hub.lock()

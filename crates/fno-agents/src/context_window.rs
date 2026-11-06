@@ -474,8 +474,8 @@ pub fn verify_compaction_receipt(
 #[cfg(test)]
 mod tests {
     use super::{
-        compaction_band, effective_window, used_percent, CompactionBand, ContextWindowError,
-        ContextWindowReceipt, EXPANDED_TAIL_BYTES,
+        effective_window, used_percent, ContextWindowError, ContextWindowReceipt,
+        EXPANDED_TAIL_BYTES,
     };
     use std::io::Write;
 

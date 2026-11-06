@@ -1270,7 +1270,7 @@ fn shutdown_reply(sock: &Path) -> Option<Value> {
 #[cfg(test)]
 mod process_table_tests {
 
-    use super::{pid_is_zombie, process_table, ps_text};
+    use super::{pid_is_zombie, ps_text};
 
     // The parser it pins compiles only beside its Linux caller.
     #[cfg(not(target_os = "macos"))]

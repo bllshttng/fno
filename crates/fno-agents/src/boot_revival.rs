@@ -802,8 +802,6 @@ mod tests {
     use super::*;
     use crate::claude_roster::ClaudeAgentRow;
     use crate::AgentStatus;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
 
     const BOOT: u64 = 1_790_338_000;
 

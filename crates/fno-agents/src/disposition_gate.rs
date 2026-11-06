@@ -326,7 +326,7 @@ pub fn disposition_blockers_on_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::{blockers_withhold, disposition_blockers_on_chain, Diagnosis};
+    use super::{disposition_blockers_on_chain, Diagnosis};
     use std::collections::HashSet;
 
     #[test]

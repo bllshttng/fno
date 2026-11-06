@@ -1264,7 +1264,6 @@ fn form_escape(value: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;

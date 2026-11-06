@@ -228,6 +228,4 @@ pub fn map_bash_command(command: &str) -> Option<MappedEffect> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}
