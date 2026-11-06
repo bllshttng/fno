@@ -37,17 +37,17 @@ identity_markers = [
     "PI_SESSION_FILE",
     "FNO_AGENT_SUBSTRATE",
     "FNO_NODE_REASON",
-    # Test seams: pid-path hooks the harness test fixtures set on their own
-    # children. A developer shell never carries them, and a leaked value
-    # would retarget a fixture's pid file, so they scrub with the ambient set.
-    "test_front_handoff_pid_path",
-    "test_local_forward_pid_path",
 ]
 
 # Non-prefixed ambient names, measured rather than guessed. Each entry earns
 # its place in hermetic.py's original table; the reasons live in the port's
 # git history and docs/architecture/test-hermeticity.md.
 ambient_names = [
+    # Test seams: pid-path hooks the harness test fixtures set on their own
+    # children. A developer shell never carries them, and a leaked value
+    # would retarget a fixture's pid file, so they scrub with the ambient set.
+    "test_front_handoff_pid_path",
+    "test_local_forward_pid_path",
     "CLAUDE_PLUGIN_ROOT",
     "CODEX_PLUGIN_ROOT",
     "CLAUDE_CONFIG_DIR",
