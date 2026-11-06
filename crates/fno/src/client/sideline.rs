@@ -100,7 +100,7 @@ fn card_head_caption(grouped: bool, column: AgentSortColumn, arrow: &str, room: 
     let sort = format!("sort: {name} {arrow}");
     let tiers = if grouped {
         vec![
-            format!("group: lead \u{b7} {sort}"),
+            format!("grouped: lead \u{b7} {sort}"),
             format!("by lead \u{b7} {sort}"),
             format!("lead \u{b7} {sort}"),
         ]
