@@ -214,9 +214,63 @@ fn row_basis(row: &Value) -> String {
         .to_string()
 }
 
+fn claim_belongs_to_session(
+    rec: &ClaimRecord,
+    session_id: Option<&str>,
+    declared_handover: Option<&str>,
+    entries: &[crate::state::RegistryEntry],
+) -> bool {
+    let Some(session_id) = session_id.filter(|id| !id.trim().is_empty()) else {
+        return declared_handover == Some(rec.holder.as_str())
+            && rec.holder.starts_with(HANDOVER_HOLDER_PREFIX);
+    };
+    if rec.holder.strip_prefix(SESSION_HOLDER_PREFIX) == Some(session_id) {
+        return true;
+    }
+    let Some(worker) = rec.holder.strip_prefix(HANDOVER_HOLDER_PREFIX) else {
+        return false;
+    };
+    declared_handover == Some(rec.holder.as_str())
+        || crate::target_start::handover_row_is_ours(entries, worker, Some(session_id))
+}
+
+fn claim_belongs_to_current_session(rec: &ClaimRecord) -> bool {
+    let session_id = crate::claims::resolve_identity().0;
+    let declared_handover = std::env::var("FNO_NODE_CLAIM_HOLDER").ok();
+    if claim_belongs_to_session(
+        rec,
+        session_id.as_deref(),
+        declared_handover.as_deref(),
+        &[],
+    ) {
+        return true;
+    }
+    if !rec.holder.starts_with(HANDOVER_HOLDER_PREFIX) {
+        return false;
+    }
+    let Some(session_id) = session_id.as_deref() else {
+        return false;
+    };
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return false;
+    };
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return false;
+    };
+    claim_belongs_to_session(
+        rec,
+        Some(session_id),
+        declared_handover.as_deref(),
+        &registry.entries,
+    )
+}
+
 /// Port of `core.sweep_verdict`: coerce the native verdict row, engage the
 /// abandonment probe only for node:-prefixed suspects.
 fn judge(rec: &ClaimRecord, row: &Value, ctx: &mut ProbeCtx) -> Result<(bool, String), String> {
+    if claim_belongs_to_current_session(rec) {
+        return Ok((false, "live".to_string()));
+    }
     let Some(obj) = row.as_object() else {
         return Err(SWEEP_FIELDS_MSG.to_string());
     };
@@ -823,6 +877,101 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64
+    }
+
+    #[test]
+    fn reaper_keeps_claims_owned_by_the_current_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let claims_dir = dir.path().join("claims");
+        std::fs::create_dir_all(&claims_dir).unwrap();
+        let agents_home = crate::paths::AgentsHome::at(dir.path().join("agents-home"));
+        std::fs::create_dir_all(agents_home.root()).unwrap();
+        crate::state::update_registry(&agents_home.registry_json(), |registry| {
+            registry.entries.push(crate::state::RegistryEntry {
+                name: "worker".into(),
+                harness: Some("claude".into()),
+                harness_session_id: Some("worker-session".into()),
+                ..Default::default()
+            });
+        })
+        .unwrap();
+
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _clear_identity: Vec<_> = crate::claims::AMBIENT_IDENTITY_NAMES
+            .iter()
+            .map(|name| crate::claims::EnvVarGuard::unset(name))
+            .collect();
+        let _handover = crate::claims::EnvVarGuard::unset("FNO_NODE_CLAIM_HOLDER");
+        let _agents_home = crate::claims::EnvVarGuard::set(
+            "FNO_AGENTS_HOME",
+            agents_home.root().to_str().unwrap(),
+        );
+        let _harness = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "fno");
+        let _session = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", "worker-session");
+
+        let spawn_claim = ClaimRecord {
+            schema_version: 2,
+            key: "node:spawn-self".into(),
+            holder: "spawn-handover:worker".into(),
+            acquired_at: now_ms(),
+            pid: None,
+            host: hostname(),
+            pid_unavailable: true,
+            expires_at: Some(now_ms() + 60_000),
+            reason: None,
+            harness: None,
+            session_id: None,
+            pid_provenance: None,
+            machine_id: Some(crate::claims::machine_id()),
+            metadata: serde_json::Map::new(),
+        };
+        let session_claim = ClaimRecord {
+            key: "node:session-self".into(),
+            holder: "target-session:worker-session".into(),
+            ..spawn_claim.clone()
+        };
+        let spawn_path = locator(&claims_dir, &spawn_claim.key);
+        let session_path = locator(&claims_dir, &session_claim.key);
+        crate::claim_store::seed_at_path(&spawn_path, &spawn_claim);
+        crate::claim_store::seed_at_path(&session_path, &session_claim);
+        let dead_verdict = |key: &str| {
+            serde_json::json!({
+                "key": key,
+                "state": "dead",
+                "basis": "pid-absent",
+                "bucket": "dead",
+                "provably_dead": true,
+            })
+        };
+        let mut ctx = ProbeCtx::default();
+        let mut summary = ReapSummary::new(Vec::new(), true);
+        reap_one(
+            &spawn_claim,
+            &dead_verdict(&spawn_claim.key),
+            &claims_dir,
+            true,
+            now_ms(),
+            &mut ctx,
+            &mut summary,
+        )
+        .unwrap();
+        reap_one(
+            &session_claim,
+            &dead_verdict(&session_claim.key),
+            &claims_dir,
+            true,
+            now_ms(),
+            &mut ctx,
+            &mut summary,
+        )
+        .unwrap();
+
+        assert!(read_claim_file(&spawn_path).is_ok());
+        assert!(read_claim_file(&session_path).is_ok());
+        assert_eq!(summary.reaped, 0);
+        assert_eq!(summary.kept_live, 2);
     }
 
     /// The pid-shared downgrade (the Python TestSharedPid shape): the sweep

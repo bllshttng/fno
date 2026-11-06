@@ -265,14 +265,17 @@ fn live_names_in(
         .collect()
 }
 
-/// Scope -> display name for every record that counts as live.
-pub fn live_names(
-    store_path: &Path,
-    registry_path: &Path,
-) -> Result<BTreeMap<String, String>, String> {
-    let store = read(store_path)?;
-    let live = live_index(registry_path)?;
-    Ok(live_names_in(&store, &live))
+/// Scope -> display name for every live team: the holder row's registry
+/// label, title-cased for display. The registry label is the one name a
+/// session answers to, so the display reads the registry and never the
+/// store: bookkeeping drift in `team_names.json` cannot rename a team, and
+/// a team whose record was dropped by a promotion or a fresh grant still
+/// shows the holder's name.
+pub fn live_names(registry_path: &Path) -> Result<BTreeMap<String, String>, String> {
+    Ok(live_index(registry_path)?
+        .into_iter()
+        .map(|(scope, team)| (scope, display(&team.holder, 1)))
+        .collect())
 }
 
 /// Scope -> stored people title for every record that counts as live (the
@@ -814,8 +817,27 @@ pub fn name_team(
     name: &str,
 ) -> Result<String, String> {
     let canon = crate::territory::canonical_scope(scope);
+    let live = live_index(registry_path)?;
+    let Some(team) = live.get(&canon) else {
+        return Err(format!("no live team holds {canon}"));
+    };
     let mut drawn = String::new();
     let name = if is_reserved_word(name) {
+        // A named live team refuses BEFORE the draw: the draw consumes a name
+        // (a claim and a history row), and the refusal would retire it
+        // forever. Same verdict the update closure re-checks under the lock.
+        let already = read(store_path)?;
+        let named_person = already
+            .teams
+            .get(&canon)
+            .is_some_and(|rec| valid_person_name(&rec.name));
+        if named_person {
+            let existing = live_names_in(&already, &live).get(&canon).cloned();
+            return Err(format!(
+                "this team is already named {}; the name belongs to the team",
+                existing.unwrap_or_default()
+            ));
+        }
         drawn = crate::name_draw::draw_successor_name(
             store_path,
             registry_path,
@@ -834,7 +856,6 @@ pub fn name_team(
             "a team name is 2-24 letters (apostrophes and hyphens allowed after the first), got {name:?}; or pass --name redraw and the machine draws one"
         ));
     }
-    let live = live_index(registry_path)?;
     let mut used = used_for_canon(store_path, registry_path, &canon, &live)?;
     // The draw this call just took is fresh by construction; its own
     // `drawn` row is the only history entry naming it. An older draw over
@@ -842,24 +863,33 @@ pub fn name_team(
     used.remove(&drawn.to_ascii_lowercase());
     // A resumed lead lost its store record but not its identity: the names
     // its own session bound or carries are its own, not a reuse.
-    if let Some(session) = live.get(&canon).and_then(|c| c.holder_session.as_deref()) {
+    if let Some(session) = team.holder_session.as_deref() {
         for own in session_own_names(store_path, registry_path, session)? {
             used.remove(&own);
         }
     }
+    // The rollback snapshot is taken BEFORE the record commits, so a failed
+    // label rename restores the pre-command state instead of re-inserting
+    // the bind it is meant to undo.
+    let prior_record = read(store_path)
+        .ok()
+        .and_then(|s| s.teams.get(&canon).cloned());
     let shown = update(store_path, |store| {
         let names = live_names_in(store, &live);
         if let Some(existing) = names.get(&canon) {
-            if store
-                .teams
-                .get(&canon)
-                .is_some_and(|record| record.name.eq_ignore_ascii_case(name))
-            {
-                return Ok(existing.clone());
+            let record = store.teams.get(&canon);
+            let same = record.is_some_and(|r| r.name.eq_ignore_ascii_case(name));
+            let person_named = record.is_some_and(|r| valid_person_name(&r.name));
+            if same || person_named {
+                if same {
+                    return Ok(existing.clone());
+                }
+                return Err(format!(
+                    "this team is already named {existing}; the name belongs to the team"
+                ));
             }
-            return Err(format!(
-                "this team is already named {existing}; the name belongs to the team"
-            ));
+            // A slug-named record (a dispatch label mirrored in from the
+            // row) was never person-named: the naming ceremony stays open.
         }
         check_duplicate_name(store_path, store, &names, &live, &used, &canon, name)?;
         let holder_session = live.get(&canon).and_then(|c| c.holder_session.clone());
@@ -881,16 +911,59 @@ pub fn name_team(
         );
         Ok(display(name, 1))
     })?;
+    // The user's name lands on the holder row through the one registry
+    // writer (`state::rename_agent_displacing`). A refusal here rolls the
+    // bind back: the record restores, and a drawn name releases its claim,
+    // because a drawn name binds only when the whole command succeeds.
+    let holder = team.holder.clone();
+    let displaceable = |row: &crate::state::RegistryEntry,
+                        entries: &[crate::state::RegistryEntry]| {
+        if crate::state::row_is_terminal(row) {
+            return true;
+        }
+        let Some(sid) = row.harness_session_id.as_deref() else {
+            return false;
+        };
+        if holds_live_team(entries, sid) {
+            return false;
+        }
+        let Ok(current) = read(store_path) else {
+            return false;
+        };
+        current
+            .teams
+            .values()
+            .all(|r| r.holder_session.as_deref() != Some(sid))
+    };
+    if let Err(e) = crate::state::rename_agent_displacing(
+        registry_path,
+        &holder,
+        &name.to_ascii_lowercase(),
+        None,
+        displaceable,
+    )
+    .map_err(|e| format!("rename teamed holder: {e}"))
+    {
+        update(store_path, |store| {
+            match prior_record {
+                Some(prior) => {
+                    store.teams.insert(canon.clone(), prior);
+                }
+                None => {
+                    store.teams.remove(&canon);
+                }
+            }
+            Ok(())
+        })?;
+        if !drawn.is_empty() {
+            crate::name_draw::release_name_claim(&drawn, draw_claims_root(store_path));
+        }
+        return Err(e);
+    }
     history_append(
         store_path,
-        NameHistoryEntry::here(
-            name,
-            &canon,
-            live.get(&canon).and_then(|c| c.holder_session.clone()),
-            "bound",
-        ),
+        NameHistoryEntry::here(name, &canon, team.holder_session.clone(), "bound"),
     )?;
-    ensure_named_team(store_path, registry_path, &canon)?;
     Ok(shown)
 }
 
@@ -1071,39 +1144,28 @@ pub fn ensure_named_team(
     if holder_bound.is_some() && holder_bound != team.holder_session {
         return Ok(false);
     }
-    let label = rec.name.to_ascii_lowercase();
-    // A succession the predecessor survived leaves the carried label parked
-    // on its still-live row. A row holding no live team keeps nothing: the
-    // label and alias move off it in the SAME transaction that names the new
-    // holder, so the label never resolves to two rows. The predicate reads
-    // the store and the transaction's own rows, so the verdict under the
-    // lock is as fresh as the two files allow.
-    let displaceable = |row: &crate::state::RegistryEntry,
-                        entries: &[crate::state::RegistryEntry]| {
-        if crate::state::row_is_terminal(row) {
-            return true;
-        }
-        let Some(sid) = row.harness_session_id.as_deref() else {
-            return false;
-        };
-        if holds_live_team(entries, sid) {
-            return false;
-        }
-        let Ok(current) = read(store_path) else {
-            return false;
-        };
-        current
-            .teams
-            .values()
-            .all(|r| r.holder_session.as_deref() != Some(sid))
-    };
-    crate::state::rename_agent_displacing(registry_path, &team.holder, &label, None, displaceable)
-        .map_err(|e| format!("rename teamed holder: {e}"))?;
+    // The registry label is the one name a session answers to: the record
+    // mirrors it (case-preserving when the names match modulo case) and
+    // never renames the row. A mismatch heals toward the label at every
+    // check-in, rescope or beat, and no display path reads the record's
+    // name (live_names reads the label), so a mismatch cannot surface.
+    let label = team.holder.clone();
+    if !rec.name.eq_ignore_ascii_case(&label) {
+        update(store_path, |store| {
+            if let Some(rec) = store.teams.get_mut(&canon) {
+                if !rec.name.eq_ignore_ascii_case(&label) {
+                    rec.name = label.clone();
+                    rec.updated_at = now_stamp();
+                }
+            }
+            Ok(())
+        })?;
+    }
     Ok(true)
 }
 
 /// Whether `sid` is the first liveish row over some non-empty canonical
-/// scope - `territory::live_teams`'s holder rule, run over the caller's
+/// scope - `territory::live_teams`'s holder binding, run over the caller's
 /// rows so the displacement verdict cannot read a pre-transaction snapshot.
 fn holds_live_team(entries: &[crate::state::RegistryEntry], sid: &str) -> bool {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1620,29 +1682,20 @@ pub(crate) fn stamp_beat_lead(store_path: &Path, cwd: &Path, scope: &str) -> Opt
 /// Set (once per scope) a lead's theme. The team must be live and named;
 /// L1 refuses ("Head of <project> takes the project name; no theme"); the
 /// same theme again is a no-op; a different theme names the current one and
-/// refuses (set once per scope, like the name).
+/// refuses (set once per scope, like the name). The refusal rules live in
+/// one place ([`validate_theme`], read-only); this commit path re-checks the
+/// set-once conflict under the store lock and writes.
 pub fn set_theme(
     store_path: &Path,
     registry_path: &Path,
     scope: &str,
     theme: &str,
 ) -> Result<String, String> {
+    validate_theme(store_path, registry_path, scope, theme, false)?;
     let theme = theme.trim();
-    if !valid_theme(theme) {
-        return Err(format!(
-            "a theme is 2-40 characters (letters, digits, spaces, hyphens and apostrophes; no quote or angle bracket), got {theme:?}"
-        ));
-    }
     let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
     update(store_path, |store| {
-        let names = live_names_in(store, &live);
-        if !names.contains_key(&canon) {
-            return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
-        }
-        if live.get(&canon).is_some_and(|c| c.level == 1) {
-            return Err("Head of <project> takes the project name; no theme".into());
-        }
         let verdict = {
             let rec = store
                 .teams
@@ -1869,8 +1922,8 @@ pub fn revert_stale_pending(
     Ok((reverted, kept))
 }
 
-/// Drop every record `live_names` would not count. Answers the dropped
-/// scope keys.
+/// Drop every record whose scope has no live team (or whose binding is
+/// stale). Answers the dropped scope keys.
 pub fn prune(store_path: &Path, registry_path: &Path) -> Result<Vec<String>, String> {
     let dropped = prune_dry(store_path, registry_path)?;
     if dropped.is_empty() {
@@ -1921,6 +1974,19 @@ pub fn apply_team_naming(
     level: Option<i64>,
     scope: &str,
 ) -> Result<(), String> {
+    // The theme validates BEFORE the name action commits: a refused
+    // check-in (a bad theme, an L1 with a theme, a set-once conflict) must
+    // never leave a freshly bound name behind, because a drawn name binds
+    // only when the whole command succeeds.
+    if let Some(theme) = theme {
+        validate_theme(
+            store_path,
+            registry_path,
+            scope,
+            theme,
+            name.is_some() || rescope_from.is_some(),
+        )?;
+    }
     match (name, rescope_from) {
         (Some(_), Some(_)) => Err("use one of --name or --keep-name-from, not both".into()),
         (Some(n), None) => name_team(&store_path, &registry_path, scope, n).map(|_| ()),
@@ -1937,6 +2003,44 @@ pub fn apply_team_naming(
         return Err(
             "every lead names its theme once per scope; check in with --theme <theme>".into(),
         );
+    }
+    Ok(())
+}
+
+/// Read-only validation for the check-in's `--theme`, run BEFORE the name
+/// action commits so a refused check-in never leaves a bound name behind.
+/// Same refusals [`set_theme`]'s write path re-checks under the store lock:
+/// shape, the L1 refusal, an unnamed team, and the set-once conflict (the
+/// same theme again is the no-op answer).
+fn validate_theme(
+    store_path: &Path,
+    registry_path: &Path,
+    scope: &str,
+    theme: &str,
+    naming_too: bool,
+) -> Result<(), String> {
+    let theme = theme.trim();
+    if !valid_theme(theme) {
+        return Err(format!(
+            "a theme is 2-40 characters (letters, digits, spaces, hyphens and apostrophes; no quote or angle bracket), got {theme:?}"
+        ));
+    }
+    let canon = crate::territory::canonical_scope(scope);
+    let live = live_index(registry_path)?;
+    if live.get(&canon).is_some_and(|c| c.level == 1) {
+        return Err("Head of <project> takes the project name; no theme".into());
+    }
+    let store = read(store_path)?;
+    let names = live_names_in(&store, &live);
+    if !naming_too && !names.contains_key(&canon) {
+        return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
+    }
+    if let Some(existing) = store.teams.get(&canon).and_then(|rec| rec.theme.as_deref()) {
+        if existing != theme {
+            return Err(format!(
+                "this lead's theme is already {existing:?}; the theme is set once per scope, like the name"
+            ));
+        }
     }
     Ok(())
 }
@@ -2002,7 +2106,7 @@ mod tests {
             assert!(used.contains("wren"), "{used:?}");
         }
 
-        fn a_successor_checkin_carries_the_name_into_its_registry_label() {
+        fn a_successor_checkin_keeps_the_label_and_the_record_mirrors_it() {
             let tmp = tempfile::TempDir::new().unwrap();
             let store = store_path(tmp.path());
             let registry = registry_path(tmp.path());
@@ -2038,8 +2142,10 @@ mod tests {
             )
             .unwrap();
             let rows = crate::state::load_registry(&registry).unwrap();
-            assert_eq!(rows.entries[0].name, "avery");
-            assert_ne!(rows.entries[0].name, "barnaby");
+
+            assert_eq!(rows.entries[0].name, "Avery");
+            let dump = snapshot(&store).unwrap();
+            assert_eq!(dump["teams"]["x-aaaa"]["name"], json!("Avery"));
         }
 
         fn a_duplicate_live_name_refuses_naming_and_names_the_holder() {
@@ -2410,7 +2516,7 @@ mod tests {
         an_org_promote_rescope_carries_the_record_and_the_carry_names_an_unnamed_team();
         a_resumed_lead_rebinds_the_name_its_own_session_held();
         an_unnamed_live_team_cannot_complete_checkin();
-        a_successor_checkin_carries_the_name_into_its_registry_label();
+        a_successor_checkin_keeps_the_label_and_the_record_mirrors_it();
         a_duplicate_live_name_refuses_naming_and_names_the_holder();
         naming_an_already_named_team_refuses();
         combining_the_two_naming_flags_refuses();
@@ -2526,12 +2632,127 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_store_reads_empty_and_a_malformed_one_is_an_error() {
+    fn a_missing_or_malformed_store_leaves_the_display_on_the_registry() {
         let tmp = tempfile::TempDir::new().unwrap();
         write_registry(tmp.path(), json!([team_row("lead-a", "fno", 1, "sess-a")]));
-        let names = live_names(&store_path(tmp.path()), &registry_path(tmp.path())).unwrap();
-        assert!(names.is_empty());
+        let names = live_names(&registry_path(tmp.path())).unwrap();
+        assert_eq!(names.get("fno").map(String::as_str), Some("Lead-a"));
         std::fs::write(store_path(tmp.path()), "{not json").unwrap();
-        assert!(live_names(&store_path(tmp.path()), &registry_path(tmp.path())).is_err());
+        let names = live_names(&registry_path(tmp.path())).unwrap();
+        assert_eq!(names.get("fno").map(String::as_str), Some("Lead-a"));
+        // The store read itself still refuses: the naming ceremony and the
+        // bookkeeping keep the fail-closed contract.
+        assert!(read(&store_path(tmp.path())).is_err());
+        let tmp2 = tempfile::TempDir::new().unwrap();
+        assert!(live_names(&registry_path(tmp2.path())).unwrap().is_empty());
+    }
+    #[test]
+    fn one_name_per_session_registry_wins() {
+        fn the_display_reads_the_label_not_the_record() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([team_row("aubin", "x-aaaa", 2, "sess-a")]),
+            );
+            std::fs::write(
+                store_path(tmp.path()),
+                serde_json::to_string(&json!({
+                    "version": 1,
+                    "teams": {"x-aaaa": {
+                        "name": "Zenobia", "generation": 1,
+                        "holder_session": "sess-a", "nodes": [],
+                        "updated_at": "2026-09-23T20:00:00Z"}},
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let names = live_names(&registry_path(tmp.path())).unwrap();
+            assert_eq!(names.get("x-aaaa").map(String::as_str), Some("Aubin"));
+        }
+
+        fn a_redraw_on_a_named_team_refuses_without_burning_a_draw() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([team_row("kestrel", "x-aaaa", 2, "sess-k")]),
+            );
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            name_team(&store, &registry, "x-aaaa", "kestrel").unwrap();
+            let before = history_names(&store).unwrap();
+            let err = name_team(&store, &registry, "x-aaaa", "redraw").unwrap_err();
+            assert!(err.contains("already named"), "{err}");
+            assert_eq!(history_names(&store).unwrap(), before, "no name burned");
+        }
+
+        fn a_refused_theme_leaves_no_freshly_bound_name() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([team_row("lead-a", "x-aaaa", 2, "sess-a")]),
+            );
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            let before = history_names(&store).unwrap();
+            let err = apply_team_naming(
+                &store,
+                &registry,
+                Some("barnaby"),
+                None,
+                Some("bad!theme"),
+                Some(2),
+                "x-aaaa",
+            )
+            .unwrap_err();
+            assert!(err.contains("a theme is 2-40"), "{err}");
+            assert!(read(&store).unwrap().teams.get("x-aaaa").is_none());
+            let rows = crate::state::load_registry(&registry).unwrap();
+            assert_eq!(rows.entries[0].name, "lead-a");
+            assert_eq!(history_names(&store).unwrap(), before);
+        }
+
+        fn the_record_mirrors_the_label_and_the_ceremony_stays_reachable() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([team_row("t-1ab9-w1", "x-aaaa", 2, "sess-a")]),
+            );
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            std::fs::write(
+                store_path(tmp.path()),
+                serde_json::to_string(&json!({
+                    "version": 1,
+                    "teams": {"x-aaaa": {
+                        "name": "Zenobia", "generation": 1,
+                        "holder_session": "sess-a", "nodes": [],
+                        "updated_at": "2026-09-23T20:00:00Z"}},
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            ensure_named_team(&store, &registry, "x-aaaa").unwrap();
+            let dump = snapshot(&store).unwrap();
+            assert_eq!(dump["teams"]["x-aaaa"]["name"], json!("t-1ab9-w1"));
+            apply_team_naming(
+                &store,
+                &registry,
+                Some("barnaby"),
+                None,
+                None,
+                None,
+                "x-aaaa",
+            )
+            .unwrap();
+            let dump = snapshot(&store).unwrap();
+            assert_eq!(dump["teams"]["x-aaaa"]["name"], json!("barnaby"));
+            let rows = crate::state::load_registry(&registry).unwrap();
+            assert_eq!(rows.entries[0].name, "barnaby");
+        }
+
+        the_display_reads_the_label_not_the_record();
+        a_redraw_on_a_named_team_refuses_without_burning_a_draw();
+        a_refused_theme_leaves_no_freshly_bound_name();
+        the_record_mirrors_the_label_and_the_ceremony_stays_reachable();
     }
 }

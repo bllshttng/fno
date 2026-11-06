@@ -570,6 +570,7 @@ pub mod resume_args;
 pub mod resume_gate;
 pub mod resume_pin;
 pub mod resume_receipt;
+pub(crate) mod resume_reroute;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
