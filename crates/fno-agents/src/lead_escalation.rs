@@ -740,7 +740,6 @@ mod tests {
         assert!(msg.contains("empty"));
     }
 
-
     // --- the mail twin ---
 
     #[test]

@@ -3152,7 +3152,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn a_close_tag_free_line_verifies_a_forged_rank() {
         // AC4-ERR: the relay single-line variant passes the structural

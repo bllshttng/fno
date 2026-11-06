@@ -3076,7 +3076,6 @@ mod tests {
 
     // ── HALF ONE: WIP-commit at every terminal ───────────────────────
 
-
     #[test]
     fn commit_wip_if_dirty_refuses_a_tree_mid_merge_conflict() {
         // The specimen this guard exists for: a worker dies with an unresolved
@@ -3192,7 +3191,6 @@ mod tests {
     // ── the cancel terminal settles its own claim ────────────────────────────
 
     // ──: arm auto-merge at the green gate, not at PR creation ────────
-
 
     #[test]
     fn manifest_auto_merge_posture_cannot_be_forged_by_input_text() {
@@ -3366,7 +3364,6 @@ mod tests {
             "a clean stop for input exits 0"
         );
     }
-
 
     #[test]
     fn prior_finalize_ship_reads_ship_flag_and_session() {

@@ -894,7 +894,6 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
     );
 }
 
-
 /// Durability ordering, enforced not narrated: a receipt that cannot be
 /// written holds its row in the registry. The receipts dir is pre-created
 /// as a FILE, so the persist write fails and the sweep keeps the row.
@@ -1139,7 +1138,6 @@ fn gc_sweep_restores_row_when_termination_evidence_is_unknown() {
             && event["data"]["op"] == "observe_dead_dispatch_termination"
     }));
 }
-
 
 #[tokio::test]
 async fn lifecycle_name_resolution_never_falls_back_on_ambiguity() {

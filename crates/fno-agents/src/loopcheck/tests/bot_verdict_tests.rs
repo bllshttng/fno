@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn bot_verdict_usage_after_clean_pass_refuses_both_axes() {
     // Clean pass pinned at HEAD, then a quota bounce. The pass does not
@@ -41,7 +40,6 @@ fn clean_pass_marker_with_minor_findings_is_not_a_pass() {
     );
 }
 
-
 #[test]
 fn equal_rank_tie_breaks_on_the_stamp_not_the_array_order() {
     // The same three comments as the test above, delivered NEWEST FIRST.
@@ -73,7 +71,6 @@ fn equal_rank_tie_breaks_on_the_stamp_not_the_array_order() {
     let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
     assert_eq!(verdict, CoverageVerdict::Reviewed);
 }
-
 
 #[test]
 fn short_name_config_cannot_draft_a_fan_into_the_marker_lane() {

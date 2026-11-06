@@ -1946,7 +1946,6 @@ mod tests {
         json!({"ts": ts, "type": "lead_checkin", "source": "loop", "data": data})
     }
 
-
     #[test]
     fn scope_optional_scan_returns_all_canonical_scopes_and_rejections() {
         let (_dir, path) = journal(&[

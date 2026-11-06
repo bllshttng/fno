@@ -512,7 +512,6 @@ mod tests {
         assert_eq!(async_wait_class(&pr, true, true), Some("ci"));
     }
 
-
     #[test]
     fn slot_block_reason_names_the_holder_and_the_ritual() {
         // The idlable half renders the hold + the arm-and-tag ritual, and the

@@ -796,7 +796,6 @@ mod tests {
         assert_eq!(get_str(&parsed.fields, "expected_url_count"), "9");
     }
 
-
     #[test]
     fn unbalanced_quote_degrades_without_raising() {
         let parsed = parse_frontmatter("---\nsources: [\"a, b]\n---\nbody\n").unwrap();

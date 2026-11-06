@@ -25,7 +25,6 @@ fn reviewer_invocation_resolves_the_author_harness_command() {
     );
 }
 
-
 #[test]
 fn self_review_gate_fails_closed_when_main_resolves_but_diffs_fail() {
     // origin/main RESOLVES but its diff fails (unrelated histories exit

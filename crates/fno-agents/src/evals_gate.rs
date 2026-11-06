@@ -3197,7 +3197,6 @@ mod tests {
         assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
     }
 
-
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
     }

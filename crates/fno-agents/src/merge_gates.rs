@@ -2050,8 +2050,4 @@ mod tests {
         .unwrap();
         assert_eq!(ledger_plan_path(sibling.path(), 70), None);
     }
-
-    /// The graph twin of the ledger scoping rule: the store is global, so a
-    /// contract node whose pr_url names another repo never answers a shared
-    /// number. A url-less node keeps the fail-open answer.
 }

@@ -4,7 +4,6 @@ use super::*;
 // a real `gh` or `fno`, and every timing case asserts wall-clock bounds
 // wide enough to survive parallel test scheduling.
 
-
 #[test]
 fn bounded_read_diagnostic_preserves_transport_classification() {
     let timeout = GhReadError::timed_out(
@@ -187,4 +186,3 @@ fn probe_reports_spawn_trouble_not_absent_for_a_non_executable_file() {
     assert!(matches!(outcome, GhProbeOutcome::SpawnTrouble { .. }));
     assert_eq!(outcome.outcome_str(), "spawn_trouble");
 }
-

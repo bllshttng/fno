@@ -66,4 +66,3 @@ fn a_zero_file_retraction_for_an_old_head_spares_the_newer_pass() {
         "the newer head-2 pass must survive a retraction naming head-1: {passes:?}"
     );
 }
-

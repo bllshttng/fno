@@ -874,7 +874,6 @@ fn the_cleared_row_reset_survives_into_the_next_fire() {
     );
 }
 
-
 #[test]
 fn an_unchanged_board_clears_nothing_and_still_reaches_noprogress() {
     let tmp = TempDir::new().unwrap();
@@ -898,7 +897,6 @@ fn an_unchanged_board_clears_nothing_and_still_reaches_noprogress() {
     assert_eq!(code, 0);
     assert_eq!(d["termination_reason"], "NoProgress");
 }
-
 
 #[test]
 fn lead_progress_is_an_action_against_a_target_id_not_seen_before() {
@@ -1351,8 +1349,6 @@ fn external_read_timeout_dies_at_its_slice_and_is_named() {
 // return above the manifest ceiling and the dry-fire backstop: blocking was
 // unbounded and the parked state was never recorded. These drive the bound.
 
-/// AC1: a quiet board with undelivered scope waits for CI or a worker.
-
 /// AC2: the undelivered journal row is written before the legal wait terminal.
 #[test]
 fn a_quiet_board_records_undelivered_before_nowork() {
@@ -1403,9 +1399,6 @@ fn an_unreadable_drain_is_never_a_progress_baseline() {
         .unwrap()
         .starts_with("waiting on CI or a worker"));
 }
-
-/// AC5: the unreadable-questions block is bounded, and each blocking fire
-/// emitted its journal row so the counters advanced to the bound.
 
 /// AC6: an open operator question is a legal wait and the terminal is durable.
 #[test]

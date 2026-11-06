@@ -39,7 +39,6 @@ fn resolved_optional_bots_default_matches_the_shared_python_default() {
     assert_eq!(resolved_optional_bots(&mine), partial);
 }
 
-
 #[test]
 fn identity_free_same_model_peer_is_an_unsatisfiable_local_gate() {
     let s = Settings {
@@ -95,9 +94,6 @@ fn peer_family_mapping_table() {
     assert_eq!(peer_family(&routed("codex", "gpt-5")), Some("openai")); // malformed -> provider
 }
 
-/// AC1-HP: codex author + `peers: [codex]` -> the peer login is replaced by
-/// the same-model sentinel so the gate cannot clear.
-
 /// A same-model peer whose identity COLLIDES with a required App login is
 /// fail-closed, not exempt (codex peer review on PR #375): the App login is
 /// kept (its requirement is not loosened) AND the sentinel is added, so a
@@ -118,9 +114,3 @@ fn base_app_login_collision_is_fail_closed() {
     assert!(logins.iter().any(|l| l == "fno-peer-bot")); // App requirement kept
     assert!(logins.iter().any(|l| l == SAME_MODEL_PEER_SENTINEL)); // gate held
 }
-
-/// A codex/gemini peer's `model` route is NOT honored (only claude transport
-/// executes a route; codex/gemini dispatch runs the bare provider). A codex
-/// peer with a zai route stays openai-family -> same-model on a codex author,
-/// closing the route-bypass codex flagged on PR #375.
-

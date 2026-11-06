@@ -4674,13 +4674,7 @@ fn settled_stuck_pr_still_burns_no_progress() {
     assert_eq!(d3.termination_reason.as_deref(), Some("NoProgress"));
 }
 
-/// x-cd97, review class: a missing bot footnote cannot nudge (NotNudgeable, a
-/// real login that reviews on push but has no nudge profile) is still a live
-/// async wait. The fall-through backstop must not reap it as NoProgress - the
-/// same lie as the CI class, one arm over.
-
 // ── coverage classifier (x-0eaf task 1.1) ────────────────────────────────────
-
 use fno_agents::loopcheck::{
     classify_coverage, coverage_receipt_line, unattested_reviewers_scan, AttestationOrigin,
     AttestationScope, Coverage, CoverageProducer, CoverageReport, CoverageVerdict, Freshness,
@@ -4772,10 +4766,6 @@ fn attestation_scope_reviewer_worktree_branch_at_exact_head_counts() {
     assert_eq!(local.reviewed_sha, COV_HEAD);
 }
 
-/// AC1-EDGE, first half: a legacy line (no branch field) with its head
-/// byte-equal to the PR head still counts, so no in-flight gate is wedged by
-/// the new field. The verdict carries the legacy label.
-
 /// A PR read that returned no branch fails closed: an attestation at a
 /// DIFFERENT head cannot be admitted by branch (the PR's branch is unknown),
 /// so it does not count. An exact-head line still counts with an unknown PR
@@ -4841,13 +4831,6 @@ fn attestation_scope_cherry_picked_foreign_pass_never_counts() {
     );
     assert_eq!(rep.coverage, Coverage::Covered(1));
 }
-
-/// AC2-HP + the N-reachable-paths rule: BOTH scans over the SAME foreign
-/// attestation at a different head (the carry shape the scope predicate
-/// exists to stop). The coverage axis (`classify_coverage`) and the
-/// `config.review.reviewers` gate (`unattested_reviewers_scan`) must agree
-/// that a foreign-branch line is not about this PR; a guard on one of the two
-/// paths is decorative.
 
 /// Seed a head-pinned `code-review` pass attestation into `.fno/events.jsonl` so
 /// the coverage classifier counts a local review. Used by tests whose PRIMARY
@@ -4915,10 +4898,6 @@ fn coverage_classify_github_read_failure_is_unknown_without_local() {
     assert_eq!(rep.coverage, Coverage::Unknown);
     assert_eq!(rep.coverage_count(), None);
 }
-
-/// Operator ruling + producer-axis correction: a head-pinned local attestation
-/// makes coverage Known even when the github read failed. A bot quota outage
-/// cannot wedge the autonomous path while a local lane reviewed.
 
 // ── clean-pass comments (x-e601: the PR #947 specimen) ───────────────────────
 //
@@ -5051,10 +5030,6 @@ fn clean_pass_comment_at_an_older_sha_is_stale() {
     assert_eq!(v.verdict, CoverageVerdict::Stale);
     assert_eq!(v.reviewed_sha, old);
 }
-
-/// AC4-EDGE: a clean-pass comment with no `Reviewed commit:` line stays
-/// Absent. Nothing is head-pinned, so counting it would be the unpinned-
-/// attestation hole the local axis already refuses; do not invent a sha.
 
 /// Ordering: a usage-limit comment means the bot did not read the code, so a
 /// body carrying BOTH markers lands on Refused, never on a clean pass.
@@ -5587,11 +5562,6 @@ fn coverage_peer_fail_does_not_revoke_author_pass() {
     );
     assert_eq!(rep.coverage_count(), Some(1));
 }
-
-/// The origin tally folds EVERY reviewed (non-human) verdict by its
-/// attestation_origin, so the three buckets sum to the reviewed count. A GitHub
-/// App review has no session to compare and reads `unknown`; it is named in the
-/// reviewed list, so "unknown" there is its origin, not its verdict.
 
 // ── GraphQL quota floor + exhaustion naming ───────────────────────────────
 
@@ -6422,7 +6392,6 @@ fn standing_waiver_never_clears_a_hard_finding() {
     );
     assert_eq!(waiver_soft.as_deref(), Some("standing operator law"));
 }
-
 
 #[test]
 fn operator_waiver_answers_unknown_on_a_row_without_a_decision() {

@@ -22,5 +22,3 @@ fn a_required_bot_that_went_stale_lands_in_stale_bots() {
     assert_eq!(stale.latest_ts, "2026-08-12T17:51:48Z");
     assert_eq!(review_activity_ts(&json), "2026-08-12T17:51:48Z");
 }
-
-

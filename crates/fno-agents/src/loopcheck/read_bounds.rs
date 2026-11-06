@@ -355,7 +355,6 @@ mod tests {
         assert!(bound <= std::time::Duration::from_millis(251), "{bound:?}");
     }
 
-
     #[test]
     fn the_drain_floor_survives_bounded_pre_drain_work() {
         // The invariant the 260-297ms kills broke: pre-drain reads taken at

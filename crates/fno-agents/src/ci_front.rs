@@ -550,7 +550,6 @@ mod tests {
         assert!(!green);
     }
 
-
     #[test]
     fn merge_check_never_reads_green_on_a_cancelled_missing_or_pr_row() {
         let cancelled = vec![

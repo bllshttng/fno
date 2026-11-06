@@ -785,7 +785,6 @@ mod tests {
         p
     }
 
-
     #[test]
     fn a_skill_local_task_loads_beside_the_bank_and_a_duplicate_id_refuses() {
         let root = tempfile::tempdir().unwrap();
@@ -899,7 +898,6 @@ mod tests {
         );
         assert_eq!(load_task(&p).unwrap().grade[0].max_tool_calls, Some(40));
     }
-
 
     #[test]
     fn the_repo_bank_holds_the_labelled_goldens() {

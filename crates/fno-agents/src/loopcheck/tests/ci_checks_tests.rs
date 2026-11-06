@@ -71,11 +71,6 @@ fn coverage_statuses_are_not_generic_ci_checks() {
     assert!(!ci_has_pending_checks(&filtered));
 }
 
-/// The evals gate is an eval fact, not CI: a red gate row must vanish from
-/// the loop's CI payload, or a waiting worker fix-loops a green PR instead
-/// of surfacing the gate hold at finalize.
-
-
 #[test]
 fn latest_per_name_drops_superseded_cancel_for_newer_pass() {
     // The dedup is what makes the non-terminal cancel safe: a superseded
@@ -99,4 +94,3 @@ fn latest_per_name_drops_superseded_cancel_for_newer_pass() {
     assert!(!ci_has_pending_checks(&deduped));
     assert!(failing_check_names(&deduped).is_empty());
 }
-

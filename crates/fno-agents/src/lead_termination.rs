@@ -878,7 +878,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn an_open_gate_with_an_open_ceiling_keeps_the_blueprint_row_actionable() {
         // AC1-EDGE / AC2-EDGE: no refusal and no readable ceiling keeps
@@ -1125,7 +1124,6 @@ mod tests {
             _ => panic!("expected blind saturation to stay distinct from NoWork"),
         }
     }
-
 
     #[test]
     fn a_broken_probe_never_allows_the_stop() {

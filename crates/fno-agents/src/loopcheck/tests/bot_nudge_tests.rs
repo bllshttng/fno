@@ -46,7 +46,6 @@ fn nudge_cfg() -> NudgeConfig {
     }
 }
 
-
 #[test]
 fn resolved_nudge_configs_default_nudges_codex_only() {
     let cfgs = resolved_nudge_configs(&Settings::default());

@@ -809,7 +809,6 @@ mod tests {
         assert!(read_doc(&p).contains("status: \"design\""));
     }
 
-
     // ------------------------------------------------------------------
     // Tier 3: canonical-but-stale -> node projection
     // ------------------------------------------------------------------
@@ -891,9 +890,6 @@ mod tests {
         assert_eq!(read_doc(&p), before);
         assert!(res.warnings.iter().any(|w| w.contains("tier2 off")));
     }
-
-    /// The sweep-level hold: a live node's unknown word is counted, warned,
-    /// and left byte-for-byte alone.
 
     fn read_doc(p: &Path) -> String {
         std::fs::read_to_string(p).unwrap()

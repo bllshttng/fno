@@ -835,7 +835,6 @@ async fn restart_over_a_large_roster_leaves_exactly_one_daemon() {
     restart_leaves_exactly_one_daemon(28).await;
 }
 
-
 /// status (Wave 5, US6.10, AC10-ERR): with no daemon running, the `fno-agents
 /// status` client exits 13 and does NOT lazy-start a daemon.
 #[tokio::test]
@@ -1514,7 +1513,6 @@ async fn stop_refuses_a_pane_row_and_names_the_row_ref() {
     let _ = daemon.wait();
     std::fs::remove_dir_all(home.root()).ok();
 }
-
 
 #[tokio::test]
 async fn a_restart_successor_dies_with_its_test_owner() {

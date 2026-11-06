@@ -847,8 +847,6 @@ mod tests {
         assert_eq!(resolve_body(&parsed).unwrap_err(), 1);
     }
 
-    /// A body is required; none of the three forms is also a refusal.
-
     /// An unknown kind refuses naming the valid set; a removed kind hints at
     /// its replacement.
     #[test]
@@ -857,8 +855,6 @@ mod tests {
         assert_eq!(validate_kind("notification").unwrap_err(), 1);
         assert_eq!(validate_kind("fyi").unwrap(), "fyi");
     }
-
-    /// `--to` is required: the usage block, exit 2.
 
     /// The retired `<harness>-<hex6+>` address form is recognized for the
     /// migration arm; every other shape passes through untouched.
@@ -985,13 +981,6 @@ mod tests {
             "an ambiguous handle queues nothing"
         );
     }
-
-    /// A visible candidate whose uniqueness went unproven is exactly the
-    /// wake-a-stranger risk: choosing the one row we can see is the guess.
-    /// Failing open is safe only when there is no candidate to choose between.
-
-    /// `--sender-session` outside the candidate set sends nothing: membership
-    /// is checked against the real candidate set or not at all.
 
     /// The retired handle kept refusing after its discovery ladders died:
     /// there proven uniqueness is the only thing vouching for the address.

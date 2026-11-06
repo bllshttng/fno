@@ -401,7 +401,6 @@ fn branch_merged_answers_real_repos() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-
 #[tokio::test]
 async fn rm_refuses_to_report_removed_when_the_row_is_already_gone() {
     // AC1-NEG (silent-no-op mode): the row entry_for_lifecycle resolved is no
@@ -745,7 +744,6 @@ fn pre_v19_row_without_posture_parses_with_the_safe_default() {
     );
 }
 
-
 #[test]
 fn reconcile_store_hit_does_not_resurrect_a_pid_dead_row() {
     // x-830c: a store that never evicts (opencode keeps its session rows
@@ -779,7 +777,6 @@ fn reconcile_store_hit_does_not_resurrect_a_pid_dead_row() {
     );
     assert_eq!(out.recovered, vec!["live-orphan".to_string()]);
 }
-
 
 #[test]
 fn reconcile_does_not_reap_a_bg_thread_that_is_live_in_claudes_roster() {
@@ -1348,7 +1345,6 @@ fn write_rollout(root: &Path, session_id: &str) -> std::path::PathBuf {
     p
 }
 
-
 #[test]
 fn a_codex_row_with_no_readable_rollout_stays_unknown_and_kept() {
     // AC1-EDGE + AC2-EDGE: a missing rollout and an unreadable store both
@@ -1483,7 +1479,6 @@ fn an_unreadable_roster_never_flips_the_zombie_arm() {
     );
     assert_eq!(changes[0].new_status, None);
 }
-
 
 /// Adapt a per-handle answer into the BATCH seam `handle_list_with_truth`
 /// takes, for the rendering tests below - they assert what a row renders,
@@ -1954,7 +1949,6 @@ fn list_renders_family1_truth_instead_of_stored_registry_status() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-
 #[test]
 fn list_pays_exactly_one_batch_call_for_the_whole_page() {
     // The x-0d93 fix, asserted where it is spent: N rows used to cost N
@@ -1991,7 +1985,6 @@ fn list_pays_exactly_one_batch_call_for_the_whole_page() {
     assert_eq!(entries, rows);
     std::fs::remove_dir_all(home.root()).ok();
 }
-
 
 /// Start a real stream worker (fake emitter child) on `home.worker_sock(id)`
 /// via the PUBLIC `stream_worker::run`; wait for its socket to appear.
@@ -2375,7 +2368,6 @@ done
     );
     std::fs::remove_dir_all(home.root()).ok();
 }
-
 
 // --- codex thread lane: actor-driven ask / stop (the x-de10 probes) ---
 //

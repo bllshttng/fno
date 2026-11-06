@@ -76,9 +76,6 @@ fn finding_wontfix_reply_is_addressed_without_commit() {
     assert!(unaddressed.is_empty(), "wontfix arm must address alone");
 }
 
-/// Anti-gaming: a commit alone (no reply) does NOT address (locked
-/// decision 3 - any unrelated commit would silently clear a P1).
-
 /// sigma-review: a blocking finding row with a missing id is SKIPPED
 /// (under-block per locked decision 4), never pooled on a default id
 /// where one stray reply could clear multiple findings.
@@ -109,8 +106,3 @@ fn finding_missing_id_skipped_not_pooled() {
     assert_eq!(unaddressed.len(), 1, "only the real finding remains");
     assert_eq!(unaddressed[0].id, 100);
 }
-
-/// sigma-review: commit-after comparison parses timestamps instead of
-/// string-comparing - an offset-suffixed commit date that lexicographically
-/// sorts above a Zulu finding date but is EARLIER in UTC must not clear
-/// the finding.

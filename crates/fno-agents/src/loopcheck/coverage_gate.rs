@@ -1246,7 +1246,6 @@ merge"
         );
         assert_eq!(posture_holds(Some(gap), false, false), None);
     }
-
 }
 
 #[cfg(test)]

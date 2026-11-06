@@ -132,7 +132,6 @@ fn parse_manifest_legacy_complete() {
     assert_eq!(m.legacy_status.as_deref(), Some("COMPLETE"));
 }
 
-
 #[test]
 fn parse_settings_nested_budget() {
     let cfg = "[budget.attended]\nwall_clock_cap_minutes = 90\ncost_cap_usd = 10.0\n\n[budget.unattended]\nwall_clock_cap_minutes = 60\ncost_cap_usd = 5.0\n";
@@ -156,7 +155,6 @@ fn session_cost_from_ledger_sums_session_only() {
     let cost = session_cost_from_ledger(&bare, "a");
     assert_eq!(cost, 0.0);
 }
-
 
 #[test]
 fn parse_settings_required_bots_inline_empty_is_declared_empty() {

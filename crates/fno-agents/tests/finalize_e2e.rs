@@ -855,7 +855,6 @@ fn generic_completion_finalize_consumes_selected_verdict_without_pr_paths() {
     assert!(store_text(&env.events).contains("DoneDelivery"));
 }
 
-
 #[test]
 fn generic_completion_finalize_real_stamp_reaches_done_with_bound_receipt() {
     let env = setup("S-delivery-real");
@@ -984,7 +983,6 @@ fn finalize_missing_manifest_is_noop() {
         "no events on missing manifest"
     );
 }
-
 
 /// `delegated` is a non-ship reason: ledger row only, no stamp/handoff. This is
 /// exactly what handoff.sh invokes against the archived manifest. (AC7-EDGE,
@@ -1550,7 +1548,6 @@ fn finalize_withholds_arm_when_optional_review_outstanding() {
     );
 }
 
-
 #[test]
 fn finalize_live_auto_merge_switch_vetoes_an_approved_run() {
     let env = setup("S-live-switch-off");
@@ -1660,12 +1657,6 @@ fn finalize_withholds_arm_when_optional_review_is_stale() {
         Some("optional-review-stale:chatgpt-codex-connector")
     );
 }
-
-/// Round 3, PR 917: the clean-pass comment lane. Codex posts its clean pass as
-/// a pinned ISSUE comment, not a review object (measured PR #947); the old
-/// scan never read comments for a pass, so a flawlessly-reviewed PR withheld
-/// arming forever while loop-check counted the same comment. The pinned sha
-/// equals the PR head, so the pass is Fresh without a git call.
 
 /// The configured merge strategy reaches the argv. Before this, `--merge`
 /// was hardcoded, so a squash-only repo was armed with a method it forbids -

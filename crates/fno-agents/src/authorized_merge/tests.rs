@@ -1794,7 +1794,6 @@ fn a_worktree_held_branch_recovers_through_the_rest_endpoint_with_the_pin() {
     assert!(calls[1].contains(&"merge_method=squash".to_string()));
 }
 
-
 #[test]
 fn a_dead_state_read_after_a_failed_effect_is_unknown() {
     let fake = Fake {

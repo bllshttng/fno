@@ -1300,7 +1300,6 @@ mod shape_review_coverage_tests {
         assert_eq!(shaped["coverage"], "uncovered");
     }
 
-
     #[test]
     fn every_golden_table_row_derives_its_expected_word() {
         let table: Value = serde_json::from_str(include_str!(

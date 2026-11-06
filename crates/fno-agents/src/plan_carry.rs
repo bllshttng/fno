@@ -1090,7 +1090,6 @@ mod tests {
         assert_eq!(out, Outcome::default());
     }
 
-
     #[test]
     fn a_tilde_binding_and_an_absolute_binding_of_one_file_stay_quiet() {
         let primary = test_primary::start();

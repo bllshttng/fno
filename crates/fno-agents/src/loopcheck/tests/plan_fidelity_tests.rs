@@ -131,7 +131,6 @@ fn golden_replay_unreadable_plan_refuses() {
     assert_golden("missing", &fix, decision);
 }
 
-
 #[test]
 fn golden_replay_uncovered_shortfall_refuses() {
     let fix = Fixture::new();
@@ -141,7 +140,6 @@ fn golden_replay_uncovered_shortfall_refuses() {
     assert_golden("unjoined", &fix, decision);
 }
 
-
 #[test]
 fn golden_replay_joined_plan_passes() {
     let fix = Fixture::new();
@@ -150,7 +148,6 @@ fn golden_replay_joined_plan_passes() {
         compute_plan_fidelity_from(&fix.inputs(&plan.to_string_lossy(), &Fixture::no_body, None));
     assert_golden("joined", &fix, decision);
 }
-
 
 #[test]
 fn classify_reads_the_refused_bool_only() {
@@ -210,7 +207,6 @@ fn body_guard_exit_one_carries_the_guard_line_and_env() {
         "{reason}"
     );
 }
-
 
 #[test]
 fn body_guard_timeout_is_named_not_silent() {

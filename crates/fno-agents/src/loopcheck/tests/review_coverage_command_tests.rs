@@ -1,10 +1,5 @@
 use super::*;
 
-/// The hint is rendered IN PROCESS by the native capability builder now:
-/// the same function the parity goldens freeze, so the stub-script bridge
-/// cases died with the spawn. The three behaviors the bridge kept are the
-/// sized answer, the placeholder-as-None case, and the harness spelling.
-
 /// Run the command until the quota probe answers decisively (a bool
 /// graphql_exhausted): a fork/exec blip on a loaded runner lands as
 /// probe_graphql_quota -> None (null), which is correct behavior - the

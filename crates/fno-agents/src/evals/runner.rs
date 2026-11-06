@@ -1346,7 +1346,6 @@ mod tests {
         assert_eq!(seat_harness(None, None), None);
     }
 
-
     #[test]
     fn a_rules_ref_replaces_only_the_rules_paths_of_the_fixture_tree() {
         let repo = tempfile::tempdir().unwrap();

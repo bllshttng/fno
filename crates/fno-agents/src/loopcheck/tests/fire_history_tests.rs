@@ -186,6 +186,3 @@ fn debounce_streak_counting_rules() {
         assert_eq!(window, *want_window, "window: {case}");
     }
 }
-
-/// AC4-CON: progress is never debounced - a CHANGED fingerprint breaks the
-/// streak however fast it arrived.

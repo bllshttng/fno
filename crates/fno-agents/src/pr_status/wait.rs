@@ -1042,10 +1042,6 @@ mod tests {
         );
     }
 
-    /// An interval already past the cap stays flat: the cap is a ceiling,
-    /// never a pull. The deadline (not the payload list) ends the wait, and
-    /// every gap stays at the base interval.
-
     #[test]
     fn a_local_head_read_that_fails_degrades_to_none() {
         assert!(local_head_sha(Path::new("/nonexistent-fno-test-dir")).is_none());
@@ -1170,10 +1166,6 @@ mod tests {
         assert_eq!(code, 0, "the pinned read answers at the named head");
         assert!(stdout.contains("\"settled\":true"), "{stdout}");
     }
-
-    /// The pin's value: a literal sha passes through; `HEAD` names the local
-    /// checkout's own HEAD, read free, so the armed command stays plain (a
-    /// worktree Bash guard refuses a command substitution in the recipe).
 
     /// A fake gh: one live failing check (node-closure completed after its
     /// run started), one run in flight, and a cancel POST answering ok.

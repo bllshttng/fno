@@ -117,7 +117,6 @@ fn github_app_review_without_a_commit_oid_fails_closed() {
     assert_eq!(rep.coverage, Coverage::Covered(0));
 }
 
-
 #[test]
 fn a_zero_line_attestation_is_not_review_evidence() {
     // A pass over a zero-line diff is a review of nothing: a session
@@ -219,4 +218,3 @@ fn a_retraction_revokes_the_named_pair_not_the_retractor() {
     );
     assert_eq!(revoked.coverage, Coverage::Unknown);
 }
-

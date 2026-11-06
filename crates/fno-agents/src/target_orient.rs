@@ -1361,7 +1361,6 @@ mod boundary_flow_tests {
         assert_eq!(v.verdict, "fresh");
     }
 
-
     #[test]
     fn a_marker_for_one_blocker_false_freshes_no_other() {
         // The doc carries a marker (so its mtime bumped past this blocker's

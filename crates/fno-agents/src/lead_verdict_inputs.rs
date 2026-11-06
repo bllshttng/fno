@@ -1067,7 +1067,6 @@ mod tests {
         assert!(err.contains("no created_at"), "{err}");
     }
 
-
     #[test]
     fn delivery_split_starts_at_the_holder_generation() {
         let _guard = crate::claims::test_env_lock()
