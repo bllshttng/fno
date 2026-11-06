@@ -19,7 +19,7 @@ The default prefix is `Ctrl-b`. Press it, release it, then press `!` to open the
 2. Describe the problem. The form starts with the bug type. Press `Tab` to switch between bug and idea.
 3. Press `Enter` to prepare the redacted issue. Nothing is sent yet. The preview names the destination, `fnodotdev/fno`, and shows the issue title and complete body.
 4. Use the arrow keys to scroll through the body. `Home` returns to the start, and `End` shows the end. Press `Esc` to return to your description before sending.
-5. Press `Enter` again to create the GitHub issue and keep a backlog node. The form uses GitHub CLI (`gh`) authentication. It shows both receipts after a successful submission.
+5. Press `Enter` again to create the public GitHub issue and keep a backlog node. The form uses GitHub CLI (`gh`) authentication. It shows both receipts after a successful submission.
 
 If `gh` is not authenticated, the form says so. If needed, install the [GitHub CLI](https://cli.github.com/). Run `gh auth login` in a terminal, then reopen the form to check authentication again. Closing and reopening discards the current draft, so copy your description first. When the preview footer says `Enter backlog only`, press `Enter` to file without signing in. That creates a backlog node and does not create a GitHub issue.
 

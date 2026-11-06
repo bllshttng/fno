@@ -60,6 +60,7 @@ pub(crate) struct Ctx {
     projects: Vec<String>,
     user: Option<String>,
     host: Option<String>,
+    home: Option<String>,
 }
 
 impl Ctx {
@@ -77,6 +78,7 @@ impl Ctx {
             projects: crate::skill_diff::project_names(cwd),
             user,
             host,
+            home: std::env::var("HOME").ok().filter(|home| !home.is_empty()),
         }
     }
 
@@ -150,13 +152,19 @@ pub(crate) fn redact(text: &str, ctx: &Ctx) -> (String, Counts) {
             }
         })
         .into_owned();
+    if let Some(home) = ctx.home.as_ref().filter(|home| !home.is_empty()) {
+        let home = Regex::new(&format!(r"{}(?:/[^\s]+)?", regex::escape(home)))
+            .expect("escaped home path");
+        *counts.entry("path").or_default() += home.find_iter(&out).count();
+        out = home.replace_all(&out, "<local path>").into_owned();
+    }
     for (class, rx, with) in [
         ("path", leak_rx("home-path"), "<local path>"),
         ("email", crate::correction_detect::email_rx(), "[email]"),
         ("session", leak_rx("session-id"), "[session]"),
         ("private_path", private_path_rx(), "<private path>"),
     ] {
-        counts.insert(class, rx.find_iter(&out).count());
+        *counts.entry(class).or_default() += rx.find_iter(&out).count();
         out = rx.replace_all(&out, with).into_owned();
     }
     let named = ctx
@@ -195,7 +203,12 @@ fn residual_classes(text: &str, ctx: &Ctx) -> Vec<&'static str> {
     if secret_survives(text) {
         found.push("secret");
     }
-    if leak_rx("home-path").is_match(text) {
+    if leak_rx("home-path").is_match(text)
+        || ctx
+            .home
+            .as_ref()
+            .is_some_and(|home| !home.is_empty() && text.contains(home))
+    {
         found.push("path");
     }
     if crate::correction_detect::email_rx().is_match(text) {
@@ -612,12 +625,13 @@ mod tests {
             projects: vec!["acmecorp".into(), "fno".into()],
             user: Some("jdoe42".into()),
             host: Some("privatehost".into()),
+            home: Some("/srv/report-user-home".into()),
         }
     }
 
     const FIXTURE: &str = "token=ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8 mail jane@example.com \
         at /Users/jane/x/y session 0f8e2f4a-1b2c-4d5e-8f90-123456789abc \
-        in acmecorp, vault internal/notes/a.md, login jdoe42, host privatehost session ses_abc123Private";
+        in acmecorp, vault internal/notes/a.md, login jdoe42, host privatehost session ses_abc123Private /srv/report-user-home/private.txt";
 
     #[test]
     fn draft_masks_every_private_class() {
@@ -632,13 +646,14 @@ mod tests {
             "jdoe42",
             "privatehost",
             "ses_abc123Private",
+            "/srv/report-user-home",
         ] {
             assert!(
                 !draft.title.contains(leaked) && !draft.body.contains(leaked),
                 "{leaked}"
             );
         }
-        assert_eq!(draft.counts.values().sum::<usize>(), 9);
+        assert_eq!(draft.counts.values().sum::<usize>(), 10);
         assert!(draft.url_has_body && draft.url.len() <= LINK_MAX_CHARS);
         let padded = format!("{FIXTURE} {}", "word ".repeat(2000));
         let long = build(&Source::Text(&padded), None, &ctx(), "o/r", None).unwrap();

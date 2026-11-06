@@ -567,7 +567,7 @@ exit 1
     let report_screen = h.wait_screen(5, |s| s.contains("report a problem"));
     let body_column = report_screen
         .lines()
-        .find_map(|line| line.find("Includes screen"))
+        .find_map(|line| line.find("Includes terminal text"))
         .expect("report capture notice");
     let footer_column = report_screen
         .lines()

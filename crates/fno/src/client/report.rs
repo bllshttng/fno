@@ -226,7 +226,7 @@ impl Report {
     fn popup(&self) -> Popup {
         let auth = match self.auth {
             None => "Checking gh authentication for fnodotdev/fno…",
-            Some(true) => "GitHub: fnodotdev/fno. Also keeps a backlog node.",
+            Some(true) => "Public issue: github.com/fnodotdev/fno. Copy: your fno backlog (its sharing settings apply).",
             Some(false) => {
                 "No gh authentication for fnodotdev/fno. Run gh auth login. Backlog-only filing is available."
             }
@@ -268,7 +268,7 @@ impl Report {
             let mut rows = vec![
                 PopupRow::Info { label: "type".into(), value: if self.feature { "idea" } else { "bug" }.into() },
                 self.field.row("description"),
-                PopupRow::Text("Includes screen, focused row, build and up to 40 lines per log. Review the redacted issue before sending.".into()),
+                PopupRow::Text("Includes terminal text, focused row, build and up to 40 lines from client and server logs. Review redacted text before sending.".into()),
                 PopupRow::Text(auth.into()),
             ];
             if !self.notice.is_empty() {
