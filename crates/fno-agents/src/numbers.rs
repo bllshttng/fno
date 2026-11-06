@@ -720,7 +720,7 @@ mod tests {
         // The number tier names the node the row carries.
         assert_eq!(
             resolve_node_ref_in(Some(&conn), "x-6666", "local").as_deref(),
-            Some("x-9999")
+            Some("x-aaaa")
         );
         // Nothing holds x-7777: the caller keeps the raw token.
         assert_eq!(resolve_node_ref_in(Some(&conn), "x-7777", "local"), None);
