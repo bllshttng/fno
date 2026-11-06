@@ -1223,10 +1223,10 @@ fn write_legacy_flip_stamp(parent: &Path) -> Result<(), String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("system clock before epoch: {e}"))?
-        .as_secs();
+        .as_secs_f64();
     let stamp = parent.join(".legacy-flip.at");
     std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    std::fs::write(&stamp, format!("{now}\n"))
+    std::fs::write(&stamp, format!("{now:.6}\n"))
         .map_err(|e| format!("write {}: {e}", stamp.display()))
 }
 
@@ -3755,11 +3755,11 @@ mod tests {
         let started = crate::process_probe::process_started_epoch(std::process::id()).unwrap();
         let pid = std::process::id();
         let before_flip =
-            harness_processes_before_flip(&format!("{pid} claude"), started.floor() + 2.0).unwrap();
+            harness_processes_before_flip(&format!("{pid} claude"), started + 0.001).unwrap();
         assert_eq!(before_flip, vec![pid]);
         assert!(harness_processes_before_flip("4294967295 claude", started + 5.0).is_err());
         assert!(
-            harness_processes_before_flip(&format!("{pid} claude"), started - 1.0)
+            harness_processes_before_flip(&format!("{pid} claude"), started - 0.001)
                 .unwrap()
                 .is_empty()
         );
