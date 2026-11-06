@@ -1920,6 +1920,11 @@ pub(crate) fn run_with_release(
                 Some(sid),
                 finished_evals.as_ref(),
             ),
+            exited_age_s: e
+                .exited_at
+                .as_deref()
+                .and_then(crate::tick_ledger::parse_rfc3339_unix)
+                .map(|at| (now - at as i64).max(0)),
         };
         let (action, reason) = gc_decide(&row, grace_secs);
         if action == GcAction::Keep {
