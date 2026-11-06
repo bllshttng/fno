@@ -245,6 +245,14 @@ if [[ -f "$_CARGO_BUILD_DIR_LIB" ]]; then
   source "$_CARGO_BUILD_DIR_LIB"
 fi
 
+# A dead setup's "initializing" lock makes `git worktree remove` refuse even
+# with --force. No stub: the removal below guards on the function's presence.
+_INIT_LOCK_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/worktree-init-lock.sh"
+if [[ -f "$_INIT_LOCK_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_INIT_LOCK_LIB"
+fi
+
 measure_strict_state() {
   FORCE_DIRTY_STATUS=""
   FORCE_DIRTY_STATUS_RC=0
@@ -893,6 +901,9 @@ fi
 # Reclaim the build hash dir while the manifest can still answer;
 # the sweep reaps what an unreadable resolution leaves behind.
 declare -F cargo_build_dir_remove_for_wt >/dev/null 2>&1 && cargo_build_dir_remove_for_wt "$TARGET" || true
+if declare -F wt_release_init_lock >/dev/null 2>&1; then
+  wt_release_init_lock "$TARGET" "$WT_INIT_LOCK_STALE_SECS" || true
+fi
 if ! git worktree remove $REMOVE_FLAGS "$TARGET"; then
   echo "archive-worktree: git worktree remove failed" >&2
   exit 4

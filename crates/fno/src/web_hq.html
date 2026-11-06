@@ -769,7 +769,7 @@ const token = new URLSearchParams(location.search).get("t") || "";
 const url = (nav ? nav.dataset.base : "./") + "hq/model.json?t=" + encodeURIComponent(token);
 const decUrl = (nav ? nav.dataset.base : "./") + "hq/decisions.json?t=" + encodeURIComponent(token);
 let decRows = [], decReviewed = new Set();
-const decName = (r) => r.decided_by_name || (r.decided_by ? r.decided_by.slice(0, 8) : decWho(r));
+const decName = (r) => r.decided_by_name || (r.decided_by && !/^[0-9a-f-]+$/.test(r.decided_by) ? r.decided_by : decWho(r));
 const decWho = (r) => ["chat_attested", "operator"].includes(r.authority_source) ? "user" : r.authority_source ? "agent" : "?";
 function decSelect(id, label, values) {
   const s = document.getElementById(id);

@@ -59,6 +59,15 @@ if [[ -f "$WTM_SCRIPT_DIR/cargo-build-dir.sh" ]]; then
     source "$WTM_SCRIPT_DIR/cargo-build-dir.sh"
 fi
 
+# Setup releases git's "initializing" lock when an add dies midway. Without the
+# lib (partial deploy) the release is a no-op.
+if [[ -f "$WTM_SCRIPT_DIR/worktree-init-lock.sh" ]]; then
+    # shellcheck source=worktree-init-lock.sh
+    source "$WTM_SCRIPT_DIR/worktree-init-lock.sh"
+else
+    wt_release_init_lock() { return 0; }
+fi
+
 # The one worktree.* reader (wt_config) and linker call (wt_link), shared with
 # the plugin WorktreeCreate hook.
 if [[ -f "$WTM_SCRIPT_DIR/worktree-config.sh" ]]; then
@@ -332,6 +341,7 @@ _wtm_cmd_create() {
     else
         _wtm_log "branch $branch may already exist, attaching ($(cat "$err_log"))"
         if ! git worktree add "$worktree_path" "$branch" >&2 2>>"$err_log"; then
+            wt_release_init_lock "$worktree_path" 2>/dev/null || true
             _wtm_err "git worktree add failed: $(cat "$err_log")"
             rm -f "$err_log"
             _wtm_json status=error error="git worktree add failed"
@@ -339,6 +349,9 @@ _wtm_cmd_create() {
         fi
     fi
     rm -f "$err_log"
+    # A killed or crashed add leaves git's "initializing" lock; a finished one
+    # already dropped it and this is a no-op.
+    wt_release_init_lock "$worktree_path" 2>/dev/null || true
 
     _wtm_json status=ok existing=false path="$worktree_path" branch="$branch" mode="$mode"
 }

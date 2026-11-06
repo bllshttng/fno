@@ -10,6 +10,7 @@
 //! ops through `worktree_parity.rs`.
 
 pub mod ensure;
+pub mod init_lock;
 pub mod overlaps;
 pub mod policy;
 pub mod registry_worker;
