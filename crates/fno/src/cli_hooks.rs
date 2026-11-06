@@ -31,7 +31,7 @@ const WORKTREE_REMOVE_SCRIPT: &str = "hooks/worktree-remove.sh";
 /// A file only the plugin ships: its presence proves a directory is the root.
 const PLUGIN_MARKER: &str = "hooks/helpers/init-target-state.sh";
 const GEMINI_HOOK_NAME: &str = "fno-session-start";
-const FOOTNOTE_STATE_WRITES_RULE: &str = "Footnote State Writes: Treat fno backlog, fno inbox law set, and fno doctor event emit as routine Footnote state writes under ~/.fno. Permit fno agents spawn only to launch a Footnote worker; this does not approve commands run by that worker or remote hosts. Never allow Claude Code settings edits, credentials, OS or GitHub permissions, or sandbox controls.";
+const FOOTNOTE_STATE_WRITES_RULE: &str = "Footnote State Writes: Allow only fno commands whose complete effect stays within ~/.fno state, such as fno inbox law set, fno doctor event emit, and local backlog updates. Exclude backlog advance or dispatch, PR operations, Claude Code settings, credentials, OS or GitHub permissions, and sandbox controls. Permit fno agents spawn only to start a local Footnote worker; this does not approve commands later run by that worker or remote hosts.";
 const FOOTNOTE_ROLE_GRANTS_RULE: &str = "Footnote Role Grants: Allow fno agents org promote, fno agents org grant, and fno agents role only for Footnote role changes stored under ~/.fno. This does not grant OS, GitHub, or Claude Code permissions, edit credentials or settings, or disable sandbox controls.";
 
 const CLI_HOOKS_USAGE: &str = "usage: fno config setup cli-hooks [--codex/--no-codex] \
