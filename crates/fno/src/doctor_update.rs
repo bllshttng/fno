@@ -2343,6 +2343,11 @@ pub fn first_run_move(args: &[std::ffi::OsString]) {
     crate::release_install::first_run_move(args);
 }
 
+/// The floor gate `main` runs after the bridge hook: see release_install.
+pub fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
+    crate::release_install::floor_refusal(args)
+}
+
 /// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {

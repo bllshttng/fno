@@ -9,6 +9,7 @@
 //! once a probe shows the binary `fno --version` answers without Python.
 //! Every later binary update runs the same probe.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -523,9 +524,10 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
         // A fresh install has no receipt: the PATH links are this door's own
         // job. With no HOME there is no PATH dir to own; postinstall's PATH
         // note covers it.
-        match std::env::var_os("FNO_INSTALL_DIR")
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")))
-        {
+        let dir = std::env::var_os("FNO_INSTALL_DIR")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")));
+        match dir {
             Some(dir) => {
                 if let Err(e) = link_binaries(&bin, &dir) {
                     return failed("link", &e);
@@ -664,6 +666,127 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool) -> i32 {
     0
 }
 
+fn floor_cache_path() -> PathBuf {
+    state_dir().join("install").join("fno-release-cache.json")
+}
+
+/// The cached floor, still inside its freshness window (24h). None when the
+/// cache is absent, stale, or unparsable.
+fn cached_floor() -> Option<(String, String)> {
+    let text = std::fs::read_to_string(floor_cache_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let fetched = v.get("fetched").and_then(serde_json::Value::as_u64)?;
+    let age = now_secs().saturating_sub(fetched);
+    if age > 86_400 {
+        return None;
+    }
+    let version = v
+        .get("version")
+        .and_then(serde_json::Value::as_str)?
+        .to_string();
+    let floor = v
+        .get("min_supported")
+        .and_then(serde_json::Value::as_str)?
+        .to_string();
+    Some((version, floor))
+}
+/// Write the floor cache from a successful metadata fetch. Best effort: the
+/// cache exists to keep the front door's hot path offline-tolerant; a write
+/// failure costs nothing but the next fetch.
+fn write_floor_cache(version: &str, floor: &str) {
+    let body = serde_json::json!({
+        "fetched": now_secs(),
+        "version": version,
+        "min_supported": floor,
+    });
+    let _ = std::fs::create_dir_all(floor_cache_path().parent().unwrap_or(Path::new(".")));
+    let _ = std::fs::write(
+        floor_cache_path(),
+        serde_json::to_string(&body).unwrap_or_default(),
+    );
+}
+
+/// The front door's floor gate (change 5): when a fresh floor sits above the
+/// running version, refuse every command except `update`, `doctor`,
+/// `--version` and `--help`, one line naming `fno update`. None when the
+/// gate admits: no floor knowledge, floor at or below the running version,
+/// or the argv is an exempt door.
+pub(crate) fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
+    let (_version, floor) = cached_floor()?;
+    let running = env!("CARGO_PKG_VERSION");
+    if let (Some(run_key), Some(fl_key)) = (version_key(running), version_key(&floor)) {
+        if run_key >= fl_key {
+            return None;
+        }
+    } else {
+        return None; // an unparsable version or floor admits everyone
+    }
+    let at = args
+        .iter()
+        .take_while(|a| *a == "-J" || *a == "--json")
+        .count();
+    let Some(word) = args.get(at).and_then(|a| a.to_str()) else {
+        return Some("fno: this install is below the supported floor; run: fno update".to_string());
+    };
+    if word.starts_with('-') {
+        return None; // --version / --help / flags-only
+    }
+    match word {
+        "update" | "doctor" => None,
+        _ => Some(format!(
+            "fno {word} is below the supported floor {}; run: fno update",
+            floor
+        )),
+    }
+}
+
+/// One fetch-and-cache round for the probe surfaces (the modal, the update
+/// check): fetch release metadata, write the cache, answer the floor. A
+/// failed fetch leaves the cache as it was and answers None (AC5-ERR).
+pub(crate) fn refresh_floor() -> Option<String> {
+    match release_metadata() {
+        Ok((version, floor)) => {
+            write_floor_cache(&version, &floor);
+            Some(floor)
+        }
+        Err(_) => None,
+    }
+}
+
+/// The floor metadata fetch: `{"version": ..., "min_supported": ...}` beside
+/// the tarballs on every release (change 5). The `releases/latest/download`
+/// route is a redirect like [`latest_release_tag`], so it spends no REST
+/// rate limit. Ok((version, floor)) only when both fields parse.
+pub(crate) fn release_metadata() -> Result<(String, String), String> {
+    let url = format!(
+        "https://github.com/{}/releases/latest/download/fno-release.json",
+        update_prebuilt::release_repo()
+    );
+    let out = crate::process_admission::std_command("curl")
+        .args(["-fsSL", "--max-time", "20", &url])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "curl exited {} for {url}",
+            out.status.code().unwrap_or(1)
+        ));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("fno-release.json is not JSON: {e}"))?;
+    let version = v
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("fno-release.json names no version")?
+        .to_string();
+    let floor = v
+        .get("min_supported")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("fno-release.json names no min_supported")?
+        .to_string();
+    Ok((version, floor))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

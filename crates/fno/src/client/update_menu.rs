@@ -426,6 +426,24 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
             rows.push(PopupRow::Rule);
             actions.push(AuxAction::UpgradeRelease(*channel));
         }
+        Some(ReleaseOutcome::Unsupported {
+            channel,
+            installed,
+            floor,
+        }) => {
+            rows.push(PopupRow::Header(format!(
+                "release: unsupported - fno {installed} is below the supported floor {floor} ({})",
+                channel.name()
+            )));
+            rows.push(PopupRow::Entry {
+                glyph: "⬆".into(),
+                label: format!("upgrade now: {}", channel.upgrade_command()),
+                hint: String::new(),
+                enabled: true,
+            });
+            rows.push(PopupRow::Rule);
+            actions.push(AuxAction::UpgradeRelease(*channel));
+        }
         Some(ReleaseOutcome::Degraded(reason)) => {
             rows.push(PopupRow::Header(format!("release check failed: {reason}")));
             rows.push(PopupRow::Rule);
