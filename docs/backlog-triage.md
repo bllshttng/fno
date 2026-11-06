@@ -61,8 +61,7 @@ fno backlog capture dismiss --reason "superseded by ab-..."
 # -> - [-] — title (p1) (dismissed: superseded by ab-...)
 ```
 
-Struck lines (promoted `[x]` and dismissed `[-]`) are **never deleted**, so the
-trail survives for provenance.
+Struck lines (promoted `[x]` and dismissed `[-]`) are **never deleted**, so the trail survives for provenance.
 
 ## Bloat control
 

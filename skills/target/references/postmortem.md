@@ -27,10 +27,7 @@ A single file at `~/.fno/postmortems/{YYYY-MM-DD}-{session_id_short}.md` with:
 - `## Last output of failed phase` (last 50 lines of the failing phase's artifact body OR the stop-hook log)
 - `## Hypotheses` (deterministic, templated from a lookup table keyed on `blocked_reason.kind`)
 
-The file lands in the postmortems dir, where the observer reads it
-(`crates/fno-agents/src/observer/mod.rs`, `postmortems_dir`). Failed
-terminations reach the eval loop through the trace pass
-(`crates/fno-agents/src/evals_traces.rs`), not through any log file.
+The file lands in the postmortems dir, where the observer reads it (`crates/fno-agents/src/observer/mod.rs`, `postmortems_dir`). Failed terminations reach the eval loop through the trace pass (`crates/fno-agents/src/evals_traces.rs`), not through any log file.
 
 ## Manual invocation (rare)
 

@@ -180,7 +180,7 @@ unchanged.
 
 ## What this enables
 
-Both improvements feed the **eval loop**. It consumes categorized BLOCKED reasons from the typed-blocker spec plus the structured per-phase context from handoff artifacts: the trace pass records them, and the go-N fixer turns recurring labels into fix drafts.
+Both improvements feed the **eval loop**. It consumes categorized BLOCKED reasons from the typed-blocker spec plus the per-phase context from handoff artifacts. The trace pass records them. The go-N fixer turns recurring labels into fix drafts.
 
 Preflight is also a structural input to the **target-postmortem** spec, which uses preflight outcomes to classify the dominant failure modes.
 

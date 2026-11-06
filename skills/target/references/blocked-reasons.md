@@ -4,7 +4,7 @@
 
 Canonical enum for the `blocked_reason.kind` field in `target-state.md` and the `last_blocked_reason.kind` field on graph nodes (`~/.fno/graph.json`). Phases 01-04 of the typed-blocker plan establish that BLOCKED can only be authored by hook-verifiable trip signals; this phase classifies *what kind* of BLOCKED was reached.
 
-Skills, hooks, preflight, and per-phase verifiers reference this file when setting `blocked_reason`. Downstream consumers (eval traces, megawalk retros, postmortems) read the same enum.
+When skills, hooks, preflight, or per-phase verifiers set `blocked_reason`, they read this file. Downstream consumers (eval traces, megawalk retros, postmortems) read the same enum.
 
 ## Tier 1 - Trip signals (LLM-side BLOCKED transitions)
 
@@ -43,7 +43,7 @@ Set by the hook, preflight, sigma-review wrapper, or other infrastructure code p
 |------|---------|----------------|
 | `other` | anything not matching above | free-text in details, classified later by retros |
 
-Use `other` only when the producing code path knows the BLOCKED is novel and not yet worth a dedicated kind. Retros mine `other` entries to identify recurring classes that should be promoted into the enum.
+When the producing code path knows the BLOCKED is novel and not yet worth a dedicated kind, use `other`. Retros mine `other` entries to identify recurring classes to promote into the enum.
 
 ## Adding a new kind
 
@@ -52,9 +52,9 @@ The enum is closed: adding a new kind requires a code change (`scripts/lib/block
 Decision rule for one-time vs recurring:
 
 - **One-time (use `other`):** A specific failure mode that is unlikely to recur or whose handling is fully captured by the free-text `details` field.
-- **Recurring (extend the enum):** A failure mode that has occurred 3+ times across recent runs and that downstream consumers (eval traces, retros) want to switch on. Open a follow-up spec; add the kind in tier 2; document the example.
+- **Recurring (extend the enum):** A failure mode that occurred 3+ times across recent runs. Downstream consumers (eval traces, retros) switch on it. Open a follow-up spec. Add the kind in tier 2. Document the example.
 
-The closed-enum invariant matters because every downstream consumer (eval traces, megawalk retros, postmortem templates) switches on `kind`. A free-text drift would silently bypass classification.
+The closed-enum invariant matters because every downstream consumer (eval traces, megawalk retros, postmortem templates) switches on `kind`. A free-text drift silently bypasses classification.
 
 ## State-file shape
 

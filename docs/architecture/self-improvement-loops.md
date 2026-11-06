@@ -16,11 +16,11 @@ The loops that turn what the fleet did into what the fleet does better. Each one
 ## What feeds what
 
 - Failures reach the trace pass at finalize: a `Budget`, `NoProgress`, `Aborted` or false-claim terminal writes a trace row. S2 corrections reach it off-loop, through the daemon's correction fold (`correction_fold.rs` `agent_corrected` feeds the `user_correction` trace). The 139 rows the old corrections.log held were frozen into `seed-s2.log` once, at first import.
-- Labels in `evals_labels.rs` name the go-N fixer model per label: the eval loop drafts the fix from the trace bank, on demand, not on a schedule.
+- Labels in `evals_labels.rs` name the go-N fixer model per label. The eval loop drafts the fix from the trace bank, on demand, not on a schedule.
 - Evals and heal are daemon-tick loops: both read what the other loops wrote. A healed PR re-runs evals banks. A graded failure in a scheduled regression run files one bug node per task. An open node holds the next filing, and a plumbing failure files no node.
 
 - A node is the join for the upstream-issue loop. `fno do feedback` masks seven classes of private text. They are secrets, paths, emails, session ids, vault paths, project names, and login and host names. It then rescans and refuses a draft that still carries one. The user's Submit click on github.com is the only publish step.
 
 ## Tuning
 
-Start nothing by hand: `evals.n: 0` plus `auto_heal.enabled: false` are the stock quiet posture. The trace pass writes only at terminals and on the daemon's daily arm; it has no installer to run or remove.
+Start nothing by hand: `evals.n: 0` plus `auto_heal.enabled: false` are the stock quiet posture. The trace pass writes only at terminals and on the daemon's daily arm. It has no installer to run or remove.
