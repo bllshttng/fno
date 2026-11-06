@@ -1458,6 +1458,9 @@ mod tests {
                 &[],
                 true,
             );
+            // The first pass stamped the guard window; backdate it or the
+            // proceed pass is refused before its body ever runs.
+            last = Instant::now() - Duration::from_secs(301);
             crate::gc::maybe_retirement_sweep(
                 &mut last,
                 &in_flight,
