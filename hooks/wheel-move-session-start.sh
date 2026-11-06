@@ -30,8 +30,63 @@ STATE="${FNO_STATE_DIR:-$HOME/.fno}"
 FNO_BIN="$(fno_bin)"
 [[ -n "$FNO_BIN" ]] || exit 0
 
+# --- change 6: the daily install count and the floor line ----------------
+# Channel for the count: binary (the marker), wheel (an index receipt
+# beside the venv bin), other. Cheap reads only.
+CHANNEL_KIND="other"
+if [[ "$(cat "$STATE/install/channel" 2>/dev/null)" == "binary" ]]; then
+  CHANNEL_KIND="binary"
+fi
+COUNT_STAMP="$STATE/install/fno_install_seen.stamp"
+count_once_per_day() {
+  find "$COUNT_STAMP" -mmin -1440 >/dev/null 2>&1 && return 0
+  [[ "$(fno config get telemetry.install_count.enabled 2>/dev/null)" == "false" ]] && return 0
+  local token
+  token="$(cat "$STATE/secrets/posthog-project-token" 2>/dev/null)"
+  [[ -n "$token" ]] || token="${FNO_POSTHOG_PROJECT_TOKEN:-}"
+  [[ -n "$token" ]] || return 0
+  local id_file="$STATE/install/fno_install_seen.id"
+  touch "$id_file" 2>/dev/null || return 0
+  local id
+  id="$(cat "$id_file" 2>/dev/null)"
+  if [[ -z "$id" ]]; then
+    id="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    printf '%s\n' "$id" > "$id_file"
+  fi
+  local os arch
+  os="$(uname -s)"; arch="$(uname -m)"
+  local ver
+  ver="$("$FNO_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
+  local body
+  body="$(printf '{"api_key": "%s", "batch": [{"event": "fno_install_seen", "distinct_id": "install:%s", "properties": {"fno_version": "%s", "channel": "%s", "os": "%s", "arch": "%s", "install_id": "%s"}}]}' \
+    "$token" "$id" "$ver" "$CHANNEL_KIND" "$os" "$arch" "$id")"
+  curl -fsSL --max-time 10 -H 'Content-Type: application/json' \
+    -d "$body" "https://us.i.posthog.com/batch/" >/dev/null 2>&1 &&
+    touch "$COUNT_STAMP"
+}
+
+# The floor line (change 6): the hook reads fno-release.json for an old CLI
+# that cannot read it (pre-floor binaries). Best effort, one line, only
+# when the installed version is below min_supported.
+floor_line() {
+  local url="https://github.com/${FNO_RELEASE_REPO:-fnodotdev/fno}/releases/latest/download/fno-release.json"
+  local meta
+  meta="$(curl -fsSL --max-time 10 "$url" 2>/dev/null)" || return 0
+  local floor
+  floor="$(printf '%s' "$meta" | grep -o '"min_supported"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\(.*\)"$/\1/' 2>/dev/null)"
+  [[ -n "$floor" ]] || return 0
+  local ver
+  ver="$("$FNO_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
+  [[ -n "$ver" ]] || return 0
+  if [[ "$(printf '%s\n%s\n' "$ver" "$floor" | sort -V | head -1)" != "$ver" ]]; then
+    echo "fno $ver is below the supported floor $floor. Run: fno update"
+  fi
+}
+
 # A binary install is done; a finished move prints nothing.
 if [[ "$(cat "$STATE/install/channel" 2>/dev/null)" == "binary" ]]; then
+  count_once_per_day
+  floor_line
   exit 0
 fi
 
@@ -50,9 +105,21 @@ RECEIPT="$ROOT/uv-receipt.toml"
 # receipt_is_index applies.
 REQ="$(grep -F 'name = "fno"' "$RECEIPT" | head -1)"
 [[ -n "$REQ" ]] || exit 0
+REQ_IS_INDEX=1
 case "$REQ" in
-  *directory*|*path*|*git*|*url*|*editable*) exit 0 ;;
+  *directory*|*path*|*git*|*url*|*editable*) REQ_IS_INDEX=0 ;;
 esac
+
+# The count and the floor line answer for every classified install; only
+# the move below stays wheel-only.
+if [[ "$REQ_IS_INDEX" == 1 ]]; then
+  CHANNEL_KIND="wheel"
+fi
+count_once_per_day
+floor_line
+if [[ "$REQ_IS_INDEX" == 0 ]]; then
+  exit 0
+fi
 
 # A move already in flight owns the swap; this session says nothing.
 LOCK="$STATE/install/first-run-move.lock"

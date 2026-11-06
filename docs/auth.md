@@ -36,5 +36,6 @@ If any of these are misconfigured, the run will fail with a clear error in the r
 - Local cost telemetry stays local. fno can ingest Claude Code's OpenTelemetry records into a receiver on 127.0.0.1 and store exact per-request cost in `~/.fno/agents/otel/otel.db`. Nothing leaves this machine. Turn it off with `[telemetry] claude_otel = false` in config.toml. See `docs/architecture/cost-accuracy.md`.
 - Feed rows export nowhere by default. With `[telemetry.otlp] enabled = true`, row ids, kinds and refs go to the endpoint you name. Free text only goes with `log_content = true`. See `docs/architecture/activity-feed.md`.
 - Eval runs export nowhere by default. With `[telemetry.eval_events] enabled = true`, identifiers and grades go to PostHog, and no free text goes with them. See `docs/evals.md`.
+- The install count sends one event per machine per day, default on (opt out with `[telemetry.install_count] enabled = false`). The event (`fno_install_seen`) carries five properties and nothing else: the fno version, the channel (wheel, binary, or other), OS, arch, and a random install id. It is what the 0.4.7 upgrade path reads before the wheel stops publishing, and it goes to the same PostHog project as eval events. See `evals/posthog-views.json`.
 
 See `docs/security-posture.md` for the broader trust model.

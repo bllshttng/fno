@@ -1,66 +1,176 @@
 {
-  "insights": [
-    {
-      "name": "Eval pass rate by seat",
-      "description": "Valid grades only: pass over pass plus fail, per day, split by seat.",
-      "query": {
-        "kind": "InsightVizNode",
-        "source": {
-          "kind": "TrendsQuery",
-          "interval": "day",
-          "dateRange": {"date_from": "-30d"},
-          "series": [
-            {"kind": "EventsNode", "event": "fno_eval_run", "math": "total", "properties": [{"key": "grade", "value": "pass", "operator": "exact", "type": "event"}]},
-            {"kind": "EventsNode", "event": "fno_eval_run", "math": "total", "properties": [{"key": "grade", "value": "fail", "operator": "exact", "type": "event"}]}
-          ],
-          "trendsFilter": {"formula": "A/(A+B)"},
-          "breakdownFilter": {"breakdown": "seat", "breakdown_type": "event"}
+ "insights": [
+  {
+   "name": "Eval pass rate by seat",
+   "description": "Valid grades only: pass over pass plus fail, per day, split by seat.",
+   "query": {
+    "kind": "InsightVizNode",
+    "source": {
+     "kind": "TrendsQuery",
+     "interval": "day",
+     "dateRange": {
+      "date_from": "-30d"
+     },
+     "series": [
+      {
+       "kind": "EventsNode",
+       "event": "fno_eval_run",
+       "math": "total",
+       "properties": [
+        {
+         "key": "grade",
+         "value": "pass",
+         "operator": "exact",
+         "type": "event"
         }
-      }
-    },
-    {
-      "name": "Eval failures by failure type",
-      "description": "Failed grades per day, split by the golden's failure type.",
-      "query": {
-        "kind": "InsightVizNode",
-        "source": {
-          "kind": "TrendsQuery",
-          "interval": "day",
-          "dateRange": {"date_from": "-30d"},
-          "series": [
-            {"kind": "EventsNode", "event": "fno_eval_run", "math": "total", "properties": [{"key": "grade", "value": "fail", "operator": "exact", "type": "event"}]}
-          ],
-          "breakdownFilter": {"breakdown": "failure_type", "breakdown_type": "event"}
+       ]
+      },
+      {
+       "kind": "EventsNode",
+       "event": "fno_eval_run",
+       "math": "total",
+       "properties": [
+        {
+         "key": "grade",
+         "value": "fail",
+         "operator": "exact",
+         "type": "event"
         }
+       ]
       }
-    },
-    {
-      "name": "Regression tier failures",
-      "description": "Failed grades on regression tier tasks per day. The alert reads this one.",
-      "query": {
-        "kind": "InsightVizNode",
-        "source": {
-          "kind": "TrendsQuery",
-          "interval": "day",
-          "dateRange": {"date_from": "-30d"},
-          "series": [
-            {"kind": "EventsNode", "event": "fno_eval_run", "math": "total", "properties": [
-              {"key": "grade", "value": "fail", "operator": "exact", "type": "event"},
-              {"key": "tier", "value": "regression", "operator": "exact", "type": "event"}
-            ]}
-          ]
-        }
-      }
+     ],
+     "trendsFilter": {
+      "formula": "A/(A+B)"
+     },
+     "breakdownFilter": {
+      "breakdown": "seat",
+      "breakdown_type": "event"
+     }
     }
-  ],
-  "alerts": [
-    {
-      "insight_name": "Regression tier failures",
-      "name": "An eval regression task failed",
-      "calculation_interval": "daily",
-      "condition": {"type": "absolute_value"},
-      "threshold": {"configuration": {"type": "absolute", "bounds": {"upper": 0}}},
-      "config": {"type": "TrendsAlertConfig", "series_index": 0}
+   }
+  },
+  {
+   "name": "Eval failures by failure type",
+   "description": "Failed grades per day, split by the golden's failure type.",
+   "query": {
+    "kind": "InsightVizNode",
+    "source": {
+     "kind": "TrendsQuery",
+     "interval": "day",
+     "dateRange": {
+      "date_from": "-30d"
+     },
+     "series": [
+      {
+       "kind": "EventsNode",
+       "event": "fno_eval_run",
+       "math": "total",
+       "properties": [
+        {
+         "key": "grade",
+         "value": "fail",
+         "operator": "exact",
+         "type": "event"
+        }
+       ]
+      }
+     ],
+     "breakdownFilter": {
+      "breakdown": "failure_type",
+      "breakdown_type": "event"
+     }
     }
-  ]
+   }
+  },
+  {
+   "name": "Regression tier failures",
+   "description": "Failed grades on regression tier tasks per day. The alert reads this one.",
+   "query": {
+    "kind": "InsightVizNode",
+    "source": {
+     "kind": "TrendsQuery",
+     "interval": "day",
+     "dateRange": {
+      "date_from": "-30d"
+     },
+     "series": [
+      {
+       "kind": "EventsNode",
+       "event": "fno_eval_run",
+       "math": "total",
+       "properties": [
+        {
+         "key": "grade",
+         "value": "fail",
+         "operator": "exact",
+         "type": "event"
+        },
+        {
+         "key": "tier",
+         "value": "regression",
+         "operator": "exact",
+         "type": "event"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "Wheel installs by version",
+   "description": "Distinct install ids per week by fno version where the channel is wheel. Read before x-8b53 deletes the wheel; the count starts when this ships.",
+   "query": {
+    "kind": "InsightVizNode",
+    "source": {
+     "kind": "TrendsQuery",
+     "interval": "week",
+     "dateRange": {
+      "date_from": "-90d"
+     },
+     "series": [
+      {
+       "kind": "EventsNode",
+       "event": "fno_install_seen",
+       "math": "dau",
+       "properties": [
+        {
+         "key": "channel",
+         "value": "wheel",
+         "operator": "exact",
+         "type": "event"
+        }
+       ]
+      }
+     ],
+     "breakdownFilter": {
+      "breakdown": "fno_version",
+      "breakdown_type": "event"
+     }
+    }
+   }
+  }
+ ],
+ "alerts": [
+  {
+   "insight_name": "Regression tier failures",
+   "name": "An eval regression task failed",
+   "calculation_interval": "daily",
+   "condition": {
+    "type": "absolute_value"
+   },
+   "threshold": {
+    "configuration": {
+     "type": "absolute",
+     "bounds": {
+      "upper": 0
+     }
+    }
+   },
+   "config": {
+    "type": "TrendsAlertConfig",
+    "series_index": 0
+   }
+  }
+ ]
 }
