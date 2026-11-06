@@ -68,7 +68,8 @@ pub struct Inbound {
 }
 
 /// One send's outcome: the external ref on success, else retry next beat
-/// or drop for good (the sink retry classes).
+/// or drop (the sink retry classes; a dropped row resends under the retry
+/// policy until it reads abandoned).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sent {
     Posted(String),
@@ -426,7 +427,6 @@ fn tick_one(
                 && retries < crate::attention_http::RETRIES_PER_BEAT
             {
                 retries += 1;
-                row.attempts += 1;
                 let sent = transport.send(&render_item(item), &buttons);
                 record_sink_health(
                     state_dir,
@@ -443,6 +443,8 @@ fn tick_one(
                     }
                     Sent::Dropped(why) => {
                         row.last_status = None;
+                        // Only a definitive drop spends an attempt.
+                        row.attempts += 1;
                         if row.attempts >= crate::attention_http::RETRY_ATTEMPTS_CAP {
                             row.status = "abandoned".into();
                             row.next_at = None;

@@ -1,7 +1,8 @@
 //! The `ntfy` and `webhook` attention sink types: the arm delivers each open
 //! item to every configured sink, dedups on `delivery_id` (sha256 of sink,
 //! item id and event), retries transient failures next beat with the same id
-//! and never resends a delivered or dropped delivery. The outbound post is
+//! and never resends a delivered delivery; a dropped one resends under the
+//! retry policy until it reads abandoned. The outbound post is
 //! one `curl` child per call with the URL, the headers and the body off
 //! argv: the URL and the bearer header ride a stdin config, the body a
 //! 0600 temp file, so `ps` shows no secret. ntfy carries at most three
@@ -448,7 +449,6 @@ pub fn tick_sinks(
                     && retries < RETRIES_PER_BEAT
                 {
                     retries += 1;
-                    row.attempts += 1;
                     let body = delivery_body_for(item, sink, &did);
                     let result = post.post(
                         &sink.url,
@@ -466,6 +466,9 @@ pub fn tick_sinks(
                     } else {
                         row.last_status = result.status;
                         if result.dropped() {
+                            // Only a definitive drop spends an attempt; a
+                            // transient keeps the row due without one.
+                            row.attempts += 1;
                             if row.attempts >= RETRY_ATTEMPTS_CAP {
                                 row.status = "abandoned".to_string();
                                 row.next_at = None;
@@ -1133,31 +1136,40 @@ mod tests {
         let sinks = vec![ntfy_sink()];
         let path = dir.path().join("deliveries.json");
         let did = delivery_id("phone", &items[0].id, "item.opened");
+        // Seed a dropped row due now: a resolve failure is transient, so the
+        // sends land on the retry path, where every one still records sink
+        // health and none spends an attempt.
+        let mut state: Deliveries = BTreeMap::new();
+        state.insert(
+            did.clone(),
+            DeliveryRow {
+                item_id: items[0].id.clone(),
+                sink: "phone".to_string(),
+                event: "item.opened".to_string(),
+                status: "dropped".to_string(),
+                external_id: None,
+                attempts: 1,
+                next_at: Some(0),
+                last_status: Some(404),
+            },
+        );
+        std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
         let resolve_fail = || PostResult {
             status: None,
             body: String::new(),
             error: Some("curl exited 6: Could not resolve host: ntfy.example".to_string()),
-        };
-        let due_now = |state_path: &Path| {
-            let mut state: Deliveries =
-                serde_json::from_str(&std::fs::read_to_string(state_path).unwrap()).unwrap();
-            state.get_mut(&did).unwrap().next_at = Some(0);
-            std::fs::write(state_path, serde_json::to_string(&state).unwrap()).unwrap();
         };
         let health = |state_dir: &Path| -> SinkHealth {
             serde_json::from_str(&std::fs::read_to_string(sink_health_path(state_dir)).unwrap())
                 .unwrap()
         };
         for beat in 0..3 {
-            if beat > 0 {
-                due_now(&path);
-            }
             let mut post = ScriptedPost {
                 responses: RefCell::new(vec![resolve_fail()]),
                 bodies: RefCell::new(vec![]),
             };
             let t = tick_sinks(&items, &sinks, dir.path(), future(), &mut post);
-            assert_eq!(t.dropped, 1, "beat {beat} drops");
+            assert_eq!(t.dropped, 0, "a resolve failure is transient, not a drop");
             assert_eq!(post.bodies.borrow().len(), 1, "beat {beat} posts once");
         }
         let row = health(dir.path())["phone"].clone();
@@ -1169,7 +1181,6 @@ mod tests {
         let first_fail = row.first_fail_at.expect("episode start recorded");
         // The healed beat: the retry 200s, the streak reads 0, and the
         // episode's start stays behind the success.
-        due_now(&path);
         let mut post = ScriptedPost {
             responses: RefCell::new(vec![PostResult {
                 status: Some(200),
