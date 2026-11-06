@@ -274,7 +274,7 @@ impl Report {
             let mut rows = vec![
                 PopupRow::Info { label: "type".into(), value: if self.feature { "idea" } else { "bug" }.into() },
                 self.field.row("description"),
-                PopupRow::Text("Includes terminal text, focused row, build and up to 40 lines from client and server logs. Review redacted text before sending.".into()),
+                PopupRow::Text("Includes terminal text, focused row, build and up to 40 lines from client and server logs. Check the full preview for private details before sending.".into()),
                 PopupRow::Text(auth.into()),
             ];
             if !self.notice.is_empty() {
