@@ -584,6 +584,15 @@ fn emit_control_plane_arms(rep: &Value, err: bool) {
             );
         }
     }
+    for line in cpa
+        .get("dead_sinks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+    {
+        emit(err, &format!("fno doctor: {line}"));
+    }
 }
 
 fn emit_observer_unavailable(rep: &Value, err: bool) {

@@ -128,17 +128,22 @@ fn start_daemon(home: &AgentsHome) -> DaemonChild {
 /// an artificially-seeded mid-flight source row intact for a promote-admission
 /// assertion.
 fn start_daemon_env(home: &AgentsHome, extra: &[(&str, &str)]) -> DaemonChild {
-    start_daemon_env_in(home, home.root(), extra)
+    start_daemon_env_in(home, home.root(), extra, Path::new(DAEMON_BIN))
 }
 
 /// [`start_daemon_env`] with an explicit launch cwd: the daemon keeps whoever
 /// started it as its cwd, and the cwd-pin test needs a launch from inside a
 /// git worktree to prove the pin.
-fn start_daemon_env_in(home: &AgentsHome, dir: &Path, extra: &[(&str, &str)]) -> DaemonChild {
+fn start_daemon_env_in(
+    home: &AgentsHome,
+    dir: &Path,
+    extra: &[(&str, &str)],
+    daemon_bin: &Path,
+) -> DaemonChild {
     let seen = common::count_events(home, "daemon_started");
     let stderr =
         std::fs::File::create(home.root().join("daemon.stderr")).expect("daemon.stderr creates");
-    let mut cmd = Command::new(DAEMON_BIN);
+    let mut cmd = Command::new(daemon_bin);
     cmd.env("FNO_AGENTS_HOME", home.root())
         .env("HOME", home.root())
         .envs(fno_agents::test_run::self_owner_env())
@@ -635,10 +640,11 @@ async fn client_declines_to_spawn_while_the_singleton_lock_is_held() {
 async fn restart_leaves_exactly_one_daemon(rows: usize) {
     let home = short_home();
     home.ensure_root().unwrap();
+    let marker = home.root().join("daemon-env-probe.log");
     let daemon_bin = daemon_env_bin(
         &home,
         "restart-storm",
-        None,
+        Some(&marker),
         &[("FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS", "3000")],
     );
 
@@ -675,6 +681,13 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
         let h = home.clone();
         let b = daemon_bin.clone();
         tokio::spawn(async move { fno_agents::client::restart_daemon(&h, &b, false).await })
+    };
+    let sibling_home = short_home();
+    sibling_home.ensure_root().unwrap();
+    let sibling_bin = daemon_env_bin(&sibling_home, "sibling", Some(&marker), &[]);
+    let sibling = {
+        let h = sibling_home.clone();
+        tokio::task::spawn_blocking(move || start_daemon_env_in(&h, h.root(), &[], &sibling_bin))
     };
     let mut commands = Vec::new();
     for i in 0..CONCURRENT_COMMANDS {
@@ -800,11 +813,27 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
         "restart's successor must at least have reached the accept loop"
     );
 
-    unsafe {
-        libc::kill(outcome.new_pid as libc::pid_t, libc::SIGTERM);
-    }
-    std::thread::sleep(Duration::from_millis(200));
+    let sibling = sibling.await.expect("sibling daemon starts");
+    let sibling_pid = sibling.id();
+    let probe = std::fs::read_to_string(&marker).expect("daemon env probe marker");
+    assert!(
+        probe.contains("restart-storm delay=3000"),
+        "intended successor did not receive its delay seam: {probe}"
+    );
+    assert!(
+        probe.contains("sibling delay=unset"),
+        "sibling inherited the intended successor's delay: {probe}"
+    );
+    drop(sibling);
+    terminate_untracked(outcome.new_pid);
+    println!(
+        "daemon_child_env_isolated intended_pid={} sibling_pid={} marker={}",
+        outcome.new_pid,
+        sibling_pid,
+        marker.display()
+    );
     std::fs::remove_dir_all(home.root()).ok();
+    std::fs::remove_dir_all(sibling_home.root()).ok();
 }
 
 #[tokio::test]
@@ -2586,7 +2615,7 @@ async fn daemon_cwd_survives_a_reaped_launch_worktree() {
 
     let home = short_home();
     home.ensure_root().unwrap();
-    let daemon = start_daemon_env_in(&home, &wt, &[]);
+    let daemon = start_daemon_env_in(&home, &wt, &[], Path::new(DAEMON_BIN));
 
     // The reaper deletes the launch worktree under the live daemon.
     e2e_git(

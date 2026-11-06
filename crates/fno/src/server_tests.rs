@@ -4441,87 +4441,11 @@ fn rerun_guard_is_scoped_to_the_current_session() {
     let foreign_only = [agent_in("other", 5, Some(AgentBadge::Working), false)];
     assert_eq!(rerun_allowed(&foreign_only, "main", 5), Ok(()));
 }
-pub(super) fn empty_core() -> Core {
-    let (out_tx, _out_rx) = mpsc::channel::<(u64, PaneChunk)>(8);
-    let (exit_tx, _exit_rx) = mpsc::channel::<u64>(8);
-    let (self_tx, _self_rx) = mpsc::channel::<CoreMsg>(8);
-    Core {
-        session: Session::default(),
-        panes: HashMap::new(),
-        pane_watch: HashMap::new(),
-        pane_stats: Arc::new(RwLock::new(HashMap::new())),
-        pane_stats_emit_failures: Arc::new(AtomicU64::new(0)),
-        pane_children: Arc::new(Mutex::new(HashSet::new())),
-        clients: Vec::new(),
-        next_pane_id: 1,
-        next_squad_id: 1,
-        sizing: TabSizing::with_policy(window_size::WindowSize::Smallest),
-        session_name: "test".into(),
-        shells: Vec::new(),
-        out_tx,
-        exit_tx,
-        self_tx,
-        agents: Vec::new(),
-        agents_read_ok: false,
-        journal: crate::spawn_journal::JournalCache::default(),
-        launch_desk: Default::default(),
-        branch_by_cwd: HashMap::new(),
-        project_by_cwd: HashMap::new(),
-        thread_pins: Vec::new(),
-        tail_by_session: HashMap::new(),
-        ctx_by_session: HashMap::new(),
-        truth_by_name: HashMap::new(),
-        truth_seq: 0,
-        backlog: Vec::new(),
-        backlog_lanes: Vec::new(),
-        backlog_stale: false,
-        backlog_holders: HashMap::new(),
-        observers: Default::default(),
-        links: Default::default(),
-        backlog_join: crate::backlog_view::BacklogJoin::default(),
-        claim_eligible: HashSet::new(),
-        claims: HashMap::new(),
-        touch_last_emit: HashMap::new(),
-        wheel_gate: HashMap::new(),
-        wheel_lines: 1,
-        wheel_passthrough_rate: 3,
-        fno_token_claims: HashMap::new(),
-        link_click_claims: HashMap::new(),
-        touch_emit_failures: Arc::new(AtomicU64::new(0)),
-        started_at: crate::server_stats::stamp_now(),
-        client_count: watch::channel(0).0,
-        seen: HashSet::new(),
-        attached: HashMap::new(),
-        worker_pane: HashMap::new(),
-        worker_session_pane: HashMap::new(),
-        held_workers: HashMap::new(),
-        detached_panes: HashMap::new(),
-        diff_pane: None,
-        portals: BTreeMap::new(),
-        portal_noticed: false,
-        squad_members: HashMap::new(),
-        template_specs: HashMap::new(),
-        pending_template_restores: Vec::new(),
-        external_lifecycle: Vec::new(),
-        persist_degraded_notified: false,
-        shared_identity_notified: HashSet::new(),
-        restored: false,
-        restore_pending: false,
-        spawn_flight: Default::default(),
-        restore_hold: Default::default(),
-        store_generations: HashMap::new(),
-        pre_restore_squads: HashSet::new(),
-        topology_dirty: false,
-        last_topology_flush: None,
-        reentry_verdict: None,
-        staged_resume_argv: None,
-        batch_plans: HashMap::new(),
-        pending_thread_reply: None,
-        keeper_adopted: Vec::new(),
-        shell_rc_dirs: std::collections::HashMap::new(),
-        portal_session_guards: std::collections::BTreeMap::new(),
-    }
-}
+
+#[path = "server/tests/core_fixture.rs"]
+mod core_fixture;
+pub(super) use core_fixture::empty_core;
+
 fn placement_core() -> Core {
     let mut core = empty_core();
     core.session.add_squad(

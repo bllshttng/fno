@@ -25,6 +25,10 @@ pub(super) async fn route(
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Option<Result<StdinFlow, String>> {
+    if view.report.is_some() {
+        super::report::keys(view, bytes);
+        return Some(Ok(StdinFlow::Continue));
+    }
     if view.digest.is_some() {
         // any key dismisses the catch-up digest into the normal view.
         // Same whole-chunk swallow as the key-table overlay below. A flush
