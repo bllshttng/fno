@@ -564,6 +564,313 @@ fn daily(state: &Path) -> Result<Value, String> {
     score(state, now_ms(), max_sessions(&repo), &spawn_judge)
 }
 
+/// The categorical recall floor a judge's hand pairs must clear per label
+/// class before the judge reads proved (the binary bar stays rubric.rs).
+const PASS_RECALL: f64 = 0.8;
+
+fn judge_by_name(name: &str) -> Option<&'static Judge> {
+    JUDGES.iter().find(|j| j.name == name)
+}
+
+/// The hand labels a person set on traces: `layer_verdict` values for the
+/// layer judge, a set `right_action` for user_corrected. Nothing else has
+/// a hand slot in v1.
+fn hand_labels(state: &Path) -> Vec<(String, &'static str, String)> {
+    let mut out = Vec::new();
+    for t in load_traces(state) {
+        let Some(sid) = fact_str(&t["session_id"]) else {
+            continue;
+        };
+        let layer = &t["layer_verdict"];
+        if layer.get("basis").and_then(Value::as_str) == Some("user_set") {
+            if let Some(v) = layer.get("value").and_then(Value::as_str) {
+                if let Some(judge) = judge_by_name("layer") {
+                    if judge.labels.contains(&v) {
+                        out.push((sid.to_string(), "layer", v.to_string()));
+                    }
+                }
+            }
+        }
+        let right = &t["right_action"];
+        if right.get("basis").and_then(Value::as_str) == Some("user_set") {
+            out.push((sid.to_string(), "user_corrected", "yes".to_string()));
+        }
+    }
+    out
+}
+
+/// Proof state, computed on read and never stored. Binary judges clear the
+/// rubric bar (n, agreement and kappa, so a one-class hand set never
+/// proves); categorical judges clear a per-label recall floor over hand
+/// pairs with both classes present.
+pub(crate) fn calibration_rows(state: &Path) -> Vec<Value> {
+    let traces = load_traces(state);
+    let seed_sessions: BTreeSet<String> = traces
+        .iter()
+        .filter(|t| t.get("signal_kind").and_then(Value::as_str) == Some("seed_correction"))
+        .filter_map(|t| fact_str(&t["session_id"]))
+        .map(String::from)
+        .collect();
+    let rows = newest_rows(&read_rows(&labels_path(state)));
+    let verdict = |sessions: &BTreeSet<String>, judge: &str| -> BTreeMap<String, String> {
+        rows.iter()
+            .filter(|r| r.get("judge").and_then(Value::as_str) == Some(judge))
+            .filter_map(|r| {
+                let sid = r.get("session_id").and_then(Value::as_str)?;
+                let label = r.get("label").and_then(Value::as_str)?;
+                sessions
+                    .contains(sid)
+                    .then(|| (sid.to_string(), label.to_string()))
+            })
+            .collect()
+    };
+    let mut out = Vec::new();
+    for judge in JUDGES {
+        let mut row = json!({
+            "judge": judge.name,
+            "seed_n": Value::Null,
+            "seed_scored": Value::Null,
+            "seed_recall": Value::Null,
+            "hand_n": 0,
+            "agreement": Value::Null,
+            "kappa": Value::Null,
+            "per_label": Value::Null,
+            "proved": false,
+        });
+        if judge.name == "user_corrected" {
+            let verdicts = verdict(&seed_sessions, judge.name);
+            let mut pairs: Vec<(bool, bool)> = Vec::new();
+            for sid in &seed_sessions {
+                if let Some(label) = verdicts.get(sid) {
+                    pairs.push((true, label == "yes"));
+                }
+            }
+            let lane = crate::evals::rubric::lane_agreement("flash", &pairs);
+            let scored = pairs.len();
+            let yes = pairs.iter().filter(|(_, v)| *v).count();
+            row["seed_n"] = json!(seed_sessions.len());
+            row["seed_scored"] = json!(scored);
+            row["seed_recall"] = if scored > 0 {
+                json!(yes as f64 / scored as f64)
+            } else {
+                Value::Null
+            };
+            row["hand_n"] = json!(seed_sessions.len());
+            row["agreement"] = lane.agreement().map(Value::from).unwrap_or(Value::Null);
+            row["kappa"] = lane.kappa.map(Value::from).unwrap_or(Value::Null);
+            row["proved"] = json!(crate::evals::rubric::agreement_proved(&[lane]));
+        } else if judge.name == "layer" {
+            let mut hand: Vec<(String, String)> = hand_labels(state)
+                .into_iter()
+                .filter(|(_, judge_name, _)| *judge_name == "layer")
+                .map(|(sid, _, label)| (sid, label))
+                .collect();
+            hand.sort();
+            hand.dedup();
+            let verdicts = verdict(&hand.iter().map(|(s, _)| s.clone()).collect(), "layer");
+            let mut hits: BTreeMap<&str, (u32, u32)> = BTreeMap::new();
+            let mut agreed = 0u32;
+            for (sid, hand_label) in &hand {
+                if let Some(label) = verdicts.get(sid) {
+                    let cell = hits.entry(hand_label.as_str()).or_default();
+                    cell.1 += 1;
+                    cell.0 += u32::from(label == hand_label);
+                    agreed += u32::from(label == hand_label);
+                }
+            }
+            let per_label: BTreeMap<String, Value> = hits
+                .iter()
+                .map(|(label, (hit, total))| {
+                    let ratio = f64::from(*hit) / f64::from(*total.max(&1));
+                    (label.to_string(), json!(ratio))
+                })
+                .collect();
+            let classes = hits.len();
+            let proved = hand.len() >= 2
+                && classes >= 2
+                && hits
+                    .values()
+                    .all(|(hit, total)| f64::from(*hit) / f64::from(*total.max(&1)) >= PASS_RECALL);
+            row["hand_n"] = json!(hand.len());
+            row["agreement"] = if hand.is_empty() {
+                Value::Null
+            } else {
+                json!(agreed as f64 / hand.len() as f64)
+            };
+            row["per_label"] = Value::Object(per_label.into_iter().collect());
+            row["proved"] = json!(proved);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn since_ms(spec: &str) -> Option<i64> {
+    let (digits, unit) = spec.split_at(spec.len().saturating_sub(1));
+    let n: i64 = digits.parse().ok()?;
+    let secs = match unit {
+        "d" => n * 86_400,
+        "h" => n * 3_600,
+        "m" => n * 60,
+        "s" => n,
+        _ => return None,
+    };
+    Some(now_ms() - secs * 1000)
+}
+
+/// The query behind `evals candidates --labels`: newest-digest rows only,
+/// unproved judges' rows excluded with a count unless `--unproved`, and no
+/// transcript is read anywhere on this path.
+fn query(
+    state: &Path,
+    judge: Option<&String>,
+    label: Option<&String>,
+    session: Option<&String>,
+    since: Option<i64>,
+    unproved: bool,
+    limit: usize,
+) -> (Vec<Value>, usize) {
+    let proved: BTreeSet<String> = calibration_rows(state)
+        .iter()
+        .filter(|j| j["proved"] == json!(true))
+        .filter_map(|j| j["judge"].as_str().map(String::from))
+        .collect();
+    let mut excluded = 0usize;
+    let mut matching: Vec<Value> = Vec::new();
+    for row in newest_rows(&read_rows(&labels_path(state))) {
+        let name = row.get("judge").and_then(Value::as_str).unwrap_or("");
+        if !proved.contains(name) && !unproved {
+            excluded += 1;
+            continue;
+        }
+        if let Some(want) = judge {
+            if row.get("judge").and_then(Value::as_str) != Some(want.as_str()) {
+                continue;
+            }
+        }
+        if let Some(want) = label {
+            if row.get("label").and_then(Value::as_str) != Some(want.as_str()) {
+                continue;
+            }
+        }
+        if let Some(want) = session {
+            if row.get("session_id").and_then(Value::as_str) != Some(want.as_str()) {
+                continue;
+            }
+        }
+        if let Some(cutoff) = since {
+            let at = row
+                .get("created_at")
+                .and_then(Value::as_str)
+                .and_then(parse_ms)
+                .unwrap_or(0);
+            if at < cutoff {
+                continue;
+            }
+        }
+        matching.push(json!({
+            "session_id": row.get("session_id"),
+            "judge": row.get("judge"),
+            "judge_version": row.get("judge_version"),
+            "label": row.get("label"),
+            "reason": row.get("reason"),
+            "span_ref": row.get("span_ref"),
+            "created_at": row.get("created_at"),
+        }));
+        if matching.len() >= limit {
+            break;
+        }
+    }
+    (matching, excluded)
+}
+
+pub fn run(args: &[String]) -> i32 {
+    let state = crate::evals_candidates::state_root();
+    let json = args.iter().any(|a| a == "--json");
+    if args.iter().any(|a| a == "--calibration") {
+        let judges = calibration_rows(&state);
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({"judges": judges})).unwrap_or_default()
+            );
+        } else {
+            for judge in &judges {
+                println!(
+                    "{}\tproved={} seed_n={} hand_n={} agreement={} kappa={}",
+                    judge["judge"].as_str().unwrap_or("?"),
+                    judge["proved"],
+                    judge["seed_n"],
+                    judge["hand_n"],
+                    judge["agreement"],
+                    judge["kappa"],
+                );
+            }
+        }
+        return 0;
+    }
+    if args.iter().any(|a| a == "--pass") {
+        let repo = crate::evals::canonical_repo_root();
+        return match score(&state, now_ms(), max_sessions(&repo), &spawn_judge) {
+            Ok(receipt) => {
+                println!("{receipt}");
+                0
+            }
+            Err(e) => {
+                eprintln!("eval labels: {e}");
+                1
+            }
+        };
+    }
+    let flag = |name: &str| crate::evals::flag_lookup(args, name);
+    let judge = flag("--judge");
+    let label = flag("--label");
+    let session = flag("--session");
+    let since = flag("--since").and_then(|s| since_ms(&s));
+    let unproved = args.iter().any(|a| a == "--unproved");
+    let limit = match flag("--limit") {
+        None => 50,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => {
+                eprintln!("usage: fno-agents evals candidates --labels [--judge J] [--label L] [--session S] [--since 1d] [--calibration] [--pass] [--unproved] [--limit N] [--json]");
+                return 2;
+            }
+        },
+    };
+    let (matching, excluded) = query(
+        &state,
+        judge.as_ref(),
+        label.as_ref(),
+        session.as_ref(),
+        since,
+        unproved,
+        limit,
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"rows": matching, "excluded_unproved": excluded}))
+                .unwrap_or_default()
+        );
+    } else {
+        for row in &matching {
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                row["session_id"].as_str().unwrap_or("?"),
+                row["judge"].as_str().unwrap_or("?"),
+                row["label"].as_str().unwrap_or("?"),
+                row["span_ref"].as_str().unwrap_or("?"),
+                row["reason"].as_str().unwrap_or(""),
+            );
+        }
+        if excluded > 0 {
+            println!("excluded {excluded} rows of unproved judges (pass --unproved to read them)");
+        }
+    }
+    0
+}
+
 #[derive(Default)]
 pub struct Arm {
     next: Arc<Mutex<Option<Instant>>>,
@@ -625,7 +932,7 @@ mod tests {
     }
 
     fn fake_labels(
-        judge_override: Option<(&str, &str)>,
+        judge_override: Option<(&'static str, &'static str)>,
     ) -> impl Fn(&str, &str) -> Result<(String, String), String> {
         move |name: &str, _: &str| {
             let rest = name.strip_prefix("eval-judge-").unwrap_or(name);
@@ -769,5 +1076,55 @@ mod tests {
         let (label, reason) =
             parse_label_reply("sure: {\"label\": \"yes\", \"reason\": \"r\"}").unwrap();
         assert_eq!((label.as_str(), reason.as_str()), ("yes", "r"));
+    }
+
+    #[test]
+    fn calibration_reads_seeds_as_user_corrected_positives_and_layer_hand_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        for sid in ["sd-one", "sd-two", "sd-three"] {
+            trace_file(
+                state,
+                sid,
+                "seed_correction",
+                "2026-11-01T00:00:00+00:00",
+                "no, prove it",
+            );
+        }
+        let now = parse_ms("2026-11-05T12:00:00+00:00").unwrap();
+        score(state, now, 40, &fake_labels(None)).unwrap();
+        let judges: BTreeMap<String, Value> = calibration_rows(state)
+            .into_iter()
+            .map(|j| (j["judge"].as_str().unwrap_or("").to_string(), j))
+            .collect();
+        let uc = &judges["user_corrected"];
+        assert_eq!(uc["seed_n"], 3);
+        assert_eq!(uc["seed_scored"], 3);
+        assert_eq!(uc["seed_recall"], json!(1.0));
+        assert_eq!(uc["kappa"], Value::Null, "one hand class proves no kappa");
+        assert_eq!(uc["proved"], json!(false));
+        assert_eq!(judges["layer"]["hand_n"], 0);
+        assert_eq!(judges["layer"]["proved"], json!(false));
+        // A person-set layer verdict becomes the hand pair the gate reads.
+        let id = trace_file(
+            state,
+            "sd-one",
+            "user_correction",
+            "2026-11-02T00:00:00+00:00",
+            "then it broke again",
+        );
+        let dir = state.join("evals").join("traces");
+        let path = dir.join(format!("{id}.json"));
+        let mut labeled =
+            serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        labeled["layer_verdict"] = json!({"value": "model", "basis": "user_set"});
+        std::fs::write(&path, labeled.to_string()).unwrap();
+        score(state, now, 40, &fake_labels(None)).unwrap();
+        let judges: BTreeMap<String, Value> = calibration_rows(state)
+            .into_iter()
+            .map(|j| (j["judge"].as_str().unwrap_or("").to_string(), j))
+            .collect();
+        assert_eq!(judges["layer"]["hand_n"], 1);
+        assert_eq!(judges["layer"]["proved"], json!(false));
     }
 }
