@@ -159,10 +159,10 @@ fn parse_settings_nested_budget() {
 }
 
 #[test]
-fn session_cost_from_ledger_sums_session_only() {
+fn team_spend_ledger_lookup_accepts_harness_alias() {
     let tmp = tempfile::tempdir().unwrap();
     let ledger = tmp.path().join("l.json");
-    std::fs::write(&ledger, format!("{}\n", r#"{"entries":[{"session_id":"a","cost_usd":1.0},{"session_id":"b","cost_usd":0.5},{"session_id":"a","cost_usd":0.25}]}"#)).unwrap();
+    std::fs::write(&ledger, format!("{}\n", r#"{"entries":[{"fno_id":"target-a","session_id":"target-a","sessions":["a"],"cost_usd":1.0},{"session_id":"b","cost_usd":0.5},{"session_id":"a","cost_usd":0.25}]}"#)).unwrap();
     let cost = session_cost_from_ledger(&ledger, "a");
     assert!(
         (cost.unwrap() - 1.25).abs() < 0.001,

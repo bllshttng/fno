@@ -835,9 +835,18 @@ pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> 
     let mut found = false;
     for entry in &entries {
         // Either key: new rows carry fno_id, pre-rename rows only session_id.
+        let session_alias =
+            entry
+                .get("sessions")
+                .and_then(Value::as_array)
+                .is_some_and(|sessions| {
+                    sessions
+                        .iter()
+                        .any(|alias| alias.as_str() == Some(session_id))
+                });
         let matches = entry.get("fno_id").and_then(|v| v.as_str()) == Some(session_id)
             || entry.get("session_id").and_then(|v| v.as_str()) == Some(session_id);
-        if matches {
+        if matches || session_alias {
             if let Some(c) = entry.get("cost_usd").and_then(|v| v.as_f64()) {
                 total += c;
                 found = true;
