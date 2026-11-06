@@ -554,7 +554,9 @@ pub(crate) fn alias_pool_at(graph: &std::path::Path) -> std::collections::BTreeS
 
 /// Mint a fresh, collision-free node id against the snapshot's ids, the
 /// legacy archive pool, the mint tombstones, every id a plan
-/// frontmatter names, and every retired alias. Must run inside the locked write.
+/// frontmatter names, and every retired alias. The tail never reads as a
+/// node number: a replica's unsynced all-digit hash and the primary's next
+/// number can collide inside the sync window. Must run inside the locked write.
 pub(crate) fn mint_node_id(
     existing: &std::collections::BTreeSet<String>,
 ) -> Result<String, String> {
@@ -590,7 +592,17 @@ fn mint_node_id_with_prefix(
         let mut bytes = [0u8; 8];
         getrandom::fill(&mut bytes).map_err(|e| format!("mint entropy failed: {e}"))?;
         let candidate = format!("{prefix}{}", &hex_lower(&bytes)[..width]);
-        if !existing.contains(&candidate) && excluded.iter().all(|set| !set.contains(&candidate)) {
+        // An all-digit tail reads as a node number (`x-1234`), so a fresh
+        // hash with one could collide with a number the primary mints for a
+        // different node before the sync lands. `numbers::node_number_texts`
+        // only knows the local cache; the guard removes the class outright.
+        let reads_as_number = candidate[prefix.len()..]
+            .bytes()
+            .all(|b| b.is_ascii_digit());
+        if !reads_as_number
+            && !existing.contains(&candidate)
+            && excluded.iter().all(|set| !set.contains(&candidate))
+        {
             return Ok(candidate);
         }
     }
@@ -1689,6 +1701,34 @@ mod tests {
         assert_eq!(pool.len(), 0x1_0000);
         let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&pool], "x", 4)
             .unwrap_err();
+        assert!(err.contains("exhaustion"), "mint refused: {err}");
+    }
+
+    #[test]
+    fn a_minted_tail_never_reads_as_a_node_number() {
+        // At width 4 about 15% of the space is all-digit tails, so 10,000
+        // draws meet the guard many times; every returned id keeps a letter.
+        for _ in 0..10_000 {
+            let id =
+                mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[], "x", 4).unwrap();
+            assert!(
+                id[2..].bytes().any(|b| matches!(b, b'a'..=b'f')),
+                "minted an all-digit tail: {id}"
+            );
+        }
+        // Every letter-bearing id excluded, only all-digit tails remain:
+        // the mint must refuse rather than return one.
+        let letter_bearing: std::collections::BTreeSet<String> = (0..=0xffff)
+            .map(|i| format!("x-{i:04x}"))
+            .filter(|id| id[2..].bytes().any(|b| matches!(b, b'a'..=b'f')))
+            .collect();
+        let err = mint_node_id_with_prefix(
+            &std::collections::BTreeSet::new(),
+            &[&letter_bearing],
+            "x",
+            4,
+        )
+        .unwrap_err();
         assert!(err.contains("exhaustion"), "mint refused: {err}");
     }
 }
