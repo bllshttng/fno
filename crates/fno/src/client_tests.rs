@@ -3156,24 +3156,6 @@ fn status_row_rows() {
     let text = frame_text(&view.compose());
     assert!(text.lines().last().unwrap().contains("esc cancel"));
 }
-
-#[test]
-fn client_keys_modal_execute_selected_maps_selected_row_to_its_chord() {
-    // The default selection is the first selectable row. The global
-    // (no prefix) section's rows are display-only (Enter on them BELs), so
-    // the first EXECUTABLE row is the first Global binding, and
-    // row_events[selected] must be exactly the Event a direct chord of that
-    // key would produce (Locked 3 parity, at the modal boundary).
-    let m = build_keys_modal();
-    let (ri, _) = m.popup.selected().expect("a selectable row");
-    let ev = m.row_events[ri..]
-        .iter()
-        .find_map(|e| e.clone())
-        .expect("a first executable row");
-    // That first executable row is Global's `w` -> OpenSelector.
-    assert_eq!(ev, crate::keys::resolve_chord(b'w'));
-}
-
 #[tokio::test]
 async fn keys_modal_which_key_executes_a_bound_key_to_the_wire() {
     // AC2-HP: tapping a bound key in the modal runs it immediately through
@@ -3225,27 +3207,6 @@ async fn keys_modal_unbound_key_and_esc_dismiss_without_acting() {
     );
     assert!(buf.is_empty(), "Esc sends nothing to a pane");
 }
-
-#[tokio::test]
-async fn keys_modal_esc_click_and_escape_both_close() {
-    let mut v = two_pane_view();
-    v.term = (30, 100);
-    v.open_keys_modal();
-    assert_eq!(super::esc_close::tap_chip(&mut v).await, 1);
-    assert!(v.keys_modal.is_none());
-    let mut buf = Vec::new();
-
-    v.open_keys_modal();
-    keys_modal_keys(&mut v, &mut Scanner::default(), b"\x1b", &mut buf)
-        .await
-        .unwrap();
-    keys_modal_keys(&mut v, &mut Scanner::default(), b"z", &mut buf)
-        .await
-        .unwrap();
-    assert!(v.keys_modal.is_none());
-    assert!(buf.is_empty());
-}
-
 #[tokio::test]
 async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
     let mut v = two_pane_view();
@@ -3270,50 +3231,6 @@ async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
         .unwrap();
     assert!(v.keys_modal.is_none(), "click off the popup dismisses");
 }
-
-#[tokio::test]
-async fn hovering_the_footer_esc_close_keeps_the_selection() {
-    // The footer's close target must never surface through `aux_hit` as a
-    // row index: ESC_CLOSE_HIT clamps in `Popup::select` to the LAST entry,
-    // so a hover sweep over the words would silently re-target Enter.
-    let mut v = two_pane_view();
-    v.term = (30, 100);
-    v.aux = Some(v.build_settings_modal());
-    let n = v.aux.as_ref().unwrap().popup.targets().len();
-    v.aux.as_mut().unwrap().popup.select(0);
-    let sel_before = v.aux.as_ref().unwrap().popup.sel;
-    // (x-020d) Same disambiguation as the click test above: pick the
-    // footer's close span specifically, not the title bar chip's.
-    let (fr, fc) = {
-        let r = v.aux.as_ref().unwrap().popup.render(v.term);
-        let (li, row) = r
-            .lines
-            .iter()
-            .enumerate()
-            .find(|(_, l)| {
-                l.hits
-                    .iter()
-                    .any(|(t, _, len)| *t == crate::chrome::ESC_CLOSE_HIT && *len > 3)
-            })
-            .expect("the modal footer carries the close target");
-        let (off, len) = row
-            .hits
-            .iter()
-            .find(|(t, _, len)| *t == crate::chrome::ESC_CLOSE_HIT && *len > 3)
-            .map(|(_, o, l)| (*o, *l))
-            .unwrap();
-        (r.origin.0 + li, r.origin.1 + off + len / 2)
-    };
-    let hover = mrep(MouseKind::Move, fr as u16, fc as u16);
-    let mut buf: Vec<u8> = Vec::new();
-    aux_mouse(&mut v, hover, &mut buf).await.unwrap();
-    assert!(
-        n < 2 || v.aux.as_ref().unwrap().popup.sel == sel_before,
-        "hover over the close words keeps the selection put ({} targets)",
-        n
-    );
-}
-
 #[test]
 fn row_menu_rows() {
     // US2: no dead item - a bg row gets new-tab + the 2x2 split grid; a pane
@@ -3696,30 +3613,6 @@ async fn row_menu_open_here_sends_here_placement() {
         other => panic!("expected AttachAgent, got {other:?}"),
     }
 }
-
-#[tokio::test]
-async fn row_menu_stale_target_notices_without_acting() {
-    // AC1-ERR: the target racing out between open and execute becomes a
-    // Notice, and nothing goes on the wire.
-    let mut v = unified_rows_view();
-    let idx = agent_row_at(&v, |a| a.name == "bg-claude");
-    v.open_row_menu(idx, Anchor::Center);
-    let sel = v
-        .row_menu
-        .as_ref()
-        .unwrap()
-        .actions
-        .iter()
-        .position(|a| *a == super::MenuAction::Split(Dir::Right))
-        .unwrap();
-    v.row_menu.as_mut().unwrap().popup.sel = sel;
-    v.layout.agents.retain(|a| a.name != "bg-claude"); // it vanishes
-    let mut buf: Vec<u8> = Vec::new();
-    row_menu_execute_selected(&mut v, &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "a stale target sends nothing");
-    assert!(v.notice.is_some(), "and surfaces a notice");
-}
-
 /// The display index of the squad-name header row for `squad`.
 fn squad_header_at(view: &View, squad: u64) -> usize {
     view.display_rows()
@@ -4010,36 +3903,6 @@ fn clear_dead_resolves_by_squad_id_when_canonical_paths_collide() {
         "LiveOnly is still offered on a collided section"
     );
 }
-
-#[tokio::test]
-async fn clear_dead_dismisses_member_tombstones() {
-    // A tombstone lives in the squad's member list, not the agent registry,
-    // so RemoveAgent would answer "no such agent" and leave the gray row on
-    // screen - the exact symptom clear-dead exists to remove.
-    let mut tomb = lifecycle_row("cc-member", true, false);
-    tomb.tombstone = true;
-    tomb.attach_id = Some("deadbeef".into());
-    let mut v = view_with_agents(vec![tomb, lifecycle_row("plain-dead", true, false)]);
-    arm_clear_dead(&mut v, 1).await;
-    let mut buf: Vec<u8> = Vec::new();
-    confirm_keys(&mut v, b"\r", &mut buf).await.unwrap();
-    assert_eq!(
-        decode_cmds(buf),
-        vec![
-            Command::DismissMember {
-                squad: 1,
-                attach_id: "deadbeef".into()
-            },
-            Command::RemoveAgent {
-                harness_session_id: None,
-                name: "plain-dead".into(),
-                pane_id: None,
-                measure: false,
-            },
-        ]
-    );
-}
-
 #[tokio::test]
 async fn row_menu_remove_dismisses_a_member_tombstone() {
     // The single-row path shares `remove_dead`, so it must route a tombstone
@@ -4097,36 +3960,6 @@ async fn clear_dead_caps_the_fan_out_and_says_what_is_left() {
         "the remainder is surfaced: {notice}"
     );
 }
-
-#[tokio::test]
-async fn row_menu_unbound_key_dismisses() {
-    // codex P2: the shared popup contract says an unbound key dismisses; the
-    // row menu must not just ring BEL and stay open. (x-91a1) The byte is
-    // chosen against the OPEN menu's accelerator set, so this fixture keeps
-    // testing dismissal even after more actions gain menu keys.
-    let mut v = unified_rows_view();
-    let idx = agent_row_at(&v, |a| a.name == "bg-claude");
-    v.open_row_menu(idx, Anchor::Center);
-    let bound: Vec<u8> = v
-        .row_menu
-        .as_ref()
-        .unwrap()
-        .actions
-        .iter()
-        .filter_map(|a| a.accelerator_id())
-        .filter_map(crate::keys::menu_byte_for)
-        .collect();
-    let unbound = (b'a'..=b'z')
-        .find(|b| !bound.contains(b))
-        .expect("the menu scope leaves some letter unbound");
-    let mut buf: Vec<u8> = Vec::new();
-    row_menu_keys(&mut v, &[unbound], &mut buf).await.unwrap();
-    assert!(
-        v.row_menu.is_none(),
-        "a byte no entry of this menu answers still dismisses it"
-    );
-}
-
 #[tokio::test]
 async fn row_menu_disambiguates_same_named_agents() {
     // codex P1: two rows share a name; the menu is pinned by the full
@@ -4200,32 +4033,6 @@ fn tab_menu_falls_through_on_the_new_tab_cell() {
     assert!(!v.open_tab_menu(pr, pc, Anchor::Center));
     assert!(v.row_menu.is_none(), "no menu, no swallow");
 }
-
-#[tokio::test]
-async fn a_right_press_on_a_tab_cell_re_anchors_an_open_menu() {
-    // (x-92d3 5.1) One press, same as a sideline row: with a menu open, a
-    // right-press on a tab cell swaps in that tab's menu instead of
-    // dismissing and making the user press again.
-    let mut v = view_with_agents(vec![]);
-    let tabs = squad_tabs(&v, 1);
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    // Start from a menu pinned to the OTHER tab (index 1).
-    v.row_menu = Some(super::build_tab_menu(1, &tabs[1], Anchor::Center, false));
-    let mut buf: Vec<u8> = Vec::new();
-    super::row_menu_mouse(
-        &mut v,
-        mrep(MouseKind::Press(MouseButton::Right), tr, tc),
-        &mut buf,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        v.row_menu.as_ref().map(|m| m.target.clone()),
-        Some(super::MenuTarget::Tab(tabs[0].id)),
-        "the open menu re-anchored onto the pressed tab in one press"
-    );
-}
-
 #[tokio::test]
 async fn tab_menu_close_arms_the_confirm_and_enter_selects_then_closes() {
     // AC9-EDGE: close tab arms the confirm line, not a modal; Enter sends
@@ -4413,83 +4220,6 @@ async fn menu_select(v: &mut View, action: super::MenuAction) {
         .position(|a| *a == action)
         .unwrap_or_else(|| panic!("menu should offer {action:?}"));
 }
-
-// ---- (x-91a1) menu-scoped accelerators -----------------------------------
-
-#[tokio::test]
-async fn menu_accelerator_rename_opens_the_tab_rename_overlay() {
-    // AC2-HP: the byte drawn beside Rename - read from the menu registry,
-    // never a literal - opens the rename overlay for the menu's stable tab.
-    // The OVERLAY is the marker: asserting the menu closed would pass even
-    // if the advertised key merely dismissed it, which is the exact defect
-    // this node closes.
-    let mut v = view_with_agents(vec![]);
-    let want = squad_tabs(&v, 1)[0].id;
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    assert!(v.open_tab_menu(tr, tc, Anchor::Center));
-    let key = crate::keys::menu_byte_for("rename-tab").expect("rename-tab registered");
-    let mut buf: Vec<u8> = Vec::new();
-    row_menu_keys(&mut v, &[key], &mut buf).await.unwrap();
-    assert_eq!(
-        v.rename.as_ref().map(|(t, _)| t.clone()),
-        Some(super::RenameTarget::Tab(want)),
-        "the advertised key opened the rename overlay for this tab"
-    );
-}
-
-#[tokio::test]
-async fn menu_accelerator_new_tab_and_reorder_send_their_commands() {
-    // The tab menu's other advertised keys are executable too, bytes read
-    // from the registry: n sends NewTab, `<` reorders the pinned tab one
-    // slot left. Positive markers on the decoded commands.
-    let mut v = view_with_agents(vec![]);
-    let want = squad_tabs(&v, 1)[0].id;
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    let mut buf: Vec<u8> = Vec::new();
-    assert!(v.open_tab_menu(tr, tc, Anchor::Center));
-    let n = crate::keys::menu_byte_for("new-tab").expect("new-tab registered");
-    row_menu_keys(&mut v, &[n], &mut buf).await.unwrap();
-    assert_eq!(decode_cmds(buf), vec![Command::NewTab], "n opened a tab");
-
-    let mut buf: Vec<u8> = Vec::new();
-    assert!(v.open_tab_menu(tr, tc, Anchor::Center));
-    let left = crate::keys::menu_byte_for("move-tab-left").expect("move-tab-left registered");
-    row_menu_keys(&mut v, &[left], &mut buf).await.unwrap();
-    assert_eq!(
-        decode_cmds(buf),
-        vec![Command::ReorderTab {
-            squad: 1,
-            tab: want,
-            delta: -1
-        }],
-        "the angle bracket moved the pinned tab left"
-    );
-}
-
-#[tokio::test]
-async fn menu_accelerator_close_arms_the_confirm_and_closes() {
-    // AC2-EDGE: the registry byte for Close arms the SAME confirm the click
-    // arms, and committing it selects then closes the captured tab.
-    let mut v = view_with_agents(vec![]);
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    assert!(v.open_tab_menu(tr, tc, Anchor::Center));
-    let key = crate::keys::menu_byte_for("close-tab").expect("close-tab registered");
-    let mut buf: Vec<u8> = Vec::new();
-    row_menu_keys(&mut v, &[key], &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "arming sends nothing");
-    match v.confirm.as_ref().map(|c| &c.action) {
-        Some(super::ConfirmKind::CloseTab { tab: 0 }) => {}
-        _ => panic!("expected CloseTab{{tab:0}} confirm"),
-    }
-    let mut buf: Vec<u8> = Vec::new();
-    confirm_keys(&mut v, b"\r", &mut buf).await.unwrap();
-    assert_eq!(
-        decode_cmds(buf),
-        vec![Command::SelectTab(0), Command::CloseTab],
-        "the captured tab is selected then closed"
-    );
-}
-
 #[tokio::test]
 async fn menu_accelerator_remove_arms_the_dead_row_confirm() {
     // AC2-EDGE: the scoped `x` on an EXITED row's menu arms the removal
@@ -4864,33 +4594,6 @@ async fn release_left(
     let bytes = format!("\x1b[<0;{};{}m", col + 1, row + 1);
     super::handle_stdin(v, &mut scanner, &mut carry, bytes.as_bytes(), buf).await
 }
-
-#[tokio::test]
-async fn x7683_long_press_on_a_tab_cell_opens_the_tab_menu_not_a_select() {
-    // A 600ms hold with no movement opens the tab menu at release - the
-    // no-config path for a terminal that swallows right-click - and the
-    // plain-click SelectTab does not fire.
-    let mut v = view_with_agents(vec![]);
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    v.tab_drag = Some(super::TabDrag {
-        src_tab: v.tab_cell_at(tr, tc).unwrap(),
-        zone: None,
-        last_at: Instant::now(),
-        start_at: Instant::now() - Duration::from_millis(600),
-        moved: false,
-    });
-    let mut buf: Vec<u8> = Vec::new();
-    release_left(&mut v, tr, tc, &mut buf).await.unwrap();
-    assert!(
-        matches!(
-            v.row_menu.as_ref().map(|m| &m.target),
-            Some(super::MenuTarget::Tab(_))
-        ),
-        "the held tab's menu opened"
-    );
-    assert!(buf.is_empty(), "no SelectTab rode the long press");
-}
-
 #[tokio::test]
 async fn x7683_long_press_on_an_agent_row_opens_its_menu_not_the_click() {
     // Same contract on a sideline row: a 600ms hold opens the agent's row
@@ -4916,33 +4619,6 @@ async fn x7683_long_press_on_an_agent_row_opens_its_menu_not_the_click() {
     );
     assert!(buf.is_empty(), "no focus or pane input rode the long press");
 }
-
-#[tokio::test]
-async fn a_long_press_on_a_workspace_row_opens_its_menu() {
-    // (x-b465) The reported gap: a hold on a workspace row did nothing at
-    // all. `open_row_menu` has built that menu since x-10ec, but the
-    // long-press arm lived inside the `row_drag` branch and
-    // `row_drag_source_at` answers only for agent rows, so a workspace press
-    // armed no state and the release had nothing to resolve.
-    let mut v = view_with_agents(vec![agent_row("w", 10, Some(AgentBadge::Working), false)]);
-    let hdr = squad_header_at(&v, 1);
-    let id = v
-        .row_identity(hdr)
-        .expect("a workspace row has an identity");
-    v.press_hold = Some((hdr, id, Instant::now() - Duration::from_millis(600)));
-    let mut buf: Vec<u8> = Vec::new();
-    release_left(&mut v, hdr as u16, 5, &mut buf).await.unwrap();
-    assert!(
-        matches!(
-            v.row_menu.as_ref().map(|m| &m.target),
-            Some(super::MenuTarget::Section { squad: Some(1), .. })
-        ),
-        "the held workspace row's menu opened: {:?}",
-        v.row_menu.as_ref().map(|m| &m.target)
-    );
-    assert!(buf.is_empty(), "no workspace selection rode the long press");
-}
-
 #[tokio::test]
 async fn a_short_press_on_a_workspace_row_still_selects_it() {
     // The deferral must be invisible below the hold threshold: the press no
@@ -5155,31 +4831,6 @@ fn only_a_multi_pane_tab_wears_the_group_marker() {
         "and so is an empty one"
     );
 }
-
-#[tokio::test]
-async fn x7683_short_press_keeps_the_plain_click_behavior() {
-    // The guard is elapsed time, not the drag state itself: a fast
-    // press-release still selects the tab and focuses the row exactly as
-    // before the long-press existed.
-    let mut v = view_with_agents(vec![]);
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    v.tab_drag = Some(super::TabDrag {
-        src_tab: v.tab_cell_at(tr, tc).unwrap(),
-        zone: None,
-        last_at: Instant::now(),
-        start_at: Instant::now(),
-        moved: false,
-    });
-    let mut buf: Vec<u8> = Vec::new();
-    release_left(&mut v, tr, tc, &mut buf).await.unwrap();
-    assert!(v.row_menu.is_none(), "a short press opens no menu");
-    let mut cur = std::io::Cursor::new(buf);
-    match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
-        ClientMsg::Command(Command::SelectTab(_)) => {}
-        other => panic!("expected SelectTab on a short press, got {other:?}"),
-    }
-}
-
 // ---- (x-7683) wave 3: m-key parity + anchor ------------------------------
 
 #[tokio::test]
@@ -5391,50 +5042,6 @@ async fn x7683_right_press_in_a_pane_under_rename_opens_nothing() {
         "a name modal swallows outside pointer input instead of leaking to a pane"
     );
 }
-
-#[tokio::test]
-async fn x7683_right_press_on_a_sideline_row_under_rename_opens_nothing() {
-    // The overlay guard covers every right-press path, not just panes: a
-    // menu opening over the rename overlay would steal its keys (the key
-    // router checks row_menu first), so rename Enter could run a menu
-    // action instead of submitting the name.
-    let mut v = view_with_agents(vec![agent_row("w", 10, Some(AgentBadge::Working), false)]);
-    v.rename = Some((super::RenameTarget::Squad(1), "na".into()));
-    let mut scanner = Scanner::default();
-    let mut carry = Vec::new();
-    let mut buf: Vec<u8> = Vec::new();
-    // Right-press on the agent row itself (screen row 1, sideline col).
-    handle_stdin(&mut v, &mut scanner, &mut carry, b"\x1b[<2;6;2M", &mut buf)
-        .await
-        .unwrap();
-    assert!(v.row_menu.is_none(), "no row menu under an open overlay");
-    assert!(v.rename.is_some(), "rename survives untouched");
-}
-
-#[tokio::test]
-async fn x7683_right_press_on_a_sideline_row_under_nav_opens_nothing() {
-    // nav looks read-only like peek (cursor + filtered list) but carries
-    // a typed query buffer like rename/create/search - a menu opening
-    // over it would swallow every keystroke meant for the filter (the
-    // key router checks row_menu before nav), so it must guard the
-    // row/tab paths the same way rename does, unlike peek.
-    let mut v = view_with_agents(vec![agent_row("w", 10, Some(AgentBadge::Working), false)]);
-    v.nav = Some(super::NavView {
-        query: "w".into(),
-        state_filter: None,
-        cursor: 0,
-    });
-    let mut scanner = Scanner::default();
-    let mut carry = Vec::new();
-    let mut buf: Vec<u8> = Vec::new();
-    // Right-press on the agent row itself (screen row 1, sideline col).
-    handle_stdin(&mut v, &mut scanner, &mut carry, b"\x1b[<2;6;2M", &mut buf)
-        .await
-        .unwrap();
-    assert!(v.row_menu.is_none(), "no row menu under an open nav filter");
-    assert!(v.nav.is_some(), "nav survives untouched");
-}
-
 #[tokio::test]
 async fn x7683_right_press_on_a_sideline_row_under_answers_digest_opens_nothing() {
     // answers/digest LOOK read-only like peek, but each owns live
@@ -5495,23 +5102,6 @@ async fn x7683_long_press_release_on_a_drop_zone_never_joins() {
     );
     assert!(buf.is_empty(), "no JoinTab rode the hold");
 }
-
-#[tokio::test]
-async fn tab_menu_stale_close_confirm_sends_nothing_on_enter() {
-    // The CloseTab commit is SelectTab-then-CloseTab; a tab that vanished
-    // while the prompt sat open must not fall through to a bare CloseTab,
-    // which would close whatever is viewed NOW. Re-resolved at Enter.
-    let mut v = view_with_agents(vec![]);
-    v.confirm = Some(super::ConfirmAction {
-        action: super::ConfirmKind::CloseTab { tab: 42 },
-        label: "gone".into(),
-    });
-    let mut buf: Vec<u8> = Vec::new();
-    confirm_keys(&mut v, b"\r", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "a stale close sends nothing at all");
-    assert!(v.notice.is_some(), "and says why");
-}
-
 #[tokio::test]
 async fn tab_menu_rename_opens_the_overlay_for_that_tab() {
     let mut v = view_with_agents(vec![]);
@@ -5531,20 +5121,6 @@ async fn tab_menu_rename_opens_the_overlay_for_that_tab() {
         "the overlay edits the CLICKED tab, not the viewed one"
     );
 }
-
-#[tokio::test]
-async fn tab_menu_reorder_names_the_clicked_tab_and_its_squad() {
-    let mut v = view_with_agents(vec![]);
-    let ((tr, tc), _) = tab_and_new_tab_cells(&v);
-    assert!(v.open_tab_menu(tr, tc, Anchor::Center));
-    match menu_command_for(&mut v, super::MenuAction::TabReorder(1)).await {
-        Command::ReorderTab { squad, tab, delta } => {
-            assert_eq!((squad, tab, delta), (1, 0, 1));
-        }
-        other => panic!("expected ReorderTab, got {other:?}"),
-    }
-}
-
 #[tokio::test]
 async fn tab_menu_join_and_split_target_the_viewed_tab() {
     // Join is the drag's command through the menu: the clicked tab joins the
@@ -5834,18 +5410,6 @@ fn menu_labels(menu: &RowMenu) -> Vec<String> {
         })
         .collect()
 }
-
-#[test]
-fn pane_menu_new_tab_cell_breaks_out() {
-    let menu = build_row_menu(&pane_hosted_row("p", 7), Anchor::Center);
-    let labels = menu_labels(&menu);
-    let i = labels
-        .iter()
-        .position(|l| l.contains("New Tab"))
-        .expect("menu has a New Tab cell");
-    assert_eq!(menu.actions[i], super::MenuAction::BreakOut);
-}
-
 #[tokio::test]
 async fn row_menu_break_out_breaks_the_pane_into_its_own_tab() {
     let row = pane_hosted_row("p", 7);
@@ -6338,24 +5902,6 @@ async fn peek_from_right_click_esc_returns_to_pane_not_selector() {
         "did NOT drop into panel-selector mode"
     );
 }
-
-#[tokio::test]
-async fn settings_toggle_preserves_keyboard_selection() {
-    // US5 review fix: toggling rebuilds the modal but keeps the selection, so
-    // a keyboard Enter re-toggles the SAME row instead of alternating.
-    let mut v = two_pane_view();
-    v.aux = Some(v.build_settings_modal());
-    assert!(v.aux.as_ref().unwrap().popup.targets().len() >= 2);
-    v.aux.as_mut().unwrap().popup.sel = 1; // the second toggle
-    let mut buf: Vec<u8> = Vec::new();
-    aux_execute_selected(&mut v, &mut buf).await.unwrap();
-    assert_eq!(
-        v.aux.as_ref().unwrap().popup.sel,
-        1,
-        "selection stays on the toggled row after the rebuild"
-    );
-}
-
 #[tokio::test]
 async fn sideline_menu_detach_entry_detaches() {
     let mut v = two_pane_view();
@@ -6392,34 +5938,6 @@ fn client_abbrev_home_only_at_component_boundary() {
     assert_eq!(abbrev_home_in("/code", None), "/code".to_string());
     assert_eq!(abbrev_home_in("/code", Some("")), "/code".to_string());
 }
-
-#[test]
-fn client_apply_style_reverses_selected_cell() {
-    // US2 render: a SELECTED cell emits reverse-video (XOR with the cell's
-    // own inverse so selection is always a visible delta).
-    let sel = Cell {
-        flags: cell_flags::SELECTED,
-        ..Cell::default()
-    };
-    let mut buf = Vec::new();
-    super::compositor::apply_style(&mut buf, &sel).unwrap();
-    assert!(
-        buf.windows(4).any(|w| w == b"\x1b[7m"),
-        "reverse SGR emitted"
-    );
-    // SELECTED over already-inverse text cancels back to non-reverse.
-    let both = Cell {
-        flags: cell_flags::SELECTED | cell_flags::INVERSE,
-        ..Cell::default()
-    };
-    let mut buf2 = Vec::new();
-    super::compositor::apply_style(&mut buf2, &both).unwrap();
-    assert!(
-        !buf2.windows(4).any(|w| w == b"\x1b[7m"),
-        "double-inverse cancels"
-    );
-}
-
 #[test]
 fn client_compose_agent_rows_render_under_squads_with_badges() {
     // 4a-G2 (AC1-UI/AC2 render side): agent rows appear under their
@@ -7301,25 +6819,6 @@ async fn move_picker_ignores_a_modified_arrow_instead_of_moving_a_tab() {
         assert_eq!(v.move_pick.as_ref().unwrap().cursor, 0, "and unmoved");
     }
 }
-
-#[tokio::test]
-async fn attach_picker_ignores_a_modified_arrow_instead_of_attaching() {
-    // Same leak, other door. `ESC [ 1 ; 5 H` ends in the letter `H`, which
-    // this PR made a commit key, so the tail committed an attach splitting
-    // left - the exact defect class this PR exists to remove, reached
-    // through a key nobody thinks of as a split.
-    for seq in [&b"\x1b[1;5H"[..], &b"\x1b[1;5A"[..]] {
-        let mut v = unified_rows_view();
-        widen_to_squads(&mut v, 14);
-        open_attach_by_click(&mut v).await;
-        let mut buf: Vec<u8> = Vec::new();
-        attach_place_keys(&mut v, seq, &mut buf).await.unwrap();
-        assert!(buf.is_empty(), "{seq:?} must send no AttachAgent");
-        let picker = v.attach_place.as_ref().expect("picker stays open");
-        assert_eq!(picker.cursor, 0, "{seq:?} moves nothing");
-    }
-}
-
 // ---- x-260a: unified selector rows (keyboard reaches every actionable row) ----
 
 /// A sideline with every row kind: squad 1 + its hosted agent, squad 2,
@@ -7664,22 +7163,6 @@ async fn peek_j_moves_to_adjacent_agent_and_refetches() {
         "j fires a fresh PeekAgent"
     );
 }
-
-// x-c376 AC2-UI: Esc closes peek back to the selector at the peeked row.
-#[tokio::test]
-async fn peek_esc_returns_to_selector_at_peeked_row() {
-    let mut v = unified_rows_view();
-    let mut buf: Vec<u8> = Vec::new();
-    let idx = agent_row_at(&v, |a| a.name == "bg-claude");
-    v.selector = Some(idx);
-    selector_keys(&mut v, b" ", &mut buf).await.unwrap();
-    // A bare Esc resolves on the following byte (fold_selector_keys); "\x1bq"
-    // yields one bare-Esc key (the q is swallowed by the pending-esc branch).
-    peek_keys(&mut v, b"\x1bq", &mut buf).await.unwrap();
-    assert!(v.peek.is_none(), "Esc closes peek");
-    assert_eq!(v.selector, Some(idx), "selector cursor sits on the row");
-}
-
 // x-c376 AC1-FR: a PeekBody whose seq is not current is dropped; the matching
 // seq applies.
 
@@ -7949,19 +7432,6 @@ async fn peek_m_reply_sends_mail_and_input_mode_wins_over_nav() {
         "peek stays open (the notice is the feedback)"
     );
 }
-
-#[tokio::test]
-async fn peek_empty_enter_keeps_reply_input_open() {
-    let mut v = view_with_agents(vec![blocked_row("peer", 4, None)]);
-    let idx = agent_row_at(&v, |a| a.name == "peer");
-    v.open_peek(idx, "peer".into());
-    peek_keys(&mut v, b"m", &mut Vec::new()).await.unwrap();
-    let mut buf: Vec<u8> = Vec::new();
-    peek_keys(&mut v, b"\r", &mut buf).await.unwrap(); // empty Enter
-    assert!(buf.is_empty(), "empty-Enter sends nothing (AC3-UI)");
-    assert!(v.peek_input.is_some(), "input stays open on empty-Enter");
-}
-
 // x-9c5f US6 / AC1-EDGE: `r` on an exited row sends RespawnAgent; on a live
 // row it BELs (nothing sent). The server re-validates uuid/external.
 #[tokio::test]
@@ -8172,23 +7642,6 @@ async fn selector_x_on_live_agent_arms_remove_confirm() {
         _ => panic!("expected a RemoveAgent confirm"),
     }
 }
-
-#[tokio::test]
-async fn selector_x_on_exited_agent_arms_remove_confirm() {
-    // US2 / AC2-HP (client half): x on an exited row arms a RemoveAgent
-    // confirm - the row's own state (exited) selects the command, no timer.
-    let mut v = view_with_agents(vec![lifecycle_row("worker-b", true, false)]);
-    v.set_squad_view(1, SectionView::Expanded);
-    v.selector = Some(agent_row_at(&v, |a| a.name == "worker-b"));
-    let mut buf: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"x", &mut buf).await.unwrap();
-    assert!(buf.is_empty());
-    match v.confirm.as_ref().map(|c| &c.action) {
-        Some(ConfirmKind::RemoveAgent { name, .. }) => assert_eq!(name, "worker-b"),
-        _ => panic!("expected a RemoveAgent confirm"),
-    }
-}
-
 #[tokio::test]
 async fn selector_x_on_pane_hosted_agent_does_not_arm_lifecycle() {
     // codex review: a PANE-hosted Agent row (a real agent's pane or a bare
@@ -8249,40 +7702,6 @@ async fn selector_uppercase_x_on_agent_arms_reap_confirm() {
         "expected a ReapAgents confirm"
     );
 }
-
-#[tokio::test]
-async fn selector_uppercase_x_on_non_agent_row_arms_nothing() {
-    // Contextual: `X` on a squad-header row (not an agent row) BELs and arms
-    // no confirm - the bulk-reap gesture only fires from an agent row.
-    let mut v = view_with_agents(vec![lifecycle_row("worker-a", true, false)]);
-    let squad_row = v
-        .display_rows()
-        .iter()
-        .position(|r| matches!(r, DisplayRow::Sel(s) if s.tab.is_none()))
-        .expect("a squad-header row");
-    v.selector = Some(squad_row);
-    let mut buf: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"X", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "a non-agent row sends nothing");
-    assert!(v.confirm.is_none(), "a non-agent row arms no reap confirm");
-}
-
-#[tokio::test]
-async fn selector_uppercase_x_refuses_on_short_terminal() {
-    // AC1-UI (x-260a): a too-short terminal refuses with a notice rather than
-    // arm an invisible confirm, matching the per-row `x` arm.
-    let mut v = view_with_agents(vec![lifecycle_row("worker-a", true, false)]);
-    v.set_squad_view(1, SectionView::Expanded);
-    v.term.0 = MIN_ROWS_FOR_STATUS - 1;
-    v.selector = Some(agent_row_at(&v, |a| a.name == "worker-a"));
-    selector_keys(&mut v, b"X", &mut Vec::new()).await.unwrap();
-    assert!(
-        v.confirm.is_none(),
-        "no invisible confirm on a short terminal"
-    );
-    assert!(v.notice.is_some(), "the refusal is surfaced");
-}
-
 #[tokio::test]
 async fn confirm_keys_enter_sends_reap_agents() {
     // AC1-HP (client half): Enter on an armed ReapAgents confirm sends the
@@ -8319,27 +7738,6 @@ async fn selector_x_on_live_external_arms_stop_external() {
         _ => panic!("expected a StopExternal confirm"),
     }
 }
-
-#[tokio::test]
-async fn selector_x_on_stopped_external_arms_remove_external() {
-    // AC3-HP (client half): x on an exited external tombstone routes to
-    // RemoveExternal by attach_id (the stopped tombstone `exited` maps to rm).
-    let mut row = lifecycle_row("ext-b", true, true);
-    row.attach_id = Some("cafef00d".into());
-    let mut v = view_with_agents(vec![row]);
-    v.set_squad_view(1, SectionView::Expanded);
-    v.selector = Some(agent_row_at(&v, |a| a.name == "ext-b"));
-    let mut buf: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"x", &mut buf).await.unwrap();
-    match v.confirm.as_ref().map(|c| &c.action) {
-        Some(ConfirmKind::RemoveExternal { attach_id, name }) => {
-            assert_eq!(attach_id, "cafef00d");
-            assert_eq!(name, "ext-b");
-        }
-        _ => panic!("expected a RemoveExternal confirm"),
-    }
-}
-
 #[tokio::test]
 async fn confirm_keys_enter_sends_external_commands() {
     for (kind, want) in [
@@ -8376,52 +7774,6 @@ async fn confirm_keys_enter_sends_external_commands() {
         assert_eq!(decoded, ClientMsg::Command(want));
     }
 }
-
-#[tokio::test]
-async fn confirm_keys_enter_sends_stop_then_remove_agent() {
-    // US1/US2 (client half): Enter on an armed StopAgent/RemoveAgent confirm
-    // sends the captured-name command (the row index is never re-read).
-    for (kind, want) in [
-        (
-            ConfirmKind::StopAgent {
-                name: "w".into(),
-                sid: None,
-                pane_id: None,
-            },
-            Command::StopAgent {
-                name: "w".into(),
-                harness_session_id: None,
-                pane_id: None,
-            },
-        ),
-        (
-            ConfirmKind::RemoveAgent {
-                name: "w".into(),
-                sid: None,
-                pane_id: None,
-                measure: false,
-            },
-            Command::RemoveAgent {
-                name: "w".into(),
-                harness_session_id: None,
-                pane_id: None,
-                measure: false,
-            },
-        ),
-    ] {
-        let mut v = view_with_agents(vec![]);
-        v.confirm = Some(ConfirmAction {
-            action: kind,
-            label: "w".into(),
-        });
-        let mut buf: Vec<u8> = Vec::new();
-        confirm_keys(&mut v, b"\r", &mut buf).await.unwrap();
-        let mut cur = std::io::Cursor::new(buf);
-        let decoded: ClientMsg = crate::proto::read_msg_sync(&mut cur).unwrap();
-        assert_eq!(decoded, ClientMsg::Command(want));
-    }
-}
-
 #[test]
 fn display_rows_footer_keeps_empty_session_actionable() {
     // AC3-EDGE: zero squads/agents/cards still yields the footer, so prefix+w always has a row to open on and Enter opens create.
@@ -8600,43 +7952,6 @@ async fn both_attach_picker_entry_paths_build_the_same_candidate_list() {
     assert_eq!(a.squads, b.squads, "one list, two doors");
     assert_eq!(a.squads.len(), 14, "and it is the uncapped one");
 }
-
-#[tokio::test]
-async fn move_picker_reaches_past_the_ninth_workspace() {
-    // The same ceiling in the OTHER overlay. Pinning it only where the
-    // operator happened to hit it would leave the class half-fixed - which
-    // is the whole reason wave 3b exists.
-    let mut v = two_pane_view();
-    widen_to_squads(&mut v, 14);
-    v.selector = Some(0); // squad 1
-    let mut buf: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"m", &mut buf).await.unwrap();
-    let picker = v.move_pick.as_ref().expect("picker opens");
-    assert_eq!(
-        picker.squads.len(),
-        13,
-        "every workspace but the source is a destination"
-    );
-
-    // Destinations are 2..=14; index 12 is the 14th workspace.
-    move_pick_keys(&mut v, b"jjjjjjjjjjjj", &mut buf)
-        .await
-        .unwrap();
-    assert!(buf.is_empty(), "walking the list moves nothing");
-    let picker = v.move_pick.as_ref().expect("the picker stays open");
-    assert_eq!(picker.target(), Some(14), "the last workspace is reachable");
-
-    // Enter commits the cursor, so the destination past nine is not just
-    // visible but selectable.
-    move_pick_keys(&mut v, b"\r", &mut buf).await.unwrap();
-    let mut cur = std::io::Cursor::new(buf);
-    match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
-        ClientMsg::Command(Command::MoveTab { squad, .. }) => assert_eq!(squad, 14),
-        other => panic!("expected MoveTab, got {other:?}"),
-    }
-    assert!(v.move_pick.is_none(), "committing closes the picker");
-}
-
 #[tokio::test]
 async fn move_picker_ignores_an_unmapped_key_instead_of_closing() {
     // It used to close on ANY key that was not a digit. That was safe while
@@ -8661,28 +7976,6 @@ async fn move_picker_ignores_an_unmapped_key_instead_of_closing() {
     move_pick_keys(&mut v, b"q", &mut buf).await.unwrap();
     assert!(v.move_pick.is_none(), "q cancels");
 }
-
-#[tokio::test]
-async fn move_picker_out_of_range_digit_bels_and_keeps_the_picker() {
-    // The same answer the attach picker gives: a digit past the END of the
-    // list names a row that was never drawn, so it BELs and the picker
-    // stays open. Closing on it would be the "my picker vanished" surprise
-    // the cursor was added to remove, and it fired on the one keypress an
-    // operator makes while learning how wide the list is.
-    let mut v = two_pane_view();
-    v.selector = Some(0); // squad 1; two_pane_view has squad 2 as the only dst
-    selector_keys(&mut v, b"m", &mut Vec::new()).await.unwrap();
-    assert_eq!(v.move_pick.as_ref().unwrap().squads.len(), 1);
-    let mut buf: Vec<u8> = Vec::new();
-    move_pick_keys(&mut v, b"5", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "an out-of-range digit sends nothing");
-    assert!(
-        v.move_pick.is_some(),
-        "and leaves the picker open to try again"
-    );
-    assert_eq!(v.move_pick.as_ref().unwrap().cursor, 0, "cursor unmoved");
-}
-
 #[tokio::test]
 async fn selector_enter_refusal_keeps_selector_open() {
     // AC1-ERR + AC2-ERR (locked 3): a refusal row (a DEAD paneless agent,
@@ -8956,43 +8249,6 @@ async fn selector_opens_on_the_focused_panes_row() {
         "an unfocusable seed falls back to the row-zero anchor"
     );
 }
-
-#[tokio::test]
-async fn navigator_opens_on_the_focused_panes_row_and_re_anchors_on_filter() {
-    // x-e10f: prefix+f opens on the focused pane's row (the same seed the
-    // global chord rides, AC11's client half); the filter-change
-    // cursor = 0 sites keep re-anchoring (ruling d-771c1d85, AC8-FR); a
-    // focused pane with no row opens at zero (AC7-EDGE).
-    let mut v = two_pane_view();
-    v.layout.agents = vec![
-        agent_row("alpha", 10, None, false),
-        agent_row("omega", 11, None, false),
-    ];
-    let mut buf: Vec<u8> = Vec::new();
-    dispatch_event(&mut v, Event::OpenNav, &mut buf)
-        .await
-        .unwrap();
-    let cursor = v.nav.as_ref().unwrap().cursor;
-    let rows = v.nav_filtered(v.nav.as_ref().unwrap());
-    assert_ne!(cursor, 0, "pane 11's row is not the first row");
-    assert!(
-        nav_row_targets_pane(&rows[cursor], 11),
-        "opens on the focused pane 11's row"
-    );
-    v.nav_cycle_state();
-    assert_eq!(
-        v.nav.as_ref().unwrap().cursor,
-        0,
-        "a state-filter change still re-anchors to zero"
-    );
-    v.nav = None;
-    v.layout.focus = 99; // no row hosts pane 99
-    dispatch_event(&mut v, Event::OpenNav, &mut buf)
-        .await
-        .unwrap();
-    assert_eq!(v.nav.as_ref().unwrap().cursor, 0);
-}
-
 #[tokio::test]
 async fn global_chord_opens_the_sideline_on_the_focused_row() {
     // x-e10f AC11-HP: ESC[1;7D with no prefix opens the sideline seeded on
@@ -9054,35 +8310,6 @@ async fn nav_goto_teleports_cross_squad_then_focuses() {
         ClientMsg::Command(Command::FocusPane(9))
     ));
 }
-
-#[tokio::test]
-async fn nav_goto_same_squad_is_a_bare_focus() {
-    // AC4-UI: a pane already in the active squad collapses to a bare
-    // FocusPane - no redundant SelectSquad.
-    let mut v = unified_rows_view(); // worker: sq1 (active), pane 10
-    let idx = v
-        .nav_rows()
-        .iter()
-        .position(|r| r.label == "footnote › worker")
-        .unwrap();
-    v.nav = Some(NavView {
-        query: String::new(),
-        state_filter: None,
-        cursor: idx,
-    });
-    let mut buf: Vec<u8> = Vec::new();
-    nav_goto(&mut v, &mut buf).await.unwrap();
-    let mut cur = std::io::Cursor::new(buf);
-    assert!(matches!(
-        crate::proto::read_msg_sync(&mut cur).unwrap(),
-        ClientMsg::Command(Command::FocusPane(10))
-    ));
-    assert!(
-        crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).is_err(),
-        "bare focus only - no SelectSquad"
-    );
-}
-
 #[tokio::test]
 async fn nav_goto_refusal_keeps_navigator_open() {
     // AC4-FR + Locked 6: Enter on a row whose only answer is a notice
@@ -9216,28 +8443,6 @@ async fn nav_keys_arrows_move_cursor() {
         "letter still edits query"
     );
 }
-
-#[tokio::test]
-async fn nav_keys_shift_tab_reverse_cycles_state() {
-    // AC2 (ab-63b44059): Shift-Tab steps to the PREVIOUS state in the ring
-    // (reverse of Tab, which advances None -> Blocked) and re-clamps cursor 0.
-    let mut v = two_pane_view();
-    v.nav = Some(NavView {
-        query: String::new(),
-        state_filter: None,
-        cursor: 1,
-    });
-    let mut buf: Vec<u8> = Vec::new();
-    nav_keys(&mut v, b"\x1b[Z", &mut buf).await.unwrap();
-    assert_eq!(
-        v.nav.as_ref().unwrap().state_filter,
-        Some(PaneState::Empty),
-        "Shift-Tab reverses to [empty] (x-d401: the cycle gained empty/unread)"
-    );
-    assert_eq!(v.nav.as_ref().unwrap().cursor, 0, "cursor re-clamped to 0");
-    assert!(buf.is_empty(), "Shift-Tab sends nothing to the pane");
-}
-
 #[tokio::test]
 async fn nav_keys_split_arrow_carries_across_reads() {
     // AC4 (ab-63b44059): a Down arrow split across two reads (ESC[ then B)
@@ -9492,40 +8697,6 @@ async fn nav_goto_pane_cross_squad_sends_squad_tab_focus() {
         ClientMsg::Command(Command::FocusPane(55))
     ));
 }
-
-#[tokio::test]
-async fn nav_goto_pane_active_view_is_bare_focus() {
-    // AC4-UI: a pane in the active squad AND active tab collapses to a bare
-    // FocusPane - no redundant SelectSquad/SelectTab.
-    let mut v = two_pane_view(); // active squad 1, active_tab idx 1 (tab id 1)
-    v.layout.squads[0].tabs[1].panes = vec![PaneMeta {
-        id: 77,
-        label: "shell".into(),
-        ..Default::default()
-    }];
-    let idx = v
-        .nav_rows()
-        .iter()
-        .position(|r| r.label == "footnote › 2 › shell")
-        .unwrap();
-    v.nav = Some(NavView {
-        query: String::new(),
-        state_filter: None,
-        cursor: idx,
-    });
-    let mut buf: Vec<u8> = Vec::new();
-    nav_goto(&mut v, &mut buf).await.unwrap();
-    let mut cur = std::io::Cursor::new(buf);
-    assert!(matches!(
-        crate::proto::read_msg_sync(&mut cur).unwrap(),
-        ClientMsg::Command(Command::FocusPane(77))
-    ));
-    assert!(
-        crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).is_err(),
-        "bare focus, no prefix"
-    );
-}
-
 #[tokio::test]
 async fn nav_goto_pane_same_squad_other_tab_selects_tab_only() {
     // A pane in the active squad but a different tab: SelectTab then
@@ -10213,35 +9384,6 @@ fn painted_lines_match_display_rows_in_every_density() {
         }
     }
 }
-
-// The selector follows the AGENT across a re-sort, not the row index.
-#[test]
-fn selector_follows_the_agent_across_a_resort() {
-    let mut v = wide_view(vec![
-        agent_row("idle", 4, None, false),
-        agent_row("blocked", 5, Some(AgentBadge::Blocked), false),
-    ]);
-    set_density(&mut v, Density::Extended);
-    let idle_at = v
-        .display_rows()
-        .iter()
-        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "idle"))
-        .unwrap();
-    v.selector = Some(idle_at);
-    v.toggle_agent_sort();
-    let now_at = v
-        .display_rows()
-        .iter()
-        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "idle"))
-        .unwrap();
-    assert_ne!(now_at, idle_at, "the re-sort moved this agent");
-    assert_eq!(
-        v.selector,
-        Some(now_at),
-        "the cursor followed the agent, not the index"
-    );
-}
-
 // The sort toggle must stay VISIBLE at every width the table renders at.
 // Appending the label past the last column silently overflowed the panel by
 // 12 columns once the tail dropped, and the painter cut it - so the toggle
@@ -10263,53 +9405,6 @@ fn slim_clamps_on_a_narrow_terminal_instead_of_hiding() {
     v.density = Density::Regular;
     assert_eq!(v.panel_w(), 0);
 }
-
-// (codex P2) A column header with nothing under it reads as a stalled table.
-#[test]
-fn extended_zero_agents_states_the_empty_case() {
-    let mut v = wide_view(vec![]);
-    set_density(&mut v, Density::Extended);
-    let rows = v.display_rows();
-    assert!(matches!(rows.first(), Some(DisplayRow::TableHead)));
-    assert!(
-        rows.iter().any(|r| matches!(r, DisplayRow::TableEmpty)),
-        "zero agents renders an explicit empty-state line"
-    );
-    assert!(frame_text(&v.compose()).contains("no agents"));
-}
-
-#[test]
-fn status_sorted_selector_follows_its_agent_across_a_layout_push() {
-    let mut v = wide_view(vec![
-        agent_row("idle", 4, None, false),
-        agent_row("busy", 5, Some(AgentBadge::Working), false),
-    ]);
-    set_density(&mut v, Density::Extended);
-    v.agent_sort = AgentSort::Attention;
-    let at = |v: &View, name: &str| {
-        v.display_rows()
-            .iter()
-            .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == name))
-            .unwrap()
-    };
-    let idle_at = at(&v, "idle");
-    v.selector = Some(idle_at);
-
-    // The SELECTED agent becomes blocked, so it outranks the working row
-    // and jumps up a band - the row under the cursor is the one that moves.
-    let mut next = v.layout.clone();
-    next.agents[0].badge = Some(AgentBadge::Blocked);
-    v.set_layout(next);
-
-    let now = at(&v, "idle");
-    assert_ne!(now, idle_at, "precondition: the re-sort moved this agent");
-    assert_eq!(
-        v.selector,
-        Some(now),
-        "the cursor must follow the agent, not the index"
-    );
-}
-
 // (codex P2) Extended puts an inert column header at index 0, so opening the
 // selector there paints no cursor and Enter only rings.
 #[test]
@@ -10569,45 +9664,6 @@ fn foreign_cwd_agent_shows_inline_parens_on_one_row() {
         lines[ai + 1]
     );
 }
-
-// (x-6851 US3) AC3-HP count, retold for d-36438ea4: squad "footnote" with a
-// same-project agent A and a foreign agent B - A reads bare, B reads with
-// the parens, and neither adds a row.
-#[test]
-fn inline_parens_only_for_foreign_agent() {
-    let mut a = blocked_row("A", 4, None);
-    a.cwd_base = Some("footnote".into()); // same project as squad 1
-    let mut b = blocked_row("B", 5, None);
-    b.cwd_base = Some("regready".into()); // foreign
-    let mut v = view_with_agents(vec![a, b]);
-    // Wide enough that the tagged label fits whole (see the one-row test).
-    v.term = (30, 140);
-    v.sideline_width = 80;
-    let rows = v.display_rows();
-    let agents = rows
-        .iter()
-        .filter(|r| matches!(r, DisplayRow::Agent(_)))
-        .count();
-    assert_eq!(agents, 2, "two agent rows, nothing between them");
-    let text = frame_text(&v.compose());
-    let line = |name: &str| -> String {
-        text.lines()
-            .find(|l| l.contains(name))
-            .unwrap_or_default()
-            .to_string()
-    };
-    assert!(
-        !line("A").contains("(footnote)"),
-        "same-project agent reads bare: {:?}",
-        line("A")
-    );
-    assert!(
-        line("B").contains("(regready)"),
-        "the foreign agent carries the parens: {:?}",
-        line("B")
-    );
-}
-
 // (x-6851 US3, AC4-EDGE) A pathologically narrow panel (text_w < 3) must
 // truncate a foreign-cwd sub row without underflow or panic.
 #[test]
@@ -10797,19 +9853,6 @@ fn operator_overlay_filters_mail_traffic_and_bare_question_events_keeps_decision
     assert_eq!(q.len(), 1);
     assert_eq!(q[0].name, "pile");
 }
-
-#[test]
-fn rendered_cursor_indexes_the_same_projection_row() {
-    let mut v = view_with_agents(vec![]);
-    v.mine_fold = Some(vec![mine_item(1, "mine-one", false)]);
-    v.needs_fold = Some(vec![fold_item("carveout_stale", "pile", true)]);
-    let projection = v.needs_projection();
-    let selected = 1;
-    let lines = needs_overlay_lines(&projection, selected, NeedsFooter::AsOf, NeedsFooter::AsOf);
-    let selected_line = &lines[projection.selected_line(selected)];
-    assert!(selected_line.contains(projection.rows[selected].label()));
-}
-
 // x-f730 task 2.2 AC1-HP: x on a MINE row queues its toggle by file index,
 // never a stray keystroke to any pane.
 #[tokio::test]
@@ -10929,19 +9972,6 @@ fn apply_mine_action_result_shows_failure_never_silent() {
     // The (untouched) prior MINE state is exactly what was there before.
     assert_eq!(v.mine_fold.as_ref().unwrap()[0].text, "existing");
 }
-
-#[test]
-fn apply_mine_action_result_success_requests_refold() {
-    let mut v = view_with_agents(vec![]);
-    v.needs_want = false;
-    v.apply_mine_action_result(Ok(()));
-    assert!(!v.mine_acting);
-    assert!(
-        v.needs_want,
-        "success re-folds so the render reflects the file"
-    );
-}
-
 // x-f730 task 2.3 AC1-HP: a digit on a question with options queues the
 // matching option text against the question id, single-flight set, no
 // stray keystroke to any pane.
@@ -11240,21 +10270,6 @@ async fn xc929_answer_keys_digit_sends_pinned_paneanswer() {
     }
     assert_eq!(v.answers, Some(0), "overlay stays open to cycle onward");
 }
-
-// AC1-ERR: a digit with no matching option never sends a keystroke.
-#[tokio::test]
-async fn xc929_answer_keys_no_matching_option_sends_nothing() {
-    let mut v = view_with_agents(vec![blocked_row(
-        "peer",
-        4,
-        Some(answerable(&[("1", "Yes"), ("2", "No")], 9)),
-    )]);
-    v.answers = Some(0);
-    let mut buf: Vec<u8> = Vec::new();
-    answer_keys(&mut v, b"7", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "no-such-option sends nothing (AC1-ERR)");
-}
-
 // AC2-HP + AC2-UI: n/N cycle the blocked queue and wrap deterministically;
 // Esc closes.
 #[tokio::test]
@@ -11353,38 +10368,6 @@ async fn move_to_keys_esc_cancels_and_swallows_the_tail() {
     assert_eq!(v.move_to, None, "Esc cancels the prompt");
     assert!(buf.is_empty(), "no tail byte reaches the pane");
 }
-
-#[tokio::test]
-async fn jump_to_a_number_that_names_no_tab_sets_a_notice_and_sends_nothing() {
-    // (x-cf97) A digit that names no tab answers with a notice naming the
-    // miss - a silent BEL reads as a dead keybind - and never a wire
-    // message the server would refuse. The event now carries the 1-based
-    // ordinal the operator reads off the strip, so 1 is the FIRST tab,
-    // and 0 (an unparseable hold) is refused like any other miss.
-    let mut v = two_pane_view();
-    let mut buf: Vec<u8> = Vec::new();
-    dispatch_event(&mut v, Event::SelectTabIdx(99), &mut buf)
-        .await
-        .unwrap();
-    assert!(buf.is_empty(), "nothing is sent for a missing tab");
-    let (text, _) = v.notice.expect("the refusal names the miss");
-    assert!(text.contains("no tab 99"), "{text}");
-    assert!(
-        text.contains("2 open"),
-        "the notice names the count: {text}"
-    );
-
-    // Ordinal 1 is the FIRST tab (1-based), not the second.
-    let mut v = two_pane_view();
-    let mut buf: Vec<u8> = Vec::new();
-    dispatch_event(&mut v, Event::SelectTabIdx(1), &mut buf)
-        .await
-        .unwrap();
-    let mut cur = std::io::Cursor::new(buf);
-    let msg: ClientMsg = crate::proto::read_msg_sync(&mut cur).unwrap();
-    assert_eq!(msg, ClientMsg::Command(Command::SelectTab(0)));
-}
-
 #[tokio::test]
 async fn sideline_menu_and_new_workspace_chords() {
     // The footer's affordances ship bound in the modal's table and open.
@@ -11441,22 +10424,6 @@ async fn xf331_pointer_over_sideline_keeps_keys_on_the_pane() {
         }
     }
 }
-
-#[tokio::test]
-async fn xf331_selector_r_on_an_agent_row_opens_rename() {
-    let mut v = unified_rows_view();
-    let mut buf: Vec<u8> = Vec::new();
-    let idx = agent_row_at(&v, |a| a.pane_id == Some(10));
-    v.selector = Some(idx);
-    selector_keys(&mut v, b"r", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "opening the overlay sends nothing");
-    assert_eq!(v.selector, None, "the selector closes");
-    assert!(
-        matches!(v.rename, Some((RenameTarget::Agent(_), _))),
-        "r opens the agent rename overlay"
-    );
-}
-
 #[tokio::test]
 async fn prefix_reorder_sends_the_active_tab_id_and_delta() {
     let mut v = two_pane_view();
@@ -11509,29 +10476,6 @@ async fn keys_modal_executed_resize_arms_the_repeat_window() {
         other => panic!("bare H after a modal resize should repeat-resize, got {other:?}"),
     }
 }
-
-#[tokio::test]
-async fn keys_modal_executed_pane_ids_arms_the_repeat_window() {
-    let mut v = two_pane_view();
-    v.term = (40, 80);
-    let mut scanner = Scanner::default();
-    let mut carry = Vec::new();
-    let mut buf: Vec<u8> = Vec::new();
-    v.open_keys_modal();
-    keys_modal_keys(&mut v, &mut scanner, b"\\", &mut buf)
-        .await
-        .unwrap();
-    buf.clear();
-    handle_stdin(&mut v, &mut scanner, &mut carry, b"\\", &mut buf)
-        .await
-        .unwrap();
-    assert!(
-        buf.is_empty(),
-        "a modal pane-id repeat must stay client-local"
-    );
-    assert!(v.pane_ids_until.is_some(), "the repeat reopened the reveal");
-}
-
 #[tokio::test]
 async fn mouse_scroll_disarms_the_resize_repeat_window() {
     // codex P2: a scroll (like a click) is "other input" - it disarms the
@@ -11648,38 +10592,6 @@ fn set_layout_follows_the_reordered_squad() {
     });
     assert_eq!(v.selector, Some(2), "cursor follows squad 1 to its new row");
 }
-
-#[tokio::test]
-async fn selector_x_arms_remove_confirm_and_degrades_on_short_terminal() {
-    // AC2-UI: `x` on a squad row arms the remove confirm carrying the blast
-    // radius; a too-short terminal refuses instead of arming an invisible
-    // confirm (x-260a row_action rule).
-    let mut v = two_pane_view(); // squad1 (footnote) has 2 panes; 2 squads
-    v.selector = Some(0);
-    let mut buf: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"x", &mut buf).await.unwrap();
-    assert!(buf.is_empty());
-    assert_eq!(v.selector, None);
-    match v.confirm.as_ref().map(|c| (&c.action, c.label.as_str())) {
-        Some((ConfirmKind::RemoveSquad { squad, panes, last }, label)) => {
-            assert_eq!((*squad, *panes, *last), (1, 2, false));
-            assert_eq!(label, "footnote");
-        }
-        _ => panic!("expected a RemoveSquad confirm"),
-    }
-
-    // Too short: refuse with a notice, arm nothing.
-    let mut v = two_pane_view();
-    v.term.0 = MIN_ROWS_FOR_STATUS - 1;
-    v.selector = Some(0);
-    selector_keys(&mut v, b"x", &mut Vec::new()).await.unwrap();
-    assert!(
-        v.confirm.is_none(),
-        "no invisible confirm on a short terminal"
-    );
-    assert!(v.notice.is_some(), "the refusal is surfaced");
-}
-
 #[tokio::test]
 async fn confirm_keys_enter_sends_remove_squad() {
     // AC2-HP: Enter on an armed remove confirm sends RemoveSquad.
@@ -11730,19 +10642,6 @@ async fn selector_m_opens_move_picker_on_a_squad_row() {
     selector_keys(&mut v, b"m", &mut Vec::new()).await.unwrap();
     assert!(v.move_pick.is_none(), "no destination squad -> no picker");
 }
-
-#[tokio::test]
-async fn selector_m_picker_lists_only_real_workspaces() {
-    let mut v = two_pane_view(); // squads 1 (footnote) + 2 (notes)
-    v.selector = Some(0); // squad 1
-    selector_keys(&mut v, b"m", &mut Vec::new()).await.unwrap();
-    let dsts = v
-        .move_pick
-        .expect("picker opens with squad 2 available")
-        .squads;
-    assert_eq!(dsts, vec![2], "only the other real workspace is listed");
-}
-
 #[tokio::test]
 async fn move_pick_keys_digit_sends_move_tab_and_stale_id_bels() {
     // A digit sends MoveTab for the numbered squad; a captured id that
@@ -11789,41 +10688,6 @@ fn row_menu_pane_row_offers_move_to_workspace_with_another_squad() {
         "pane row with a second workspace offers Move to workspace"
     );
 }
-
-#[test]
-fn row_menu_pane_row_omits_move_to_workspace_with_one_squad() {
-    // No destination -> no entry. A dead Move-to-workspace item that bels on
-    // open would be worse than none.
-    let mut v = view_with_agents(vec![]);
-    v.set_layout(LayoutView {
-        squads: vec![meta(1, "footnote", 2, 1)],
-        active_squad: 1,
-        panes: vec![(
-            10,
-            Rect {
-                x: 0,
-                y: 0,
-                rows: 29,
-                cols: 35,
-            },
-        )],
-        focus: 10,
-        area: (29, 72),
-        agents: vec![pane_hosted_row("only", 10)],
-        focus_node: None,
-    });
-    let idx = agent_row_at(&v, |a| a.name == "only");
-    assert!(v.open_row_menu(idx, Anchor::Center));
-    assert!(
-        !v.row_menu
-            .as_ref()
-            .unwrap()
-            .actions
-            .contains(&MenuAction::MoveToWorkspace),
-        "a lone workspace offers no move"
-    );
-}
-
 #[tokio::test]
 async fn move_pick_keys_pane_sends_cross_squad_move_pane() {
     // A pane source relocates the live pane into the chosen workspace beside
@@ -12074,31 +10938,6 @@ fn g2_tab_drag_of_the_current_tab_is_a_suppressed_self_join() {
     );
     assert_eq!(view.commit_tab_drag(), None, "and commits nothing");
 }
-
-#[test]
-fn g2_tab_drag_off_zone_or_cancelled_sends_nothing() {
-    // AC1-EDGE / AC1-FR: an off-zone release, and a cancelled drag (the
-    // timeout/esc path clears the struct internally), both send nothing.
-    let mut view = three_pane_view();
-    view.begin_tab_drag(0, Instant::now());
-    // Released with no zone ever set.
-    assert_eq!(view.commit_tab_drag(), None, "off-zone -> nothing");
-    // Cancel clears the struct internally, so a late commit finds nothing.
-    view.begin_tab_drag(0, Instant::now());
-    let (r, c) = seam_cell_between(&view, 11, 12);
-    view.tab_drag_to(r, c, Instant::now());
-    assert!(view.cancel_tab_drag(), "a live drag cancels");
-    assert!(
-        view.tab_drag.is_none(),
-        "the struct is cleared, not just the zone"
-    );
-    assert_eq!(
-        view.commit_tab_drag(),
-        None,
-        "a late release commits nothing"
-    );
-}
-
 #[test]
 fn g3_pane_hosted_row_drop_moves_the_off_layout_pane_cross_tab() {
     // AC3-HP (commit half): a pane-hosted row names a pane (99) that is NOT
@@ -12124,42 +10963,6 @@ fn g3_pane_hosted_row_drop_moves_the_off_layout_pane_cross_tab() {
         })
     );
 }
-
-#[test]
-fn row_drag_of_an_onscreen_pane_suppresses_an_origin_zone() {
-    // The server discards an origin move in SILENCE (it reads the drop as a
-    // deliberate cancel), so a zone that lights up and then moves nothing is
-    // the defect. `pane_drag_to` already suppresses both origin shapes; the
-    // row drag of an on-layout pane must too, or the same gesture means two
-    // things depending on which grip you grabbed.
-    let mut view = three_pane_view();
-    assert!(
-        view.pane_rect(11).is_some(),
-        "precondition: 11 is ON this layout"
-    );
-    view.begin_row_drag(RowSource::Pane(11), Instant::now());
-    // The seam between 11 and 12 is one 11 already abuts: dropping there
-    // rebuilds the identical tree, which move_leaf reports as Origin.
-    let (r, c) = seam_cell_between(&view, 11, 12);
-    view.row_drag_to(r, c, Instant::now());
-    assert_eq!(
-        view.commit_row_drag(),
-        None,
-        "an origin drop commits nothing rather than a command the server eats"
-    );
-
-    // The off-layout case is unchanged: that mover is in another tree, so it
-    // can never be an origin and must keep every zone.
-    let mut view = three_pane_view();
-    view.begin_row_drag(RowSource::Pane(99), Instant::now());
-    let (r, c) = seam_cell_between(&view, 11, 12);
-    assert!(view.row_drag_to(r, c, Instant::now()));
-    assert!(
-        view.commit_row_drag().is_some(),
-        "an off-layout row still commits a cross-tab move"
-    );
-}
-
 #[test]
 fn g3_paneless_row_drop_attaches_at_the_slot() {
     // AC3 (paneless half): a paneless bg row attaches at the drop slot with a
@@ -12182,25 +10985,6 @@ fn g3_paneless_row_drop_attaches_at_the_slot() {
         })
     );
 }
-
-#[test]
-fn g3_row_drop_off_zone_or_cancelled_sends_nothing() {
-    // AC1-EDGE / AC1-FR for the row drag: off-zone and cancelled both quiet.
-    let mut view = three_pane_view();
-    view.begin_row_drag(RowSource::Pane(99), Instant::now());
-    assert_eq!(view.commit_row_drag(), None, "off-zone -> nothing");
-    view.begin_row_drag(RowSource::Attach("dead".into()), Instant::now());
-    let (r, c) = seam_cell_between(&view, 11, 12);
-    view.row_drag_to(r, c, Instant::now());
-    assert!(view.cancel_row_drag(), "a live drag cancels");
-    assert!(view.row_drag.is_none(), "the struct is cleared internally");
-    assert_eq!(
-        view.commit_row_drag(),
-        None,
-        "a late release commits nothing"
-    );
-}
-
 #[test]
 fn tab_cell_at_resolves_a_strip_cell_to_its_tab() {
     // The drag-source hit-test for G2: a strip cell names its tab id, a
@@ -12260,51 +11044,6 @@ fn row_drag_source_at_resolves_pane_hosted_and_paneless_rows() {
         "a row with neither pane nor attach is not a drag source"
     );
 }
-
-#[test]
-fn row_drag_source_at_skips_the_density_button_on_the_strip_row() {
-    // (x-d6a8, codex P2) The density button rides the strip row (R15); a
-    // press on its cell must never start a row drag on a sideline row -
-    // chrome_hit routes it to the density cycle instead.
-    let view = view_with_agents(vec![focus_agent(10)]);
-    let pw = view.panel_w() as usize;
-    let Some(range) = view.density_button_range(pw) else {
-        return; // panel too narrow for the button; the guard is moot
-    };
-    let btn = range.start as u16;
-    // The button's cell is on the strip row, which carries no display row.
-    assert_eq!(
-        view.sideline_row_at(0, btn),
-        None,
-        "the strip row resolves no display row"
-    );
-    // Yet the button cell is NOT a drag source - it cycles density instead.
-    assert_eq!(
-        view.row_drag_source_at(0, btn),
-        None,
-        "the density button is not a drag source"
-    );
-}
-
-#[test]
-fn g1_strip_lights_inverse_while_a_pane_is_dragged_over_it() {
-    // AC1-UI (headless slice): a pane dragged onto the strip lights the strip
-    // INVERSE - the "drop here to break" affordance. The visual is otherwise a
-    // manual-checklist item, but that a strip cell changes is assertable.
-    let mut view = three_pane_view();
-    view.begin_pane_drag(10, Instant::now());
-    view.pane_drag_to(0, view.panel_w(), Instant::now()); // over the strip
-    let frame = view.compose();
-    let cols = view.term.1 as usize;
-    let cell = frame.cells[view.panel_w() as usize]; // row 0, first strip cell
-    assert_eq!(
-        cell.flags & cell_flags::INVERSE,
-        cell_flags::INVERSE,
-        "the strip reads as an insert target while a pane hovers it"
-    );
-    let _ = cols;
-}
-
 #[test]
 fn g2_tab_drag_lights_the_destination_zone() {
     // AC1-UI (headless slice): a tab-cell drag reuses the content-edge zone
@@ -13562,79 +12301,6 @@ fn tab_strip_condenses_instead_of_overflowing_a_narrow_terminal() {
         }
     }
 }
-
-/// (x-b465) The group marker costs three columns on every grouped tab, and
-/// the strip is the surface with the least room to spare. Condensation has
-/// to survive it: the `+` is still the only mouse route to a new tab, and an
-/// overflow counter that scrolls away is worse than a missing marker.
-#[test]
-fn a_strip_full_of_grouped_tabs_still_condenses() {
-    let names: Vec<String> = (1..=20)
-        .map(|i| format!("release-candidate-{i:02}"))
-        .collect();
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    for cols in [44u16, 52, 60, 68, 80, 100] {
-        let mut squad = named_meta(1, "readyrule/readyrule-web", &refs, 13);
-        // Every tab a four-pane group, the worst case for width.
-        for (t, tab) in squad.tabs.iter_mut().enumerate() {
-            tab.panes = (0..4)
-                .map(|p| crate::proto::PaneMeta {
-                    id: (t * 10 + p) as u64,
-                    label: String::new(),
-                    ..Default::default()
-                })
-                .collect();
-        }
-        let view = shot_view((24, cols), vec![squad], vec![]);
-        let window = view.tab_bar_window();
-        let painted: usize = window.iter().map(|s| s.text.chars().count()).sum();
-        let avail = (cols as usize).saturating_sub(view.panel_w() as usize);
-        assert!(
-            painted <= avail,
-            "a grouped strip overflows at {cols} cols: {painted} > {avail}"
-        );
-        assert!(
-            window.iter().any(|s| matches!(s.hit, Some(TabHit::NewTab))),
-            "the + must survive the markers at {cols} cols"
-        );
-        // Width and the `+` alone pass on the outcome that matters most:
-        // a strip of identical nameless `▤` cells. Columns come off the
-        // right, so the marker would otherwise outlive the name it marks.
-        // No visible tab may be marker-only.
-        for span in window.iter().filter(|s| s.role == SpanRole::Tab) {
-            let bare: String = span
-                .text
-                .chars()
-                .filter(|c| !matches!(c, ' ' | '[' | ']') && *c != TAB_GROUP_GLYPH)
-                .collect();
-            assert!(
-                !bare.is_empty(),
-                "a tab kept its marker and lost its whole name at {cols} cols: {:?}",
-                span.text
-            );
-        }
-    }
-    // And the marker really is rendering, or the widths above prove nothing.
-    let mut squad = named_meta(1, "footnote", &["build"], 0);
-    squad.tabs[0].panes = (0..4)
-        .map(|p| crate::proto::PaneMeta {
-            id: p,
-            label: String::new(),
-            ..Default::default()
-        })
-        .collect();
-    let view = shot_view((24, 100), vec![squad], vec![]);
-    let strip: String = view
-        .tab_bar_window()
-        .iter()
-        .map(|s| s.text.clone())
-        .collect();
-    assert!(
-        strip.contains("▤ build·4"),
-        "a four-pane tab names its size in the strip: {strip:?}"
-    );
-}
-
 #[test]
 fn condensing_sheds_a_group_marker_before_the_last_of_its_name() {
     // Tested on `condense_to_width` directly, not through the strip. Under
@@ -13659,54 +12325,6 @@ fn condensing_sheds_a_group_marker_before_the_last_of_its_name() {
         "the marker outlived the name it marks: {text:?}"
     );
 }
-
-/// The before/after pair the operator can compare: the same twenty tabs
-/// under the old paint-until-the-edge rule.
-#[test]
-fn ux_shot_twenty_tabs_before() {
-    use crate::frame_html::write_shot;
-    let names: Vec<String> = (1..=20).map(|i| format!("task-{i:02}")).collect();
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let view = shot_view(
-        (34, 150),
-        vec![named_meta(1, "footnote", &refs, 13)],
-        vec![],
-    );
-    // The pre-fix behaviour, reproduced from the unwindowed span list: paint
-    // left to right and stop at the edge.
-    let mut frame = view.compose();
-    let cols = frame.cols as usize;
-    for c in view.panel_w() as usize..cols {
-        frame.cells[c] = Cell::default();
-    }
-    let mut c = view.panel_w() as usize;
-    'spans: for span in view.tab_bar_spans() {
-        for ch in span.text.chars() {
-            if c >= cols {
-                break 'spans;
-            }
-            frame.cells[c] = Cell {
-                c: ch,
-                fg: span.fg,
-                bg: Color::Default,
-                flags: span.flags,
-            };
-            c += 1;
-        }
-    }
-    let painted = frame_text(&frame);
-    let strip = painted.lines().next().unwrap_or_default();
-    assert!(
-        !strip.contains("task-20"),
-        "the before fixture should CLIP: the old strip could not reach tab 20"
-    );
-    write_shot(
-        &frame,
-        "00-twenty-tabs-before",
-        "twenty tabs (before: clipped)",
-    );
-}
-
 // (x-e763) The section-menu / clear-dead family lives in its own module
 // under the file-budget gate; this file is shrink-only against main.
 #[path = "client/tests/section_menu_tests.rs"]

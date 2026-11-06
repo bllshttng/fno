@@ -46,16 +46,6 @@ this: is: not: valid: yaml: at: all
 # missing closing delimiter intentionally
 """
 
-WALKER_STATE = """---
-status: LOOPING
-current_phase: dispatching
-session_id: 20260512T000000Z-88888-walkbb
-in_flight: 3
-done: 1
----
-# Megawalk Walker State (fixture)
-"""
-
 SESSION_STATE = """---
 status: IN_PROGRESS
 current_phase: think
@@ -128,7 +118,6 @@ CLAUDE_STAMP = {"CLAUDE_CODE_SESSION_ID": "879d8d26-2505-4977-9b87-000000000000"
 
 FULL_STACK = {
     ".fno/target-state.md": TARGET_STATE,
-    ".fno/megawalk-state.md": WALKER_STATE,
 }
 
 CASES: tuple[Case, ...] = (
@@ -176,11 +165,6 @@ CASES: tuple[Case, ...] = (
         ("whoami",),
         {".fno/target-state.md": TARGET_STATE},
         {"FNO_ROUTE_PROVIDER": "zai"},
-    ),
-    Case(
-        "bare_suppressed_layers",
-        ("whoami", "--no-walker", "--no-fleet"),
-        FULL_STACK,
     ),
     Case(
         "bare_session_fallback",

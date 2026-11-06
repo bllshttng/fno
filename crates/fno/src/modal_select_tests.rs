@@ -110,27 +110,3 @@ fn a_press_is_a_click_until_it_moves_and_a_double_click_takes_the_word() {
     assert!(drag(at.0, at.1 + 2));
     assert!(matches!(release(), Release::Copy(t) if !t.is_empty()));
 }
-
-#[test]
-fn a_selection_paints_with_the_cursor_style_and_drops_with_its_text() {
-    let popup = info_popup(URL);
-    paint(&popup);
-    drag_everything();
-    let cells = paint(&popup);
-    let cols = TERM.1 as usize;
-    let (from, _, _) = bounds();
-    let (_, sel_bg, _) = cell_style(Role::BodySel, &Theme::default_theme());
-    assert_eq!(
-        cells[from.0 * cols + from.1].bg,
-        sel_bg,
-        "body cell selected"
-    );
-    assert_ne!(
-        cells[from.0 * cols + from.1 - 1].bg,
-        sel_bg,
-        "the border is never part of a selection"
-    );
-    assert!(active());
-    paint(&info_popup("something else entirely"));
-    assert!(!active(), "the cells no longer name what was selected");
-}

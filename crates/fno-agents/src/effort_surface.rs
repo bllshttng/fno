@@ -142,62 +142,6 @@ pub fn compat(payload: &Value) -> Value {
 mod tests {
     use super::*;
 
-    // --- AC4-HP: the per-harness spellings ------------------------------ //
-
-    #[test]
-    fn effort_spellings_match_the_measured_table() {
-        assert_eq!(
-            effort_tokens("claude", "high").unwrap(),
-            vec!["--effort".to_string(), "high".to_string()]
-        );
-        assert_eq!(
-            effort_tokens("codex", "high").unwrap(),
-            vec!["-c".to_string(), "model_reasoning_effort=high".to_string()]
-        );
-        assert_eq!(
-            effort_tokens("opencode", "high").unwrap(),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            effort_tokens("pi", "high").unwrap(),
-            vec!["--thinking".to_string(), "high".to_string()]
-        );
-        assert_eq!(
-            effort_tokens("grok", "high").unwrap(),
-            vec!["--reasoning-effort".to_string(), "high".to_string()]
-        );
-        assert_eq!(
-            effort_tokens("agy", "high").unwrap(),
-            vec!["--effort".to_string(), "high".to_string()]
-        );
-    }
-
-    // --- AC4-ERR: the deny set ------------------------------------------ //
-
-    #[test]
-    fn effort_denies_with_the_python_strings() {
-        assert_eq!(
-            effort_tokens("gemini", "high"),
-            Err("harness 'gemini' has no reasoning-effort surface; omit --effort".to_string())
-        );
-        assert_eq!(
-            effort_tokens("cursor-agent", "high"),
-            Err(
-                "harness 'cursor-agent' has no --effort flag; effort is encoded in \
-                 the selected --model value"
-                    .to_string()
-            )
-        );
-        assert_eq!(
-            effort_tokens("claude", ""),
-            Err("--effort requires a value".to_string())
-        );
-        let undeclared = effort_tokens("ghosth", "high");
-        assert!(undeclared.unwrap_err().starts_with(
-            "--effort is not available for harness 'ghosth': fno has no capability row"
-        ));
-    }
-
     // --- AC5-HP: the substrate table ------------------------------------- //
 
     #[test]

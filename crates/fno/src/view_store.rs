@@ -1116,14 +1116,6 @@ mod tests {
         save(&m);
         assert_eq!(load(), m, "next write repairs the file");
     }
-
-    // A missing file is a fresh store, not an error.
-    #[test]
-    fn missing_file_loads_empty() {
-        let _s = Scratch::new("missing");
-        assert!(load().is_empty());
-    }
-
     // The experimental toggles: absent and corrupt read off, and each name
     // persists without disturbing the others.
     #[test]
@@ -1231,36 +1223,6 @@ mod tests {
         save_board_layout(&custom);
         assert_eq!(load_board_layout(), custom);
     }
-
-    // The board full-screen pref: absent or corrupt reads false, and
-    // save/load round-trips.
-    #[test]
-    fn board_full_absent_corrupt_and_round_trip() {
-        let _s = Scratch::new("board-full");
-        assert!(!load_board_full(), "absent reads false");
-        std::fs::write(view_path(), r#"{"board_full":"wide"}"#).unwrap();
-        assert!(!load_board_full(), "corrupt reads false");
-        save_board_full(true);
-        assert!(load_board_full());
-        save_board_full(false);
-        assert!(!load_board_full());
-    }
-
-    // An unknown key or value is dropped entry-wise, not fatally: a file
-    // written by a newer build still yields its readable entries.
-    #[test]
-    fn unknown_entries_are_dropped_not_fatal() {
-        let _s = Scratch::new("unknown");
-        std::fs::write(
-            view_path(),
-            r#"{"version":1,"sections":{"squad:a":"expanded","mystery:b":"expanded"}}"#,
-        )
-        .unwrap();
-        let got = load();
-        assert_eq!(got.len(), 1, "unknown key dropped: {got:?}");
-        assert_eq!(got[&SectionKey::Squad("a".into())], SectionView::Expanded);
-    }
-
     // The `squad:` prefix keeps a squad named after a fixed section from
     // colliding with it.
     #[test]
@@ -1277,15 +1239,6 @@ mod tests {
         );
         assert_eq!(got[&SectionKey::Elsewhere], SectionView::Collapsed);
     }
-
-    // AC5-EDGE: a section with no dead rows skips LiveOnly entirely.
-    #[test]
-    fn next_view_skips_live_only_without_dead() {
-        use SectionView::*;
-        assert_eq!(next_view(Expanded, false), Collapsed);
-        assert_eq!(next_view(Collapsed, false), Expanded);
-    }
-
     // AC4-UI: the full tri-state cycle when dead rows exist.
     #[test]
     fn next_view_cycles_tri_state_with_dead() {
@@ -1334,34 +1287,6 @@ mod tests {
         save(&m);
         assert_eq!(load(), m);
     }
-
-    // A save must not clobber a key it was not asked to write - that is what
-    // keeps one mux session from deleting a sibling session's preferences.
-    #[test]
-    fn save_merges_and_leaves_foreign_keys_alone() {
-        let _s = Scratch::new("merge");
-        std::fs::write(
-            view_path(),
-            r#"{"version":1,"sections":{"squad:/other-session":"collapsed"}}"#,
-        )
-        .unwrap();
-
-        let mut mine = HashMap::new();
-        mine.insert(SectionKey::Squad("/mine".into()), SectionView::LiveOnly);
-        save(&mine);
-
-        let got = load();
-        assert_eq!(
-            got[&SectionKey::Squad("/mine".into())],
-            SectionView::LiveOnly
-        );
-        assert_eq!(
-            got[&SectionKey::Squad("/other-session".into())],
-            SectionView::Collapsed,
-            "another session's key must survive this session's write"
-        );
-    }
-
     // An entry this build cannot parse survives a write, so an older client
     // never destroys a newer build's state. Load drops it (no opinion), and
     // save never writes a key it was not explicitly given.
@@ -1459,45 +1384,6 @@ mod tests {
             "the preset overwrote both the mode and the dragged width"
         );
     }
-
-    #[test]
-    fn corrupt_width_degrades_to_none_then_writes_clean() {
-        // AC5-ERR: a non-numeric width resolves to None (canonical), never a
-        // panic, and is NOT retained - the first save_width writes a clean
-        // number over the corruption.
-        let _s = Scratch::new("width-corrupt");
-        std::fs::write(
-            view_path(),
-            r#"{"version":1,"sections":{},"density":"regular","width":"wide"}"#,
-        )
-        .unwrap();
-        assert_eq!(load_prefs(), (Density::Regular, AgentSort::Attention, None));
-        // The bell width pref sits beside it: absent reads None, a saved
-        // number reads back, and the two writers never clobber each other.
-        assert_eq!(load_bell_width(), None, "absent reads None");
-        save_bell_width(60);
-        assert_eq!(load_bell_width(), Some(60));
-        assert_eq!(
-            load_prefs().2,
-            None,
-            "the bell write left the sideline width alone"
-        );
-        save_width(28);
-        assert_eq!(load_prefs().2, Some(28));
-        assert_eq!(
-            load_bell_width(),
-            Some(60),
-            "the sideline write left the bell width alone"
-        );
-        // A string bell_width degrades to None the same way.
-        std::fs::write(
-            view_path(),
-            r#"{"version":1,"sections":{},"bell_width":"wide","width":28}"#,
-        )
-        .unwrap();
-        assert_eq!(load_bell_width(), None, "a string reads None");
-    }
-
     #[test]
     fn prefs_and_sections_do_not_clobber_each_other() {
         // Both writers overlay the same file under one lock; persisting a

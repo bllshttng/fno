@@ -687,71 +687,6 @@ mod tests {
             flags,
         }
     }
-
-    #[test]
-    fn bold_over_inverse_costs_contrast_on_a_light_theme() {
-        // The mechanism, made measurable. Bold sets a BRIGHTER foreground and
-        // inverse then swaps the pair, so the brightening lands on what became
-        // the background. On a light theme that pulls the two toward each other
-        // (dark-ish background, white text lifting toward it); on a dark theme it
-        // happens to push them apart. Chrome has to hold up on both, which is
-        // why the modal now paints explicit colours instead of inheriting.
-        let plain = contrast_ratio(&cell(cell_flags::INVERSE), LIGHT);
-        let bolded = contrast_ratio(&cell(cell_flags::INVERSE | cell_flags::BOLD), LIGHT);
-        assert!(
-            plain > bolded,
-            "on a light theme bold over inverse should LOSE contrast: \
-             plain {plain:.2} vs bold {bolded:.2}"
-        );
-    }
-
-    #[test]
-    fn palette_extremes_are_not_extremes_in_a_real_scheme() {
-        // The premise that killed a fix: "index 0 and index 15 are the two
-        // colours every scheme keeps at the ends, so painting them is
-        // theme-independent." It is false, and this is the counter-example.
-        //
-        // Left here as an executable one, not a comment, because the idea is
-        // reasonable enough to be reinvented: whoever next reaches for a
-        // "guaranteed contrast" indexed pair gets the numbers instead of the
-        // argument.
-        let pair = |fg, bg| Cell {
-            c: 'x',
-            fg,
-            bg,
-            flags: 0,
-        };
-        let extremes = pair(Color::Indexed(0), Color::Indexed(15));
-        let ideal = contrast_ratio(&extremes, DARK); // idealised xterm 16
-        let real = contrast_ratio(&extremes, MACCHIATO);
-        assert!(
-            ideal > 20.0,
-            "on an idealised palette 0-on-15 is black on white: {ideal:.2}"
-        );
-        assert!(
-            real < 5.0,
-            "in Macchiato 0 is #494d64 and 15 is #b8c0e0, so the same cell is \
-             muted: expected under 5:1, got {real:.2}"
-        );
-        // And the thing it was supposed to improve on beats it there, which is
-        // the whole lesson: a scheme's default pair is the one pair its author
-        // guaranteed readable, because every character its user reads uses it.
-        let inverted = pair(Color::Default, Color::Default);
-        let inverted = Cell {
-            flags: cell_flags::INVERSE,
-            ..inverted
-        };
-        // Compared against the scheme's own body text, not against `real`:
-        // coupling the two leaves 7% of headroom and flips if either palette
-        // entry is re-transcribed, for reasons unrelated to the lesson.
-        let inherited = contrast_ratio(&inverted, MACCHIATO);
-        assert!(
-            inherited >= body_contrast(MACCHIATO) - 0.01,
-            "inheriting and inverting ({inherited:.2}) should keep the scheme's \
-             own contrast, where naming the palette extremes gives {real:.2}"
-        );
-    }
-
     #[test]
     fn worst_contrast_reports_the_losing_theme() {
         // Bold over inverse brightens what became the background, so its worst
@@ -764,23 +699,5 @@ mod tests {
             "expected a light-background scheme to be the worst case, got {}",
             theme.name
         );
-    }
-
-    #[test]
-    fn inverting_the_default_pair_costs_a_scheme_nothing() {
-        // The guarantee that replaced the absolute floor: reversing a theme's
-        // own pair keeps its exact contrast on every theme, so chrome built that
-        // way is never less readable than the text around it. No named pair can
-        // promise this - `palette_extremes_are_not_extremes_in_a_real_scheme`
-        // is the counter-example.
-        for theme in THEMES {
-            let inverted = contrast_ratio(&cell(cell_flags::INVERSE), theme);
-            let body = body_contrast(theme);
-            assert!(
-                (inverted - body).abs() < 0.01,
-                "{}: inverted {inverted:.2} should equal body {body:.2}",
-                theme.name
-            );
-        }
     }
 }

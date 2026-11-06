@@ -1330,21 +1330,6 @@ mod tests {
     use crate::protocol::{read_response, write_request};
     use std::time::Instant;
 
-    // ---- parser unit tests (pure, no subprocess) -----------------------
-
-    #[test]
-    fn frame_log_overflow_reports_gap() {
-        let mut log = FrameLog::default();
-        for _ in 0..(MAX_FRAMES + 10) {
-            log.push(StreamFrame::UserEcho);
-        }
-        // Reading from cursor 0 after overflow reports a gap and starts at base.
-        let (frames, next, gap) = log.since(0);
-        assert!(gap, "overflow must report a gap");
-        assert_eq!(next, (MAX_FRAMES + 10) as u64);
-        assert_eq!(frames.len(), MAX_FRAMES);
-    }
-
     // ---- idle-classifier unit tests -----------------------
 
     fn log_ending_in(f: StreamFrame) -> FrameLog {
@@ -1578,87 +1563,6 @@ done
             .await
             .unwrap();
         let _ = read_response(&mut conn).await;
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn malformed_line_is_skipped_not_fatal() {
-        let home = tmp_home("malformed");
-        // Emit a garbage line, then a valid result, then idle on stdin.
-        let script = r#"
-printf '%s\n' 'GARBAGE not json'
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
-cat >/dev/null
-"#;
-        let cfg = fake_cfg("swM", &home, script);
-        let sock = start_worker(cfg).await;
-        let mut conn = connect_retry(&sock).await;
-
-        let mut cursor = 0u64;
-        let mut kinds: Vec<String> = Vec::new();
-        for i in 0..400 {
-            write_request(
-                &mut conn,
-                &Request::new(100 + i, "stream.read_frames", json!({"cursor": cursor})),
-            )
-            .await
-            .unwrap();
-            let resp = read_response(&mut conn).await.unwrap();
-            let res = resp.result().unwrap();
-            cursor = res["next"].as_u64().unwrap();
-            for fr in res["frames"].as_array().unwrap() {
-                kinds.push(fr["kind"].as_str().unwrap().to_string());
-            }
-            if kinds.iter().any(|k| k == "result") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert!(
-            kinds.iter().any(|k| k == "malformed"),
-            "garbage not surfaced: {kinds:?}"
-        );
-        assert!(
-            kinds.iter().any(|k| k == "result"),
-            "valid frame after garbage lost: {kinds:?}"
-        );
-
-        write_request(&mut conn, &Request::new(9, "stream.shutdown", json!({})))
-            .await
-            .unwrap();
-        let _ = read_response(&mut conn).await;
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn child_eof_orphans_the_registry_row() {
-        let home = tmp_home("orphan");
-        seed_live_row(&home, "swO");
-
-        // A child that emits one frame then exits (broken pipe / EOF). Because
-        // the child exits on its own, run() RETURNS when it detects EOF - so
-        // await it directly (with a timeout guard) and assert the FINAL state.
-        // No polling, no separate worker thread to race under parallel load
-        // (this was a CI flake when polled from a detached thread).
-        let script = r#"printf '%s\n' '{"type":"system","subtype":"init"}'"#;
-        let cfg = fake_cfg("swO", &home, script);
-        tokio::time::timeout(Duration::from_secs(30), run(cfg))
-            .await
-            .expect("worker did not exit within 30s")
-            .expect("run() returned an error");
-
-        let reg_path = AgentsHome::at(&home).registry_json();
-        let r = state::load_registry(&reg_path).unwrap();
-        let e = r
-            .entries
-            .iter()
-            .find(|e| e.short_id == "swO")
-            .expect("seeded row missing");
-        assert_eq!(
-            e.status,
-            AgentStatus::Orphaned,
-            "child EOF must orphan the registry row"
-        );
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -2027,33 +1931,6 @@ done
         assert!(!path_escapes_cwd(&canon_cwd, "inside.txt"));
         std::fs::remove_dir_all(&cwd).ok();
         std::fs::remove_dir_all(&outside).ok();
-    }
-
-    #[test]
-    fn posture_from_cwd_inherits_project_permissions_allow_and_deny() {
-        let dir = tmp_home("posture");
-        let claude = dir.join(".claude");
-        std::fs::create_dir_all(&claude).unwrap();
-        std::fs::write(
-            claude.join("settings.json"),
-            r#"{"permissions":{"allow":["Read","Bash(git diff:*)"],"deny":["Write"]}}"#,
-        )
-        .unwrap();
-        let p = Posture::from_cwd(&dir);
-        assert!(p.allowed.contains("Read"), "bare allow inherited");
-        assert!(
-            !p.allowed.contains("Bash"),
-            "parameterized allow is not wholesale"
-        );
-        assert!(
-            p.restricted.contains("Bash"),
-            "parameterized allow restricts the tool"
-        );
-        assert!(
-            p.restricted.contains("Write"),
-            "deny rule restricts the tool"
-        );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

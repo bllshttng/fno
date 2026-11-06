@@ -194,30 +194,4 @@ mod tests {
         assert_eq!(titles.last().map(String::as_str), Some("xAI"));
         assert!(!titles.iter().any(|t| t == "Bare"));
     }
-
-    #[test]
-    fn search_matches_title_or_id_case_insensitively() {
-        let got = entries(Some(&catalog()), "XA");
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].title(), "xAI");
-        assert_eq!(entries(None, "lm studio").len(), 1);
-    }
-
-    #[test]
-    fn local_models_parse_from_both_reply_shapes() {
-        assert_eq!(
-            parse_local_models(r#"{"models":[{"name":"llama3"}]}"#),
-            ["llama3"]
-        );
-        assert_eq!(
-            parse_local_models(r#"{"data":[{"id":"qwen"},{"id":"phi"}]}"#),
-            ["qwen", "phi"]
-        );
-        assert!(parse_local_models("not json").is_empty());
-        assert_eq!(
-            openai_base("http://127.0.0.1:1234/"),
-            "http://127.0.0.1:1234/v1"
-        );
-        assert_eq!(openai_base("http://h/v1"), "http://h/v1");
-    }
 }

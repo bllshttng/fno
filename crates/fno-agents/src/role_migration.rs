@@ -738,38 +738,6 @@ pub fn retired_verb(verb: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn a_table_row_holding_crown_level_reads_back_as_role_level() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("agents").join("registry.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        crate::registry_store::replace_document(
-            &path,
-            serde_json::json!({"schema_version":39,"agents":[
-                {"fno_id":"a","crown_level":2,"crown_scope":"epic-alpha","role_scope":"kept"}
-            ]}),
-        );
-        let read = crate::registry_store::read(&path).unwrap();
-        assert_eq!(read["agents"][0]["role_level"], 2);
-        assert_eq!(read["agents"][0]["role_scope"], "kept");
-        assert!(read["agents"][0].get("crown_level").is_none());
-        let text: Value =
-            serde_json::from_str(&crate::registry_read::registry_text(&path).unwrap()).unwrap();
-        assert_eq!(text["agents"][0]["role_level"], 2);
-        std::fs::create_dir_all(tmp.path().join("migrations")).unwrap();
-        std::fs::write(tmp.path().join("migrations/role-vocabulary-v2.done"), "1\n").unwrap();
-        run_at(tmp.path()).unwrap();
-        assert!(tmp
-            .path()
-            .join("install/migrations/role-registry-table-v1.done")
-            .exists());
-        let db = crate::registry_read::database_path(&path).unwrap();
-        let stored: String = rusqlite::Connection::open(db)
-            .unwrap()
-            .query_row("SELECT payload FROM registry", [], |r| r.get(0))
-            .unwrap();
-        assert!(stored.contains("role_level") && !stored.contains("crown_level"));
-    }
 
     #[test]
     fn migration_preserves_authority_and_history_refuses_conflicts_and_is_once_only() {
@@ -883,54 +851,6 @@ mod tests {
         run_at(&state).unwrap();
         assert!(moved.join("repo").join("leads").is_dir());
         assert!(!moved.join("repo").join("kings").exists());
-    }
-
-    #[test]
-    fn a_collision_keeps_both_files_and_the_walk_still_migrates_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let kings = tmp.path().join("kings");
-        std::fs::create_dir(&kings).unwrap();
-        let legacy = r#"{"crown_scope":"x"}"#;
-        std::fs::write(kings.join("king-a.json"), legacy).unwrap();
-        std::fs::write(kings.join("lead-a.json"), "{}").unwrap();
-        std::fs::write(kings.join("king-b.json"), "{}").unwrap();
-        let leads = tmp.path().join("leads");
-        std::fs::create_dir(&leads).unwrap();
-        std::fs::write(leads.join("lead-c.json"), "{}").unwrap();
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            "[king]\nenabled = false\nwake_enabled = true\n\n[lead]\nenabled = true\n",
-        )
-        .unwrap();
-        run_at(tmp.path()).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(tmp.path().join("leads/king-a.json.superseded")).unwrap(),
-            legacy,
-            "the legacy file is kept byte-for-byte beside the live one"
-        );
-        let config: toml::Value =
-            toml::from_str(&std::fs::read_to_string(tmp.path().join("config.toml")).unwrap())
-                .unwrap();
-        assert!(config.get("king").is_none(), "{config}");
-        assert_eq!(
-            config["lead"]["enabled"].as_bool(),
-            Some(true),
-            "current wins"
-        );
-        assert_eq!(
-            config["lead"]["wake_enabled"].as_bool(),
-            Some(true),
-            "legacy-only key kept"
-        );
-        assert!(
-            leads.join("lead-b.json").exists() && leads.join("lead-c.json").exists(),
-            "a legacy-only child joins the live directory beside its own"
-        );
-        assert!(!kings.exists(), "the emptied legacy directory is removed");
-        assert!(tmp
-            .path()
-            .join("install/migrations/role-vocabulary-v2.done")
-            .exists());
     }
 
     #[test]

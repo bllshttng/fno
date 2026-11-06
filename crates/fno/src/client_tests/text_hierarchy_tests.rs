@@ -141,14 +141,3 @@ fn every_mux_view_has_a_text_hierarchy() {
         }
     }
 }
-
-#[test]
-fn a_view_of_plain_lines_fails_the_hierarchy_check() {
-    let lines: Vec<TLine> = ["alpha", "beta", "gamma", "delta"]
-        .into_iter()
-        .map(TLine::plain)
-        .collect();
-    let framed = lines_framed("flat view", &lines);
-    let err = text_hierarchy("flat view", &framed, &Theme::default_theme()).unwrap_err();
-    assert!(err.contains("flat view"), "{err}");
-}

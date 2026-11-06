@@ -1252,7 +1252,11 @@ fn payload_for_session<C: CursorAccess>(
         Some(stamp) => (Some(stamp), Some("last-entry".to_string())),
         None => age_fallback(&session, path.as_deref()),
     };
-    let age: Option<f64> = epoch.map(|stamp| (now_s - stamp).max(0.0));
+    // The age counts awake time only: an activity stamp that predates this
+    // boot idles from the boot, not through the powered-off stretch.
+    let boot_ms = crate::host_boot_epoch_ms();
+    let age: Option<f64> =
+        epoch.map(|stamp| crate::awake_idle_from(stamp as i64, now_s as i64, boot_ms) as f64);
     let actor = summary.last_actor();
     let role = actor.map(|a| a.role.as_str());
     let state = classify_signal(

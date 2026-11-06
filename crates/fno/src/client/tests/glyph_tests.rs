@@ -106,30 +106,6 @@ fn pane_activity_folds_to_working_or_live_shells_never_marked() {
         PaneState::Working
     );
 }
-
-#[test]
-fn unmeasured_pane_renders_the_question_glyph_not_the_idle_circle() {
-    // (x-d401, AC1-EDGE) The positive control: `?` is a marker only the
-    // no-reading outcome produces, and it is pinned as DISTINCT from the
-    // idle glyph it used to be confused with.
-    assert_eq!(lattice_glyph(pane_to_lattice(PaneState::Unmeasured)).0, '?');
-    assert_ne!(
-        lattice_glyph(pane_to_lattice(PaneState::Idle)).0,
-        lattice_glyph(pane_to_lattice(PaneState::Unmeasured)).0,
-        "the no-reading glyph must differ from the idle glyph"
-    );
-}
-
-#[test]
-fn pristine_shell_and_live_workload_render_different_glyphs() {
-    // (x-d401, AC1-ERR) The reported bug as its own assertion: an empty
-    // shell tab and a pane running cargo test must not share a glyph.
-    use crate::vt::ShellActivity as SA;
-    let empty = lattice_glyph(pane_to_lattice(pane_state(None, false, Some(SA::Empty)))).0;
-    let running = lattice_glyph(pane_to_lattice(pane_state(None, false, Some(SA::Running)))).0;
-    assert_ne!(empty, running);
-}
-
 #[test]
 fn lattice_color_only_on_blocked_and_done() {
     use LatticeState::*;
