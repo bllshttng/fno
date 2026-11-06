@@ -775,6 +775,11 @@ numbers.execute("CREATE TABLE IF NOT EXISTS fno_numbers (kind TEXT NOT NULL, num
                 "PRIMARY KEY (store, kind, num), UNIQUE (store, key))")
 for num, key in ((87, "q-demo-a1"), (88, "q-demo-b2")):
     numbers.execute("INSERT OR IGNORE INTO fno_numbers VALUES ('q', ?, ?, 'local', 'bb16', 0)", (num, key))
+# Node numbers too, so the board cards show the number beside the hash the
+# way the primary mints them in production.
+for num, (nid,) in enumerate(numbers.execute("SELECT id FROM nodes ORDER BY created_at, ordinal, id"), 1):
+    kind = "n:" + nid.split("-", 1)[0]
+    numbers.execute("INSERT OR IGNORE INTO fno_numbers VALUES (?, ?, ?, 'local', 'bb16', 0)", (kind, num, nid))
 numbers.commit()
 numbers.close()
 PY
