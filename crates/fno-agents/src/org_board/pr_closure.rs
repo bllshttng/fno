@@ -428,7 +428,7 @@ mod tests {
             _ => None,
         };
         assert_eq!(render_with(["x-aaaa"], &labels), "Fixes x-5555 (x-aaaa)");
-        assert_eq!(render_with(["x-aaaa"], &labels), "Fixes x-aaaa");
+        assert_eq!(render_with(["x-bbbb"], &labels), "Fixes x-bbbb");
     }
 
     #[test]

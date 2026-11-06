@@ -1770,6 +1770,7 @@ gate rather than something to annotate in the file:\n  {}",
                 let (fixed, _) = fix(&text, &surface);
                 if fixed != text {
                     if let Err(e) = std::fs::write(path, &fixed) {
+                        eprintln!("style: could not write {path}: {e}");
                         return 1;
                     }
                 }

@@ -704,7 +704,11 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) VALUES ('n:x', 5166, 'x-9999', 'local', 'h', 0)",
+            "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) VALUES ('n:x', 5555, 'x-9999', 'local', 'h', 0)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) VALUES ('n:x', 6666, 'x-aaaa', 'local', 'h', 0)",
             [],
         ).unwrap();
         // The exact tier wins: a legacy all-digit hash stays itself even
