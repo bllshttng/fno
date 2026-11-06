@@ -1769,7 +1769,7 @@ mod tests {
             1,
             true,
         );
-        let got = entry["matching_rows"][0]["data"]["head_sha"];
+        let got = &entry["matching_rows"][0]["data"]["head_sha"];
         assert_eq!(got.as_str(), Some("cccc"));
     }
 
