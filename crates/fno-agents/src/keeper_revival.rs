@@ -461,14 +461,16 @@ where
     // The session id the CHILD argv carries, parsed exactly as the keeper
     // parses its own Identify reply. A create form that carries no id (agy's
     // bare launch since 6805ab42ac) yields None, and identity rests on the
-    // keeper pid alone; an id-carrying form must name that id.
+    // keeper pid alone; an answered id names the argv's id or the claimed
+    // session (a revival's argv can lag the row it races).
     let expected_sid = crate::pane_keeper::session_id_from_argv(&spec.argv);
     loop {
         if let crate::daemon::KeeperProbe::Answered(reply) = probe(&spec.sock) {
             let (answered_sid, keeper_pid, child_pid) = reply_parts(&reply);
             match (answered_sid, keeper_pid) {
                 (Some(s), Some(p))
-                    if Some(s.as_str()) == expected_sid.as_deref() && p == launched =>
+                    if (Some(s.as_str()) == expected_sid.as_deref() || s == spec.session_id)
+                        && p == launched =>
                 {
                     return Ok((
                         launched,
