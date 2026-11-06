@@ -1411,7 +1411,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     svg.setAttribute("width", String(svgWidth));
     svg.setAttribute("height", String(svgHeight));
     svg.setAttribute("viewBox", "0 0 " + svgWidth + " " + svgHeight);
-    svg.setAttribute("role", "img");
+    svg.setAttribute("role", "group");
     svg.setAttribute("aria-label", "Backlog family graph rooted at " + graph.root);
     const defs = document.createElementNS(svg.namespaceURI, "defs");
     const marker = document.createElementNS(svg.namespaceURI, "marker");

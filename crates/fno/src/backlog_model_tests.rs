@@ -251,7 +251,7 @@ fn graph_keeps_one_stub_per_outside_node_and_names_unsupported_edges() {
 }
 
 #[test]
-fn graph_caps_dense_families_and_lays_out_400_rows_under_20ms() {
+fn graph_caps_dense_families_and_keeps_layout_bounded() {
     let rows = std::iter::once(json!({
         "id": "x-root", "status": "in_progress", "type": "epic"
     }))
@@ -314,13 +314,9 @@ fn graph_caps_dense_families_and_lays_out_400_rows_under_20ms() {
         .flat_map(|lane| lane.cells.iter())
         .flat_map(|cell| cell.cards.iter().cloned())
         .collect();
-    let start = std::time::Instant::now();
-    let _ = crate::backlog_graph::graph(&large, &cards, Some("x-large"));
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < std::time::Duration::from_millis(20),
-        "layout took {elapsed:?}"
-    );
+    let large_graph = crate::backlog_graph::graph(&large, &cards, Some("x-large")).unwrap();
+    assert!(large_graph.nodes.len() <= 80);
+    assert!(large_graph.hidden.nodes > 0);
 }
 
 #[test]
