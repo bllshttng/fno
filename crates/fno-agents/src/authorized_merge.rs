@@ -1045,9 +1045,11 @@ fn decide_observed<P: Probes>(
     let strategy = probes.strategy(cwd);
     // Reaching here with `approved == Some(false)` means the only door through
     // `authority_refusal` was a Granted head grant, so the receipt names it.
+    // The grant is the user's voice whichever door recorded it: an operator
+    // row, or a chat_attested row carrying the user's own words.
     let merge_grant = (request.approved == Some(false)).then(|| {
         format!(
-            "operator head grant {}",
+            "user head grant {}",
             facts.head_sha.chars().take(8).collect::<String>()
         )
     });
@@ -1511,13 +1513,15 @@ pub(crate) fn posture_is_default_off(approved: Option<bool>, source: Option<&str
 }
 
 /// The authority fold, in the order init folds it. A per-run refusal outranks
-/// every grant - EXCEPT the head-scoped operator grant, the one sanctioned
-/// remedy for a per-run no-merge, recorded out-of-band by a person at a
-/// terminal through `fno backlog decide --authority operator` and never by a
-/// session (`decide/__init__.py:297` refuses operator authority from agent
-/// sessions). The grant clears only the per-run layer; the live-config and
-/// posture-floor arms still run, and a push to a new head invalidates the
-/// grant by subject construction.
+/// every grant - EXCEPT the head-scoped user grant, one of two sanctioned
+/// remedies for a per-run no-merge: an operator row recorded out-of-band by
+/// a person at a terminal through `fno backlog decide --authority operator`
+/// (never by a session - `decide/__init__.py:297` refuses operator authority
+/// from agent sessions), or the user's own chat approval recorded at the
+/// head subject through the law door, whose `chat_attested` row carries the
+/// user's words (`merge_grant::chat_grant_command`). The grant clears only
+/// the per-run layer; the live-config and posture-floor arms still run, and
+/// a push to a new head invalidates the grant by subject construction.
 fn authority_refusal<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -1590,11 +1594,14 @@ fn authority_refusal<P: Probes>(
                 let (state_word, detail) = match &other {
                     crate::merge_grant::HeadGrant::Absent => (
                         "absent",
-                        "no operator row records a grant at this head".to_string(),
+                        "no row carrying the user's ruling records a grant at this head"
+                            .to_string(),
                     ),
                     crate::merge_grant::HeadGrant::Conflict => (
                         "conflicting",
-                        "operator rows at this head disagree or carry no decision".to_string(),
+                        "rows carrying the user's ruling at this head disagree or carry no \
+                         decision"
+                            .to_string(),
                     ),
                     crate::merge_grant::HeadGrant::Unreadable(d) => ("unreadable", d.clone()),
                     crate::merge_grant::HeadGrant::Granted => unreachable!("matched above"),
@@ -1603,9 +1610,15 @@ fn authority_refusal<P: Probes>(
                     "per_run_no_merge",
                     format!(
                         "per-run no-merge (manifest auto_merge_approved is not true; \
-                         auto_merge_source: {source}); the operator head grant reads \
-                         {state_word} ({detail}); sanctioned override: {}",
+                         auto_merge_source: {source}); the user head grant reads \
+                         {state_word} ({detail}); sanctioned overrides: {} (a person at a \
+                         terminal), or the user's own chat approval recorded at this head: {}",
                         crate::merge_grant::attended_grant_command(
+                            &slug,
+                            facts.number as i64,
+                            &facts.head_sha
+                        ),
+                        crate::merge_grant::chat_grant_command(
                             &slug,
                             facts.number as i64,
                             &facts.head_sha

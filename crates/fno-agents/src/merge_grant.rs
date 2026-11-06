@@ -413,9 +413,11 @@ pub fn parse_head_grant_subject(subject: &str) -> Option<(String, i64, String)> 
 }
 
 /// The attended command an operator runs in their own terminal to record the
-/// grant. Only that door can carry it: `decide/__init__.py` refuses
-/// `--authority operator` from any agent session, so a worker can never mint
-/// one, and this string is what a per-run refusal names as its one remedy.
+/// grant. One of two sanctioned doors: this one (a person at a terminal -
+/// `decide/__init__.py` refuses `--authority operator` from any agent
+/// session, so a worker can never mint one), or [`chat_grant_command`], the
+/// user's own chat approval recorded through the law door. This string is
+/// one remedy a per-run refusal names.
 pub fn attended_grant_command(repo_slug: &str, pr: i64, head: &str) -> String {
     format!(
         "fno backlog decide '{}' '{}' --authority operator",
@@ -424,21 +426,64 @@ pub fn attended_grant_command(repo_slug: &str, pr: i64, head: &str) -> String {
     )
 }
 
+/// The command a session runs to record the user's own chat approval as the
+/// head grant: the law door records a `chat_attested` row, and the
+/// rationale's `user in chat:` words are the evidence the user spoke
+/// (`decision_index::is_user_ruling`). The second sanctioned door for a
+/// per-run no-merge; [`head_grant_status`] counts the row it writes. A
+/// session may only run it with the user's actual words, never its own
+/// ruling dressed up as chat.
+pub fn chat_grant_command(repo_slug: &str, pr: i64, head: &str) -> String {
+    format!(
+        "fno inbox law set '{}' '{}' --rationale 'user in chat: <the exact words the user wrote>'",
+        head_grant_subject(repo_slug, pr, head),
+        MERGE_GRANT_DECISION
+    )
+}
+
 /// The head-grant reading over one `decisions` payload. Same polarity as the
-/// durable verdict: only a positively affirmative operator row set grants.
+/// durable verdict: only a positively affirmative row carrying the user's
+/// ruling grants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeadGrant {
-    /// Every operator row at the subject carries `MERGE_GRANT_DECISION`, so
-    /// identical duplicates read granted once (idempotent re-records).
+    /// Every row that carries the user's ruling at the subject carries
+    /// `MERGE_GRANT_DECISION`, so identical duplicates read granted once
+    /// (idempotent re-records).
     Granted,
-    /// No operator row at the subject. `chat_attested` and unattributed rows
-    /// are already filtered out by `operator_law_rows`.
+    /// No row carrying the user's ruling at the subject. Bare
+    /// `chat_attested` rows and unattributed rows are filtered out by
+    /// [`user_ruling_rows`].
     Absent,
-    /// Operator rows disagree, or one carries no readable decision.
+    /// Rows carrying the user's ruling disagree, or one carries no readable
+    /// decision.
     Conflict,
     /// No payload (nonzero exit, dead probe) or a payload without the
     /// `decisions` array. Never reads as either grant or absence.
     Unreadable(String),
+}
+
+/// The rows that may carry the user's merge grant, over one `fno backlog
+/// decisions --json` payload; `None` when the payload carries no `decisions`
+/// array (a shape the CLI never emits). A row qualifies when
+/// `decision_index::is_user_ruling` holds: an operator row, or a
+/// `chat_attested` row storing the user's words (a `quote`, or a rationale
+/// that starts `user in chat:`). The words are the trust anchor - any
+/// session can mint a bare `chat_attested` row, so only the user's own words
+/// prove the user spoke. The lane and `ts` half of `is_user_ruling` is
+/// already applied by the `--lane law` query the caller runs. Unlike
+/// `operator_law_rows` (the waiver reader), this filter accepts the
+/// chat-attested door: a merge grant asserts the user approved, and their
+/// exact words carry that fact, while a waiver asserts a person at a
+/// terminal read the diff.
+fn user_ruling_rows(stdout: &[u8]) -> Option<Vec<Value>> {
+    let parsed = serde_json::from_slice::<Value>(stdout).ok()?;
+    let rows = parsed.get("decisions")?.as_array()?;
+    Some(
+        rows.iter()
+            .filter(|r| crate::decision_index::is_user_ruling(r))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// The pure grant reader over an already-read `decisions` stdout.
@@ -447,7 +492,7 @@ pub fn head_grant_status(stdout: Option<&[u8]>) -> HeadGrant {
     let Some(bytes) = stdout else {
         return HeadGrant::Unreadable("the decisions read did not answer".to_string());
     };
-    let Some(rows) = crate::loopcheck::coverage_status::operator_law_rows(bytes) else {
+    let Some(rows) = user_ruling_rows(bytes) else {
         return HeadGrant::Unreadable("malformed decisions payload".to_string());
     };
     if rows.is_empty() {

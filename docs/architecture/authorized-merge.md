@@ -58,25 +58,31 @@ After a main merge, every open PR with older CI is stale. A stale PR can prove i
 12. **Merge result** (`fno do pr merge-result-check`), fail-open. The merge tree is computed locally and the repo-wide ruff + mypy step runs on it. The same merge tree also runs the repo's preamble budget from its own copy. Two PRs that each pass their own base can no longer merge into a main over the byte ceiling. When git joins hunks that never met on one machine, two green parents merge red. Held, not refused: the remedy is rebase, fix, push, retry.
 13. **Checks**. The caller asks for these or leaves them out. `--auto` IS the wait for the checks, so the arm path leaves them out and the queue enforces them server-side.
 
-## The head-scoped operator merge grant
+## The head-scoped user merge grant
 
-The per-run no-merge refusal used to name only out-of-band escapes: merge by hand, or re-dispatch. That door is closed. The one sanctioned remedy is a law row at a subject that names the exact head:
+The per-run no-merge refusal used to name only out-of-band escapes: merge by hand, or re-dispatch. That door is closed. The sanctioned remedies are law rows at a subject that names the exact head:
 
 ```
 merge-grant:<owner/repo>#<pr>@<40-hex head>
 ```
 
-An operator records it in their own terminal, attended:
+An operator records one in their own terminal, attended:
 
 ```
 fno backlog decide 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --authority operator
 ```
 
-The reader lives in `merge_grant.rs` (`head_grant_status`) and shares the waiver's trust shape. Only rows whose `authority_source` is `operator` count. A harness session cannot mint one, because `fno backlog decide` refuses `--authority operator` from any agent session. The decision must equal `merge authorized for this head` exactly: row existence carries no polarity, identical duplicates read granted once, and disagreeing rows read conflicting. A `chat_attested` row at the subject is invisible to the reader.
+A harness session records the other: the user's own chat approval, through the law door, with the user's exact words as the rationale:
 
-Head invalidation is structural. A push changes the head, the subject no longer matches, and the new subject has no rows: the refusal stands until the operator grants again. No manifest is rewritten.
+```
+fno inbox law set 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --rationale 'user in chat: <the exact words the user wrote>'
+```
 
-The grant supersedes only the per-run layer. Live config, the posture floor, the holds, the pin, and every later guard still run. A merge that passes them carries `"merge_grant": "operator head grant <short head>"` in its receipt.
+The reader lives in `merge_grant.rs` (`head_grant_status`). When `decision_index::is_user_ruling` holds, the row counts: an `operator` row, or a `chat_attested` row carrying the user's words (a `quote`, or a rationale that starts `user in chat:`). A harness session cannot mint an operator row, because `fno backlog decide` refuses `--authority operator` from any agent session. A bare `chat_attested` row mints no words, so it proves nothing and stays invisible. The decision must equal `merge authorized for this head` exactly: row existence carries no polarity, identical duplicates read granted once, and disagreeing rows read conflicting.
+
+Head invalidation is structural. A push changes the head, the subject no longer matches, and the new subject has no rows: the refusal stands until the user grants again. No manifest is rewritten.
+
+The grant supersedes only the per-run layer. Live config, the posture floor, the holds, the pin, and every later guard still run. A merge that passes them carries `"merge_grant": "user head grant <short head>"` in its receipt.
 
 ## Outside pull requests and the owner's per-PR hold
 
