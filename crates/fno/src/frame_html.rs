@@ -172,7 +172,9 @@ pub fn cell_colors(cell: &Cell, theme: Theme) -> ((u8, u8, u8), (u8, u8, u8)) {
     // terminal does: SGR 1 sets a foreground attribute and SGR 7 then swaps the
     // resolved pair. That order is what turns bold-over-inverse into a bright
     // BACKGROUND with the theme's background colour as the text.
-    if cell.flags & cell_flags::BOLD != 0 {
+    // A terminal brightens bold only for palette colours: a truecolor
+    // foreground keeps its value, so the shot shows the colour the client paints.
+    if cell.flags & cell_flags::BOLD != 0 && !matches!(cell.fg, Color::Rgb(..)) {
         fg = brighten(fg);
     }
     if cell.flags & cell_flags::DIM != 0 {
@@ -660,6 +662,15 @@ mod tests {
             bg: Color::Default,
             flags,
         }
+    }
+
+    #[test]
+    fn bold_keeps_a_truecolor_foreground() {
+        let rgb = Cell {
+            fg: Color::Rgb(0x79, 0x68, 0x23),
+            ..cell(cell_flags::BOLD)
+        };
+        assert_eq!(cell_colors(&rgb, LIGHT).0, (0x79, 0x68, 0x23));
     }
 
     #[test]
