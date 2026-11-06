@@ -150,6 +150,7 @@ pub mod codex_daemon_upgrade;
 /// only a library item reaches both.
 #[doc(hidden)]
 pub mod codex_fake_daemon;
+pub mod codex_hook_trust;
 pub mod codex_inject;
 /// Public because `codex_resume` (pub, exercised by the parity test) names
 /// [`CodexRoute`] in its signature.
@@ -485,7 +486,6 @@ pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]
 mod pi_transcript_tests;
-pub mod codex_hook_trust;
 pub mod plan_carry;
 pub mod plan_doc;
 pub mod plan_schema;
