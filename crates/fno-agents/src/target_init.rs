@@ -1221,6 +1221,30 @@ mod advisory_flag_tests {
         let default_args = parse_args(&["--input".into(), "x-1".into()])
             .unwrap_or_else(|error| panic!("{}", error.message));
         assert!(!default_args.advisory);
+
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("hooks/helpers/init-target-state.sh");
+        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        std::fs::write(
+            &helper,
+            "#!/bin/bash\nprintf '%s' \"${TARGET_ADVISORY:-unset}\" > \"$(dirname \"$0\")/advisory.txt\"\n",
+        )
+        .unwrap();
+        let previous_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
+        std::env::set_var("CLAUDE_PLUGIN_ROOT", dir.path());
+        let result = run_helper(&args, None, None, false, None);
+        match previous_root {
+            Some(root) => std::env::set_var("CLAUDE_PLUGIN_ROOT", root),
+            None => std::env::remove_var("CLAUDE_PLUGIN_ROOT"),
+        }
+        assert_eq!(
+            result.unwrap_or_else(|error| panic!("{}", error.message)),
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("hooks/helpers/advisory.txt")).unwrap(),
+            "1"
+        );
     }
 }
 
