@@ -73,6 +73,12 @@ async fn publish(draft: &IssueDraft) -> Result<String, String> {
         None,
     )
     .await;
+    if !ok {
+        return Err(format!(
+            "GitHub lookup failed: {}. Check gh auth status and repository issues before retrying.",
+            crate::redact::redact_text(&output)
+        ));
+    }
     let matches = ok
         .then(|| serde_json::from_str::<Vec<serde_json::Value>>(&output).ok())
         .flatten()
@@ -103,7 +109,7 @@ async fn publish(draft: &IssueDraft) -> Result<String, String> {
     if ok && issue_url(&output) {
         Ok(output)
     } else {
-        Err("GitHub returned no issue receipt. Check fnodotdev/fno issues before retrying; the backlog report is kept.".into())
+        Err(format!("GitHub returned no issue receipt: {}. Check fnodotdev/fno issues before retrying; the backlog report is kept.", crate::redact::redact_text(&output)))
     }
 }
 
