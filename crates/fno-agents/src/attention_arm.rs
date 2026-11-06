@@ -2132,7 +2132,14 @@ mod tests {
         .unwrap();
         assert!(receipt.contains("option 1"), "{receipt}");
         assert!(!superseded);
-        let decisions = std::fs::read_to_string(tmp.join("decisions.jsonl")).unwrap();
+        // The in-append mint is silent on failure, so the direct call names
+        // any mint error this fixture can hit.
+        mint_answer_law_row(&home, "q-law", &answer, "mux-board", None)
+            .expect("direct mint failed");
+        let decisions_path = crate::decision_index::default_state_path("decisions.jsonl");
+        // The mirror commits through the store twin, so read the same layer
+        // the door's own tests read, never the raw bytes.
+        let decisions = crate::event_store::journal_text(&decisions_path, &["operator_decision"]);
         let rows: Vec<Value> = decisions
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
@@ -2140,7 +2147,7 @@ mod tests {
         let law = rows
             .iter()
             .find(|r| r["data"]["authority_source"] == "operator")
-            .unwrap_or_else(|| panic!("no operator law row: {rows:?}"));
+            .unwrap_or_else(|| panic!("no operator law row in {decisions_path:?}: {rows:?}"));
         assert_eq!(law["data"]["question_id"], "q-law");
         assert_eq!(law["data"]["subject"], "x-law");
         assert_eq!(law["data"]["decision"], "Merge as painted");
@@ -2156,12 +2163,19 @@ mod tests {
         )
         .unwrap();
         assert!(again_won, "a second append reads superseded");
-        let after = std::fs::read_to_string(tmp.join("decisions.jsonl")).unwrap();
+        let after = crate::event_store::journal_text(&decisions_path, &["operator_decision"]);
         let law_count = after
             .lines()
             .filter(|l| l.contains("operator_decision"))
             .count();
-        assert_eq!(law_count, 1, "no second law row on a superseded append");
+        let before_count = decisions
+            .lines()
+            .filter(|l| l.contains("operator_decision"))
+            .count();
+        assert_eq!(
+            law_count, before_count,
+            "no second law row on a superseded append"
+        );
         match saved_home {
             Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
             None => std::env::remove_var("FNO_AGENTS_HOME"),

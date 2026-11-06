@@ -1783,7 +1783,7 @@ mod tests {
         ));
         let vault = tmp.join("vault");
         let repo = vault.join("internal").join("fno-web").join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(repo.join(".fno")).unwrap();
         std::fs::create_dir_all(tmp.join("fno")).unwrap();
         std::fs::create_dir_all(tmp.join("empty-home")).unwrap();
         std::fs::write(
