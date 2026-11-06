@@ -212,6 +212,7 @@ pub mod evals_climb;
 pub mod evals_compare;
 pub mod evals_drafts;
 pub mod evals_gate;
+pub mod evals_labels;
 pub mod evals_macro;
 pub mod evals_power;
 pub mod evals_predict;

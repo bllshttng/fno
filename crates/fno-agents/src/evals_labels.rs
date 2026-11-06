@@ -1,0 +1,773 @@
+//! The session label table: one append-only row per (session, judge,
+//! judge_version) in `<state>/evals/labels.jsonl`, scored by a daily pass
+//! that sends each finished session's trace snapshot to one judge on the
+//! zai flash lane. A judge reads only the trace file, which `write_trace`
+//! scrubbed at write time; the pass re-scrubs every string it adds.
+//!
+//! Proof state is never stored. A judge is proved only on hand labels,
+//! computed on read, and its rows stay out of queries until then. The row
+//! key skips a (session, judge, version, traces_digest) already answered,
+//! so a trace that lands later rescores the session under a new digest and
+//! every reader sees only the newest digest per key.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde_json::{json, Value};
+
+use crate::event_store::{query_events, EventQuery};
+
+const JUDGE_TIMEOUT_S: u64 = 240;
+/// The judge lane: the cheap zai flash account, measured live to answer as
+/// this model (the spawn is the golden drafter's one-shot shape plus the
+/// account flag).
+const MODEL: &str = "glm-5.3-flash";
+const ACCOUNT: &str = "zai";
+/// A finished session's transcript has been unwritten this long. Measured
+/// over 825 resolved transcripts: none wrote again more than six hours
+/// after the session's newest trace.
+const QUIET_MS: i64 = 6 * 3600 * 1000;
+const DEFAULT_MAX_SESSIONS: usize = 40;
+const MAX_TRACES_PER_SESSION: usize = 8;
+const TEXT_CHARS: usize = 400;
+const NODE_TEXT_CHARS: usize = 600;
+const REASON_CHARS: usize = 300;
+
+/// One judge in the fixed v1 set. `version` bumps when its prompt changes,
+/// so an old row never reads as the new judge's answer (the rubric
+/// TEMPLATE_ID idea).
+struct Judge {
+    name: &'static str,
+    version: &'static str,
+    labels: &'static [&'static str],
+    prompt: &'static str,
+}
+
+const JUDGES: &[Judge] = &[
+    Judge {
+        name: "user_corrected",
+        version: "v1",
+        labels: &["yes", "no"],
+        prompt: include_str!("evals_labels/judges/user_corrected.md"),
+    },
+    Judge {
+        name: "repeat_after_correction",
+        version: "v1",
+        labels: &["repeated", "not_repeated", "no_correction"],
+        prompt: include_str!("evals_labels/judges/repeat_after_correction.md"),
+    },
+    Judge {
+        name: "did_what_asked",
+        version: "v1",
+        labels: &["done", "partial", "not_done", "no_ask"],
+        prompt: include_str!("evals_labels/judges/did_what_asked.md"),
+    },
+    Judge {
+        name: "premise_checked",
+        version: "v1",
+        labels: &["checked", "unchecked", "not_applicable"],
+        prompt: include_str!("evals_labels/judges/premise_checked.md"),
+    },
+    Judge {
+        name: "failure_recovery",
+        version: "v1",
+        labels: &["recovered", "partial", "unresolved", "no_failure"],
+        prompt: include_str!("evals_labels/judges/failure_recovery.md"),
+    },
+    Judge {
+        name: "layer",
+        version: "v1",
+        labels: &["model", "harness", "unclear"],
+        prompt: include_str!("evals_labels/judges/layer.md"),
+    },
+];
+
+fn labels_path(state: &Path) -> PathBuf {
+    state.join("evals").join("labels.jsonl")
+}
+
+fn read_rows(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+fn append_rows(path: &Path, rows: &[Value]) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut body = String::new();
+    for row in rows {
+        body.push_str(&row.to_string());
+        body.push('\n');
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(body.as_bytes()))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The newest-digest row per (session, judge, judge_version). Rows land in
+/// append order, so the last row for a key carries the newest digest, and
+/// this function is the only projection a reader needs.
+pub(crate) fn newest_rows(rows: &[Value]) -> Vec<Value> {
+    let mut out: BTreeMap<(String, String, String), Value> = BTreeMap::new();
+    for row in rows {
+        let key = (
+            row.get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            row.get("judge")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            row.get("judge_version")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        );
+        if key.0.is_empty() || key.1.is_empty() {
+            continue;
+        }
+        out.insert(key, row.clone());
+    }
+    out.into_values().collect()
+}
+
+fn fact_str(field: &Value) -> Option<&str> {
+    field
+        .get("value")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
+fn clip(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+
+fn scrub(text: &str) -> String {
+    crate::intel_corpus::scrub_quote(text)
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn parse_ms(stamp: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|t| t.timestamp_millis())
+}
+
+fn trace_ms(trace: &Value) -> i64 {
+    trace
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|s| parse_ms(s))
+        .unwrap_or(0)
+}
+
+fn mtime_ms(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+}
+
+fn load_traces(state: &Path) -> Vec<Value> {
+    let dir = state.join("evals").join("traces");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|x| x == "json") {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(trace) = serde_json::from_slice::<Value>(&bytes) {
+                    out.push(trace);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every session with at least one trace, oldest session first, each
+/// session's traces oldest first.
+fn by_session(traces: &[Value]) -> Vec<(String, Vec<Value>)> {
+    let mut map: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for trace in traces {
+        if let Some(sid) = fact_str(&trace["session_id"]) {
+            map.entry(sid.to_string()).or_default().push(trace.clone());
+        }
+    }
+    let mut rows: Vec<(String, Vec<Value>)> = map.into_iter().collect();
+    for (_, group) in rows.iter_mut() {
+        group.sort_by_key(|t| trace_ms(t));
+    }
+    rows.sort_by_cached_key(|(sid, group)| (group.last().map(trace_ms).unwrap_or(0), sid.clone()));
+    rows
+}
+
+fn termination_sessions(state: &Path) -> BTreeSet<String> {
+    let journal = state.join("events.jsonl");
+    let query = EventQuery::of_types(&["termination"]);
+    let mut out = BTreeSet::new();
+    for event in query_events(&journal, &query).unwrap_or_default() {
+        if let Ok(line) = serde_json::from_str::<Value>(&event.line) {
+            if let Some(sid) = line.pointer("/data/session_id").and_then(Value::as_str) {
+                out.insert(sid.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// A session is finished when a termination event names it, or its
+/// transcript (resolved per harness) has sat unwritten past the quiet
+/// window, or no transcript resolves and its newest trace predates the
+/// window. A live session answers none of those, so it writes no row.
+fn is_finished(sid: &str, traces: &[Value], terminated: &BTreeSet<String>, now: i64) -> bool {
+    if terminated.contains(sid) {
+        return true;
+    }
+    let harness = traces
+        .iter()
+        .find_map(|t| fact_str(&t["harness"]))
+        .unwrap_or("claude");
+    let quiet_before = now - QUIET_MS;
+    match crate::context_run::session_transcript(sid, harness) {
+        Some(path) => mtime_ms(&path).is_some_and(|m| m < quiet_before),
+        None => traces.last().map(trace_ms).unwrap_or(0) < quiet_before,
+    }
+}
+
+fn digest_of(ids: &[String]) -> String {
+    let mut sorted = ids.to_vec();
+    sorted.sort();
+    blake3::hash(sorted.join("\n").as_bytes()).to_hex()[..16].to_string()
+}
+
+/// The node's title and details, one graph read per pass. An unknown node
+/// id contributes nothing.
+fn node_texts(ids: &BTreeSet<String>) -> BTreeMap<String, String> {
+    if ids.is_empty() {
+        return BTreeMap::new();
+    }
+    let graph = crate::backlog::settings::graph_path();
+    let rows = crate::graph_store::read_rows(&graph).unwrap_or_default();
+    let mut out = BTreeMap::new();
+    for row in &rows {
+        if let Some(id) = row.get("id").and_then(Value::as_str) {
+            if ids.contains(id) {
+                let title = row.get("title").and_then(Value::as_str).unwrap_or("");
+                let details = row.get("details").and_then(Value::as_str).unwrap_or("");
+                out.insert(
+                    id.to_string(),
+                    clip(&scrub(&format!("{title}\n{details}")), NODE_TEXT_CHARS),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// The judge's bounded view of one session: the traces' trigger and truth
+/// quotes, their bounded tool calls and claims, any person-set label, and
+/// the node text. Every string passes the scrub, however it was written.
+fn evidence(
+    sid: &str,
+    harness: &str,
+    model: Option<&str>,
+    traces: &[Value],
+    node_text: Option<&str>,
+) -> Value {
+    let text = |field: &Value| -> Value {
+        match field.get("value") {
+            Some(Value::String(s)) if !s.is_empty() => json!(clip(&scrub(s), TEXT_CHARS)),
+            Some(v) if !v.is_null() => json!(clip(&scrub(&v.to_string()), TEXT_CHARS)),
+            _ => Value::Null,
+        }
+    };
+    let list = |field: &Value, key: &str| -> Value {
+        match field.get("value").and_then(Value::as_array) {
+            Some(items) => Value::Array(
+                items
+                    .iter()
+                    .map(|item| match item.get(key) {
+                        Some(inner) => json!(clip(&scrub(&inner.to_string()), TEXT_CHARS)),
+                        None => json!(clip(&scrub(&item.to_string()), TEXT_CHARS)),
+                    })
+                    .collect(),
+            ),
+            None => Value::Null,
+        }
+    };
+    let rows: Vec<Value> = traces
+        .iter()
+        .take(MAX_TRACES_PER_SESSION)
+        .map(|t| {
+            json!({
+                "id": t.get("id"),
+                "signal_kind": t.get("signal_kind"),
+                "trigger": text(&t["trigger"]),
+                "truth": text(&t["truth"]),
+                "tool_calls": list(&t["tool_calls"], "intent"),
+                "claims": list(&t["claims"], "text"),
+                "right_action": text(&t["right_action"]),
+                "layer_verdict": text(&t["layer_verdict"]),
+                "created_at": t.get("created_at"),
+            })
+        })
+        .collect();
+    json!({
+        "session_id": sid,
+        "harness": harness,
+        "model": model,
+        "node_text": node_text,
+        "traces": rows,
+    })
+}
+
+/// The first JSON object in a judge reply, read as (label, reason).
+fn parse_label_reply(out: &str) -> Result<(String, String), String> {
+    let (a, b) = (out.find('{'), out.rfind('}'));
+    let (Some(a), Some(b)) = (a, b) else {
+        return Err("no JSON object in the reply".into());
+    };
+    let reply: Value = serde_json::from_str(&out[a..=b])
+        .map_err(|e| format!("reply is not the JSON asked for: {e}"))?;
+    let label = reply
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if label.is_empty() {
+        return Err("reply carries no label".into());
+    }
+    let reason = reply
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok((label, reason))
+}
+
+/// One zai flash one-shot with read tools: the golden drafter's bounded
+/// spawn shape plus the account flag. A hang dies at the kill bound, not
+/// at the child's own timeout.
+fn spawn_judge(name: &str, prompt: &str) -> Result<(String, String), String> {
+    let cwd = crate::evals::canonical_repo_root();
+    let argv: Vec<String> = [
+        "agents",
+        "spawn",
+        "--name",
+        name,
+        prompt,
+        "--harness",
+        "claude",
+        "--account",
+        ACCOUNT,
+        "--once",
+        "--cwd",
+        &cwd.display().to_string(),
+        "--timeout",
+        &JUDGE_TIMEOUT_S.to_string(),
+        "--",
+        "--model",
+        MODEL,
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--tools",
+        "Read,Grep,Glob",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--disable-slash-commands",
+        "--no-chrome",
+        "--no-session-persistence",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let (code, out, err) = crate::blueprint_judge::headless_spawn(&argv, JUDGE_TIMEOUT_S + 30)?;
+    if code != 0 {
+        return Err(format!("spawn exit {code}: {}", err.trim()));
+    }
+    parse_label_reply(&out)
+}
+
+type SpawnJudge<'a> = &'a dyn Fn(&str, &str) -> Result<(String, String), String>;
+
+/// One scoring pass. Finished, unscored sessions go oldest first under the
+/// per-run cap; each judge answers once per (session, digest) and a failed
+/// or unknown-label spawn writes no row, so the next run retries it.
+pub(crate) fn score(
+    state: &Path,
+    now: i64,
+    max_sessions: usize,
+    spawn: SpawnJudge,
+) -> Result<Value, String> {
+    let path = labels_path(state);
+    let dir = path.parent().ok_or("no state dir")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.with_extension("lock"))
+        .map_err(|e| e.to_string())?;
+    lock.lock().map_err(|e| e.to_string())?;
+    let done: BTreeSet<(String, String, String, String)> = read_rows(&path)
+        .iter()
+        .filter_map(|r| {
+            Some((
+                r.get("session_id")?.as_str()?.to_string(),
+                r.get("judge")?.as_str()?.to_string(),
+                r.get("judge_version")?.as_str()?.to_string(),
+                r.get("traces_digest")?.as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    let sessions = by_session(&load_traces(state));
+    let terminated = termination_sessions(state);
+    let mut node_ids = BTreeSet::new();
+    for (_, group) in &sessions {
+        for t in group {
+            if let Some(node) = fact_str(&t["node"]) {
+                node_ids.insert(node.to_string());
+            }
+        }
+    }
+    let texts = node_texts(&node_ids);
+    let mut scored = 0usize;
+    let mut written = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+    for (sid, group) in &sessions {
+        if scored >= max_sessions {
+            break;
+        }
+        if !is_finished(sid, group, &terminated, now) {
+            continue;
+        }
+        let ids: Vec<String> = group
+            .iter()
+            .filter_map(|t| t.get("id").and_then(Value::as_str))
+            .map(String::from)
+            .collect();
+        let digest = digest_of(&ids);
+        let todo: Vec<&Judge> = JUDGES
+            .iter()
+            .filter(|j| {
+                !done.contains(&(
+                    sid.clone(),
+                    j.name.to_string(),
+                    j.version.to_string(),
+                    digest.clone(),
+                ))
+            })
+            .collect();
+        if todo.is_empty() {
+            continue;
+        }
+        scored += 1;
+        let harness = group
+            .iter()
+            .find_map(|t| fact_str(&t["harness"]))
+            .unwrap_or("claude");
+        let model = group.iter().find_map(|t| fact_str(&t["model"]));
+        let node_text = group
+            .iter()
+            .find_map(|t| fact_str(&t["node"]))
+            .and_then(|n| texts.get(n))
+            .cloned();
+        let view = evidence(sid, harness, model, group, node_text.as_deref());
+        let body = serde_json::to_string(&view).map_err(|e| e.to_string())?;
+        for judge in todo {
+            let hash =
+                blake3::hash(format!("{sid}|{}", judge.name).as_bytes()).to_hex()[..12].to_string();
+            let name = format!("eval-judge-{}-{hash}", judge.name);
+            let prompt = format!("{}\n\nSESSION EVIDENCE:\n{body}", judge.prompt);
+            match spawn(&name, &prompt) {
+                Ok((label, reason)) if judge.labels.contains(&label.as_str()) => {
+                    let newest = group.last();
+                    let span_ref = format!(
+                        "{}/{}",
+                        newest
+                            .and_then(|t| t.get("id"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("?"),
+                        newest
+                            .and_then(|t| fact_str(&t["source_ref"]))
+                            .unwrap_or("?"),
+                    );
+                    append_rows(
+                        &path,
+                        &[json!({
+                            "session_id": sid,
+                            "judge": judge.name,
+                            "judge_version": judge.version,
+                            "label": label,
+                            "reason": clip(&scrub(&reason), REASON_CHARS),
+                            "span_ref": span_ref,
+                            "traces_digest": digest,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "model": MODEL,
+                        })],
+                    )?;
+                    written += 1;
+                }
+                Ok((label, _)) => {
+                    failed.push(format!("{sid}/{}: unknown label {label:?}", judge.name))
+                }
+                Err(e) => failed.push(format!("{sid}/{}: {}", judge.name, clip(&e, 120))),
+            }
+        }
+    }
+    let finished = sessions
+        .iter()
+        .filter(|(sid, group)| is_finished(sid, group, &terminated, now))
+        .count();
+    Ok(json!({
+        "finished": finished,
+        "scored": scored,
+        "rows": written,
+        "failed": failed.len(),
+        "failed_sample": failed.iter().rev().take(5).cloned().collect::<Vec<_>>(),
+        "cap": max_sessions,
+    }))
+}
+
+fn max_sessions(repo: &Path) -> usize {
+    match crate::agents_config::config_value_deep(
+        repo,
+        &["evals", "labels", "max_sessions_per_day"],
+    ) {
+        Some(toml::Value::Integer(n)) if n >= 0 => n as usize,
+        _ => DEFAULT_MAX_SESSIONS,
+    }
+}
+
+fn daily(state: &Path) -> Result<Value, String> {
+    let repo = crate::evals::canonical_repo_root();
+    score(state, now_ms(), max_sessions(&repo), &spawn_judge)
+}
+
+#[derive(Default)]
+pub struct Arm {
+    next: Arc<Mutex<Option<Instant>>>,
+    in_flight: Arc<AtomicBool>,
+}
+
+/// The fleet tick's entry: once a day, one pass in flight, off the core
+/// loop. A failed pass retries in five minutes.
+pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
+    {
+        let mut next = arm.next.lock().unwrap_or_else(|e| e.into_inner());
+        if next.is_some_and(|t| t > Instant::now()) || arm.in_flight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        *next = Some(Instant::now() + Duration::from_secs(86400));
+    }
+    let flag = Arc::clone(&arm.in_flight);
+    let next = Arc::clone(&arm.next);
+    tokio::task::spawn_blocking(move || {
+        let _gate = crate::daemon::SweepGate(flag);
+        if let Some(state) = home.root().parent() {
+            if let Err(e) = daily(state) {
+                eprintln!("eval labels: {e}");
+                *next.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(Instant::now() + Duration::from_secs(300));
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trace_file(state: &Path, sid: &str, kind: &str, created: &str, trigger: &str) -> String {
+        let id = blake3::hash(format!("t|{sid}|{kind}|{created}|{trigger}").as_bytes()).to_hex()
+            [..16]
+            .to_string();
+        let trace = json!({
+            "id": id,
+            "signal_kind": kind,
+            "trigger": {"value": trigger, "basis": "event"},
+            "truth": {"value": "the stated reason", "basis": "event"},
+            "tool_calls": {"value": [{"tool": "Bash", "intent": "cargo test"}], "basis": "transcript_before_turn"},
+            "claims": {"value": ["it is green"], "basis": "transcript_before_turn"},
+            "right_action": {"value": null, "basis": "unmeasured"},
+            "layer_verdict": {"value": null, "basis": "unmeasured"},
+            "source_ref": {"value": "ev:1", "basis": "source_identity"},
+            "node": {"value": Value::Null, "basis": "unmeasured"},
+            "model": {"value": "glm-5.3-flash", "basis": "event"},
+            "harness": {"value": "claude", "basis": "event"},
+            "session_id": {"value": sid, "basis": "event"},
+            "created_at": created,
+        });
+        let dir = state.join("evals").join("traces");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{id}.json")), trace.to_string()).unwrap();
+        id
+    }
+
+    fn fake_labels(
+        judge_override: Option<(&str, &str)>,
+    ) -> impl Fn(&str, &str) -> Result<(String, String), String> {
+        move |name: &str, _: &str| {
+            let rest = name.strip_prefix("eval-judge-").unwrap_or(name);
+            let judge = rest.rsplit_once('-').map(|(j, _)| j).unwrap_or(rest);
+            if let Some((bad, label)) = judge_override {
+                if judge == bad {
+                    return Ok((label.to_string(), "because test".into()));
+                }
+            }
+            let label = match judge {
+                "user_corrected" => "yes",
+                "repeat_after_correction" => "repeated",
+                "did_what_asked" => "done",
+                "premise_checked" => "checked",
+                "failure_recovery" => "recovered",
+                "layer" => "harness",
+                other => return Err(format!("fake spawn asked for {other}")),
+            };
+            Ok((label.to_string(), "because test".into()))
+        }
+    }
+
+    fn rows(state: &Path) -> Vec<Value> {
+        read_rows(&labels_path(state))
+    }
+
+    #[test]
+    fn finished_sessions_score_once_and_a_live_session_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let old = "2026-11-01T00:00:00+00:00";
+        let fresh = "2026-11-05T00:00:00+00:00";
+        trace_file(state, "s-old", "user_correction", old, "no, prove it");
+        trace_file(state, "s-fresh", "user_correction", fresh, "no, prove it");
+        trace_file(state, "s-term", "user_correction", fresh, "stop re-ranking");
+        let journal = state.join("events.jsonl");
+        crate::event_store::append_envelope(
+            &journal,
+            &json!({"ts": "2026-11-05T01:00:00Z", "type": "termination", "source": "hook",
+                    "data": {"session_id": "s-term", "reason": "Budget", "message": "run ended"}})
+            .to_string(),
+            None,
+        )
+        .unwrap();
+        let now = parse_ms("2026-11-05T12:00:00+00:00").unwrap();
+        let receipt = score(state, now, 40, &fake_labels(None)).unwrap();
+        assert_eq!(receipt["rows"], 12, "{receipt}");
+        assert_eq!(
+            receipt["scored"], 2,
+            "only the old and the terminated session"
+        );
+        assert_eq!(receipt["failed"], 0);
+        assert_eq!(rows(state).len(), 12);
+        let again = score(state, now, 40, &fake_labels(None)).unwrap();
+        assert_eq!(again["rows"], 0, "a second pass is a no-op: {again}");
+        assert_eq!(rows(state).len(), 12);
+    }
+
+    #[test]
+    fn unknown_label_writes_no_row_and_a_later_trace_rescores_the_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let created = "2026-11-01T00:00:00+00:00";
+        let id1 = trace_file(state, "s-old", "user_correction", created, "no, prove it");
+        let now = parse_ms("2026-11-05T12:00:00+00:00").unwrap();
+        let receipt = score(state, now, 40, &fake_labels(Some(("layer", "maybe")))).unwrap();
+        assert_eq!(receipt["rows"], 5, "{receipt}");
+        assert_eq!(receipt["failed"], 1);
+        assert!(rows(state).iter().all(|r| r["judge"] != "layer"));
+        let retry = score(state, now, 40, &fake_labels(None)).unwrap();
+        assert_eq!(
+            retry["rows"], 1,
+            "the unknown-label judge is retried: {retry}"
+        );
+        assert_eq!(
+            newest_rows(&rows(state)).len(),
+            6,
+            "one newest row per judge"
+        );
+        // A trace that lands later moves the digest and rescores the session.
+        let id2 = trace_file(state, "s-old", "no_progress", created, "same stall");
+        let third = score(state, now, 40, &fake_labels(None)).unwrap();
+        assert_eq!(third["rows"], 6, "{third}");
+        let expected = digest_of(&[id1, id2]);
+        let latest = newest_rows(&rows(state));
+        assert_eq!(latest.len(), 6);
+        assert!(
+            latest.iter().all(|r| r["traces_digest"] == json!(expected)),
+            "the newest rows carry the new digest"
+        );
+    }
+
+    #[test]
+    fn evidence_is_scrubbed_clipped_and_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let id = trace_file(
+            state,
+            "s-old",
+            "user_correction",
+            "2026-11-01T00:00:00+00:00",
+            "mail me at a@b.co then prove it",
+        );
+        let traces = load_traces(state);
+        assert_eq!(traces.len(), 1);
+        let view = evidence("s-old", "claude", Some("glm-5.3-flash"), &traces, None);
+        let body = view.to_string();
+        assert!(!body.contains("a@b.co"), "{body}");
+        assert!(body.contains(&id), "the trace id anchors the evidence");
+        assert_eq!(view["traces"].as_array().unwrap().len(), 1);
+        let long = "x".repeat(2_000);
+        let mut group = traces.clone();
+        group[0]["trigger"] = json!({"value": long, "basis": "event"});
+        let clipped = evidence("s-old", "claude", None, &group, None);
+        assert!(clipped["traces"][0]["trigger"].as_str().unwrap().len() <= TEXT_CHARS);
+    }
+
+    #[test]
+    fn newest_rows_keeps_one_row_per_session_judge_and_version() {
+        let row = |digest: &str, at: &str| {
+            json!({"session_id": "s1", "judge": "layer", "judge_version": "v1",
+                   "label": "harness", "reason": "r", "span_ref": "t/ev",
+                   "traces_digest": digest, "created_at": at})
+        };
+        let rows = vec![
+            row("aaa", "2026-11-01T00:00:00+00:00"),
+            row("bbb", "2026-11-02T00:00:00+00:00"),
+        ];
+        let newest = newest_rows(&rows);
+        assert_eq!(newest.len(), 1);
+        assert_eq!(newest[0]["traces_digest"], json!("bbb"));
+        let mut other = row("aaa", "2026-11-01T00:00:00+00:00");
+        other["judge"] = json!("user_corrected");
+        assert_eq!(newest_rows(&[rows[0].clone(), other]).len(), 2);
+    }
+
+    #[test]
+    fn a_reply_without_json_or_label_is_a_judge_fault() {
+        assert!(parse_label_reply("no braces here").is_err());
+        assert!(parse_label_reply("{\"verdict\": 1}").is_err());
+        let (label, reason) =
+            parse_label_reply("sure: {\"label\": \"yes\", \"reason\": \"r\"}").unwrap();
+        assert_eq!((label.as_str(), reason.as_str()), ("yes", "r"));
+    }
+}
