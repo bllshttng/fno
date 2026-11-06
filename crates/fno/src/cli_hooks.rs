@@ -628,13 +628,13 @@ fn claude_settings_path(home: &Path, config_dir: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| home.join(".claude/settings.json"))
 }
 
-pub fn user_claude_settings_path() -> PathBuf {
+pub(crate) fn user_claude_settings_path() -> PathBuf {
     let home = home();
     let config_dir = env_path("CLAUDE_CONFIG_DIR");
     claude_settings_path(&home, config_dir.as_deref())
 }
 
-pub fn claude_auto_mode_allow_status(settings: &Path) -> Result<bool, String> {
+pub(crate) fn claude_auto_mode_allow_status(settings: &Path) -> Result<bool, String> {
     let data = load_settings(settings)?;
     let Some(auto_mode) = data.get("autoMode") else {
         return Ok(false);
@@ -657,7 +657,7 @@ pub fn claude_auto_mode_allow_status(settings: &Path) -> Result<bool, String> {
             .any(|v| v.as_str() == Some(FOOTNOTE_ROLE_GRANTS_RULE)))
 }
 
-pub fn install_claude_auto_mode_allow(settings: &Path) -> InstallResult {
+pub(crate) fn install_claude_auto_mode_allow(settings: &Path) -> InstallResult {
     let mut data = match load_settings(settings) {
         Ok(data) => data,
         Err(note) => return InstallResult::refused(settings, &note),
