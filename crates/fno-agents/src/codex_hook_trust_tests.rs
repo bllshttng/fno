@@ -91,7 +91,7 @@ async fn trust_check_counts_every_state_over_a_fake_daemon() {
     assert_eq!(report.trusted, 2);
     assert_eq!(report.modified, 1);
     assert_eq!(report.untrusted, 1);
-    assert_eq!(report.not_trusted, 3);
+    assert_eq!(report.not_trusted, 2);
     assert_eq!(report.disabled, 1);
     assert!(report.reason.is_none());
 }

@@ -15,6 +15,7 @@
 //! the one writer of its own config. Only rows whose `plugin_id` starts
 //! `fno@` are written; a user who disabled a fno hook keeps it disabled.
 
+use futures_util::SinkExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -132,6 +133,7 @@ fn run(home: &Path, write: bool) -> HookTrustReport {
         return HookTrustReport::skipped("unreachable", error);
     }
     let socket_for_thread = socket.clone();
+    let home = home.to_path_buf();
     let outcome = std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -201,8 +203,13 @@ async fn request_hooks_list(
         .ok_or_else(|| "hooks/list answered without data".to_string())?;
     let hooks: Vec<Value> = data
         .iter()
-        .flat_map(|entry| entry.get("hooks").and_then(Value::as_array).cloned().unwrap_or_default())
-        .flatten()
+        .flat_map(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
         .collect();
     Ok(hooks)
 }
@@ -240,11 +247,11 @@ async fn write_hook_trust(
     fno: &[FnoHook],
 ) -> Result<(), String> {
     let mut state: serde_json::Map<String, Value> = serde_json::Map::new();
-    for hook in fno.iter().filter(|h| h.enabled && h.trust_status != "trusted") {
-        state.insert(
-            hook.key.clone(),
-            json!({"trusted_hash": hook.current_hash}),
-        );
+    for hook in fno
+        .iter()
+        .filter(|h| h.enabled && h.trust_status != "trusted")
+    {
+        state.insert(hook.key.clone(), json!({"trusted_hash": hook.current_hash}));
     }
     if state.is_empty() {
         return Ok(());
@@ -276,8 +283,7 @@ async fn write_hook_trust(
     .await
     .map_err(|_| "config/batchWrite timed out".to_string())?
     .map_err(str::to_string)?;
-    let frame: Value =
-        serde_json::from_str(&raw).map_err(|e| format!("batchWrite frame: {e}"))?;
+    let frame: Value = serde_json::from_str(&raw).map_err(|e| format!("batchWrite frame: {e}"))?;
     if let Some(error) = frame.get("error") {
         return Err(format!("config/batchWrite refused: {error}"));
     }
@@ -318,7 +324,10 @@ pub(crate) fn print_human(report: &HookTrustReport) {
         ),
         "unsupported" => println!(
             "codex hook trust: skipped ({}); run `fno doctor --codex-hooks --fix`",
-            report.reason.as_deref().unwrap_or("codex has no hooks/list")
+            report
+                .reason
+                .as_deref()
+                .unwrap_or("codex has no hooks/list")
         ),
         status => println!(
             "codex hook trust: skipped ({}); run `fno doctor --codex-hooks --fix`",
