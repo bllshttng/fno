@@ -1092,16 +1092,18 @@ fn rename_findings() -> Vec<RenameFinding> {
                 .get("source")
                 .and_then(marketplace_repo_slug)
                 .map(|s| s.to_lowercase());
-            if let Some(target) = slug.as_deref().and_then(|s| aliases.get(s)) {
-                findings.push(RenameFinding {
-                    harness: "claude",
-                    kind: "marketplace-redirect",
-                    name: name.clone(),
-                    detail: format!(
-                        "claude marketplace {name} clones {slug}, which now answers as {target}"
-                    ),
-                    command: format!("claude plugin marketplace remove {name}"),
-                });
+            if let Some(old_slug) = slug.as_deref() {
+                if let Some(target) = aliases.get(old_slug) {
+                    findings.push(RenameFinding {
+                        harness: "claude",
+                        kind: "marketplace-redirect",
+                        name: name.clone(),
+                        detail: format!(
+                            "claude marketplace {name} clones {old_slug}, which now answers as {target}"
+                        ),
+                        command: format!("claude plugin marketplace remove {name}"),
+                    });
+                }
             }
             if name == LEGACY_MARKETPLACE_NAME {
                 legacy_marketplace_named = true;
