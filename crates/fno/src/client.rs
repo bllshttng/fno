@@ -733,7 +733,7 @@ pub(crate) struct View {
     machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
-    /// Nest workers under their lead in the card layout (prefix+u),
+    /// Nest workers under their lead in the card layout (prefix+t),
     /// persisted. Off = flat cards; the list layout always nests.
     group_by_lead: bool,
     /// The manual reorder sequence (agent names in display order) behind the
@@ -1703,7 +1703,7 @@ pub(crate) enum AuxAction {
     ToggleExperimental(experimental::Flag),
     Share(share_flow::Act),
     OpenBacklogView,
-    /// Nest workers under their lead in the card layout (the prefix+u toggle).
+    /// Nest workers under their lead in the card layout (the prefix+t toggle).
     ToggleGroupByLead,
     /// Flip the sideline's row shape (list <-> card) live: swap the view's
     /// in-memory layout, persist `sideline.layout` through the CLI, then

@@ -18,7 +18,7 @@ pub(crate) struct Flags {
     pub(crate) org_board: bool,
     pub(crate) pane_share: bool,
     pub(crate) other_machines: bool,
-    /// The card layout nests workers under their lead (prefix+u).
+    /// The card layout nests workers under their lead (prefix+t).
     pub(crate) group_by_lead: bool,
     /// Knocks waiting on the running share; `None` while no share runs.
     pub(crate) share: Option<usize>,
