@@ -1386,12 +1386,12 @@ mod tests {
 
     /// Pins FNO_STATE_DIR for the duration of one test and restores it on
     /// drop, so the fixer's graph writes land in the test's tempdir.
-    struct PinState(PathBuf, Option<std::ffi::OsString>);
+    struct PinState(Option<std::ffi::OsString>);
     impl PinState {
         fn new(path: &Path) -> Self {
             let prior = std::env::var_os("FNO_STATE_DIR");
             std::env::set_var("FNO_STATE_DIR", path);
-            Self(path.to_path_buf(), prior)
+            Self(prior)
         }
     }
     impl Drop for PinState {

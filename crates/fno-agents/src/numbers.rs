@@ -719,7 +719,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_go_node_resolves_its_display_number() {
         let (_dir, graph, conn) = conn();
         let keys: Vec<String> = ["go-1a2b", "go-3c4d"]
