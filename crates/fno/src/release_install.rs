@@ -795,7 +795,10 @@ mod tests {
             receipt_links(receipt),
             vec![
                 ("fno".to_string(), PathBuf::from("/u/bin/fno")),
-                ("legacy-script".to_string(), PathBuf::from("/u/bin/legacy-script")),
+                (
+                    "legacy-script".to_string(),
+                    PathBuf::from("/u/bin/legacy-script")
+                ),
             ]
         );
         assert!(receipt_links("not toml [").is_empty());
