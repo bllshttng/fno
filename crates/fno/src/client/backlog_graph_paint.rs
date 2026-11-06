@@ -162,11 +162,7 @@ pub(crate) fn lines(
     .trunc(width)];
     let body_start = lines.len();
     for y in 0..height {
-        let mut line = grid.line(y).trunc(width);
-        if selected_y == Some(y) {
-            line.band = true;
-        }
-        lines.push(line);
+        lines.push(grid.line(y).trunc(width));
     }
     for unavailable in &graph.unavailable {
         lines.push(TLine::meta(format!(

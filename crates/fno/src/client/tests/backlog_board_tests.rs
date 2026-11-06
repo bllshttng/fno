@@ -1046,7 +1046,11 @@ fn tab_cycles_kanban_list_and_graph_views() {
         "graph"
     );
     let b = view.backlog_board.as_ref().unwrap();
-    let (lines, _) = render(b, 120);
+    let (lines, follow) = render(b, 120);
+    assert!(
+        follow.is_some_and(|line| !lines[line].band),
+        "the graph cursor uses its node border, not a stripe across other nodes"
+    );
     let painted = lines
         .iter()
         .map(|line| line.text.as_str())
