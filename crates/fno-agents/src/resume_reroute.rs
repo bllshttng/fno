@@ -92,8 +92,22 @@ pub(crate) fn apply(
         .iter()
         .any(|e| crate::route_recovery::row_matches_session(e, &session_id))
     {
+        let names: Vec<String> = registry
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .take(8)
+            .collect();
         return Err(format!(
-            "resume --route: no registry row answers session {session_id}; adopt it first (fno agents adopt)"
+            "resume --route: no registry row answers session {session_id}; registry {} \
+             holds {} row(s) ({}); adopt it first (fno agents adopt)",
+            home.registry_json().display(),
+            registry.entries.len(),
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
         ));
     }
 
