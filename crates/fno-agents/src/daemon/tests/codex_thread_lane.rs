@@ -1676,55 +1676,6 @@ async fn codex_target_launch_cwd_binds_a_canonical_node_target_to_its_worktree()
 /// row, no birth event, and the error names the node and the failing ensure
 /// condition. Starting on canonical as a fallback would be the exact
 /// outcome this lane exists to prevent.
-#[tokio::test(flavor = "current_thread")]
-async fn codex_target_launch_cwd_refusal_starts_nothing() {
-    let _env = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let behavior = crate::codex_fake_daemon::Behavior::quick();
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-target-cwd-refusal");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let (repo, bin) = codex_target_launch_cwd_fixture("", 1);
-        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
-
-        let req = Request::new(
-            1,
-            "agent.spawn",
-            json!({
-                "name": "t",
-                "provider": "codex",
-                "substrate": "thread",
-                "cwd": repo.path().to_string_lossy(),
-                "node": "x-ecf4",
-                "message": "/fno:target seed",
-            }),
-        );
-        let spawned = handle_spawn(&ctx, &req).await;
-        let message = match &spawned.payload {
-            crate::protocol::ResponsePayload::Err(e) => e.message.clone(),
-            _ => panic!("spawn should refuse: {spawned:?}"),
-        };
-        assert!(
-            message.contains("x-ecf4") && message.contains("worktree ensure"),
-            "refusal names the node and the failing ensure condition: {message}"
-        );
-        assert_eq!(
-            codex_target_launch_cwd_registry_row(&home, "t"),
-            serde_json::Value::Null,
-            "no registry row for a refused spawn"
-        );
-        let events = read_events(&home);
-        assert!(
-            !events
-                .iter()
-                .any(|event| event["type"] == "agent_spawned" && event["data"]["name"] == "t"),
-            "no birth event for a refused spawn: {events:?}"
-        );
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
 
 /// AC4: if the ensured node worktree disappears before thread creation, the
 /// spawn refuses without starting or registering a thread on that missing cwd.

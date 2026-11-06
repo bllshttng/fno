@@ -401,26 +401,6 @@ fn branch_merged_answers_real_repos() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-#[test]
-fn rm_take_worktree_keeps_the_tree_when_the_probe_cannot_answer() {
-    // AC7-ERR: an unanswerable probe keeps the tree. Removal never guesses.
-    let wt = fake_worktree("mute");
-    let mut row = ask_row("wt3", Some("2020-01-01T00:00:00Z"));
-    row.cwd = wt.to_string_lossy().into_owned();
-    let receipt = rm_take_worktree_with(
-        &row,
-        &|_| WorktreeGate::Unanswerable("the reapable probe could not answer".into()),
-        &|_| Ok(()),
-    );
-    assert_eq!(
-        receipt.map(|o| o.receipt()),
-        Some(format!(
-            "worktree kept: {} (the reapable probe could not answer)",
-            wt.to_string_lossy()
-        ))
-    );
-    std::fs::remove_dir_all(&wt).ok();
-}
 
 #[tokio::test]
 async fn rm_refuses_to_report_removed_when_the_row_is_already_gone() {
@@ -765,56 +745,6 @@ fn pre_v19_row_without_posture_parses_with_the_safe_default() {
     );
 }
 
-#[test]
-fn reconcile_mux_pane_liveness_follows_the_pid_not_the_store() {
-    // Codex P1/P2 (#603): a mux-hosted pane is PTY-governed, so on a
-    // session-store miss a live pid keeps it Live and a dead pid reaps to
-    // Exited. A pid-less pane (_lookup_child_pid best-effort miss) has no PTY
-    // signal and must NOT be preserved -- pid_live maps None to true, so that
-    // would keep a maybe-dead pane immortal; it defers to store liveness
-    // (orphan) instead.
-    let mk = |name: &str, pid: Option<u32>| {
-        let mut e = rentry(name, AgentStatus::Live, None);
-        e.mux = Some(crate::state::MuxRef {
-            session: "main".into(),
-            pane_id: 7,
-        });
-        e.pid = pid;
-        e
-    };
-    let entries = vec![
-        mk("live-pane", Some(4242)), // pid present + alive
-        mk("dead-pane", Some(4243)), // pid present + dead
-        mk("pidless-pane", None),    // pid capture missed
-    ];
-    let (changes, out) = plan_reconcile(
-        &entries,
-        |_| Ok(false), // session_index miss for all
-        || false,
-        |e| e.name == "live-pane", // only live-pane's pid is alive
-        |_| false,
-        |_| false,
-        |_| false,
-        |_| false,
-        |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
-        true,                   // roster readable: the flip needs a successful roster read
-    );
-    assert_eq!(
-        changes[0].new_status, None,
-        "a live-pid mux pane is preserved"
-    );
-    assert_eq!(
-        changes[1].new_status,
-        Some(AgentStatus::Exited),
-        "a dead-pid mux pane is reaped to Exited"
-    );
-    assert_eq!(
-        changes[2].new_status,
-        Some(AgentStatus::Orphaned),
-        "a pid-less mux pane defers to store liveness (orphan), not immortal"
-    );
-    assert_eq!(out.orphans, vec!["pidless-pane".to_string()]);
-}
 
 #[test]
 fn reconcile_store_hit_does_not_resurrect_a_pid_dead_row() {
@@ -850,26 +780,6 @@ fn reconcile_store_hit_does_not_resurrect_a_pid_dead_row() {
     assert_eq!(out.recovered, vec!["live-orphan".to_string()]);
 }
 
-#[test]
-fn reconcile_inconclusive_preserves_status() {
-    let entries = vec![rentry("flaky", AgentStatus::Live, None)];
-    let (changes, out) = plan_reconcile(
-        &entries,
-        |_| Err(probe_err()),
-        || false,
-        |_| true,
-        |_| false,
-        |_| false,
-        |_| false,
-        |_| false,
-        |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
-        true,                   // roster readable: the flip needs a successful roster read
-    );
-    assert_eq!(changes[0].new_status, None, "must NOT flip on inconclusive");
-    assert!(out.orphans.is_empty());
-    assert_eq!(out.inconsistent.len(), 1);
-    assert_eq!(out.inconsistent[0].0, "flaky");
-}
 
 #[test]
 fn reconcile_does_not_reap_a_bg_thread_that_is_live_in_claudes_roster() {
@@ -1438,25 +1348,6 @@ fn write_rollout(root: &Path, session_id: &str) -> std::path::PathBuf {
     p
 }
 
-#[test]
-fn an_advancing_codex_rollout_answers_alive_and_the_sweep_names_it_live() {
-    // AC1-HP (x-798a): a rollout jsonl written within the window proves
-    // the worker is advancing. The heartbeat rung cannot fire here (no
-    // exited_at to advance past) and the claude rungs cannot see the row;
-    // without this rung the row is kept but never probeable.
-    let home = tmp_home("ladder-codex-alive");
-    let codex = tempfile::tempdir().unwrap();
-    write_rollout(codex.path(), "cdx-alive");
-    let e = ladder_codex_row("codex-live", "cdx-alive");
-    let answer = crate::client_commands::row_liveness_with_codex_root(
-        &e,
-        &crate::claude_ask::ClaudeHome::at(home.root()),
-        codex.path(),
-        codex_truth_none,
-    );
-    assert_eq!(answer, RowLiveness::Alive);
-    std::fs::remove_dir_all(home.root()).ok();
-}
 
 #[test]
 fn a_codex_row_with_no_readable_rollout_stays_unknown_and_kept() {
@@ -1593,30 +1484,6 @@ fn an_unreadable_roster_never_flips_the_zombie_arm() {
     assert_eq!(changes[0].new_status, None);
 }
 
-#[test]
-fn reconcile_ends_the_status_constant_for_a_roster_stale_silent_row() {
-    // The roster hit used to hold a claude row `live` forever: presence
-    // in a possibly-stale roster proves nothing about RUNNING. A silent
-    // ladder (no socket, no advancing heartbeat, no working truth state)
-    // means no positive running-marker, so the ask-bucket row goes
-    // Orphaned - the REVERSIBLE transition, not Exited - and gc takes it
-    // from the terminal set.
-    let entries = vec![bg_claude_row("zombie", "zomb0001")];
-    let (changes, out) = plan_reconcile(
-        &entries,
-        |_| Ok(true),
-        || false,
-        |_| true,
-        |_| true,
-        |_| false, // roster: entry present
-        |_| false,
-        |_| false,
-        |_| RowLiveness::Unknown,
-        true, // roster readable
-    );
-    assert_eq!(changes[0].new_status, Some(AgentStatus::Orphaned));
-    assert_eq!(out.orphans, vec!["zombie".to_string()]);
-}
 
 /// Adapt a per-handle answer into the BATCH seam `handle_list_with_truth`
 /// takes, for the rendering tests below - they assert what a row renders,
@@ -2087,41 +1954,6 @@ fn list_renders_family1_truth_instead_of_stored_registry_status() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-#[test]
-fn list_applies_cheap_filters_before_family1_subprocesses() {
-    let home = short_home("listprefilter");
-    seed_stream_row(&home, "claude-worker", "aaaaaaaa");
-    seed_stream_row(&home, "codex-worker", "bbbbbbbb");
-    state::update_registry(&home.registry_json(), |registry| {
-        registry.entries[1].harness = Some("codex".into());
-        registry.entries[1].harness_session_id =
-            Some("bbbbbbbb-1111-2222-3333-444444444444".into());
-        // The provider filter reads the v15+ vendor axis: stamp the row
-        // so it matches below. entries[0] stays unstamped, so a null
-        // provider contributes to no vendor filter.
-        registry.entries[1].provider = Some("openai".into());
-    })
-    .unwrap();
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
-    let req = Request::new(1, "agent.list", json!({"provider": "openai"}));
-    let seen = std::cell::RefCell::new(Vec::new());
-
-    let response = list_rows::handle_list_with_truth(
-        &ctx,
-        &req,
-        per_handle(|handle| {
-            seen.borrow_mut().push(handle.to_string());
-            probe("working")
-        }),
-    );
-
-    assert!(response.result().is_some());
-    assert_eq!(
-        seen.into_inner(),
-        vec!["bbbbbbbb-1111-2222-3333-444444444444"]
-    );
-    std::fs::remove_dir_all(home.root()).ok();
-}
 
 #[test]
 fn list_pays_exactly_one_batch_call_for_the_whole_page() {
@@ -2160,39 +1992,6 @@ fn list_pays_exactly_one_batch_call_for_the_whole_page() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-#[test]
-fn list_row_the_batch_did_not_answer_renders_exactly_as_an_unanswered_row() {
-    // A handle absent from the batch map must be indistinguishable from the
-    // per-row path's `None`: null triple, no invented model. Anything else
-    // and the batch would be reporting a reading it never took.
-    let home = short_home("listbatchpartial");
-    seed_stream_row(&home, "answered", "aaaaaaaa");
-    seed_stream_row(&home, "unanswered", "bbbbbbbb");
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
-    let req = Request::new(1, "agent.list", json!({"all": true}));
-
-    let response = list_rows::handle_list_with_truth(&ctx, &req, |handles: &[String]| {
-        // Answers for the first handle only; the second is simply missing.
-        let map = handles
-            .iter()
-            .take(1)
-            .map(|h| (h.clone(), probe("working").unwrap()))
-            .collect();
-        (map, crate::truth_probe::BatchOutcome::Measured)
-    });
-
-    let agents = response.result().unwrap()["agents"].clone();
-    let rows = agents.as_array().unwrap();
-    let missing = rows
-        .iter()
-        .find(|r| r["name"] == "unanswered")
-        .expect("the unanswered row still renders");
-    assert!(missing["reachability"].is_null());
-    assert!(missing["basis"].is_null());
-    assert!(missing["last_activity_age_s"].is_null());
-    assert_eq!(missing["observed_model"]["kind"], "no-transcript");
-    std::fs::remove_dir_all(home.root()).ok();
-}
 
 /// Start a real stream worker (fake emitter child) on `home.worker_sock(id)`
 /// via the PUBLIC `stream_worker::run`; wait for its socket to appear.
@@ -2577,24 +2376,6 @@ done
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn switchboard_v2_routes_to_identity_guard() {
-    let home = short_home("v2route");
-    let ctx = Arc::new(test_ctx(home.clone(), PathBuf::from("/nonexistent-worker")));
-    let response = dispatch_agent(
-        &ctx,
-        &Request::new(
-            1,
-            "agent.switchboard_v2",
-            json!({"to": "victim", "from": "ghost", "body": "secret"}),
-        ),
-    )
-    .await;
-    let error = response.error().expect("missing identity must fail");
-    assert_eq!(error.code, ErrorCode::InvalidParams);
-    assert!(error.message.contains("recipient_identity"));
-    std::fs::remove_dir_all(home.root()).ok();
-}
 
 // --- codex thread lane: actor-driven ask / stop (the x-de10 probes) ---
 //

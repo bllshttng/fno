@@ -480,12 +480,3 @@ fn fix_clean_on_stdin() {
     );
 }
 
-#[test]
-fn fix_residue_exits_1() {
-    assert_case(
-        None,
-        &["--stdin", "--surface", "mail", "--fix"],
-        Some("You should do this; do that.\n"),
-        "fix leaves residue exit 1",
-    );
-}

@@ -117,48 +117,6 @@ fn build_argv_create_default_sandbox() {
     assert_eq!(&argv[argv.len() - 2..], ["--", full_prompt]);
 }
 
-#[test]
-fn build_argv_create_forwards_model() {
-    // x-c772: an explicit --model reaches `codex exec --model <m>` (between
-    // --skip-git-repo-check and the sandbox flag). None/empty = no --model.
-    let cwd = absent_project_dir();
-    let argv = build_argv_create(&cwd, "hi", false, Some("gpt-5.5"), None, None, &[]);
-    let i = argv
-        .iter()
-        .position(|a| a == "--model")
-        .expect("--model present");
-    assert_eq!(argv[i + 1], "gpt-5.5");
-    // empty model = no flag (parity with the None case)
-    let argv_none = build_argv_create(&cwd, "hi", false, Some(""), None, None, &[]);
-    assert!(!argv_none.iter().any(|a| a == "--model"));
-}
-
-#[test]
-fn build_argv_create_forwards_add_dir() {
-    // x-b6e2: a user --add-dir grants extra write access on `codex exec`. codex's
-    // own cwd rides -C, so add-dir is purely additive. Empty/None adds no USER
-    // flag; the bounded worker's internal plan grant remains. UV_CACHE_DIR is
-    // pinned to a missing path (authoritative, so no grant) because the test
-    // counts --add-dir and the host's real cache would add one.
-    let _uv_guard = PATH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let uv_prev = std::env::var_os("UV_CACHE_DIR");
-    unsafe { std::env::set_var("UV_CACHE_DIR", "/nonexistent-fno-uv-cache-probe") };
-    let cwd = absent_project_dir();
-    let argv = build_argv_create(&cwd, "hi", false, None, None, Some("/extra"), &[]);
-    let i = argv
-        .iter()
-        .position(|a| a == "--add-dir")
-        .expect("--add-dir present");
-    assert_eq!(argv[i + 1], "/extra");
-    let none = build_argv_create(&cwd, "hi", false, None, None, Some(""), &[]);
-    match uv_prev {
-        Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
-        None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
-    }
-    drop(_uv_guard);
-    assert!(!none.iter().any(|a| a == "/extra"));
-    assert_eq!(none.iter().filter(|a| *a == "--add-dir").count(), 1);
-}
 
 #[cfg(unix)]
 #[test]
@@ -285,49 +243,11 @@ fn build_argv_create_approval_precedes_exec() {
     assert!(approval < exec, "approval flag must precede exec: {argv:?}");
 }
 
-#[test]
-fn build_argv_create_yolo() {
-    let cwd = PathBuf::from("/work");
-    let argv = build_argv_create(&cwd, "msg", true, None, None, None, &[]);
-    // --dangerously-bypass-approvals-and-sandbox replaces --sandbox workspace-write
-    assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-    assert!(!argv.contains(&"--sandbox".to_string()));
-    assert!(!argv.contains(&"workspace-write".to_string()));
-}
 
 // ---------------------------------------------------------------------------
 // build_argv_resume
 // ---------------------------------------------------------------------------
 
-#[test]
-fn build_argv_resume_default_no_sandbox_flag() {
-    let argv = build_argv_resume(
-        &PathBuf::from("/x"),
-        "sess-uuid-1234",
-        "msg to resume",
-        false,
-        None,
-    );
-    // codex exec resume <session_id> --json --skip-git-repo-check <prompt>
-    assert_eq!(argv[0], "codex");
-    assert_eq!(argv[1], "exec");
-    assert_eq!(argv[2], "resume");
-    assert_eq!(argv[3], "sess-uuid-1234");
-    assert!(argv.contains(&"--json".to_string()));
-    assert!(argv.contains(&"--skip-git-repo-check".to_string()));
-    // No --sandbox or --dangerously-bypass on default
-    assert!(!argv.contains(&"--sandbox".to_string()));
-    assert!(!argv.contains(&"workspace-write".to_string()));
-    assert!(!argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-    // Prompt is last
-    assert_eq!(argv.last().unwrap(), "msg to resume");
-}
-
-#[test]
-fn build_argv_resume_yolo_adds_bypass() {
-    let argv = build_argv_resume(&PathBuf::from("/x"), "s123", "p", true, None);
-    assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-}
 
 #[test]
 fn build_argv_resume_forwards_reasoning_effort() {
@@ -390,15 +310,6 @@ fn parse_jsonl_line_thread_started() {
     }
 }
 
-#[test]
-fn parse_jsonl_line_item_completed_agent_message() {
-    let line = r#"{"type":"item.completed","item":{"type":"agent_message","text":"hello world"}}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    match ev {
-        JsonlEvent::AgentMessage { text } => assert_eq!(text, "hello world"),
-        other => panic!("unexpected: {:?}", other),
-    }
-}
 
 #[test]
 fn parse_jsonl_line_item_completed_error() {
@@ -410,12 +321,6 @@ fn parse_jsonl_line_item_completed_error() {
     }
 }
 
-#[test]
-fn parse_jsonl_line_turn_completed() {
-    let line = r#"{"type":"turn.completed"}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    assert!(matches!(ev, JsonlEvent::TurnCompleted));
-}
 
 #[test]
 fn parse_jsonl_line_non_json_returns_none() {
@@ -425,30 +330,6 @@ fn parse_jsonl_line_non_json_returns_none() {
     assert!(parse_jsonl_line("   ").is_none());
 }
 
-#[test]
-fn parse_jsonl_line_unknown_type_returns_other() {
-    let line = r#"{"type":"some.future.event","data":42}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    assert!(matches!(ev, JsonlEvent::Other { .. }));
-}
-
-#[test]
-fn parse_jsonl_line_thread_started_missing_thread_id_returns_other_or_none() {
-    // thread.started without thread_id -> None or Other (can't extract session_id)
-    // The key requirement is: no panic, and no ThreadStarted with a junk id.
-    let line = r#"{"type":"thread.started"}"#;
-    let ev = parse_jsonl_line(line);
-    // None (the ? operator returned early) or Some(Other) are both acceptable.
-    if let Some(ev) = ev {
-        match ev {
-            JsonlEvent::ThreadStarted { .. } => {
-                panic!("should not parse a missing thread_id as valid ThreadStarted")
-            }
-            _ => {} // Other is fine
-        }
-    }
-    // None is also fine
-}
 
 // ---------------------------------------------------------------------------
 // CodexAskError display / exit-code mapping

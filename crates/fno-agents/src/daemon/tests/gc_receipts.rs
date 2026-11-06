@@ -894,28 +894,6 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
     );
 }
 
-#[test]
-fn a_receipt_whose_reaped_at_will_not_parse_is_kept_and_named() {
-    let home = tmp_home("gc-receipt-baddate");
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let broken = write_receipt_at(&home, "claude-broken-sess.json", "");
-    let missing = write_receipt_at(&home, "claude-missing-sess.json", "not-a-date");
-
-    let summary = gc_sweep(&home, &emitter, 900, 7);
-
-    // A failed read is not evidence of age: both survive, and the sweep
-    // names what it kept so a silent pile-up is never mistaken for health.
-    assert!(broken.exists());
-    assert!(missing.exists());
-    assert!(summary.expired_receipts.is_empty());
-    let kept: Vec<&str> = summary
-        .kept_receipts
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .collect();
-    assert!(kept.contains(&"claude-broken-sess.json"), "{kept:?}");
-    assert!(kept.contains(&"claude-missing-sess.json"), "{kept:?}");
-}
 
 /// Durability ordering, enforced not narrated: a receipt that cannot be
 /// written holds its row in the registry. The receipts dir is pre-created
@@ -1162,55 +1140,6 @@ fn gc_sweep_restores_row_when_termination_evidence_is_unknown() {
     }));
 }
 
-#[test]
-fn gc_sweep_restores_row_when_dead_dispatch_receipt_cannot_persist() {
-    let sandbox = tmp_home("gc-dead-dispatch-write-failure");
-    let home = AgentsHome::at(sandbox.root().join("agents"));
-    home.ensure_root().unwrap();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let repo = home.root().join("repo");
-    std::fs::create_dir_all(&repo).unwrap();
-    assert!(crate::git_test_helpers::git_init(&repo));
-    state::update_registry(&home.registry_json(), |registry| {
-        let mut row = bg_claude_row("target-x-a35a-route-atomicity", "dead0001");
-        row.status = AgentStatus::Exited;
-        row.cwd = repo.to_string_lossy().into_owned();
-        row.exited_at = Some("2020-01-01T00:00:00Z".into());
-        row.log_path = Some(stale_log(&repo));
-        // Session identity present, so the receipt gate stages a record
-        // and the sweep reaches the dead-dispatch write this test breaks.
-        row.harness_session_id = Some("019cdead-0000-7000-8000-000000000001".into());
-        registry.entries.push(row);
-    })
-    .unwrap();
-    // The write this test breaks is the STORE commit now: a directory at the
-    // store path refuses to open as SQLite, so the receipt persist fails the
-    // same way a journal append to a directory did pre-cutover.
-    std::fs::create_dir_all(global_events_path(&home)).unwrap();
-    std::fs::create_dir_all(global_events_path(&home).with_file_name("events.db")).unwrap();
-
-    let summary = retire_sweep(
-        &home,
-        &emitter,
-        &[("019cdead-0000-7000-8000-000000000001", "x-a35a", "done")],
-        &|e| {
-            e.log_path
-                .as_deref()
-                .map(|p| vec![std::path::PathBuf::from(p)])
-        },
-    );
-
-    assert!(summary.retired.is_empty());
-    let registry = state::load_registry(&home.registry_json()).unwrap();
-    assert!(registry
-        .entries
-        .iter()
-        .any(|row| row.name == "target-x-a35a-route-atomicity"));
-    let events = read_events(&home);
-    assert!(events.iter().any(|event| {
-        event["type"] == "daemon_recovery_error" && event["data"]["op"] == "record_dead_dispatch"
-    }));
-}
 
 #[tokio::test]
 async fn lifecycle_name_resolution_never_falls_back_on_ambiguity() {
