@@ -76,7 +76,13 @@ fn boot_age_past_ceiling(boot_epoch_s: u64) -> bool {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(u64::MAX);
-    now.saturating_sub(boot_epoch_s) > REVIVAL_HOLD_CEILING_SECS
+    boot_age_past_ceiling_at(boot_epoch_s, now)
+}
+
+/// The pure ceiling read, now injected so the test pins a young and an old
+/// boot without depending on the runner's own uptime.
+fn boot_age_past_ceiling_at(boot_epoch_s: u64, now_s: u64) -> bool {
+    now_s.saturating_sub(boot_epoch_s) > REVIVAL_HOLD_CEILING_SECS
 }
 
 /// The sender stamp the pass's mail carries, so a drain attributes the rows
@@ -1254,12 +1260,13 @@ mod tests {
         assert!(hold_reason(&home).is_some(), "unfinished must hold");
         write_receipt(&receipt, boot, &[], true);
         assert!(hold_reason(&home).is_none(), "finished must run");
-        let bound = boot - REVIVAL_HOLD_CEILING_SECS - 1;
-        write_receipt(&receipt, bound, &[], true);
-        assert!(
-            hold_reason(&home).is_none(),
-            "past the ceiling the hold does not bind"
-        );
+        // The ceiling is a pure bound on the boot's age, tested with now
+        // injected: a receipt older than the window reads as an earlier
+        // boot, so the wall-clock ceiling is what ends the hold.
+        let young = boot_age_past_ceiling_at(boot, boot + 60);
+        assert!(!young, "a fresh boot is inside the ceiling");
+        let old = boot_age_past_ceiling_at(boot - 1, boot + REVIVAL_HOLD_CEILING_SECS);
+        assert!(old, "past the ceiling the hold does not bind");
     }
     /// The re-seat: a revived holder gets its vacated manifest restored and
     /// its row re-stamped; a live rival on the territory refuses the stamp
