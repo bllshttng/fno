@@ -107,6 +107,9 @@ pub(super) struct FleetArms {
     // state read when the gate is idle, so an extra run is cheap; the gate
     // exists so a slow compare-and-post never stacks.
     evals_settle_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Evals launch and scheduled-bank work: bounded client invocation,
+    // independent of pr-watch's saturated tick budget.
+    evals_arm_in_flight: Arc<std::sync::atomic::AtomicBool>,
     // Legacy shell-writer rendezvous sweep: same one-in-flight discipline.
     // The pass is a few read_dir walks over the state root and the spaces,
     // so an extra run is cheap; the gate exists so a machine carrying the
@@ -193,6 +196,7 @@ impl FleetArms {
             sandbox_ingest_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             trust_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             evals_settle_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            evals_arm_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shell_writers_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -580,6 +584,23 @@ impl FleetArms {
                 });
             });
         }
+        // Launches due gate and scheduled-bank runs off-loop. The one-in-flight
+        // guard keeps a slow child from stacking; the child itself is bounded.
+        if !self
+            .evals_arm_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.evals_arm_in_flight);
+            let home = ctx.home.clone();
+            let cwd = ctx.opts.agents_config_cwd.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sweeps::evals_arm_sweep(&home, &emitter, now_epoch_secs(), &|| {
+                    evals_arm_receipt(&home, &cwd)
+                });
+            });
+        }
         // Legacy shell-writer rendezvous sweep: hourly, off-loop. The module
         // owns its cadence and stamp, the siblings' shape; the residue is
         // static, so the pass is a quiet no-op on current machines.
@@ -596,5 +617,87 @@ impl FleetArms {
             });
         }
         crate::question_sweep::daemon_tick(&ctx.home, now_epoch_secs());
+    }
+}
+
+fn evals_arm_receipt(home: &crate::paths::AgentsHome, cwd: &Path) -> Option<String> {
+    let schedule_days = crate::agents_config::config_lookup(cwd, &["evals", "schedule_days"])
+        .and_then(|value| value.as_integer())
+        .unwrap_or(7);
+    if schedule_days <= 0 {
+        return Some(
+            serde_json::json!({
+                "acted": 0,
+                "skip_reason": "evals_off",
+                "detail": "evals.schedule_days 0"
+            })
+            .to_string(),
+        );
+    }
+    if !crate::backlog::advance_settings::autonomy_master_enabled(Some(cwd)) {
+        return Some(
+            serde_json::json!({
+                "acted": 0,
+                "skip_reason": "autonomy_off",
+                "detail": "config.autonomy.enabled is false"
+            })
+            .to_string(),
+        );
+    }
+    let stale_days = match crate::agents_config::config_lookup(cwd, &["evals", "stale_days"])
+        .and_then(|value| value.as_integer())
+        .unwrap_or(7)
+    {
+        0 => 7,
+        value => value,
+    };
+    let history = crate::evals::history_path();
+    let summary = crate::evals_trend::summary_payload(
+        &history.to_string_lossy(),
+        stale_days,
+        chrono::Utc::now(),
+    );
+    let fno_agents_bin = std::env::var_os("FNO_AGENTS_BIN")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|dir| dir.join("fno-agents")))
+        })
+        .unwrap_or_else(|| PathBuf::from("fno-agents"));
+    let mut cmd = std::process::Command::new(fno_agents_bin);
+    let args = vec![
+        "evals-arm".to_string(),
+        "--summary-json".to_string(),
+        summary.to_string(),
+        "--history".to_string(),
+        history.to_string_lossy().into_owned(),
+        "--events".to_string(),
+        home.events_jsonl().to_string_lossy().into_owned(),
+        "--fno-bin".to_string(),
+        crate::scrape::fno_bin().to_string_lossy().into_owned(),
+        "--schedule-days".to_string(),
+        schedule_days.to_string(),
+        "--stale-days".to_string(),
+        stale_days.to_string(),
+    ];
+    cmd.current_dir(cwd)
+        .env("FNO_AGENTS_HOME", home.root())
+        .args(args);
+    let budget = crate::bounded_cmd::load_scaled_budget_s(30, 120);
+    match crate::bounded_cmd::output_with_timeout_result(cmd, budget) {
+        Ok(output) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        Ok(output) => Some(serde_json::json!({
+            "acted": 0,
+            "skip_reason": "arm_failed",
+            "detail": format!("evals-arm exited {:?}: {}", output.status.code(), String::from_utf8_lossy(&output.stderr).chars().take(500).collect::<String>())
+        }).to_string()),
+        Err(error) => Some(serde_json::json!({
+            "acted": 0,
+            "skip_reason": "arm_failed",
+            "detail": format!("evals-arm could not run: {error}")
+        }).to_string()),
     }
 }

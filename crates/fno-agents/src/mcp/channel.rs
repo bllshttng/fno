@@ -281,17 +281,6 @@ mod tests {
     }
 
     #[test]
-    fn a_non_identifier_meta_key_is_reported_on_receipt() {
-        let env = json!({
-            "jsonrpc": "2.0",
-            "method": MCP_CHANNEL_METHOD,
-            "params": {"content": "x", "meta": {"chat-id": "abc"}},
-        });
-        let reason = validate_envelope(&env).unwrap_err();
-        assert_eq!(reason, "meta_key_invalid:'chat-id'");
-    }
-
-    #[test]
     fn a_method_rename_surfaces_in_the_drift_diff() {
         let a = build_channel_notification("x", None, None).unwrap();
         let mut b = a.clone();

@@ -401,7 +401,9 @@ fn default_true() -> bool {
 /// chip opens the node's own repo and counts every PR; floor stays 58.
 /// v121: `ClientMsg::Link`, the link role a far `mux serve --link` takes, and
 /// `Command::ReachRemote`, a remote row opened in a portal; floor stays 58.
-pub const PROTO_VERSION: u32 = 121;
+/// v122: `AgentLaunchRequest.host` (serde default), the composer's target
+/// machine; older servers must never ignore a remote destination.
+pub const PROTO_VERSION: u32 = 122;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -4160,7 +4162,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 121);
+        assert_eq!(PROTO_VERSION, 122);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

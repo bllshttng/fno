@@ -242,7 +242,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `evals.gate.daily_usd` | float | `15.0` | never | Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off. |
 | `evals.gate.lane` | str | `zai-flash` | never | Lane the gate's golden runs use. Defaults zai-flash. |
 | `evals.enabled` | bool | `true` | never | Enable the headless eval-suite grading-worker spawn. Defaults true. |
-| `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs on the pr-watch tick (0 disables). |
+| `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs; the daemon checks each minute (0 disables). |
 | `evals.stale_days` | int | `7` | never | Age in days at which the newest regression-tier run reads STALE in doctor and triage health. |
 | `evals.scratch_threshold` | int | `3` | never | Distinct jobs inside the window at which a recurring scratch shape files one p1 node. |
 | `evals.scratch_window_days` | int | `28` | never | Window in days the scratch-shape sweep reads job tmp dirs over. |
@@ -354,8 +354,8 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `accounts.quota.defer_horizon_minutes` | int | `60` | never | How far ahead a quota-window reset is still worth deferring for. |
 | `accounts.quota.pick_on_launch` | bool | `false` | never | Pick the least-loaded account at spawn time instead of pinning one. |
 | `accounts.failover` | FailoverBlock (optional) | _(none)_ | never | Provider-rotation failover: {max_swaps_per_phase}. |
-| `github.app_id` | str | `` | never | GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls. |
-| `github.app_installation_id` | str | `` | never | GitHub App installation id; required beside github.app_id before the App path mints tokens. |
+| `github.app_id` | str | `` | never | GitHub App id; arms App-installation token minting for GitHub API calls. The installation is resolved per repo owner from the app's installations list; a repo whose owner has no installation keeps the user token. |
+| `github.app_installation_id` | str | `` | never | Optional GitHub App installation id pin; skips the per-owner installation resolution and serves every repo that installation can see. |
 | `github.app_key_path` | str | `~/.fno/secrets/github-app.pem` | never | Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME. |
 | `questions.judge.batch` | int | `10` | never | Max questions the judge takes per run. |
 | `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |

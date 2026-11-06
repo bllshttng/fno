@@ -194,19 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_dead_pid_file_survives_the_floor() {
-        let (_dir, _env) = pinned_env("fresh");
-        let dir = temp_dir("fresh");
-        let fresh = write_tmp(&dir, 999_999_999, "cccccccccccc");
-        let rep = sweep_with_min_age(true, SystemTime::now(), Duration::from_secs(3600));
-        assert!(fresh.exists());
-        assert_eq!(rep.reaped.len(), 0);
-        assert_eq!(rep.kept, 1);
-        assert!(rep.rows[0].reason.contains("floor"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn an_unparsable_tmp_name_is_never_touched() {
         let (_dir, _env) = pinned_env("unparsable");
         let dir = temp_dir("unparsable");

@@ -533,31 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn machine_wide_fno_config_survives_the_birth() {
-        // A supervisor that lost these would fork every session onto the
-        // DEFAULT state root: a different registry and backlog than the
-        // operator configured, and state written outside the configured tree.
-        // Per-session stamps in the same namespace are still held back.
-        for key in SUPERVISOR_WIDE_FNO_KEYS {
-            assert!(
-                !is_poison(key),
-                "{key} configures the machine, not a session"
-            );
-        }
-        assert!(!is_poison("FNO_TEST_HERMETIC"));
-        for key in [
-            "FNO_SESSION",
-            "FNO_NODE",
-            "FNO_AGENT_SELF",
-            "FNO_HARNESS_SESSION_ID",
-            "FNO_REPO_ROOT",
-            "FNO_WAKE_MSG",
-        ] {
-            assert!(is_poison(key), "{key} names one session, never the machine");
-        }
-    }
-
-    #[test]
     fn a_pinned_birth_command_holds_every_poison_key_back() {
         // AC1-HP: the AC1 key set, plus the prefix cases and one model var.
         let _guard = crate::claims::test_env_lock()

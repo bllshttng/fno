@@ -71,6 +71,7 @@ fn send_launch_full(
         revision: 1,
         cwd: scratch.home_cwd(),
         harness: "claude".to_string(),
+        host: None,
         substrate: "pane".to_string(),
         model: None,
         provider: None,
@@ -109,11 +110,7 @@ fn send_launch_with_flags(
 }
 
 #[test]
-fn launcher_journey_model_only_pin_omits_harness() {
-    // AC5-HP: a routing-row pick (model_names_harness) omits --harness so
-    // the door resolves the row's harness, route and account from the model.
-    // AC5-EDGE: the false default keeps today's argv, pinned by
-    // launcher_journey_argv_stdin_and_birth_decode.
+fn launcher_journey_forwards_model_effort_and_permission_chips() {
     let scratch = Scratch::new("launcher-journey-modelpin");
     let record_dir = scratch.0.join("records");
     std::fs::create_dir_all(&record_dir).unwrap();
@@ -127,18 +124,19 @@ fn launcher_journey_model_only_pin_omits_harness() {
         ],
     );
     let mut client = attach_and_launch(&scratch, &sock);
-    client.raw(&ClientMsg::AgentLaunch(AgentLaunchRequest {
+    let base = AgentLaunchRequest {
         request_id: 1,
         revision: 1,
         cwd: scratch.home_cwd(),
         harness: "claude".to_string(),
+        host: None,
         substrate: String::new(),
         model: Some("glm-5.3-flash[1m]".to_string()),
         provider: None,
         route: None,
         model_names_harness: true,
-        effort: None,
-        permission_mode: None,
+        effort: Some("high".into()),
+        permission_mode: Some("default".into()),
         placement: None,
         portal: None,
         split: None,
@@ -148,25 +146,76 @@ fn launcher_journey_model_only_pin_omits_harness() {
         worktree: false,
         branch: None,
         force: false,
-    }));
-    client.wait(15, "launch terminal state", |c| {
-        c.launch_updates
-            .iter()
-            .any(|u| !matches!(u.state, fno::proto::LaunchState::Starting))
-            .then_some(())
-    });
-    let argv = std::fs::read_to_string(record_dir.join("argv.log")).unwrap();
-    let argv: Vec<String> = argv.lines().map(str::to_string).collect();
-    assert!(
-        !argv.contains(&"--harness".to_string()),
-        "a model-only pin omits --harness: {argv:?}"
-    );
-    // The model pins are vestigial at the door: the axis flags retired, so
-    // the pin rides nothing here (a routing row would ride --route instead).
-    assert!(
-        !argv.contains(&"--model".to_string()),
-        "a model-only pin emits no axis flag: {argv:?}"
-    );
+    };
+    for (index, (harness, model, provider, route, inferred)) in [
+        ("claude", Some("glm-5.3-flash[1m]"), None, None, true),
+        ("codex", Some("gpt-5.6-luna"), None, None, false),
+        (
+            "claude",
+            Some("glm-5.3-flash[1m]"),
+            Some("zai"),
+            None,
+            false,
+        ),
+        ("claude", None, None, Some("zai/glm-5.3-flash[1m]"), false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut req = base.clone();
+        req.request_id = index as u64 + 1;
+        req.harness = harness.into();
+        req.model = model.map(str::to_string);
+        req.provider = provider.map(str::to_string);
+        req.route = route.map(str::to_string);
+        req.model_names_harness = inferred;
+        std::fs::write(record_dir.join("argv.log"), "").unwrap();
+        client.launch_updates.clear();
+        client.raw(&ClientMsg::AgentLaunch(req));
+        client.wait(15, "launch terminal state", |c| {
+            c.launch_updates
+                .iter()
+                .any(|u| !matches!(u.state, fno::proto::LaunchState::Starting))
+                .then_some(())
+        });
+        let argv = std::fs::read_to_string(record_dir.join("argv.log")).unwrap();
+        let argv: Vec<String> = argv.lines().map(str::to_string).collect();
+        assert_eq!(
+            argv.iter().any(|a| a == "--harness"),
+            !inferred,
+            "harness choice: {argv:?}"
+        );
+        let expected_route = if index == 2 {
+            Some("zai/glm-5.3-flash[1m]")
+        } else {
+            route
+        };
+        let expected_model = if index == 2 { None } else { model };
+        for (flag, value) in [
+            ("--harness", (!inferred).then_some(harness)),
+            ("--model", expected_model),
+            ("--provider", None),
+            ("--route", expected_route),
+            ("--effort", Some("high")),
+            ("--permission-mode", Some("default")),
+        ] {
+            if let Some(value) = value {
+                assert!(
+                    argv.windows(2).any(|args| args == [flag, value]),
+                    "chip {flag}={value} reaches spawn: {argv:?}"
+                );
+            } else {
+                assert!(
+                    !argv.iter().any(|a| a == flag),
+                    "no invented {flag}: {argv:?}"
+                );
+            }
+        }
+        assert!(
+            !argv.iter().any(|arg| arg == "--"),
+            "no fence required: {argv:?}"
+        );
+    }
 }
 
 /// Wait for ANY terminal state, not one specific variant: a wait pinned to
@@ -244,6 +293,8 @@ fn launcher_journey_argv_stdin_and_birth_decode() {
         "spawn",
         "--cwd",
         home_cwd.as_str(),
+        "--harness",
+        "claude",
         "--as",
         "pane",
         "--mux-session",
@@ -290,6 +341,7 @@ fn launcher_journey_empty_substrate_takes_the_door_default() {
         revision: 1,
         cwd: scratch.home_cwd(),
         harness: "claude".to_string(),
+        host: None,
         substrate: String::new(),
         model: None,
         provider: None,
@@ -321,6 +373,8 @@ fn launcher_journey_empty_substrate_takes_the_door_default() {
         "spawn",
         "--cwd",
         home_cwd.as_str(),
+        "--harness",
+        "claude",
         "--no-wait",
         "--portal",
         "1",
@@ -357,6 +411,7 @@ fn launcher_journey_node_prefill_rides_the_door() {
         revision: 1,
         cwd: scratch.home_cwd(),
         harness: "claude".to_string(),
+        host: None,
         substrate: String::new(),
         model: None,
         provider: None,
