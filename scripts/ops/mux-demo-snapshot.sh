@@ -3,7 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
-#       [--hold] [--group <axis>] [--remote-pane]
+#       [--hold] [--group <axis>] [--remote-pane] [--web]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -36,6 +36,7 @@ PREV=""
 HOLD=""
 GROUP=""
 REMOTE_PANE=""
+WEB=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -50,6 +51,8 @@ for a in "$@"; do
     HOLD=1
   elif [ "$a" = "--remote-pane" ]; then
     REMOTE_PANE=1
+  elif [ "$a" = "--web" ]; then
+    WEB=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -327,6 +330,18 @@ for i in "${!IDS[@]}"; do
   if [ $((i % 2)) -eq 0 ]; then s=payments; else s=search; fi
   "$FNO" backlog update "${IDS[$i]}" --set project="$s" >/dev/null
 done
+
+# The graph shot needs a real family, a cross-project blocker and live nodes;
+# every other snapshot keeps the compact, unrelated work fixture above.
+case " $* " in
+  *" --view backlog-graph "*)
+    "$FNO" backlog update "${IDS[0]}" type=epic >/dev/null
+    "$FNO" backlog update "${IDS[1]}" parent="${IDS[0]}" "blocked_by+=${IDS[5]}" >/dev/null
+    "$FNO" backlog update "${IDS[2]}" parent="${IDS[0]}" >/dev/null
+    "$FNO" backlog update "${IDS[3]}" parent="${IDS[1]}" >/dev/null
+    "$FNO" backlog update "${IDS[5]}" type=epic >/dev/null
+    ;;
+esac
 
 # The three panes work the first three nodes: a claim moves each node to In
 # Progress, and a session row names the harness session its pane runs.
@@ -795,4 +810,8 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
+if [ -n "$WEB" ]; then
+  "$FNO" mux serve --web --server "$SERVER"
+else
+  "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
+fi
