@@ -369,3 +369,4 @@ mod tests {
         assert!(json.get("target").is_some());
         assert_eq!(json["pr_number"], serde_json::json!(123));
     }
+}
