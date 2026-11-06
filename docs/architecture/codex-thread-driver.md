@@ -265,7 +265,7 @@ A driver-hosted thread closes this by construction. It appears in `thread/loaded
 
 ### Worker threads start without the rea MCP
 
-Every thread the lane spawns sends `mcp_servers.rea.enabled=false` in its `thread/start` config map, and again on `thread/resume`. The daemon starts one MCP server process per loaded thread and never reaps it (x-d560, measured 2026-11-06: 15 children against 9 loaded threads). A spawn that carries its own `mcp_servers.rea.` pair keeps its value. The disable only fills the absent names. The user's own interactive codex sessions are untouched: the disable rides the lane's frames, never `~/.codex/config.toml`.
+Every thread the lane spawns sends `mcp_servers.rea.enabled=false` in its `thread/start` config map, and again on `thread/resume`. The daemon starts one MCP server process per loaded thread and never reaps it (measured 2026-11-06: 15 children against 9 loaded threads). A spawn that carries its own `mcp_servers.rea.` pair keeps its value. The disable only fills the absent names. The user's own interactive codex sessions are untouched: the disable rides the lane's frames, never `~/.codex/config.toml`.
 
 ## What the fno side holds now
 

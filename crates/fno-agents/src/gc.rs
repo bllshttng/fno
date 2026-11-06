@@ -126,8 +126,8 @@ pub const DONE_NODE_IDLE_RETIRE_SECS: i64 = 1_800;
 /// only spaces the reap from the death (nudges and the stuck escalation run
 /// inside it); the stamp itself is the reconcile's positive proof of death,
 /// written only after it confirmed the child gone. Nothing reaped these rows
-/// before, and they stacked up (x-d560 lead read 2026-11-06: 22 of them on
-/// one machine, ages 0 to 73 hours).
+/// before, and they stacked up (measured 2026-11-06: 22 of them on one
+/// machine, ages 0 to 73 hours).
 pub const EXIT_ROW_REAP_SECS: i64 = 7_200;
 
 /// WHICH positive fact holds a [`GcAction::Keep`] row. Removal is the
@@ -2219,7 +2219,7 @@ mod tests {
     }
 
     /// An exit-recorded row past the guard retires whatever the transcript
-    /// says (the x-d560 fix): the brainstorm keep and the idle window protect
+    /// says: the brainstorm keep and the idle window protect
     /// rows whose death is inferred, and this row's death is a stored probe
     /// result. Inside the guard the keeps still hold, and a live claim still
     /// outranks the exit reap.
