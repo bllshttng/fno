@@ -9,11 +9,15 @@ Arguments:
   kind  Event kind to match.
 
 Options:
-  --field <str>        Field filter FIELD=VALUE; may be repeated.
+  --field <str>        Field filter FIELD=VALUE (match) or FIELD!=VALUE
+                       (exclude: kept only when the field is present and
+                       differs); may be repeated.
   --since <str>        Lower timestamp bound as ISO-8601 or a duration such as
                        7d.
   --session-id <str>   Session id to match.
   --limit <int range>  Maximum matching rows to print.  [default: 50; x>=1]
+  --last <int range>   Print the NEWEST N matching rows instead of the first
+                       N. Pass --limit or --last, not both.
   --kinds              Summarize every event kind.
   -J, --json           Emit one structured result.
   --help               Show this message and exit.
