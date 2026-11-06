@@ -128,6 +128,100 @@ esac"#,
     );
 }
 
+#[test]
+fn a_done_node_without_any_pr_row_ends_as_advisory_without_rest_read() {
+    let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
+    let (tmp, manifest_path, transcript_path) = stamped_rig(
+        "x-no-pr",
+        "sess-no-pr",
+        serde_json::json!({
+            "id": "x-no-pr", "slug": "x-no-pr", "title": "n", "type": "feature",
+            "status": "done", "priority": "p1"
+        }),
+    );
+    let cwd = tmp.path();
+    let gh = make_script(
+        cwd,
+        "gh",
+        r#"echo "unexpected gh invocation: $*" >&2
+exit 1"#,
+    );
+    let git = make_script(
+        cwd,
+        "git",
+        r#"case "$*" in
+  *"@{push}"*) echo sha1111111111111111111111111111111111111111 ;;
+  *"rev-parse"*) echo sha1111111111111111111111111111111111111111 ;;
+  *"porcelain"*) exit 0 ;;
+  *) echo deadbeefdeadbeefdeadbeefdeadbeef00000001 ;;
+esac"#,
+    );
+
+    let (code, d) = fire(&[
+        "loop-check",
+        "--state",
+        manifest_path.to_str().unwrap(),
+        "--transcript",
+        transcript_path.to_str().unwrap(),
+        "--cwd",
+        cwd.to_str().unwrap(),
+        "--now",
+        "2026-06-05T00:30:00Z",
+        &format!("--gh-bin={}", gh.display()),
+        &format!("--git-bin={}", git.display()),
+    ]);
+    let events_path = project_events(cwd);
+    std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
+
+    assert_eq!(code, 0);
+    assert_eq!(d.decision, "allow", "{}", d.message);
+    assert_eq!(d.termination_reason.as_deref(), Some("DoneAdvisory"));
+    let events = event_text(&events_path);
+    assert!(events.contains("DoneAdvisory"), "events: {events}");
+    assert!(!events.contains("loop_check_gh_error"), "events: {events}");
+}
+
+#[test]
+fn a_done_node_with_an_open_pr_row_stays_on_the_regular_gate() {
+    let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
+    let (tmp, manifest_path, transcript_path) = stamped_rig(
+        "x-open-pr",
+        "sess-open-pr",
+        serde_json::json!({
+            "id": "x-open-pr", "slug": "x-open-pr", "title": "n", "type": "feature",
+            "status": "done", "priority": "p1", "pr_number": 42,
+            "pr_url": "https://github.com/bllshttng/footnote/pull/42"
+        }),
+    );
+    let cwd = tmp.path();
+    let mock = MockBins::failing_gh();
+
+    let (code, d) = fire(&[
+        "loop-check",
+        "--state",
+        manifest_path.to_str().unwrap(),
+        "--transcript",
+        transcript_path.to_str().unwrap(),
+        "--cwd",
+        cwd.to_str().unwrap(),
+        "--now",
+        "2026-06-05T00:30:00Z",
+        &format!("--gh-bin={}", mock.gh.display()),
+        &format!("--git-bin={}", mock.git.display()),
+    ]);
+    let events_path = project_events(cwd);
+    std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
+
+    assert_eq!(code, 0);
+    assert_eq!(d.decision, "block", "{}", d.message);
+    assert!(d.termination_reason.is_none());
+    assert!(event_text(&events_path).contains("loop_check_gh_error"));
+}
+
 /// The early allow must not outrank the shipped-work check: a local commit
 /// the push target does not have falls through to the full gate, which on a
 /// gh outage blocks exactly as before.

@@ -260,21 +260,25 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     rows.first().map(|(number, _, _)| number.to_string())
 }
 
-/// The manifest node's work reads finished in the graph store alone: the node
-/// is done (or superseded), at least one of its recorded PRs is stamped
-/// merged, and no live row is left open. Returns the newest merged PR number
-/// so the caller can name its evidence.
+/// The manifest node's completion shape read from the graph store: a done or
+/// superseded node with no numbered PR rows, or one whose recorded PRs are
+/// settled with at least one merged row. Returns None for an open node, an
+/// unreadable store, or any live PR row so the caller keeps the normal gate.
 ///
 /// This is the done-worker early allow: once the store records the merge, the
 /// gate's REST read can only re-learn a fact it already knows, and under a
 /// loaded machine that read is the one thing that can still fail - each
 /// timeout re-blocking a finished session that never goes idle, so queued
-/// mail never lands. An unreadable store, a missing row, an open node, or an
-/// unstamped live row keeps the REST read exactly as before (fail-open); the
-/// live-row rule is the selector's own (an unstamped row at or below the
-/// newest terminal stamp is reopen history, a marked `history` row sinks
-/// regardless), so a replacement PR in flight holds the gate.
-pub(super) fn node_done_pr_merged(cwd: &Path, node_id: Option<&str>) -> Option<i64> {
+/// mail never lands. A numbered history or closed row is still a PR row and
+/// never qualifies for the no-PR advisory terminal. An unstamped live row
+/// keeps the normal PR gate; the live-row rule matches the selector's own
+/// reopen-history rule.
+pub(super) enum DoneNodeTerminal {
+    NoPr,
+    Merged(i64),
+}
+
+pub(super) fn node_done_terminal(cwd: &Path, node_id: Option<&str>) -> Option<DoneNodeTerminal> {
     use crate::backlog::model::Status;
     let node_id = node_id?;
     let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
@@ -286,6 +290,9 @@ pub(super) fn node_done_pr_merged(cwd: &Path, node_id: Option<&str>) -> Option<i
         return None;
     }
     let rows = numbered_pr_rows(&node);
+    if rows.is_empty() {
+        return Some(DoneNodeTerminal::NoPr);
+    }
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
@@ -302,6 +309,7 @@ pub(super) fn node_done_pr_merged(cwd: &Path, node_id: Option<&str>) -> Option<i
         .filter(|(_, status, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
         .map(|(number, _, _)| *number)
         .max()
+        .map(DoneNodeTerminal::Merged)
 }
 
 /// The node's live replacement PR when the bound one reads CLOSED: the
