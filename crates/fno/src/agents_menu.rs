@@ -776,11 +776,13 @@ mod tests {
         let debt = include_str!("../../../scripts/ci/menu-caps-debt.tsv");
         for (path, node) in walk(&ROOT) {
             if path.len() < 2 {
-                let printed = path
-                    .iter()
-                    .map(|s| s.as_ref())
-                    .collect::<Vec<&str>>()
-                    .join(" ");
+                let printed = format!(
+                    "agents {}",
+                    path.iter()
+                        .map(|s| s.as_ref())
+                        .collect::<Vec<&str>>()
+                        .join(" ")
+                );
                 let cap = debt
                     .lines()
                     .filter(|l| !l.starts_with('#'))
