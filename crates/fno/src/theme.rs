@@ -405,7 +405,7 @@ pub(crate) fn theme_footnote_paper() -> Theme {
         border: rgb(0x14, 0x14, 0x14), // the dark twin's ground (the mirror pair)
         title: rgb(0x14, 0x14, 0x14),  // text
         brand: rgb(0x14, 0x14, 0x14),  // ink
-        needs_you: rgb(0x79, 0x68, 0x23), // needs-you olive
+        needs_you: rgb(0x65, 0x55, 0x1b), // needs-you olive, readable on surface0
         ok: rgb(0x46, 0x77, 0x48),     // palette green
         warn: rgb(0x79, 0x68, 0x23),   // palette yellow
         error: rgb(0x8f, 0x4d, 0x4b),  // the palette red darkened one step: the
