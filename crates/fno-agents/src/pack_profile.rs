@@ -22,6 +22,12 @@ pub const HOOK_FILES: [&str; 3] = [
 pub enum Profile {
     Full,
     Pack,
+    /// The codex dev stage: a full stage minus the four trees no codex hook,
+    /// skill or command reads at run time (`crates/`, `cli/`, `tests/`,
+    /// `evals/`). Its own stage dir, so it never replaces another profile's
+    /// tree under a live session. The build refuses a hook that names a
+    /// dropped tree, so a future runtime read cannot ship silently.
+    Codex,
 }
 
 impl Profile {
@@ -31,6 +37,7 @@ impl Profile {
         match self {
             Profile::Full => "fno",
             Profile::Pack => "fno-pack",
+            Profile::Codex => "fno-codex",
         }
     }
 }

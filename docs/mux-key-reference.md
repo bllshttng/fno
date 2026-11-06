@@ -68,4 +68,5 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `show-pane-ids` | `\` | `\` | `\` | hold to show pane ids |
 | `show-keys` | `?` | `?` | `?` | keys of this view (* for all) |
 | `grab-work` | `g` | `g` | `g` | grab work (dispatch next ready) |
+| `report` | `!` | `!` | `!` | report a problem |
 | `detach` | `d` | `d` | `Q` | detach |

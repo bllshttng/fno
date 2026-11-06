@@ -31,7 +31,7 @@ impl WindowSize {
     pub(super) fn from_env() -> Self {
         match std::env::var("FNO_MUX_WINDOW_SIZE") {
             Ok(raw) => Self::parse(&raw).unwrap_or_else(|| {
-                eprintln!("fno mux: unknown FNO_MUX_WINDOW_SIZE {raw:?}; using latest");
+                crate::mux_log!(warn; "fno mux: unknown FNO_MUX_WINDOW_SIZE {raw:?}; using latest");
                 Self::default()
             }),
             Err(_) => Self::default(),
