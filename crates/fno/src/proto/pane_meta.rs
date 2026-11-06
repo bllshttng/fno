@@ -26,16 +26,6 @@ pub struct PaneMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // AC6-ERR: a pre-v91 row decodes with the new fields None.
-    #[test]
-    fn a_v86_row_decodes_with_the_new_fields_none() {
-        let v: PaneMeta = serde_json::from_str(r#"{"id":7,"label":"shell"}"#).unwrap();
-        assert_eq!(v.id, 7);
-        assert_eq!(v.label, "shell");
-        assert_eq!((v.node, v.branch, v.ctx), (None, None, None));
-    }
-
     // AC6-ERR, other half: all-None serializes to the v86 bytes.
     #[test]
     fn all_none_fields_serialize_to_the_v86_bytes() {

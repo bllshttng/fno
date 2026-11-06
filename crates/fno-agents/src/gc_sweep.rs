@@ -1448,7 +1448,9 @@ fn transcript_file_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs() as i64;
-    Some((now - secs).max(0))
+    // Awake time only: a transcript last written before this boot idles from
+    // the boot, never through the powered-off stretch.
+    Some(crate::awake_idle_secs(secs, now))
 }
 
 /// The settle blocker an open-do-row hold names: the same pr_state

@@ -403,37 +403,50 @@ pub fn initialize_server_info() -> Option<serde_json::Value> {
     // Same guard as `probe_codex_app_server`: block_on from inside a running
     // runtime panics, and the census reads this from the async daemon loop.
     if tokio::runtime::Handle::try_current().is_ok() {
-        return std::thread::spawn(move || initialize_server_info_inner(&socket_path))
-            .join()
-            .ok()
-            .flatten();
+        return std::thread::spawn(move || {
+            initialize_server_info_inner(&socket_path, HANDSHAKE_TIMEOUT)
+        })
+        .join()
+        .ok()
+        .flatten();
     }
-    initialize_server_info_inner(&socket_path)
+    initialize_server_info_inner(&socket_path, HANDSHAKE_TIMEOUT)
 }
 
-fn initialize_server_info_inner(socket_path: &Path) -> Option<serde_json::Value> {
+/// The whole handshake under a wall-clock bound: a connect that lands on a
+/// listening-but-stalled server parks `read_until_id` forever otherwise, and
+/// this reader runs on the readiness path the provider lock protects.
+fn initialize_server_info_inner(
+    socket_path: &Path,
+    timeout: std::time::Duration,
+) -> Option<serde_json::Value> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .ok()?;
     runtime.block_on(async {
-        let conn = UnixStream::connect(&socket_path).await.ok()?;
-        let ws = tokio_tungstenite::client_async("ws://localhost/rpc", conn)
-            .await
-            .ok()?
-            .0;
-        let (mut sink, mut stream) = ws.split();
-        use futures_util::SinkExt;
-        sink.send(Message::Text(initialize_request_json().into()))
-            .await
-            .ok()?;
-        let response = read_until_id(&mut stream, &serde_json::json!("init"))
-            .await
-            .ok()?;
-        drop(sink);
-        drop(stream);
-        let frame: serde_json::Value = serde_json::from_str(&response).ok()?;
-        frame.pointer("/result/serverInfo").cloned()
+        tokio::time::timeout(timeout, async {
+            let conn = UnixStream::connect(&socket_path).await.ok()?;
+            let ws = tokio_tungstenite::client_async("ws://localhost/rpc", conn)
+                .await
+                .ok()?
+                .0;
+            let (mut sink, mut stream) = ws.split();
+            use futures_util::SinkExt;
+            sink.send(Message::Text(initialize_request_json().into()))
+                .await
+                .ok()?;
+            let response = read_until_id(&mut stream, &serde_json::json!("init"))
+                .await
+                .ok()?;
+            drop(sink);
+            drop(stream);
+            let frame: serde_json::Value = serde_json::from_str(&response).ok()?;
+            frame.pointer("/result/serverInfo").cloned()
+        })
+        .await
+        .ok()
+        .flatten()
     })
 }
 
@@ -2451,6 +2464,28 @@ mod tests {
 
         assert_eq!(result, Err("timeout"));
         server.abort();
+    }
+
+    /// The serverInfo reader is bounded: a connect that lands on a
+    /// listening-but-stalled server must read None inside its budget, not
+    /// park the readiness path (and any provider lock above it) forever.
+    /// Plain test, no tokio attribute: the reader builds its own runtime.
+    #[test]
+    fn the_server_info_reader_is_bounded_on_a_silent_socket() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("silent.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let started = std::time::Instant::now();
+        let info = initialize_server_info_inner(&socket, Duration::from_millis(50));
+        let elapsed = started.elapsed();
+        assert!(
+            info.is_none(),
+            "a silent socket reads none inside its bound, got {info:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "a silent socket must not hold the reader {elapsed:?}"
+        );
     }
 
     // --- project assignment -------------------------------------

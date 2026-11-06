@@ -49,8 +49,6 @@ use crate::restore_liveness::{
     classify_member, no_resume_form_reason, restore_worker_refusal_reason, worker_registry_match,
     MemberVerdict,
 };
-#[cfg(test)]
-use crate::spawn_journal::parse_spawn_receipts;
 use crate::spawn_journal::{
     receipt_for_member, scan_spawn_journal, worker_binding_key, BatchReplay, DetachedPane,
     HeldWorker, ReentrySpawnRequest, ReentryVerdict, SpawnJournal,
@@ -3504,17 +3502,6 @@ impl Core {
         }
         self.push_layout(true);
         Ok(())
-    }
-
-    /// Resolve an `fno_id` to its live location for [`ControlCommand::PaneWhere`],
-    /// or one of the three distinct error codes. Never an empty-successful
-    /// location (Locked Decision 4). REGISTRY_UNAVAILABLE is the CLI's to emit
-    /// (it reads registry.json); the server's cache is always consultable, so
-    /// an unmatched id here is NOT_FOUND, and a matched-but-paneless one is
-    /// NOT_PANE_HOSTED.
-    #[cfg(test)]
-    fn pane_where(&self, fno_id: &str) -> Result<ServerMsg, u32> {
-        self.pane_where_with_agents(fno_id, &self.agents)
     }
 
     fn pane_where_with_agents(

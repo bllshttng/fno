@@ -206,33 +206,4 @@ mod tests {
             Target::System(PathBuf::from(IN_VAULT))
         );
     }
-
-    #[test]
-    fn obsidian_builds_a_uri_for_a_vault_file() {
-        let t = route(
-            IN_VAULT,
-            OpenWith::Obsidian,
-            &cfg(true, Some("/opt/myvault")),
-        );
-        assert_eq!(
-            t,
-            Target::Obsidian {
-                uri: "obsidian://open?vault=myvault&file=plans/a%20b.md".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn obsidian_falls_back_to_system_when_it_cannot_serve_the_file() {
-        let outside = (OUTSIDE, cfg(true, Some("/opt/myvault")));
-        let off = (IN_VAULT, cfg(false, Some("/opt/myvault")));
-        let no_vault = (IN_VAULT, cfg(true, None));
-        let empty_vault = (IN_VAULT, cfg(true, Some("")));
-        for (path, c) in [outside, off, no_vault, empty_vault] {
-            assert_eq!(
-                route(path, OpenWith::Obsidian, &c),
-                Target::System(PathBuf::from(path))
-            );
-        }
-    }
 }

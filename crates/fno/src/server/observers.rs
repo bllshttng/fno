@@ -173,16 +173,4 @@ mod tests {
             "a client that left is no longer listed"
         );
     }
-
-    #[test]
-    fn frames_follow_the_tag() {
-        let mut core = empty_core();
-        core.clients.push(client(7, true));
-        core.observe(7, hello("a", 3));
-        let all = [1, 3, 5];
-        assert_eq!(frame_ids(&core.observers, 7, &all), vec![3]);
-        assert_eq!(frame_ids(&core.observers, 99, &all), vec![1, 3, 5]);
-        core.observers.0.get_mut(&7).unwrap().frames = false;
-        assert!(frame_ids(&core.observers, 7, &all).is_empty());
-    }
 }

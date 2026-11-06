@@ -46,15 +46,14 @@ mod wire_version;
 mod workspace_folder;
 use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
-use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
-#[cfg(test)]
-use sweep_scope::{parse_sweep_receipt, sweep_apply_args};
-
 use self::rename_overlay::RenameTarget;
 pub use row_menu::SplitOpens;
 #[cfg(test)]
 use row_menu::{build_row_menu, row_menu_execute_selected};
 use row_menu::{build_tab_menu, row_menu_keys, row_menu_mouse};
+#[cfg(test)]
+use sweep_scope::parse_sweep_receipt;
+use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
 
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
@@ -1297,17 +1296,6 @@ struct MovePick {
 }
 
 impl MovePick {
-    /// The selected destination squad id, or `None` for an empty list.
-    ///
-    /// Test-only: the commit path consumes the picker and indexes `squads`
-    /// directly, so this exists to let a test read the selection without
-    /// reproducing that arithmetic. Unconditional, it is dead code in the
-    /// shipped build.
-    #[cfg(test)]
-    fn target(&self) -> Option<u64> {
-        self.squads.get(self.cursor).copied()
-    }
-
     /// A freshly opened picker: cursor at the top, no escape carry.
     fn new(src: MoveSrc, squads: Vec<u64>) -> Self {
         Self {

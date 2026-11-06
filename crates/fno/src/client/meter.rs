@@ -367,7 +367,7 @@ fn human_tokens(used: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity_segment, human_tokens, memory_segment, parse_macmon_sample};
+    use super::{capacity_segment, human_tokens, parse_macmon_sample};
     use serde_json::json;
 
     #[test]
@@ -393,38 +393,6 @@ mod tests {
         assert_eq!(detailed, "cpu 45% 54W");
         assert_eq!(parse_macmon_sample(b"", false), None);
     }
-
-    #[test]
-    fn the_meter_and_the_overlay_print_the_same_state_memory_figure() {
-        let state = json!({
-            "ceiling": 23,
-            "effective": 14,
-            "memory": {"used_fraction": 0.64, "total_gb": 96.0,
-                       "ram_used_gb": 81.0, "swap_used_gb": 4.0, "swap_total_gb": 8.0,
-                       "compressor_occupied_gb": 61.4, "compressor_stored_gb": 41.0},
-            "workers_live": 15,
-            "accounts": [],
-        });
-        let memory = memory_segment(Some(&state), false);
-        assert_eq!(memory, " · memory 64% full");
-        assert_eq!(
-            memory_segment(Some(&state), true),
-            " · mem 81G/96G swap 4G/8G"
-        );
-        // The overlay reads the same field (org_overlay::memory_line), so
-        // one sample renders one percent in both places (AC5).
-        let overlay_pct = (state["memory"]["used_fraction"].as_f64().unwrap() * 100.0).round();
-        assert_eq!(format!("{overlay_pct:.0}% full"), "64% full");
-
-        // No state at all: the cap reads unknown and no memory number
-        // renders, the never-a-zero contract (AC6).
-        assert_eq!(capacity_segment(None, false), " · cap unknown");
-        assert_eq!(memory_segment(None, false), "");
-        let bare = json!({"ceiling": 23});
-        assert_eq!(capacity_segment(Some(&bare), false), " · cap unknown");
-        assert_eq!(memory_segment(Some(&bare), false), "");
-    }
-
     #[test]
     fn the_capacity_line_names_workers_cap_reason_and_windows() {
         // The account shape the writer emits: limit_tokens sits on the

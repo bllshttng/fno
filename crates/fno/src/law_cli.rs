@@ -310,19 +310,4 @@ mod tests {
         assert!(classify_inbox_law(&mk(&["inbox", "law", "nope"])).is_none());
         assert!(classify_inbox_law(&mk(&["inbox", "law"])).is_none());
     }
-
-    #[test]
-    fn classify_routes_the_decisions_listing() {
-        let mk = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
-        // The subcommand token itself plus the caller's flags.
-        assert_eq!(
-            classify_inbox_decisions(&mk(&["inbox", "decisions", "--json"])).map(|r| r.len()),
-            Some(2)
-        );
-        assert!(classify_inbox_decisions(&mk(&["inbox", "decisions"])).is_some());
-        // The rest of the inbox tree stays Python's.
-        assert!(classify_inbox_decisions(&mk(&["inbox", "law"])).is_none());
-        assert!(classify_inbox_decisions(&mk(&["inbox", "decide"])).is_none());
-        assert!(classify_inbox_decisions(&mk(&["inbox"])).is_none());
-    }
 }

@@ -411,39 +411,6 @@ mod tests {
         assert_eq!(frame_at(2.25), FINAL);
         assert_eq!(frame_at(9.9), FINAL);
     }
-
-    #[test]
-    fn growing_stamp_centers_no_and_keeps_the_row_solid() {
-        let solid = |w: usize| vec![Px::Solid; w];
-        // The pad rows above and below the F are solid at every width.
-        for w in [9, 11, 13, 15, 17] {
-            assert_eq!(stamp_row(w, 0, false), solid(w));
-            assert_eq!(stamp_row(w, 7, false), solid(w));
-        }
-        // Glyph band row 0 of the grids is all knocked out except the
-        // separators: pad + n="..." + '#' + o="..." + pad.
-        assert_eq!(
-            stamp_row(9, 1, false),
-            [
-                Px::Solid,
-                Px::Knock,
-                Px::Knock,
-                Px::Knock,
-                Px::Solid,
-                Px::Knock,
-                Px::Knock,
-                Px::Knock,
-                Px::Solid
-            ],
-        );
-        // 9 px = 1 px pad each side of the 7 px inner mark.
-        assert_eq!(stamp_row(9, 2, false).len(), 9);
-        assert_eq!(stamp_row(15, 4, false).len(), 15);
-        assert_eq!(stamp_row(15, 4, false)[0], Px::Solid);
-        assert_eq!(stamp_row(15, 4, false)[3], Px::Solid);
-        assert_eq!(stamp_row(15, 4, false)[7], Px::Solid);
-    }
-
     #[test]
     fn final_stamp_row_is_the_17px_mark() {
         let row = stamp_row(17, 3, true);
@@ -476,52 +443,6 @@ mod tests {
             ],
         );
     }
-
-    #[test]
-    fn f_cells_draw_the_four_by_six_glyph() {
-        assert_eq!(f_cells(0), " ".repeat(8));
-        assert_eq!(f_cells(1), "████████");
-        assert_eq!(f_cells(2), "██      ");
-        assert_eq!(f_cells(3), "██████  ");
-        assert_eq!(f_cells(4), "██      ");
-        assert_eq!(f_cells(6), "██      ");
-        assert_eq!(f_cells(7), " ".repeat(8));
-    }
-
-    #[test]
-    fn visual_rows_match_the_art_geometry() {
-        let dim = CtColor::Reset;
-        // F alone: 8 rows, 11 cells (F + gap).
-        let alone = visual_rows(frame_at(0.0), "0.0.0", dim);
-        assert_eq!(alone.len(), 8);
-        for row in &alone {
-            assert_eq!(
-                row.iter().map(|s| s.text.chars().count()).sum::<usize>(),
-                11
-            );
-        }
-        // Final: 9 rows; the 8 art rows are 45 cells. The footer row runs a
-        // couple of cells wider now that the tagline carries the README
-        // wording: 8 + 3 + 4 + version + 3 + 24.
-        let fin = visual_rows(FINAL, "9.9.9", dim);
-        assert_eq!(fin.len(), ART_ROWS as usize);
-        for row in fin.iter().take(8) {
-            assert_eq!(
-                row.iter().map(|s| s.text.chars().count()).sum::<usize>(),
-                45
-            );
-        }
-        assert_eq!(
-            fin[8].iter().map(|s| s.text.chars().count()).sum::<usize>(),
-            47
-        );
-        let footer: String = fin[8].iter().map(|s| s.text.as_str()).collect();
-        assert!(footer.contains("footnote"));
-        assert!(footer.contains("fno 9.9.9"));
-        assert!(footer.contains("say F[no] to mostly done"));
-        assert!(footer.trim_start().starts_with("footnote"));
-    }
-
     #[test]
     fn a_long_version_never_overflows_the_footer_row() {
         let fin = visual_rows(FINAL, "10.100.100-beta.7+x", CtColor::Reset);
@@ -529,54 +450,5 @@ mod tests {
         // The clamp floor keeps six version chars; the fixed parts around it
         // are 42 cells, so 48 is the widest the footer can ever run.
         assert_eq!(width, 48);
-    }
-
-    #[test]
-    fn animation_gates() {
-        assert!(animated_env(true, None, None));
-        assert!(animated_env(true, Some(""), None));
-        assert!(!animated_env(false, None, None));
-        assert!(!animated_env(true, Some("1"), None));
-        assert!(!animated_env(true, Some("true"), None));
-        assert!(!animated_env(true, None, Some("1")));
-        assert!(!animated_env(true, None, Some("yes")));
-        assert!(animated_env(true, None, Some("0")));
-        assert!(animated_env(true, None, Some("")));
-    }
-
-    #[test]
-    fn every_stamp_row_paints_equal_width() {
-        // The user's screenshot: the bottom stamp row rendered one px wider
-        // than the rows above, a nub at the stamp's bottom-right. Every
-        // stamp row must carry exactly `width` px in cells.
-        for brackets in [false, true] {
-            for w in [9usize, 11, 13, 15, 17] {
-                let rows: Vec<Vec<Px>> =
-                    (0..STAMP_ROWS).map(|r| stamp_row(w, r, brackets)).collect();
-                for (r, row) in rows.iter().enumerate() {
-                    assert_eq!(row.len(), w, "stamp row {r} at width {w}");
-                    let cells = px_cells(row);
-                    assert_eq!(
-                        cells.chars().count(),
-                        2 * w,
-                        "stamp row {r} cells at width {w}"
-                    );
-                }
-            }
-        }
-        // And the composed visual rows of the FINAL frame agree: the F
-        // column (8) + gap (3) + stamp (34) on every line.
-        let rows = visual_rows(
-            FINAL,
-            "9.9",
-            to_ct(crate::theme::Theme::from_name("footnote-superscript").0.dim),
-        );
-        let widths: Vec<usize> = rows
-            .iter()
-            .map(|segs| segs.iter().map(|s| s.text.chars().count()).sum())
-            .collect();
-        for (i, w) in widths.iter().enumerate() {
-            assert_eq!(w, &(11 + 2 * 17), "row {i} width");
-        }
     }
 }

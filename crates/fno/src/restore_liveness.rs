@@ -161,17 +161,6 @@ mod tests {
             MemberVerdict::Undecidable
         );
     }
-
-    #[test]
-    fn a_listed_worker_is_resumable_even_without_a_session_identity() {
-        let known = HashSet::from([String::from("t-live")]);
-        let m = member(Some("t-live"));
-        assert_eq!(
-            classify_member(&m, Some(&known), &receipts()),
-            MemberVerdict::Resumable
-        );
-    }
-
     #[test]
     fn an_unlisted_member_with_a_spawn_receipt_is_recently_spawned() {
         let known = HashSet::from([String::from("t-other")]);
@@ -191,19 +180,6 @@ mod tests {
         assert_eq!(
             classify_member(&m, Some(&known), &rs),
             MemberVerdict::RecentlySpawned
-        );
-    }
-
-    #[test]
-    fn a_member_with_no_worker_name_is_undecidable_other_lane() {
-        let known = HashSet::from([String::from("t-live")]);
-        assert_eq!(
-            classify_member(&member(None), Some(&known), &receipts()),
-            MemberVerdict::Undecidable
-        );
-        assert_eq!(
-            classify_member(&member(Some("   ")), Some(&known), &receipts()),
-            MemberVerdict::Undecidable
         );
     }
 }

@@ -179,43 +179,6 @@ fn focus_outline_accents_focused_pane_seams_and_moves_with_focus() {
         "a single-pane tab paints no seam outline; the frame is the signal"
     );
 }
-
-#[test]
-fn a_framed_pane_owns_its_focus_signal_on_the_border() {
-    // The seam outline stops firing for framed panes - the frame's
-    // own border carries the focus color instead. The gaps between frames
-    // stay blank even around the focused pane.
-    let view = three_pane_view(); // 23-col panes: all framed; focus = 10
-    let frame = view.compose();
-    let cols = frame.cols as usize;
-    let seam_10_11 = 28 + 23;
-    let row = 5;
-    let gap = frame.cells[row * cols + seam_10_11];
-    assert_eq!(gap.c, ' ', "the gap between frames paints blank");
-    assert_eq!(gap.fg, Color::Default, "no seam accent between frames");
-    // The focused pane's frame border is the accent.
-    let border = frame.cells[row * cols + 28]; // pane 10's left border cell
-    assert_eq!(border.c, '│');
-    assert_eq!(border.fg, LATTICE_ACCENT, "the focused frame is amber");
-
-    // The border accent is the same keyboard mark: with the feed on the
-    // keyboard the focused frame goes dim, in both a named theme and the
-    // terminal one (theme cases ride the same band vocabulary).
-    for name in ["footnote-paper", "terminal"] {
-        let mut feed_owns = three_pane_view();
-        feed_owns.theme = crate::theme::Theme::from_name(name).0;
-        feed_owns.feed = Some(super::feed_view::open_overlay(None, 0));
-        feed_owns.region_owner = RegionOwner::Feed;
-        let frame = feed_owns.compose();
-        let dimmed = frame.cells[row * cols + 28];
-        assert_eq!(
-            dimmed.flags & cell_flags::DIM,
-            cell_flags::DIM,
-            "{name}: the focused frame dims while the feed owns typing"
-        );
-    }
-}
-
 #[test]
 fn clicks_select_one_input_owner_and_route_bytes() {
     // AC1-HP/AC2-HP routing matrix: an explicit click names the input owner

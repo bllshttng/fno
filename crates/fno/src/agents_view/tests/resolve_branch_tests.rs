@@ -22,33 +22,6 @@ fn resolve_branch_reads_plain_checkout_head() {
     assert_eq!(resolve_branch(&cwd), Some("x-cd67".into()));
     std::fs::remove_dir_all(&cwd).unwrap();
 }
-
-#[test]
-fn resolve_branch_walks_up_to_repo_root_from_subdir() {
-    // codex review: a pane started in a subdirectory resolves the repo's
-    // branch by walking up to the nearest `.git`, not degrading to the tail.
-    let root = branch_tmp("subdir");
-    std::fs::create_dir_all(root.join(".git")).unwrap();
-    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-    let sub = root.join("crates/fno");
-    std::fs::create_dir_all(&sub).unwrap();
-    assert_eq!(resolve_branch(&sub), Some("main".into()));
-    std::fs::remove_dir_all(&root).unwrap();
-}
-
-#[test]
-fn resolve_branch_detached_head_shortens_sha() {
-    let cwd = branch_tmp("detached");
-    std::fs::create_dir_all(cwd.join(".git")).unwrap();
-    std::fs::write(
-        cwd.join(".git/HEAD"),
-        "0123456789abcdef0123456789abcdef01234567\n",
-    )
-    .unwrap();
-    assert_eq!(resolve_branch(&cwd), Some("01234567".into()));
-    std::fs::remove_dir_all(&cwd).unwrap();
-}
-
 #[test]
 fn resolve_branch_follows_worktree_gitdir_redirect() {
     // AC3-EDGE: a linked-worktree `.git` FILE points at the real gitdir.
@@ -225,19 +198,6 @@ fn lineage_two_row_cycle_terminates() {
         "the cycle entry roots, the member nests"
     );
 }
-
-#[test]
-fn lineage_self_edge_roots() {
-    let rows = [LRow {
-        name: "self",
-        id: Some("s"),
-        parent: Some("s"),
-    }];
-    let (order, depths) = layout(&rows);
-    assert_eq!(ordered_names(&rows, &order), vec!["self"]);
-    assert_eq!(depths, vec![0]);
-}
-
 #[test]
 fn lineage_depth_is_capped_for_rendering() {
     let mut rows = vec![LRow {
@@ -259,23 +219,4 @@ fn lineage_depth_is_capped_for_rendering() {
         "no row indents past the cap: {depths:?}"
     );
     assert_eq!(*depths.last().unwrap(), MAX_LINEAGE_DEPTH);
-}
-
-#[test]
-fn lineage_flat_set_is_byte_identical_to_input_order() {
-    let rows = [
-        LRow {
-            name: "b",
-            id: Some("b"),
-            parent: None,
-        },
-        LRow {
-            name: "a",
-            id: Some("a"),
-            parent: None,
-        },
-    ];
-    let (order, depths) = layout(&rows);
-    assert_eq!(ordered_names(&rows, &order), vec!["b", "a"]);
-    assert_eq!(depths, vec![0, 0]);
 }

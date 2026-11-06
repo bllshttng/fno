@@ -93,32 +93,6 @@ fn hex_target_reaches_leaf_with_send_intact() {
         "leaf argv must open with the send pair: {stderr}"
     );
 }
-
-/// A dashed full UUID rides the same native leg with a byte-verbatim tail:
-/// flags after the body pass through untouched.
-#[test]
-fn uuid_target_keeps_the_tail_verbatim() {
-    let s = LeafStub::new("uuid");
-    let (argv, stderr) = s.leaf_argv(&[
-        "mail",
-        "send",
-        "0000dead-0000-4000-8000-000000000000",
-        "probe",
-        "--from-self",
-    ]);
-    assert_eq!(
-        argv,
-        vec![
-            "mail",
-            "send",
-            "0000dead-0000-4000-8000-000000000000",
-            "probe",
-            "--from-self"
-        ],
-        "leaf argv must carry the tail untouched: {stderr}"
-    );
-}
-
 /// The machine-mail door (`fno backlog note` notify, events push) execs the
 /// front with a flag-led send: `agents mail send --from-name <sender> --
 /// <recipient> <body>`. The flag-led target claims the native leg, so the

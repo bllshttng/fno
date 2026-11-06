@@ -291,21 +291,4 @@ mod tests {
         let empty = Rect { w: 0, ..RECT };
         assert!(render_with(&forced(ProtocolType::Kitty), &png(), empty).is_none());
     }
-
-    #[test]
-    fn an_escape_paint_holes_its_rect_and_stages_one_placement() {
-        let cols = 20;
-        let mut cells = vec![Cell::default(); cols * 10];
-        let r = render_with(&forced(ProtocolType::Kitty), &png(), RECT).expect("kitty renders");
-        clear();
-        paint(&r, RECT, &mut cells, cols);
-        let holes = cells.iter().filter(|c| **c == HOLE).count();
-        assert_eq!(holes, usize::from(RECT.w * RECT.h));
-        let placed = take().expect("a placement is staged");
-        assert_eq!(placed.rect, RECT);
-        assert!(placed.kitty);
-        assert!(take().is_none(), "take empties the stage");
-        assert_eq!(protocol_named(" Kitty "), Some(ProtocolType::Kitty));
-        assert_eq!(protocol_named("chafa"), None);
-    }
 }

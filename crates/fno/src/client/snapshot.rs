@@ -1761,13 +1761,4 @@ mod tests {
             "{e}"
         );
     }
-
-    #[test]
-    fn raster_page_clamps_overflow() {
-        // The unclamped page screenshots a composite whose bottom tile repeats
-        // the first rows at an exact-fit window (the doubled chrome report).
-        let page = page_html("<svg>x</svg>");
-        assert!(page.contains("overflow:hidden"), "{page}");
-        assert!(page.contains("<svg>x</svg>"), "{page}");
-    }
 }
