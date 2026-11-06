@@ -1661,8 +1661,6 @@ use crate::codex_thread::InterruptOutcome;
 mod codex_thread_lane;
 mod codex_thread_resume;
 mod connection;
-#[cfg(test)]
-mod connection_admission_tests;
 mod convert;
 mod report;
 pub(crate) mod sandbox_host;
@@ -5780,6 +5778,8 @@ mod tests;
 #[cfg(test)]
 #[path = "daemon/tests/adopt_pin_tests.rs"]
 mod adopt_pin_tests;
+#[cfg(test)]
+mod connection_admission_tests;
 #[cfg(test)]
 #[path = "daemon/tests/keeper_stop.rs"]
 mod keeper_stop_tests;
