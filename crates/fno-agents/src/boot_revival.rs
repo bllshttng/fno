@@ -224,7 +224,7 @@ fn reseat_vacated_roles(home: &AgentsHome, revived: &[String]) {
     let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
         return;
     };
-    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "boot-revival");
+    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
     for name in revived {
         let Some(row) = registry.entries.iter().find(|e| e.name == *name) else {
             continue;

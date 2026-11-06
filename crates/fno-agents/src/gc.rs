@@ -1659,6 +1659,14 @@ mod tests {
         let home = AgentsHome::at(dir.path().join("agents"));
         home.ensure_root().unwrap();
         crate::paths::pin_test_claims_root(dir.path());
+        // The retire arm reads the boot-revival receipt before it may sweep;
+        // stamp one finished so this tick exercises the held-rows event.
+        crate::boot_revival::write_receipt(
+            &home.root().join("boot-revival.json"),
+            crate::boot_revival::boot_time().unwrap_or(0),
+            &[],
+            true,
+        );
         crate::graph_store::seed_rows(
             &dir.path().join("graph.json"),
             &[serde_json::json!({
