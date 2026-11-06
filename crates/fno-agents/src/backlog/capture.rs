@@ -4,7 +4,7 @@
 //! holding-pen of self-contained checkbox items, each with a stable fu-id.
 //! Capture is a cheap markdown append, not a graph mutation; triage promotes
 //! warranted items into real graph nodes. Struck lines are never deleted, so
-//! autocorrect provenance survives. Items are addressed by fu-id, never by
+//! provenance survives. Items are addressed by fu-id, never by
 //! line number (Obsidian edits shift lines).
 //!
 //! The legacy em-dash (U+2014) separator still parses on read; every writer
