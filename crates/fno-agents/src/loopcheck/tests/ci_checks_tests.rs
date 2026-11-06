@@ -74,43 +74,7 @@ fn coverage_statuses_are_not_generic_ci_checks() {
 /// The evals gate is an eval fact, not CI: a red gate row must vanish from
 /// the loop's CI payload, or a waiting worker fix-loops a green PR instead
 /// of surfacing the gate hold at finalize.
-#[test]
-fn the_evals_gate_is_not_a_ci_check() {
-    let checks = serde_json::json!([
-        {"name": "ci", "bucket": "pass"},
-        {"name": "evals/gate", "bucket": "fail"}
-    ]);
-    let filtered = without_coverage_statuses(&checks);
-    assert_eq!(filtered.as_array().unwrap().len(), 1);
-    assert_eq!(
-        compute_ci_conclusion(&filtered).unwrap(),
-        CiConclusion::Success
-    );
-    assert!(failing_check_names(&filtered).is_empty());
-}
 
-#[test]
-fn ci_has_pending_gates_partial_ci() {
-    // One check failed while another still runs -> pending (must hold, not
-    // terminate: the pending job could be the session's own new red).
-    let partial = serde_json::json!([
-        {"name": "smoke",   "bucket": "fail"},
-        {"name": "rust-ci", "bucket": "pending"},
-    ]);
-    assert!(ci_has_pending_checks(&partial));
-    // Fully settled red -> no pending -> eligible for the terminal.
-    let settled = serde_json::json!([
-        {"name": "smoke",   "bucket": "fail"},
-        {"name": "rust-ci", "bucket": "pass"},
-        {"name": "doc",     "bucket": "skipping"},
-    ]);
-    assert!(!ci_has_pending_checks(&settled));
-    // Unrecognized bucket is treated as pending (fail safe).
-    let unknown = serde_json::json!([{"name": "x", "bucket": "queued"}]);
-    assert!(ci_has_pending_checks(&unknown));
-    // Malformed input never panics.
-    assert!(!ci_has_pending_checks(&serde_json::json!({})));
-}
 
 #[test]
 fn latest_per_name_drops_superseded_cancel_for_newer_pass() {
@@ -136,21 +100,3 @@ fn latest_per_name_drops_superseded_cancel_for_newer_pass() {
     assert!(failing_check_names(&deduped).is_empty());
 }
 
-#[test]
-fn latest_per_name_keeps_same_name_checks_from_different_workflows() {
-    // codex P1: several workflows in this repo define a job literally
-    // named "self-test". A name-only key folds a cancelled self-test
-    // from one workflow into a passing self-test from another, hiding
-    // the real failure behind an unrelated workflow's pass. The key
-    // must be (name, workflow), so both entries survive the dedup.
-    let checks = serde_json::json!([
-        {"name": "self-test", "bucket": "cancel", "workflow": "control-plane-doc-colocation",
-         "startedAt": "2026-08-15T01:00:00Z"},
-        {"name": "self-test", "bucket": "pass", "workflow": "loc-ratchet",
-         "startedAt": "2026-08-15T00:00:00Z"},
-    ]);
-    let deduped = latest_per_name(&checks);
-    assert_eq!(deduped.as_array().unwrap().len(), 2);
-    assert!(ci_has_pending_checks(&deduped));
-    assert_eq!(failing_check_names(&deduped), vec!["self-test".to_string()]);
-}

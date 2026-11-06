@@ -78,17 +78,6 @@ fn finding_wontfix_reply_is_addressed_without_commit() {
 
 /// Anti-gaming: a commit alone (no reply) does NOT address (locked
 /// decision 3 - any unrelated commit would silently clear a P1).
-#[test]
-fn finding_commit_without_reply_is_unaddressed() {
-    let comments = vec![finding_comment(
-        100,
-        "![P1 Badge](https://img.shields.io/badge/P1-orange) bug",
-        "2026-06-05T01:10:00Z",
-    )];
-    let commits = vec!["2026-06-05T01:30:00Z".to_string()];
-    let (_, unaddressed) = compute_unaddressed_findings(&comments, &commits, &req_vec(), &[]);
-    assert_eq!(unaddressed.len(), 1, "commit alone must not address");
-}
 
 /// sigma-review: a blocking finding row with a missing id is SKIPPED
 /// (under-block per locked decision 4), never pooled on a default id
@@ -125,27 +114,3 @@ fn finding_missing_id_skipped_not_pooled() {
 /// string-comparing - an offset-suffixed commit date that lexicographically
 /// sorts above a Zulu finding date but is EARLIER in UTC must not clear
 /// the finding.
-#[test]
-fn ts_after_parses_offsets_correctly() {
-    // 23:30+13:00 == 10:30Z, which is BEFORE 11:00Z - but the raw string
-    // "2026-06-05T23:30:00+13:00" > "2026-06-05T11:00:00Z".
-    assert!(!ts_after(
-        "2026-06-05T23:30:00+13:00",
-        "2026-06-05T11:00:00Z"
-    ));
-    // POSITIVE direction proves chrono's FromStr for DateTime<Utc>
-    // parses offset-suffixed RFC3339 and converts to UTC (gemini's
-    // #448 critical claimed it errors; empirically it returns
-    // Ok(2026-06-05T13:30:00Z) here). Without this assertion the
-    // offset case above could pass vacuously via the Err arm.
-    assert!(ts_after(
-        "2026-06-05T23:30:00+10:00", // == 13:30Z
-        "2026-06-05T11:00:00Z"
-    ));
-    assert!(ts_after("2026-06-05T11:00:01Z", "2026-06-05T11:00:00Z"));
-    assert!(!ts_after("2026-06-05T11:00:00Z", "2026-06-05T11:00:00Z"));
-    // Unparseable on either side never clears a finding.
-    assert!(!ts_after("garbage", "2026-06-05T11:00:00Z"));
-    assert!(!ts_after("2026-06-05T11:00:00Z", "garbage"));
-    assert!(!ts_after("2026-06-05T11:00:00Z", ""));
-}

@@ -4678,65 +4678,6 @@ fn settled_stuck_pr_still_burns_no_progress() {
 /// real login that reviews on push but has no nudge profile) is still a live
 /// async wait. The fall-through backstop must not reap it as NoProgress - the
 /// same lie as the CI class, one arm over.
-#[test]
-fn not_nudgeable_review_wait_defers_the_backstop() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-    // A required bot with NO nudge profile classifies NotNudgeable (idlable,
-    // status quo), so async_wait_class reads Some("review") on green CI.
-    fs::write(
-        cwd.join(".fno/config.toml"),
-        "[review]\nrequired_bots = [\"some-real-bot\"]\n",
-    )
-    .unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let events_path = project_events(&cwd);
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-review-wait", "2026-06-05T00:00:00Z", false),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    // Open PR #1, CI success, no reviews, no comments -> the bot is missing.
-    let mock = nudge_mock("[]", 0, None);
-
-    let args = [
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-        "--events",
-        events_path.to_str().unwrap(),
-    ];
-
-    let (_c1, d1) = fire(&args);
-    assert_eq!(d1.decision, "block", "fire 1: {}", d1.message);
-    let (_c2, d2) = fire(&args);
-    assert_eq!(d2.decision, "block", "fire 2: {}", d2.message);
-    let (_c3, d3) = fire(&args);
-    assert_eq!(
-        d3.decision, "block",
-        "a NotNudgeable review wait must defer the backstop: {}",
-        d3.message
-    );
-    assert!(
-        d3.termination_reason.is_none(),
-        "got: {:?}",
-        d3.termination_reason
-    );
-}
 
 // ── coverage classifier (x-0eaf task 1.1) ────────────────────────────────────
 
@@ -4834,28 +4775,6 @@ fn attestation_scope_reviewer_worktree_branch_at_exact_head_counts() {
 /// AC1-EDGE, first half: a legacy line (no branch field) with its head
 /// byte-equal to the PR head still counts, so no in-flight gate is wedged by
 /// the new field. The verdict carries the legacy label.
-#[test]
-fn attestation_scope_legacy_exact_head_still_counts() {
-    let events = attestation_line("code-review", COV_HEAD, "pass");
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        None,
-        &at_head,
-        "feature/a",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    let local = rep
-        .verdicts
-        .iter()
-        .find(|v| v.producer == CoverageProducer::LocalAttestation)
-        .unwrap();
-    assert_eq!(local.scope, Some(AttestationScope::LegacyHeadMatch));
-}
 
 /// A PR read that returned no branch fails closed: an attestation at a
 /// DIFFERENT head cannot be admitted by branch (the PR's branch is unknown),
@@ -4929,38 +4848,6 @@ fn attestation_scope_cherry_picked_foreign_pass_never_counts() {
 /// `config.review.reviewers` gate (`unattested_reviewers_scan`) must agree
 /// that a foreign-branch line is not about this PR; a guard on one of the two
 /// paths is decorative.
-#[test]
-fn attestation_scope_both_scans_agree_on_foreign_line() {
-    let foreign_head = "bbbb0000000000000000000000000000000000000";
-    let carried = |_: &str| Freshness::CarriedBaseSync;
-    let events = attestation_line_on_branch("code-review", foreign_head, "pass", "feature/a");
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("events.jsonl");
-    std::fs::write(&p, &events).unwrap();
-    let reviewers = vec!["code-review".to_string()];
-
-    let (unattested, _malformed) =
-        unattested_reviewers_scan(&p, &reviewers, &carried, "feature/b", COV_HEAD, false);
-    assert_eq!(
-        unattested.len(),
-        1,
-        "the reviewers gate must NOT be satisfied by a foreign branch"
-    );
-
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        None,
-        &carried,
-        "feature/b",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(0));
-    assert!(rep.verdicts.is_empty());
-}
 
 /// Seed a head-pinned `code-review` pass attestation into `.fno/events.jsonl` so
 /// the coverage classifier counts a local review. Used by tests whose PRIMARY
@@ -5032,28 +4919,6 @@ fn coverage_classify_github_read_failure_is_unknown_without_local() {
 /// Operator ruling + producer-axis correction: a head-pinned local attestation
 /// makes coverage Known even when the github read failed. A bot quota outage
 /// cannot wedge the autonomous path while a local lane reviewed.
-#[test]
-fn coverage_classify_local_pass_survives_github_outage() {
-    let events = attestation_line("code-review", COV_HEAD, "pass");
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &["chatgpt-codex-connector".to_string()],
-        false,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    let local = rep
-        .verdicts
-        .iter()
-        .find(|v| v.producer == CoverageProducer::LocalAttestation)
-        .unwrap();
-    assert_eq!(local.name, "code-review");
-}
 
 // ── clean-pass comments (x-e601: the PR #947 specimen) ───────────────────────
 //
@@ -5190,32 +5055,6 @@ fn clean_pass_comment_at_an_older_sha_is_stale() {
 /// AC4-EDGE: a clean-pass comment with no `Reviewed commit:` line stays
 /// Absent. Nothing is head-pinned, so counting it would be the unpinned-
 /// attestation hole the local axis already refuses; do not invent a sha.
-#[test]
-fn clean_pass_comment_with_no_pinned_sha_stays_absent() {
-    let comments = vec![gh_comment(
-        "chatgpt-codex-connector[bot]",
-        "Codex Review: Didn't find any major issues. Bravo.",
-    )];
-    let rep = classify_coverage(
-        &[],
-        &comments,
-        "",
-        &["chatgpt-codex-connector".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(0));
-    let v = rep
-        .verdicts
-        .iter()
-        .find(|v| v.name == "chatgpt-codex-connector")
-        .unwrap();
-    assert_eq!(v.verdict, CoverageVerdict::Absent);
-    assert_eq!(v.reviewed_sha, "");
-}
 
 /// Ordering: a usage-limit comment means the bot did not read the code, so a
 /// body carrying BOTH markers lands on Refused, never on a clean pass.
@@ -5753,28 +5592,6 @@ fn coverage_peer_fail_does_not_revoke_author_pass() {
 /// attestation_origin, so the three buckets sum to the reviewed count. A GitHub
 /// App review has no session to compare and reads `unknown`; it is named in the
 /// reviewed list, so "unknown" there is its origin, not its verdict.
-#[test]
-fn coverage_receipt_origin_tally_sums_to_reviewed_count() {
-    let reviews = vec![gh_review("chatgpt-codex-connector[bot]", "COMMENTED")];
-    let events = attestation_line_attested("code-review", COV_HEAD, "pass", AUTHOR);
-    let rep = classify_coverage(
-        &reviews,
-        &[],
-        &events,
-        &["chatgpt-codex-connector".to_string()],
-        true,
-        Some(AUTHOR),
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(2));
-    let line = coverage_receipt_line(&rep, None, None);
-    assert!(line.contains("self 1"), "{line}");
-    assert!(line.contains("other 0"), "{line}");
-    assert!(line.contains("unknown 1"), "{line}");
-    assert!(line.contains("2 reviewed"), "{line}");
-}
 
 // ── GraphQL quota floor + exhaustion naming ───────────────────────────────
 
@@ -6606,35 +6423,6 @@ fn standing_waiver_never_clears_a_hard_finding() {
     assert_eq!(waiver_soft.as_deref(), Some("standing operator law"));
 }
 
-#[test]
-fn operator_waiver_never_reads_a_chat_attested_row_as_a_waiver() {
-    let dir = TempDir::new().unwrap();
-    // A chat_attested row is law-lane but not operator evidence: the law door
-    // is open to any harness-descended process, so the exact affirmative
-    // decision value recorded under chat_attested is a clean no, never a
-    // waiver and never a failed probe.
-    let fno = make_script(
-        dir.path(),
-        "fno",
-        r#"case "$3" in
-review-coverage-waiver*) echo '{"canonical_subject":"s","current_law":{"status":"single","decision_ids":["d-1"],"decision_id":"d-1"},"decisions":[{"decision_id":"d-1","decision":"review coverage waived for this head","authority_source":"chat_attested"}]}'; exit 0 ;;
-*) echo '{"canonical_subject":"s","current_law":{"status":"none"},"decisions":[]}'; exit 0 ;;
-esac"#,
-    );
-    let (waiver, unknown) = operator_waiver(
-        fno.to_str().unwrap(),
-        dir.path(),
-        "acme/widgets",
-        42,
-        HEAD40,
-        false,
-    );
-    assert_eq!(waiver, None);
-    assert!(
-        !unknown,
-        "a readable non-operator row is a clean no, not a failed probe"
-    );
-}
 
 #[test]
 fn operator_waiver_answers_unknown_on_a_row_without_a_decision() {

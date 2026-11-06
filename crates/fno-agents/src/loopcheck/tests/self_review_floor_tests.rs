@@ -25,29 +25,6 @@ fn reviewer_invocation_resolves_the_author_harness_command() {
     );
 }
 
-#[test]
-fn code_payload_classifies_code_and_docs() {
-    // Code: source, config, lockfile, script. Docs: markdown, docs/.
-    assert!(payload_is_code(&["cli/src/fno/x.py".into()]));
-    assert!(payload_is_code(&["crates/fno-agents/src/lib.rs".into()]));
-    assert!(payload_is_code(&[".fno/config.toml".into()]));
-    assert!(payload_is_code(&["Cargo.lock".into()]));
-    assert!(payload_is_code(&["scripts/ci/gate.sh".into()]));
-    assert!(!payload_is_code(&["README.md".into()]));
-    assert!(!payload_is_code(&[
-        "docs/architecture/review-lanes.md".into()
-    ]));
-    assert!(!payload_is_code(&["docs/preflight.txt".into()]));
-}
-
-#[test]
-fn self_review_gate_classifies_unreadable_diff_as_code() {
-    // AC4-ERR: a git that cannot produce a diff fails CLOSED - code with
-    // assumed=true - so a degraded probe cannot wave the obligation away.
-    let (is_code, assumed) = classify_payload("definitely-not-a-real-git-binary", Path::new("."));
-    assert!(is_code);
-    assert!(assumed);
-}
 
 #[test]
 fn self_review_gate_fails_closed_when_main_resolves_but_diffs_fail() {

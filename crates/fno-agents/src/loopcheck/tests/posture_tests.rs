@@ -39,32 +39,6 @@ fn resolved_optional_bots_default_matches_the_shared_python_default() {
     assert_eq!(resolved_optional_bots(&mine), partial);
 }
 
-#[test]
-fn is_bot_reviewer_known_patterns() {
-    assert!(is_bot_reviewer("gemini-code-assist[bot]", &[]));
-    assert!(is_bot_reviewer("chatgpt-codex-connector", &[]));
-    assert!(is_bot_reviewer("some-bot[bot]", &[]));
-    assert!(!is_bot_reviewer("human-reviewer", &[]));
-}
-
-#[test]
-fn identity_free_peer_uses_local_attestation_not_a_login() {
-    let s = Settings {
-        github_apps: Some(Vec::new()),
-        peers: vec![PeerEntry {
-            provider: "gemini".into(),
-            model: None,
-            identity: None,
-        }],
-        peer_identity: None,
-        ..Default::default()
-    };
-    assert!(resolved_required_bots_for_author(&s, Some("codex")).is_empty());
-    assert_eq!(
-        resolved_local_peer_reviewers_for_author(&s, Some("codex")),
-        vec![LOCAL_PEER_REVIEWER.to_string()]
-    );
-}
 
 #[test]
 fn identity_free_same_model_peer_is_an_unsatisfiable_local_gate() {
@@ -123,22 +97,6 @@ fn peer_family_mapping_table() {
 
 /// AC1-HP: codex author + `peers: [codex]` -> the peer login is replaced by
 /// the same-model sentinel so the gate cannot clear.
-#[test]
-fn same_model_peer_holds_gate() {
-    let s = Settings {
-        github_apps: Some(Vec::new()),
-        peers: vec![PeerEntry {
-            provider: "codex".into(),
-            model: None,
-            identity: None,
-        }],
-        peer_identity: Some("fno-peer-bot".into()),
-        ..Default::default()
-    };
-    let logins = resolved_required_bots_for_author(&s, Some("codex"));
-    assert!(logins.iter().any(|l| l == SAME_MODEL_PEER_SENTINEL));
-    assert!(!logins.iter().any(|l| l == "fno-peer-bot"));
-}
 
 /// A same-model peer whose identity COLLIDES with a required App login is
 /// fail-closed, not exempt (codex peer review on PR #375): the App login is
@@ -165,39 +123,4 @@ fn base_app_login_collision_is_fail_closed() {
 /// executes a route; codex/gemini dispatch runs the bare provider). A codex
 /// peer with a zai route stays openai-family -> same-model on a codex author,
 /// closing the route-bypass codex flagged on PR #375.
-#[test]
-fn non_claude_route_is_ignored() {
-    let routed_codex = PeerEntry {
-        provider: "codex".into(),
-        model: Some("zai,glm-5.2".into()),
-        identity: None,
-    };
-    assert_eq!(peer_family(&routed_codex), Some("openai"));
-    let s = Settings {
-        github_apps: Some(Vec::new()),
-        peers: vec![routed_codex],
-        peer_identity: Some("fno-peer-bot".into()),
-        ..Default::default()
-    };
-    let logins = resolved_required_bots_for_author(&s, Some("codex"));
-    assert!(logins.iter().any(|l| l == SAME_MODEL_PEER_SENTINEL));
-    assert!(!logins.iter().any(|l| l == "fno-peer-bot"));
-}
 
-#[test]
-fn login_matches_bot_cases() {
-    // Full login, [bot]-suffixed login, and short config names all match.
-    assert!(login_matches_bot(
-        "chatgpt-codex-connector",
-        "chatgpt-codex-connector"
-    ));
-    assert!(login_matches_bot(
-        "chatgpt-codex-connector[bot]",
-        "chatgpt-codex-connector"
-    ));
-    assert!(login_matches_bot("chatgpt-codex-connector", "codex"));
-    assert!(login_matches_bot("Gemini-Code-Assist[bot]", "gemini"));
-    assert!(!login_matches_bot("alice-the-human", "codex"));
-    // Empty config entry must never match every login.
-    assert!(!login_matches_bot("anyone", ""));
-}

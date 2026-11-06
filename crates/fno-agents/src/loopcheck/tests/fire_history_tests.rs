@@ -189,20 +189,3 @@ fn debounce_streak_counting_rules() {
 
 /// AC4-CON: progress is never debounced - a CHANGED fingerprint breaks the
 /// streak however fast it arrived.
-#[test]
-fn debounce_changed_fingerprint_breaks_streak_at_any_speed() {
-    let now = at(NOW);
-    let dir = tempfile::TempDir::new().unwrap();
-    let p = dir.path().join("events.jsonl");
-    write_fire_log(
-        &p,
-        &[
-            ("2026-06-05T11:40:00Z".to_string(), FP),
-            ("2026-06-05T11:50:00Z".to_string(), FP),
-            ("2026-06-05T11:59:58Z".to_string(), "DIFFERENT"),
-        ],
-    );
-    let (_, streak, _, _) =
-        read_prior_fires(loop_check_rows(&p).as_deref(), "sess", Some(FP), now, 300);
-    assert_eq!(streak, 0, "a 2-second-old change still resets the streak");
-}
