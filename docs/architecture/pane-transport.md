@@ -144,13 +144,13 @@ Note what this does and does not cover. Because the seed usually rides in on arg
 
 ## Re-pointing a live worker's route
 
-A model or effort change is live already: retask drives `/model` and `/effort` in the running session (`crates/fno-agents/src/harness_capabilities.toml` holds the tokens). An endpoint or credential change is not. Claude pins the `--settings` file's content at launch, so no edit to any route file reaches a running worker, and fno has no channel that asks claude to reload one.
+A model or effort change is live already: retask drives `/model` and `/effort` in the running session (`crates/fno-agents/src/harness_capabilities.toml` holds the tokens). An endpoint or credential change is not. Claude pins the `--settings` file's content at launch. No edit to any route file reaches a running worker. fno has no channel that asks claude to reload one.
 
 The re-point is `fno agents session resume <name> --route <provider/model>`. It stops the worker, restamps the row's provider, model and route settings path, and re-enters the same session id through `claude --bg --resume` with the new `--settings`. The conversation keeps its transcript and its name. The process is new. When the stop lands mid-turn, the in-flight turn is lost.
 
 The account does not move. `CLAUDE_CONFIG_DIR` selects which config claude reads, so it cannot ride a settings file read from that config, and the re-route keeps the row's account. A worker that must move to another account needs a fresh spawn.
 
-This is the lane-cap escape: a worker walled by a quota re-points to another lane instead of being reaped, and it keeps the conversation a respawn loses.
+This is the lane-cap escape. A quota-walled worker re-points to another lane instead of being reaped, and it keeps the conversation.
 
 ## The `fno_id` column answers identity, not idleness
 
