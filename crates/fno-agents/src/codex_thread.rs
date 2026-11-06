@@ -255,12 +255,23 @@ pub fn thread_unarchive_request_json(id: u64, thread_id: &str) -> String {
 /// rides along: a resumed control thread must not lose the posture that lets
 /// its hooks run.
 pub(crate) fn thread_resume_control_request_json(id: u64, thread_id: &str, cwd: &Path) -> String {
+    thread_resume_control_request_json_with(id, thread_id, cwd, thread_hook_trust_bypass())
+}
+
+/// The explicit form: tests pass the posture directly, since the version
+/// probe answers empty under test cfg by design.
+fn thread_resume_control_request_json_with(
+    id: u64,
+    thread_id: &str,
+    cwd: &Path,
+    bypass: bool,
+) -> String {
     let mut params = json!({
         "threadId": thread_id,
         "excludeTurns": true,
         "cwd": cwd,
     });
-    if let Some(config) = config_with_hook_trust_bypass(None, thread_hook_trust_bypass()) {
+    if let Some(config) = config_with_hook_trust_bypass(None, bypass) {
         params["config"] = Value::Object(config);
     }
     json!({
@@ -2973,10 +2984,11 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(frame["params"]["config"]["bypass_hook_trust"], true);
-        let control: Value = serde_json::from_str(&thread_resume_control_request_json(
+        let control: Value = serde_json::from_str(&thread_resume_control_request_json_with(
             2,
             "thread-b",
             std::path::Path::new("/tmp/w"),
+            true,
         ))
         .unwrap();
         assert_eq!(control["params"]["config"]["bypass_hook_trust"], true);
