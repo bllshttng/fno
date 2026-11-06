@@ -296,14 +296,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals") {
         std::process::exit(fno_agents::evals::run(&args[1..]));
     }
-    // `evals-trend` and `corrections-verify`: transport-only folds (the
-    // shrink law allows no new `run` arm); their module docs carry the
-    // contract, autocorrect-pack.sh embeds the verify one.
+    // `evals-trend`: a transport-only fold (the shrink law allows no new
+    // `run` arm); the module doc carries the contract.
     if args.first().map(String::as_str) == Some("evals-trend") {
         std::process::exit(fno_agents::evals_trend::run_evals_trend(&args[1..]));
-    }
-    if args.first().map(String::as_str) == Some("corrections-verify") {
-        std::process::exit(fno_agents::corrections_verify::run(&args[1..]));
     }
     // `evals-attempt`: the native attempt-eligibility verdict for eval history
     // rows. Transport-only, dispatched here like evals-trend: the

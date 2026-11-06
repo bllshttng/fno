@@ -44,6 +44,7 @@ Forbidden locations (regardless of config):
 - `~/.warp/worktrees/...` (setup script never runs there).
 - `~/.cursor/worktrees/...` (cursor-agent's native worktree). fno allocates the worktree and never passes cursor-agent a native worktree flag.
 - `<repo>/worktrees/` or any non-`.claude` path inside the checkout. Enforced since 2026-09-03: `setup-worktree.sh` refuses a `WORKTREE` that does not exist.
+- Any destination inside the canonical checkout whose git show-toplevel is the canonical root (a subdirectory, not a real worktree). Enforced since 2026-11-06: `setup-worktree.sh` refuses and links nothing. Measured 2026-10-30: a run from `crates/fno-agents` linked `.agents`, `.codex`, `.codex-plugin` and `.claude/` into the crate. The destination had defaulted to `$(pwd)` while `CANONICAL` still resolved to the repo root. A real worktree inside the checkout (`.claude/worktrees/<name>`) has its own toplevel and still links.
 - `../<name>` or any sibling-of-canonical path.
 - Anything beneath `$CODEX_HOME/worktrees`. Footnote never allocates there.
 
