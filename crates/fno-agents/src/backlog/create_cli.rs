@@ -1664,6 +1664,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_per_create_prefix_parses_and_the_mint_gate_refuses_a_bad_word() {
+        let tail: Vec<String> = ["fix the gate", "--prefix", "Go"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let parsed = match parse(&tail) {
+            ParsedAdd::Args(args) => args,
+            ParsedAdd::Refusal { message, .. } => panic!("parse refused: {message}"),
+            ParsedAdd::Help => panic!("help"),
+        };
+        assert_eq!(parsed.prefix.as_deref(), Some("go"));
+        assert!(
+            !node_ref::valid_prefix_word("Bad-Prefix"),
+            "the word gate holds the id shape"
+        );
+        let mint = mint_node_id_prefixed(&Default::default(), "Bad-Prefix").unwrap_err();
+        assert!(mint.contains("invalid prefix"), "{mint}");
+    }
+
+    #[test]
     fn tombstone_round_trip_and_mint_exclusion() {
         let dir = tempfile::tempdir().unwrap();
         record_id_tombstone_in(dir.path(), "x-6666");
