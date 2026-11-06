@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::spawn_admission::{flag_value, has_flag, seed_of, HARNESS_FLAGS};
 
@@ -18,6 +19,53 @@ pub const EVALS_SEALED_ENV: &str = "FNO_EVALS_SEALED";
 
 /// The spawn gate's exit for a sandbox that blocks a tool the worker needs.
 pub const EXIT_SANDBOX_UNREACHABLE: i32 = 85;
+
+#[derive(Debug)]
+pub struct SpawnTiming {
+    entered: Instant,
+    seam_ms: u64,
+    gate_ms: u64,
+    guard_ms: u64,
+    queued_ms: u64,
+}
+
+impl SpawnTiming {
+    pub fn for_spawn(args: &[String]) -> Option<Self> {
+        (args.first().map(String::as_str) == Some("spawn")).then(|| Self {
+            entered: Instant::now(),
+            seam_ms: 0,
+            gate_ms: 0,
+            guard_ms: 0,
+            queued_ms: 0,
+        })
+    }
+
+    pub fn record_seam(&mut self) {
+        self.seam_ms = duration_ms(self.entered.elapsed());
+    }
+
+    pub fn record_gate(&mut self, gate: Duration, queued: Duration) {
+        self.gate_ms = self.gate_ms.saturating_add(duration_ms(gate));
+        self.queued_ms = self.queued_ms.saturating_add(duration_ms(queued));
+    }
+
+    pub fn record_guard(&mut self, guard: Duration) {
+        self.guard_ms = self.guard_ms.saturating_add(duration_ms(guard));
+    }
+
+    pub fn client_stage_ms(&self) -> serde_json::Value {
+        serde_json::json!({
+            "seam": self.seam_ms,
+            "gate": self.gate_ms,
+            "guard": self.guard_ms,
+            "queued": self.queued_ms,
+        })
+    }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
 
 /// Admit one argv. `Ok` is the argv to parse; `Err` is the exit code of a
 /// refusal whose lines are already printed.
