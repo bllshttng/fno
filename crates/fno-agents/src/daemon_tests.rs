@@ -626,10 +626,6 @@ fn thread_entry(name: &str, status: AgentStatus, log_path: Option<String>) -> Re
     entry
 }
 
-fn probe_err() -> crate::provider::ReachabilityProbeError {
-    crate::provider::ReachabilityProbeError::new("codex", "store unavailable")
-}
-
 // --- find_uuid_backfill_row (x-c393): backfill a null-uuid bg row ---------
 
 /// A `claude --bg` row: jobId in `short_id`, `claude_session_uuid` null.
