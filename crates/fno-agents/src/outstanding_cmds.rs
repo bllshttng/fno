@@ -1174,6 +1174,34 @@ fn run_ask(args: &[String]) -> i32 {
         if let Some(rung) = &answer.rung {
             crate::question_ladder::wake_holder(rung, qid, wake_node.as_deref(), &wake_question);
         }
+        // A user-rung ask sits invisible until the user next looks at the
+        // board: raise it through the notify table (mux clients first, then
+        // the OS toast). A lead-rung ask woke its holder above, and stays
+        // off the user's board until the lease lapses.
+        if crate::question_ladder::rung_is_user(answer.rung.as_ref()) {
+            let mut title = format!("Question {qid}");
+            if let Some(s) = request.subject.as_deref().filter(|s| !s.is_empty()) {
+                title.push_str(": ");
+                title.push_str(s);
+            }
+            // A file ask carries frontmatter before the question line; the
+            // toast reads the question, never the delimiter.
+            let text = match wake_question.strip_prefix("---") {
+                Some(rest) => match rest.split_once("\n---") {
+                    Some((_, tail)) => tail,
+                    None => rest,
+                },
+                None => &wake_question,
+            };
+            let body = text
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect::<String>();
+            let _ = crate::notify_dispatch::send_notification(&title, &body, qid);
+        }
     }
     0
 }
