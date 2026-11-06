@@ -3498,8 +3498,6 @@ fn collect_until_portal_closed(rx: &mut mpsc::Receiver<ServerMsg>, needle: &str)
     None
 }
 
-// ---- (x-3cea) a portal seat follows the session its claude viewer shows --
-
 /// Feed the seat pane an OSC title like a live claude viewer emits.
 fn feed_seat_title(core: &mut Core, seat: u64, title: &str) {
     core.panes
@@ -3510,289 +3508,52 @@ fn feed_seat_title(core: &mut Core, seat: u64, title: &str) {
 }
 
 #[test]
-fn title_claim_rows() {
-    // AC2-HP: a claude viewer switches from A to B inside its own TUI; the
-    // 1s follow repoints the slot, the attach mapping and the pane name to
-    // B, and a second tick is a no-op.
+fn portal_reach_keeps_session_after_title_changes() {
     set_attach_program(&["/bin/cat"]);
     let (mut core, client_id, _p1, mut rx) = thread_core();
-    core.agents = vec![
-        bg_row("target-a", "/tmp/seen", Some("deadbee1")),
-        bg_row("target-b", "/tmp/seen", Some("deadbee2")),
-    ];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    drain_notices(&mut rx);
-    feed_seat_title(&mut core, seat, "◐ target-b");
+    let mut row = bg_row("mutable-label", "/tmp/seen", Some("deadbee1"));
+    row.session_id = Some("fno-slot-a".into());
+    row.harness_session_id = Some("harness-session-a".into());
+    let mut other = bg_row("other-label", "/tmp/seen", Some("deadbee2"));
+    other.harness_session_id = Some("harness-session-b".into());
+    core.agents = vec![row, other];
+    core.command(client_id, portal_reach_cmd("harness-session-a", 0));
+    let seat = core.portals[&0].seat;
+    let child = core.panes[&seat].pty.child_pid();
+    core.panes
+        .get_mut(&seat)
+        .unwrap()
+        .vt
+        .feed(b"retained-screen");
 
-    core.follow_portal_viewer_titles();
-
-    assert_eq!(core.portals[&0].row_key, "deadbee2", "the slot claims B");
-    assert_eq!(core.attached.get("deadbee2"), Some(&seat), "B maps it");
-    assert!(
-        !core.attached.contains_key("deadbee1"),
-        "A holds no mapping"
-    );
-    assert_eq!(core.panes[&seat].name.as_deref(), Some("target-b"));
-    let rows = core.agent_rows();
-    let b = rows.iter().find(|r| r.name == "target-b").expect("row B");
-    assert_eq!(b.pane_id, Some(seat), "B wears the seat");
-    assert_eq!(b.portal, Some(0), "B carries the marker");
-    let a = rows.iter().find(|r| r.name == "target-a").expect("row A");
-    assert_eq!(a.pane_id, None, "A is paneless");
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("portal 0 now shows target-b")),
-        "the follow says so"
-    );
-
-    core.follow_portal_viewer_titles();
-    assert!(
-        !drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("now shows")),
-        "the second tick emits no notice"
-    );
-    core.reap_pane(seat);
-
-    // AC2-ERR: a title naming two rows claims nothing instead of guessing;
-    // the border names the screen marked and no row wears the seat. A later
-    // unambiguous title claims its row.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, mut rx) = thread_core();
-    core.agents = vec![
-        bg_row("twin", "/tmp/seen", Some("deadbee1")),
-        bg_row("twin", "/tmp/seen", Some("deadbee3")),
-    ];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    drain_notices(&mut rx);
-    feed_seat_title(&mut core, seat, "✳ twin");
-
-    core.follow_portal_viewer_titles();
-
-    assert!(
-        !core.attached.values().any(|p| *p == seat),
-        "no row claims the seat"
-    );
-    assert_eq!(
-        core.portals[&0].row_key, "twin?",
-        "the ambiguous title is stored marked, so no row answers it"
-    );
-    assert_eq!(
-        core.panes[&seat].name.as_deref(),
-        Some("twin?"),
-        "the border names the screen, marked unclaimed"
-    );
-    assert!(
-        !core.agent_rows().iter().any(|r| r.portal == Some(0)),
-        "no row carries the marker: the screen names no one row"
-    );
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("portal 0 now shows twin (unclaimed)")),
-        "the relabel says so"
-    );
-
-    core.follow_portal_viewer_titles();
-    assert!(
-        !drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("now shows")),
-        "the second tick is silent"
-    );
-
-    core.agents
-        .push(bg_row("solo", "/tmp/seen", Some("deadbee4")));
-    feed_seat_title(&mut core, seat, "solo");
-    core.follow_portal_viewer_titles();
-    assert_eq!(
-        core.attached.get("deadbee4"),
-        Some(&seat),
-        "an unclaimed seat is not stuck"
-    );
-    core.reap_pane(seat);
-
-    // AC2-EDGE: a bare spinner frame names no session. The seat keeps its
-    // row instead of unclaiming onto the glyph.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, mut rx) = thread_core();
-    core.agents = vec![bg_row("target-a", "/tmp/seen", Some("deadbee1"))];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    drain_notices(&mut rx);
-    feed_seat_title(&mut core, seat, "◐");
-
-    core.follow_portal_viewer_titles();
-
-    assert_eq!(core.portals[&0].row_key, "deadbee1", "the row is kept");
-    assert_eq!(core.attached.get("deadbee1"), Some(&seat));
-    assert_eq!(core.panes[&seat].name.as_deref(), Some("target-a"));
-    assert!(
-        !drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("now shows")),
-        "a glyph-only title is silent"
-    );
-    core.reap_pane(seat);
-
-    // AC2-EDGE: the seated row named by `name`, by `harness_title`, an
-    // unset title, a held stand-in seat and a non-claude viewer seat all
-    // leave the slot, the mapping and the pane name untouched, with no
-    // notice.
-    fn undisturbed(core: &Core, seat: u64) {
-        assert_eq!(core.portals[&0].row_key, "deadbee1");
+    for title in [
+        "unmatched-title",
+        "other-label",
+        "◐ mutable-label",
+        "Claude Code",
+    ] {
+        feed_seat_title(&mut core, seat, title);
+        core.refresh_portal_viewer_labels();
+        core.command(client_id, portal_reach_cmd("harness-session-a", 0));
+        assert_eq!(
+            core.portals[&0].seat, seat,
+            "title {title:?} replaced a live viewer"
+        );
+        assert_eq!(core.panes[&seat].pty.child_pid(), child);
+        assert!(core.panes[&seat].vt.text().contains("retained-screen"));
+        assert_eq!(core.portals[&0].row_key, "harness-session-a");
         assert_eq!(core.attached.get("deadbee1"), Some(&seat));
-        assert_eq!(core.panes[&seat].name.as_deref(), Some("target-a"));
+        assert!(!core.attached.contains_key("deadbee2"));
+        drain_notices(&mut rx);
     }
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, mut rx) = thread_core();
-    let mut aliased = bg_row("target-a", "/tmp/seen", Some("deadbee1"));
-    aliased.harness_title = Some("alias-a".to_string());
-    core.agents = vec![aliased];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    drain_notices(&mut rx);
-
-    core.follow_portal_viewer_titles(); // no title at all
-    undisturbed(&core, seat);
-    feed_seat_title(&mut core, seat, "◐ target-a"); // the seated row by name
-    core.follow_portal_viewer_titles();
-    undisturbed(&core, seat);
-    feed_seat_title(&mut core, seat, "alias-a"); // the seated row by harness title
-    core.follow_portal_viewer_titles();
-    undisturbed(&core, seat);
-    core.panes.get_mut(&seat).unwrap().cmd = None; // a held stand-in
-    feed_seat_title(&mut core, seat, "◐ target-b");
-    core.follow_portal_viewer_titles();
-    undisturbed(&core, seat);
-    core.panes.get_mut(&seat).unwrap().cmd = Some("sh".into()); // not the attach program
-    core.follow_portal_viewer_titles();
-    undisturbed(&core, seat);
-    assert!(
-        !drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("now shows")),
-        "an agreeing seat is silent"
-    );
-    core.reap_pane(seat);
-
-    // AC2-EDGE: portal 1 already shows B; portal 0's viewer switches to B.
-    // Portal 1 keeps its row, its mapping and its pane name; portal 0 drops
-    // its claim rather than minting a second viewer, and names the screen
-    // marked: the channel takes no row answer, so B keeps portal 1's mark.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, _rx) = thread_core();
-    core.agents = vec![
-        bg_row("target-a", "/tmp/seen", Some("deadbee1")),
-        bg_row("target-b", "/tmp/seen", Some("deadbee2")),
-    ];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    core.command(client_id, portal_reach_cmd("deadbee2", 1));
-    let seat0 = core.portals.get(&0).expect("portal 0 open").seat;
-    let seat1 = core.portals.get(&1).expect("portal 1 open").seat;
-    feed_seat_title(&mut core, seat0, "◐ target-b");
-
-    core.follow_portal_viewer_titles();
-
-    assert_eq!(core.portals[&1].row_key, "deadbee2", "portal 1 keeps B");
-    assert_eq!(core.attached.get("deadbee2"), Some(&seat1));
-    assert_eq!(core.panes[&seat1].name.as_deref(), Some("target-b"));
+    core.agents[0].name = "renamed-label".into();
+    core.agents[1].name = "renamed-label".into();
+    core.refresh_portal_viewer_labels();
+    assert_eq!(core.panes[&seat].name.as_deref(), Some("renamed-label"));
+    core.command(client_id, portal_reach_cmd("harness-session-a", 0));
     assert_eq!(
-        core.portals[&0].row_key, "target-b?",
-        "the held row is stored marked, so portal 1's claim stays unpoisoned"
-    );
-    assert_eq!(
-        core.panes[&seat0].name.as_deref(),
-        Some("target-b?"),
-        "portal 0's border names the screen, marked"
-    );
-    assert!(
-        !core.attached.values().any(|p| *p == seat0),
-        "portal 0's seat is unclaimed"
-    );
-    core.reap_pane(seat0);
-    core.reap_pane(seat1);
-
-    // x-8413: the viewer switches to a row that cannot be claimed (no
-    // attach id). The border still names the screen marked and the channel
-    // follows it, so the sideline marks vellum - never the stale finch.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, mut rx) = thread_core();
-    core.agents = vec![
-        bg_row("finch", "/tmp/seen", Some("deadbee1")),
-        bg_row("vellum", "/tmp/seen", None),
-    ];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    drain_notices(&mut rx);
-    feed_seat_title(&mut core, seat, "◐ vellum");
-
-    core.follow_portal_viewer_titles();
-
-    assert!(
-        !core.attached.contains_key("deadbee1"),
-        "finch holds no mapping"
-    );
-    assert_eq!(
-        core.panes[&seat].name.as_deref(),
-        Some("vellum?"),
-        "the border names the screen, marked unclaimed"
-    );
-    assert_eq!(
-        core.portals[&0].row_key, "vellum",
-        "the channel follows the screen, so the sideline marks vellum"
-    );
-    let rows = core.agent_rows();
-    let v = rows
-        .iter()
-        .find(|r| r.name == "vellum")
-        .expect("row vellum");
-    assert_eq!(v.portal, Some(0), "vellum carries the marker");
-    let f = rows.iter().find(|r| r.name == "finch").expect("row finch");
-    assert_eq!(f.portal, None, "finch keeps no marker");
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("portal 0 now shows vellum (unclaimed)")),
-        "the relabel says so"
-    );
-
-    core.follow_portal_viewer_titles();
-    assert!(
-        !drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("now shows")),
-        "the second tick is silent"
-    );
-    core.reap_pane(seat);
-
-    // A row coincidentally named into the marked form never answers the
-    // marked key: the mark deepens until nothing answers it, so the
-    // uninvolved row wears no marker.
-    set_attach_program(&["/bin/cat"]);
-    let (mut core, client_id, _p1, mut rx) = thread_core();
-    core.agents = vec![
-        bg_row("vellum", "/tmp/seen", Some("deadbee1")),
-        bg_row("vellum", "/tmp/seen", Some("deadbee3")),
-        bg_row("vellum?", "/tmp/seen", None),
-    ];
-    core.command(client_id, portal_reach_cmd("deadbee1", 0));
-    let seat = core.portals.get(&0).expect("portal 0 open").seat;
-    drain_notices(&mut rx);
-    feed_seat_title(&mut core, seat, "◐ vellum");
-
-    core.follow_portal_viewer_titles();
-
-    assert_eq!(
-        core.portals[&0].row_key, "vellum??",
-        "the mark deepens past the row named vellum?"
-    );
-    assert!(
-        !core.agent_rows().iter().any(|r| r.portal == Some(0)),
-        "no row carries the marker, the row named vellum? least of all"
+        core.portals[&0].seat, seat,
+        "a registry rename replaced the viewer"
     );
     core.reap_pane(seat);
 }
@@ -3831,7 +3592,7 @@ fn portal_saves_the_row_id_and_finds_it_after_a_restart() {
     );
 
     feed_seat_title(&mut core, seat, "✳ Claude Code");
-    core.follow_portal_viewer_titles();
+    core.refresh_portal_viewer_labels();
     assert_eq!(
         core.portals[&0].row_key, "sess-a",
         "a title no row goes by keeps the id"
