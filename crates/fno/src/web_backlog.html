@@ -1398,7 +1398,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     const layers = [...new Set(graph.nodes.map((node) => node.layer))].sort((a, b) => a - b);
     const byLayer = new Map(layers.map((layer) => [layer,
       graph.nodes.filter((node) => node.layer === layer).sort((a, b) => a.slot - b.slot)]));
-    const colW = 280, nodeW = 232, nodeH = 72, stepY = 96, padX = 22, padY = 56;
+    const colW = 280, nodeW = 232, nodeH = 84, stepY = 108, padX = 22, padY = 56;
     const svgWidth = Math.max(gridEl.clientWidth, padX * 2 + layers.length * colW);
     const maxSlots = Math.max(1, ...layers.map((layer) => byLayer.get(layer).length));
     const svgHeight = padY + maxSlots * stepY + 24;
@@ -1458,6 +1458,25 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       const text = String(value || "");
       return text.length > limit ? text.slice(0, limit - 1) + "…" : text;
     };
+    const wrapGraphTitle = (value, limit) => {
+      let rest = String(value || "").trim();
+      const lines = [];
+      while (rest && lines.length < 2) {
+        if (rest.length <= limit) {
+          lines.push(rest);
+          rest = "";
+          break;
+        }
+        let cut = rest.lastIndexOf(" ", limit);
+        if (cut <= 0) cut = limit;
+        lines.push(rest.slice(0, cut).trim());
+        rest = rest.slice(cut).trim();
+      }
+      if (rest && lines.length === 2) {
+        lines[1] = fitGraphText(lines[1] + " " + rest, limit);
+      }
+      return [lines[0] || "", lines[1] || ""];
+    };
     const leadClass = (name) => {
       let hash = 0;
       for (const ch of String(name || "")) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
@@ -1496,16 +1515,21 @@ function laneKeyOf(card, lanesBy, parents, byId) {
           ? "+" + node.stub.more.count + " more"
           : fitGraphText(id || node.id, 27);
       group.appendChild(idText);
-      const title = document.createElementNS(svg.namespaceURI, "text");
-      title.setAttribute("x", "10");
-      title.setAttribute("y", "43");
-      title.setAttribute("class", "gtitle");
-      title.textContent = card ? fitGraphText(card.title, 32) : node.stub === "outside" ? "outside family" : "";
-      group.appendChild(title);
+      const titleLines = card ? wrapGraphTitle(card.title, 32) :
+        [node.stub === "outside" ? "outside family" : "", ""];
+      for (const [index, text] of titleLines.entries()) {
+        if (!text) continue;
+        const title = document.createElementNS(svg.namespaceURI, "text");
+        title.setAttribute("x", "10");
+        title.setAttribute("y", String(index === 0 ? 41 : 55));
+        title.setAttribute("class", "gtitle");
+        title.textContent = text;
+        group.appendChild(title);
+      }
       if (card && card.lead && card.lead.name) {
         const lead = document.createElementNS(svg.namespaceURI, "text");
         lead.setAttribute("x", "10");
-        lead.setAttribute("y", "61");
+        lead.setAttribute("y", String(titleLines[1] ? 73 : 61));
         lead.setAttribute("class", "glead");
         lead.textContent = fitGraphText(card.lead.name, 30);
         group.appendChild(lead);

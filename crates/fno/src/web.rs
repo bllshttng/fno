@@ -2720,6 +2720,11 @@ console.log("framePacer: 12 cases ok");
             "the graph draws model edges and nodes into the existing detail action"
         );
         assert!(
+            BACKLOG_PAGE.contains("const wrapGraphTitle")
+                && BACKLOG_PAGE.contains("wrapGraphTitle(card.title, 32)"),
+            "the SVG keeps a long card title visible on a second line"
+        );
+        assert!(
             BACKLOG_PAGE.contains("svg.setAttribute(\"role\", \"group\")")
                 && BACKLOG_PAGE.contains("group.setAttribute(\"role\", \"button\")"),
             "graph nodes stay accessible as controls inside a labeled group"

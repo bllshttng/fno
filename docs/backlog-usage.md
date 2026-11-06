@@ -416,6 +416,8 @@ The graph shows the focused node's family. Parent and contained edges form its l
 
 ![The mux backlog graph: three layers of parent-linked nodes, a selected node, and an outside blocker stub](images/backlog-mux-graph.png)
 
+This screenshot uses seeded demo data. Its counts do not describe a live project.
+
 The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
 
 ![The mux node details view: a node's fields, plan path, parent epic, pull request, two sessions with their adopt commands, and its comment thread](images/backlog-mux-details.png)

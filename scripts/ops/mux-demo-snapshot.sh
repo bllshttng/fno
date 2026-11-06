@@ -350,12 +350,16 @@ done
 
 # The graph shot needs a real family, a cross-project blocker and live nodes;
 # every other snapshot keeps the compact, unrelated work fixture above.
+GRAPH_VIEW=""
 case " $* " in
   *" --view backlog-graph "*)
+    GRAPH_VIEW=1
     "$FNO" backlog update "${IDS[0]}" type=epic >/dev/null
     "$FNO" backlog update "${IDS[1]}" parent="${IDS[0]}" "blocked_by+=${IDS[5]}" >/dev/null
     "$FNO" backlog update "${IDS[2]}" parent="${IDS[0]}" >/dev/null
     "$FNO" backlog update "${IDS[3]}" parent="${IDS[1]}" >/dev/null
+    "$FNO" backlog update "${IDS[4]}" parent="${IDS[0]}" >/dev/null
+    "$FNO" backlog done "${IDS[4]}" --force --reason "demo fixture includes one completed graph child" --note "demo fixture completed child" --skip-stamp >/dev/null
     "$FNO" backlog update "${IDS[5]}" type=epic >/dev/null
     ;;
 esac
@@ -364,6 +368,10 @@ esac
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
+if [ -n "$GRAPH_VIEW" ]; then
+  SIDS=(0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2d)
+  HARNESSES=(codex codex codex)
+fi
 # The first backlog command migrates the store and publishes its tombstone AS
 # the claims path: a marker file where the lock needs a directory. The
 # marker's backup imported at publish, so retiring the marker and

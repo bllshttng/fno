@@ -2,7 +2,7 @@ use crate::backlog_graph::{EdgeKind, Graph, GraphNode, Stub};
 use crate::text_style::{char_w, TLine, TSeg, TextStyle};
 use std::collections::{BTreeMap, HashMap};
 
-const NODE_STEP: usize = 4;
+const NODE_STEP: usize = 6;
 const MIN_COL_W: usize = 14;
 const MAX_NODE_W: usize = 30;
 
@@ -115,7 +115,7 @@ pub(crate) fn lines(
             let is_selected = selected == Some(node.id.as_str());
             positions.insert(node.id.as_str(), Pos { x, y, w: node_w });
             if is_selected {
-                selected_y = Some(y + 1);
+                selected_y = Some(y + 2);
             }
         }
     }
@@ -127,7 +127,8 @@ pub(crate) fn lines(
         for (slot, node) in layers[layer].iter().enumerate() {
             let y = band_y[band] + slot * NODE_STEP;
             let role = node_role(node, selected);
-            draw_box(&mut grid, x, y, node_w, &node_label(node), role);
+            let labels = node_lines(node, node_w);
+            draw_box(&mut grid, x, y, node_w, &labels, role);
         }
     }
     for (index, layer) in layer_ids.iter().enumerate() {
@@ -183,20 +184,84 @@ pub(crate) fn action_id(node: &GraphNode) -> Option<String> {
 }
 
 fn node_label(node: &GraphNode) -> String {
-    if let Some(card) = &node.card {
-        let live = if card.live { "●" } else { " " };
-        let lead = card
-            .lead
-            .as_ref()
-            .map(|lead| format!(" @{}", lead.name))
-            .unwrap_or_default();
-        return format!("{live} {} {}{lead}", card.id, card.title);
-    }
     match &node.stub {
         Some(Stub::Done { count }) => format!("✓ {count} done"),
         Some(Stub::More { count }) => format!("+{count} more"),
         Some(Stub::Outside) => format!("↗ {}", node.id.trim_start_matches("outside:")),
         None => node.id.clone(),
+    }
+}
+
+fn node_lines(node: &GraphNode, box_width: usize) -> [String; 3] {
+    let content_width = box_width.saturating_sub(2).max(1);
+    let Some(card) = &node.card else {
+        return [
+            truncate_cells(&node_label(node), content_width),
+            String::new(),
+            String::new(),
+        ];
+    };
+
+    let live = if card.live { "● " } else { "" };
+    let id = truncate_cells(&format!("{live}{}", card.id), content_width);
+    let (title, rest) = take_cells(&card.title, content_width);
+    let (second_title, rest) = take_cells(&rest, content_width);
+    let second_title = if rest.is_empty() {
+        second_title
+    } else {
+        truncate_cells(&format!("{second_title}…"), content_width)
+    };
+    let lead = card
+        .lead
+        .as_ref()
+        .map(|lead| truncate_cells(&format!("@{}", lead.name), content_width))
+        .unwrap_or_default();
+    let third = if second_title.is_empty() {
+        lead
+    } else {
+        second_title
+    };
+    [id, title, third]
+}
+
+fn take_cells(value: &str, max_cells: usize) -> (String, String) {
+    let value = value.trim_start();
+    let mut end = 0;
+    let mut cells = 0;
+    for (index, ch) in value.char_indices() {
+        let width = char_w(ch).max(1);
+        if cells + width > max_cells {
+            break;
+        }
+        cells += width;
+        end = index + ch.len_utf8();
+    }
+    if end == value.len() {
+        return (value.trim_end().to_string(), String::new());
+    }
+    if end == 0 {
+        end = value.chars().next().map(char::len_utf8).unwrap_or(0);
+    }
+    let split = value[..end]
+        .rfind(char::is_whitespace)
+        .filter(|split| *split > 0)
+        .unwrap_or(end);
+    (
+        value[..split].trim_end().to_string(),
+        value[split..].trim_start().to_string(),
+    )
+}
+
+fn truncate_cells(value: &str, max_cells: usize) -> String {
+    let (prefix, rest) = take_cells(value, max_cells);
+    if rest.is_empty() {
+        prefix
+    } else if max_cells <= char_w('…').max(1) {
+        prefix
+    } else {
+        let ellipsis = '…';
+        let prefix = take_cells(value, max_cells.saturating_sub(char_w(ellipsis).max(1))).0;
+        format!("{prefix}{ellipsis}")
     }
 }
 
@@ -218,28 +283,45 @@ fn node_role(node: &GraphNode, selected: Option<&str>) -> TextStyle {
     }
 }
 
-fn draw_box(grid: &mut Grid, x: usize, y: usize, width: usize, label: &str, role: TextStyle) {
+fn draw_box(
+    grid: &mut Grid,
+    x: usize,
+    y: usize,
+    width: usize,
+    labels: &[String; 3],
+    role: TextStyle,
+) {
     if width < 3 {
-        for (offset, ch) in label.chars().take(width).enumerate() {
-            grid.put(x + offset, y + 1, ch, role);
+        for (row, label) in labels.iter().enumerate() {
+            for (offset, ch) in label.chars().take(width).enumerate() {
+                grid.put(x + offset, y + row + 1, ch, role);
+            }
         }
         return;
     }
+    let bottom = y + 4;
     grid.put(x, y, '┌', role);
     grid.put(x + width - 1, y, '┐', role);
     grid.horizontal(x + 1, x + width - 2, y, '─', role);
-    grid.put(x, y + 1, '│', role);
-    grid.put(x + width - 1, y + 1, '│', role);
-    grid.put(x, y + 2, '└', role);
-    grid.put(x + width - 1, y + 2, '┘', role);
-    grid.horizontal(x + 1, x + width - 2, y + 2, '─', role);
-    let mut at = x + 1;
-    for ch in label.chars() {
+    for (row, label) in labels.iter().enumerate() {
+        let y = y + row + 1;
+        grid.put(x, y, '│', role);
+        grid.put(x + width - 1, y, '│', role);
+        draw_text(grid, x + 1, y, x + width - 1, label, role);
+    }
+    grid.put(x, bottom, '└', role);
+    grid.put(x + width - 1, bottom, '┘', role);
+    grid.horizontal(x + 1, x + width - 2, bottom, '─', role);
+}
+
+fn draw_text(grid: &mut Grid, x: usize, y: usize, end: usize, text: &str, role: TextStyle) {
+    let mut at = x;
+    for ch in text.chars() {
         let cells = char_w(ch).max(1);
-        if at + cells > x + width - 1 {
+        if at + cells > end {
             break;
         }
-        grid.put(at, y + 1, ch, role);
+        grid.put(at, y, ch, role);
         at += cells;
     }
 }
@@ -258,8 +340,8 @@ fn draw_edges(grid: &mut Grid, graph: &Graph, positions: &HashMap<&str, Pos>, wi
             EdgeKind::BlockedBy => TextStyle::ERROR,
             EdgeKind::Related => TextStyle::Badge,
         };
-        let sy = from.y + 1;
-        let dy = to.y + 1;
+        let sy = from.y + 2;
+        let dy = to.y + 2;
         let sx = from.x + from.w;
         let dx = to.x.saturating_sub(1);
         let route = if sx < dx { (sx + dx) / 2 } else { 0 }.min(width.saturating_sub(1));

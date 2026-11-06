@@ -1027,7 +1027,7 @@ fn tab_cycles_kanban_list_and_graph_views() {
     inputs.rows[1]["parent"] = json!("x-1");
     inputs.rows.push(json!({
         "id": "x-4", "status": "ready", "priority": "p2",
-        "title": "graph child", "project": "fno", "parent": "x-1"
+        "title": "Rate limit the checkout api per key", "project": "fno", "parent": "x-1"
     }));
     inputs.order.push("x-4".into());
     inputs.rows.push(json!({
@@ -1063,6 +1063,10 @@ fn tab_cycles_kanban_list_and_graph_views() {
     assert!(
         painted.contains("x-1") && painted.contains("x-2"),
         "family nodes missing: {painted}"
+    );
+    assert!(
+        painted.contains("Rate limit the checkout api") && painted.contains("per key"),
+        "the graph keeps a long title readable across its node lines: {painted}"
     );
     assert!(painted.contains("─"), "graph connectors missing: {painted}");
     assert_eq!(
