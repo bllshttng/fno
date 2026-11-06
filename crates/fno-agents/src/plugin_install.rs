@@ -289,7 +289,8 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
 /// inside each hook's own timeout, so every entry is paid on every hook call.
 fn codex_dropped_tree(rel: &str) -> bool {
     const DROPPED: [&str; 4] = ["crates", "cli", "tests", "evals"];
-    DROPPED.iter()
+    DROPPED
+        .iter()
         .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
 }
 
@@ -298,10 +299,9 @@ fn codex_dropped_tree(rel: &str) -> bool {
 /// build refusal naming the file and the path (AC8), not a broken hook at
 /// runtime.
 fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
-    let pattern = regex::Regex::new(
-        r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)(?![-\w])"#,
-    )
-    .expect("valid tree-read pattern");
+    let pattern =
+        regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)(?![-\w])"#)
+            .expect("valid tree-read pattern");
     for dir in ["hooks", "skills", "agents", "commands"] {
         let root = source_root.join(dir);
         if !root.is_dir() {
@@ -310,11 +310,37 @@ fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
         // Depth ≤ 2: skills nest one level (skills/<name>/references/);
         // deeper nesting is docs, not runtime reads.
         let mut stack: Vec<std::path::PathBuf> = vec![root];
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
         while let Some(dir) = stack.pop() {
-            let depth = stack_len_placeholder
-            for entry in std::fn_placeholder
-
-/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if let Some(hit) = pattern.find(&text) {
+                let rel = path.strip_prefix(source_root).unwrap_or(path);
+                return Err(format!(
+                    "codex stage: {} names dropped tree path {:?} at run time; \
+                     widen the keep set or fix the reference",
+                    rel.display(),
+                    hit.as_str()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
     source_root: &Path,
@@ -2493,7 +2519,20 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
 const STAGE_STAMP: &str = ".fno-stage.json";
 
 fn install_harness(
-    harness: &string placeholder
+    harness: &str,
+    force: bool,
+    source_dir: &Path,
+    profile: Profile,
+) -> Result<String, String> {
+    // The codex dev install gets the slim profile unless --pack asked for
+    // the mux-free pack; the shared full stage stays for every other
+    // harness.
+    let profile = if harness == "codex" && profile == Profile::Full {
+        Profile::Codex
+    } else {
+        profile
+    };
+    let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
     let (stage, _) = build_stage_as(&root, &parent, profile)?;
     let detail = match harness {
