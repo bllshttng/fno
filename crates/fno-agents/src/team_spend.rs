@@ -112,7 +112,8 @@ fn team_spend_at(
 ) -> Result<TeamSpend, String> {
     let registry = crate::state::load_registry(&home.registry_json())
         .map_err(|error| format!("worker registry unreadable: {error}"))?;
-    let event_query = crate::event_store::EventQuery::of_types(&["agent_spawned"]);
+    let event_query =
+        crate::event_store::EventQuery::of_types(&["agent_spawned", "registry_row_removed"]);
     let events = crate::event_store::journal_text_checked(&home.events_jsonl(), &event_query)
         .map_err(|error| format!("worker birth journal unreadable: {error}"))?;
 
@@ -123,10 +124,63 @@ fn team_spend_at(
         let Some(data) = row.get("data") else {
             continue;
         };
-        let Some(member) = event_member(data) else {
-            continue;
-        };
-        members.insert(session_key(&member.session_id), member);
+        match row.get("type").and_then(serde_json::Value::as_str) {
+            Some("agent_spawned") => {
+                let Some(member) = event_member(data) else {
+                    continue;
+                };
+                members.insert(session_key(&member.session_id), member);
+            }
+            Some("registry_row_removed") => {
+                let Some(session_id) = data
+                    .get("harness_session_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                else {
+                    continue;
+                };
+                let key = session_key(session_id);
+                if data
+                    .get("receipt_staged")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    let harness = data
+                        .get("harness")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    let path = crate::receipt::reap_receipt_path_for(home, harness, session_id);
+                    let receipt = crate::receipt::read_reap_receipt(&path).map_err(|error| {
+                        format!(
+                            "worker removal receipt unreadable at {}: {error}",
+                            path.display()
+                        )
+                    })?;
+                    let mut member = members.remove(&key).unwrap_or_default();
+                    member.session_id = receipt.harness_session_id.clone();
+                    member.name = receipt.row_name.clone();
+                    if let Some(identity) = receipt.identity.as_ref() {
+                        if let Some(role_level) = identity.get("role_level") {
+                            member.role_level = role_level
+                                .as_u64()
+                                .and_then(|level| u32::try_from(level).ok());
+                        }
+                        if let Some(parent_session_id) = identity.get("spawned_by_session") {
+                            member.parent_session_id = parent_session_id
+                                .as_str()
+                                .map(str::trim)
+                                .filter(|id| !id.is_empty())
+                                .map(str::to_string);
+                        }
+                    }
+                    members.insert(key, member);
+                } else if let Some(member) = event_member(data) {
+                    members.entry(key).or_insert(member);
+                }
+            }
+            _ => {}
+        }
     }
     for row in registry.entries {
         let Some(session_id) = row
@@ -265,20 +319,76 @@ mod tests {
         for (name, session, parent) in [
             ("t-child-a", "h-a", "h-root"),
             ("t-child-b", "h-b", "h-root"),
-            ("jn-t-grandchild-c", "h-c", "h-a"),
-            ("handoff-peer", "h-peer", "h-a"),
+            ("grandchild-c", "h-c", "h-a"),
+            ("handoff-peer", "h-peer", "h-b"),
+            ("t-legacy", "h-legacy", "h-root"),
+            ("jn-t-legacy-child", "h-legacy-child", "h-legacy"),
         ] {
             emitter
                 .emit("agent_spawned", &birth(name, session, parent, &cwd))
                 .unwrap();
         }
+        let retired_lead = row("t-child-a", "h-a", Some("h-root"), Some(1), &cwd);
+        let receipt = crate::receipt::build_reap_receipt(
+            &retired_lead,
+            None,
+            crate::receipt::Writer::RegistryWrite,
+            &|_| None,
+        )
+        .unwrap();
+        crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        emitter
+            .emit(
+                "registry_row_removed",
+                &json!({
+                    "name": "t-child-a",
+                    "short_id": "",
+                    "harness": "codex",
+                    "harness_session_id": "h-a",
+                    "remover": "test-remover",
+                    "reason": "retired",
+                    "receipt_staged": true,
+                }),
+            )
+            .unwrap();
+        let legacy_parent = row("t-legacy", "h-legacy", Some("h-root"), None, &cwd);
+        let mut legacy_receipt = crate::receipt::build_reap_receipt(
+            &legacy_parent,
+            None,
+            crate::receipt::Writer::RegistryWrite,
+            &|_| None,
+        )
+        .unwrap();
+        let legacy_identity = legacy_receipt
+            .identity
+            .as_mut()
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap();
+        legacy_identity.remove("role_level");
+        legacy_identity.remove("spawned_by_session");
+        crate::receipt::write_reap_receipt(&home, &legacy_receipt).unwrap();
+        emitter
+            .emit(
+                "registry_row_removed",
+                &json!({
+                    "name": "t-legacy",
+                    "short_id": "",
+                    "harness": "codex",
+                    "harness_session_id": "h-legacy",
+                    "remover": "test-remover",
+                    "reason": "legacy receipt",
+                    "receipt_staged": true,
+                }),
+            )
+            .unwrap();
         std::fs::write(
             &ledger,
             r#"{"entries":[
                 {"fno_id":"root-run","session_id":"root-run","sessions":["h-root"],"cost_usd":0.5},
                 {"fno_id":"child-a-run","session_id":"child-a-run","sessions":["h-a"],"cost_usd":2.0},
                 {"fno_id":"child-b-run","session_id":"child-b-run","sessions":["h-b"],"cost_usd":null},
-                {"fno_id":"child-c-run","session_id":"child-c-run","sessions":["h-c"],"cost_usd":1.5}
+                {"fno_id":"child-c-run","session_id":"child-c-run","sessions":["h-c"],"cost_usd":1.5},
+                {"fno_id":"legacy-run","session_id":"legacy-run","sessions":["h-legacy","h-legacy-child"],"cost_usd":0.0}
             ]}"#,
         )
         .unwrap();
@@ -290,6 +400,8 @@ mod tests {
                 "h-a".to_string(),
                 "h-b".to_string(),
                 "h-c".to_string(),
+                "h-legacy".to_string(),
+                "h-legacy-child".to_string(),
                 "h-root".to_string(),
             ]
         );
