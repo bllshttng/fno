@@ -4165,6 +4165,14 @@ async fn handle_rm_with(
             Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
         };
     let name = entry.name.clone();
+    let (own_session_id, _) = crate::claims::resolve_identity();
+    if let Some(detail) = rm_refusal_detail::self_removal(
+        &name,
+        entry.harness_session_id.as_deref(),
+        own_session_id.as_deref(),
+    ) {
+        return Response::err(req.id, ErrorCode::InvalidStatus, detail);
+    }
     let audit = RemovalAuditContext::from_request(req, &entry);
     if let Some(held) = audit.pin_hold(&ctx.home, &entry) {
         return Response::err(req.id, ErrorCode::InvalidStatus, held);
