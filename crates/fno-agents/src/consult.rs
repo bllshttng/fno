@@ -859,6 +859,13 @@ mod tests {
         for _ in 0..2 {
             let mut m = Map::new();
             m.insert("session_id".into(), json!("sess-cap"));
+            m.insert("harness".into(), json!("claude"));
+            m.insert("model".into(), json!("opus"));
+            m.insert("question_chars".into(), json!(3));
+            m.insert("context_bytes".into(), json!(400_000));
+            m.insert("input_tokens".into(), json!(1));
+            m.insert("output_tokens".into(), json!(1));
+            m.insert("cost_usd".into(), json!(0.01));
             m.insert("exit".into(), json!(0));
             emitter.emit_fields("consult_call", m).unwrap();
         }
