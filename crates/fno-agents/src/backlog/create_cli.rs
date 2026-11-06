@@ -230,6 +230,10 @@ pub(crate) struct Refusal {
 pub(crate) struct Born {
     pub(crate) id: String,
     pub(crate) reused: Option<Value>,
+    /// The short number minted in step with the filing, when the store could
+    /// answer. `None` leaves the receipt hash-only; the daemon beat backfills
+    /// the number later.
+    pub(crate) number: Option<String>,
 }
 
 fn refused(message: impl Into<String>, exit: i32) -> Refusal {
@@ -935,9 +939,15 @@ pub fn run(tail: &[String]) -> i32 {
     };
     match create_node(&args, &|_| None) {
         Ok(born) => {
+            // stderr, not stdout: the JSON payload stays machine-readable,
+            // and the number line rides with the other advisory receipt
+            // lines.
+            if let Some(number) = &born.number {
+                super::receipt::emit_line_to(std::io::stderr(), &format!("number: {number}"));
+            }
             println!(
                 "{}",
-                super::render::py_json_pretty(&json!({"id": born.id, "title": args.title}))
+                super::render::py_json_pretty(&receipt_json(&born, &args.title))
             );
             0
         }
@@ -946,6 +956,16 @@ pub fn run(tail: &[String]) -> i32 {
             r.exit
         }
     }
+}
+
+/// The stdout receipt. `number` rides along only when the store minted in
+/// step; consumers read fields by name, so the key is additive.
+fn receipt_json(born: &Born, title: &str) -> Value {
+    let mut receipt = json!({"id": born.id, "title": title});
+    if let Some(number) = &born.number {
+        receipt["number"] = json!(number);
+    }
+    receipt
 }
 
 /// The create flow without the stdout receipt. `reuse` runs over every
@@ -1120,6 +1140,7 @@ pub(crate) fn create_node(
             return Ok(Born {
                 id,
                 reused: Some(row),
+                number: None,
             });
         }
 
@@ -1428,9 +1449,15 @@ pub(crate) fn create_node(
             }
         },
     }
+    // The receipt's short number, minted in step with the filing so the
+    // filer leaves with it. Advisory: any failure reads None, the receipt
+    // stays hash-only, and the daemon beat mints the same key as a no-op.
+    let number =
+        crate::numbers::mint_now(&graph, &format!("{}{minted}", crate::numbers::NODE_KIND));
     Ok(Born {
         id: minted,
         reused: None,
+        number,
     })
 }
 
@@ -1617,6 +1644,22 @@ fn parse_blocker_list_args(values: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_receipt_carries_the_number_only_when_minted() {
+        let hash_only = Born {
+            id: "x-aa11".into(),
+            reused: None,
+            number: None,
+        };
+        assert!(receipt_json(&hash_only, "t").get("number").is_none());
+        let minted = Born {
+            id: "x-aa11".into(),
+            reused: None,
+            number: Some("x-5904".into()),
+        };
+        assert_eq!(receipt_json(&minted, "t")["number"], "x-5904");
+    }
 
     #[test]
     fn tombstone_round_trip_and_mint_exclusion() {
