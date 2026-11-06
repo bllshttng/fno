@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::proto::{AgentBadge, AgentRow, AnswerablePrompt, Reach};
+use crate::proto::{AgentBadge, AgentRow, AnswerablePrompt, BuildMark, Reach};
 // The tail reader lives in its own module (transcript_tail); the sideline
 // entry point keeps its historical path here.
 pub use crate::transcript_tail::session_tails;
