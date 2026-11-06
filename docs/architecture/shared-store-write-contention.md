@@ -61,7 +61,7 @@ ext4, tmpfs and APFS pass. btrfs on kernels older than 4.7 fails, and so does an
 
 ### Remediation on the shared primary (2026-11-06)
 
-The sqld data directory moved onto a 16 GB ext4 image, `/volume2/docker/fno-sqld.ext4.img`, loop-mounted at `/volume2/docker/fno-sqld-ext4`. The container was recreated on that mount with its previous environment, port and restart policy. Its entrypoint now waits for a `.on-ext4` marker in the data directory, so an auto-start that lands before the mount cannot reinitialize an empty store. The boot hook `/usr/local/etc/rc.d/fno-sqld-ext4-mount.sh` mounts the image and restarts the container; if the marker is missing it stops the container instead, because a store that is clearly down beats one that silently starts empty. The old btrfs directory stays in place until the clean window below closes. Downtime was about 3 minutes.
+The sqld data directory moved onto a 16 GB ext4 image, `/volume2/docker/fno-sqld.ext4.img`, loop-mounted at `/volume2/docker/fno-sqld-ext4`. The container was recreated on that mount with its previous environment, port and restart policy. Its entrypoint now waits for a `.on-ext4` marker in the data directory, so an auto-start that lands before the mount cannot reinitialize an empty store. The boot hook `/usr/local/etc/rc.d/fno-sqld-ext4-mount.sh` mounts the image and restarts the container. If the marker is missing, it stops the container instead, because a store that is clearly down beats one that silently starts empty. The old btrfs directory stays in place until the clean window below closes. Downtime was about 3 minutes.
 
 ## Diagnose before recovery
 
@@ -86,4 +86,4 @@ A code regression and a short healthy probe establish different facts from susta
 
 If the stall recurs, preserve the new evidence and continue diagnosis. Do not treat removal of the measured scan amplification as proof that another lock holder or server fault is absent.
 
-The same discipline applies to the compaction fix. The observation window for the ext4 remediation started 2026-11-06 08:13Z with the recreated container. The window closes when a 72-hour log scan shows at least one `performing log compaction` line and zero `snapshot file swap` failures. A window with no compaction line does not close, because it proves the logs were quiet, not that the swap works.
+The same discipline applies to the compaction fix. The observation window for the ext4 remediation started 2026-11-06 08:13Z with the remediated container. When a 72-hour log scan shows at least one `performing log compaction` line and zero `snapshot file swap` failures, the window closes. A window with no compaction line does not close, because it proves the logs were quiet, not that the swap works.
