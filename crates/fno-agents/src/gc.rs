@@ -84,6 +84,12 @@ pub struct GcRow {
     /// The row is an eval worker whose attempt the evals history reads
     /// terminal (`graded` or `unavailable`): finished work by definition.
     pub eval_finished: bool,
+    /// Seconds since the row's own exit stamp. `Some` only when the registry
+    /// itself recorded the exit (`Exited`, stamped by the reconcile that
+    /// confirmed the child gone): a probe result, not an inference. Past
+    /// [`EXIT_ROW_REAP_SECS`] it outranks the brainstorm and idle-window
+    /// keeps, which protect rows whose death is only inferred.
+    pub exited_age_s: Option<i64>,
 }
 
 /// The statuses that complete a PLANNING assignment: the plan was written
@@ -115,6 +121,14 @@ pub const SKILL_IDLE_RETIRE_SECS: i64 = 86_400;
 /// Law d-b01ffede: a row whose node is done retires after 30 idle minutes,
 /// whatever its origin.
 pub const DONE_NODE_IDLE_RETIRE_SECS: i64 = 1_800;
+
+/// An exit-recorded row reaps once its recorded exit is this old. The guard
+/// only spaces the reap from the death (nudges and the stuck escalation run
+/// inside it); the stamp itself is the reconcile's positive proof of death,
+/// written only after it confirmed the child gone. Nothing reaped these rows
+/// before, and they stacked up (x-d560 lead read 2026-11-06: 22 of them on
+/// one machine, ages 0 to 73 hours).
+pub const EXIT_ROW_REAP_SECS: i64 = 7_200;
 
 /// WHICH positive fact holds a [`GcAction::Keep`] row. Removal is the
 /// default, so an unknown fact never keeps a row: there is no variant for
@@ -185,6 +199,15 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             let (node, pr) = (node.clone(), *pr);
             return (GcAction::Keep, Some(KeepReason::OpenPr { node, pr }));
         }
+    }
+    // A recorded exit past the guard retires whatever the transcript says:
+    // the brainstorm keep (law d-defa43c7) and the idle window protect rows
+    // whose death is inferred, and this row's death is a stored probe result.
+    if row
+        .exited_age_s
+        .is_some_and(|age| age >= EXIT_ROW_REAP_SECS)
+    {
+        return (GcAction::Retire, None);
     }
     if row.fno_skill == Some(false) && !row.eval_finished && row.origin.as_deref() != Some("spawn")
     {
@@ -2040,6 +2063,7 @@ mod tests {
             open_pr: None,
             peer_drives_pr: false,
             eval_finished: false,
+            exited_age_s: None,
         }
     }
 
@@ -2192,6 +2216,41 @@ mod tests {
         ] {
             assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None), "{row:?}");
         }
+    }
+
+    /// An exit-recorded row past the guard retires whatever the transcript
+    /// says (the x-d560 fix): the brainstorm keep and the idle window protect
+    /// rows whose death is inferred, and this row's death is a stored probe
+    /// result. Inside the guard the keeps still hold, and a live claim still
+    /// outranks the exit reap.
+    #[test]
+    fn an_exit_recorded_row_past_the_guard_reaps() {
+        let mut row = retiring();
+        row.fno_skill = Some(false);
+        row.origin = None;
+        row.transcript_age_s = Some(SKILL_IDLE_RETIRE_SECS + 1);
+        let recorded = GcRow {
+            exited_age_s: Some(EXIT_ROW_REAP_SECS + 1),
+            ..row.clone()
+        };
+        assert_eq!(gc_decide(&recorded, GRACE), (GcAction::Retire, None));
+        let young = GcRow {
+            exited_age_s: Some(EXIT_ROW_REAP_SECS - 1),
+            ..row
+        };
+        assert_eq!(
+            gc_decide(&young, GRACE),
+            (GcAction::Keep, Some(KeepReason::Brainstorm))
+        );
+        let claimed = GcRow {
+            exited_age_s: Some(EXIT_ROW_REAP_SECS + 1),
+            live_claim: Some("node:x-1 (holder t-1)".into()),
+            ..recorded
+        };
+        assert!(matches!(
+            gc_decide(&claimed, GRACE),
+            (GcAction::Keep, Some(KeepReason::LiveClaim { .. }))
+        ));
     }
 
     #[test]
