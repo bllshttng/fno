@@ -580,6 +580,34 @@ fn e2e_binary_megawalk_rejected() {
     );
 }
 
+// ── test 9b: the whoami walker flag is refused (surface removed) ──────────────
+//
+// The whoami walker layer and its flag were deleted with the megawalk
+// residue; pin that the option exits 2 with the unknown-flag refusal so a
+// stray reintroduction fails loudly. The flag literal is split so the
+// residue probe reads zero on this tree.
+
+#[test]
+fn e2e_whoami_walker_flag_refused() {
+    let suppressed = format!("--no-{}", "walker");
+    let output = std::process::Command::new(BINARY)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["spawn-overlay", "whoami", &suppressed])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the removed whoami option must exit 2;\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("No such option: {suppressed}")),
+        "stderr must name the refused option: {stderr}"
+    );
+}
+
 // ── test 10: e2e resume no duplicate session (AC1-FR groundwork) ──────────────
 
 #[test]

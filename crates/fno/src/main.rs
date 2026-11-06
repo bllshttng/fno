@@ -866,7 +866,7 @@ fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
             let mut i = 0usize;
             while i < tail.len() {
                 match tail[i].to_str()? {
-                    "--json" | "-J" | "--no-walker" | "--no-fleet" => {}
+                    "--json" | "-J" | "--no-fleet" => {}
                     "--state-file" => i += 1,
                     a if a.starts_with("--state-file=") => {}
                     "status" => return Some((claimed_tail(tail, root_json), false)),

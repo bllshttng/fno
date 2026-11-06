@@ -37,7 +37,7 @@ Out of scope for the `/agent` router by design - naming one is not a gap. Rust-o
 
 | Subcommand | Caller |
 |------|--------|
-| `loop` / `loop-check` / `finalize` | the target/megawalk loop (stop decision, ledger/stamp writer). |
+| `loop` / `loop-check` / `finalize` | the target loop (stop decision, ledger/stamp writer). |
 | `reconcile` / `reap` | post-merge close-out, agent-view GC. |
 | `kill-check` | kill-criteria evaluation. |
 | `verify-evidence` / `digest` / `report` / `wait` / `trace` / `ping` | evidence audit, catch-up fold, progress report, blocking wait, tracing, liveness. |
