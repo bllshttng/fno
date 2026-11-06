@@ -1129,6 +1129,21 @@ fn emit_plugin_cache(rep: &Value, err: bool) {
             ),
         );
     }
+    for f in pc
+        .get("rename_findings")
+        .and_then(Value::as_array)
+        .map(|a| a.to_vec())
+        .unwrap_or_default()
+    {
+        emit(
+            err,
+            &format!(
+                "fno doctor: old-name install: {}. Fix: {}",
+                s(&f, "detail"),
+                s(&f, "command")
+            ),
+        );
+    }
 }
 
 fn emit_codex_dual(rep: &Value, err: bool) {
