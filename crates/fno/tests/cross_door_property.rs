@@ -548,6 +548,10 @@ impl Fleet {
             .args(args)
             .env("FNO_AGENTS_HOME", self.agents_home())
             .env("HOME", self.home())
+            // The fixtures backdate mtimes to pre-boot history, which the
+            // awake-idle clamp would refresh to the boot. Pin a boot far in
+            // the past so the fabricated quiet stays quiet.
+            .env("FNO_TEST_BOOT_EPOCH_MS", "1000000000000")
             // The config-declared account roots: the settings path makes the
             // roster reader and the transcript index read the fleet's
             // config.toml (its parent dir), never the developer's.

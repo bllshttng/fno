@@ -3347,6 +3347,24 @@ event_types:
           type: array
 
   - {name: agent_team_vacated, alias_of: agent_role_vacated, sources: [daemon]}
+  - name: retire_held_for_boot_revival
+    description: "The daemon retire arm held its vacates and row reaps because this boot's revival pass has not finished. The hold names its reason; the arm kicks the pass and skips its sweeps this tick (gc.rs)."
+    sources: [daemon]
+    data:
+      required: [reason]
+      properties:
+        reason: {type: string, description: "Why the hold binds: no receipt, an unfinished pass, or an earlier boot's receipt."}
+  - name: agent_team_reseated
+    description: "Boot revival restored a vacated lead manifest and re-stamped the holder's row after the holder revived. Refusals over a live rival or a successor-armed manifest print instead of emitting (boot_revival.rs reseat)."
+    sources: [daemon]
+    data:
+      required: [scope, holder_session]
+      properties:
+        scope: {type: string}
+        level: {type: integer, description: "The role level re-stamped from the manifest."}
+        holder_session: {type: string}
+        grantor: {type: string}
+        row: {type: string, description: "The registry row name the role re-seated."}
   - name: team_succession_reverted
     description: "A succession whose successor died before binding reverted: the reap sweep restored the predecessor's session on the role-name record past the revert window, with the successor's registry row removed or terminal as the evidence. The pending marker cleared; the generation stays bumped as lineage."
     sources: [daemon]
