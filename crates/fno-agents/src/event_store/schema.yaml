@@ -75,6 +75,36 @@ gates:
 
 event_types:
 
+  - name: consult_call
+    description: "One `fno agents loop consult` call: a worker asked a stronger model one bounded question over a trimmed transcript digest. One row per call, including failed spawns, so the per-session cap and the arms report read the same record. A figure the envelope lacked is the string `unknown`, never 0."
+    sources: [consult]
+    data:
+      required: [session_id, harness, model, question_chars, context_bytes, input_tokens, output_tokens, cost_usd, exit]
+      properties:
+        session_id: { type: string, description: "The calling worker's harness session id" }
+        harness: { type: string, description: "The calling worker's harness" }
+        node: { type: [string, "null"], description: "The node the caller holds, when one is known" }
+        model: { type: string, description: "The one-shot's model" }
+        question_chars: { type: integer, description: "The question's character count" }
+        context_bytes: { type: integer, description: "The digest byte budget" }
+        input_tokens: { type: [integer, string], description: "Envelope usage, or `unknown`" }
+        output_tokens: { type: [integer, string], description: "Envelope usage, or `unknown`" }
+        cost_usd: { type: [number, string], description: "Envelope total_cost_usd, or `unknown`" }
+        exit: { type: integer, description: "The one-shot's exit code" }
+    consumers: [operator, consult]
+
+  - name: first_check_notice
+    description: "The spawn first-check found no progress and mailed the parent; recorded beside the mail so the consult report's stuck-node fold and every later reader query the store instead of a mailbox. One row per notice."
+    sources: [fno-first-check]
+    data:
+      required: [name, notice]
+      properties:
+        name: { type: string, description: "The worker the check watches" }
+        session_id: { type: string, description: "The worker's harness session id, when the row carries one" }
+        node: { type: [string, "null"], description: "The worker's node, when the row carries one" }
+        notice: { type: integer, description: "Which notice this is (1 or 2)" }
+    consumers: [operator, consult]
+
   - name: native_bg_mint_failed
     description: "The native-bg roster adopt's registry write failed; a `claude --bg` row did not mint this beat. The write closure re-decides absence, so the next beat retries; this names a failed birth, never a silent zero."
     sources: [daemon]

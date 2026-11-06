@@ -61,7 +61,7 @@ fn rung_command(rung_base: &str) -> Option<String> {
 /// The config-declared rows exactly (never the built-in fallback): a
 /// repeated name folds per field, never wholesale, and a config that does
 /// not parse gathers as empty.
-fn declared_rows(cwd: &Path) -> Value {
+pub(crate) fn declared_rows(cwd: &Path) -> Value {
     let mut folded: Map<String, Value> = Map::new();
     if let Some(models) = crate::agents_config::config_value_deep(cwd, &["routing", "models"])
         .as_ref()
@@ -88,6 +88,11 @@ fn declared_rows(cwd: &Path) -> Value {
                 if !value.is_empty() {
                     entry[field] = json!(value);
                 }
+            }
+            // args is a harness-flag array, not a string: carried verbatim so
+            // the slot fold can validate it where the inline-table fold does.
+            if let Some(args) = row.get("args") {
+                entry["args"] = json!(args);
             }
         }
     }
