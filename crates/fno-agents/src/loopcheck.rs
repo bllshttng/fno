@@ -200,7 +200,6 @@ use bot_nudge::{
 pub(crate) use bot_verdict::bot_verdict;
 use bot_verdict::{clean_pass_review, usage_limit_comment_by};
 #[cfg(test)]
-use bounded_run::BOUNDED_STDERR_TAIL_CAP;
 pub(crate) use bounded_run::{
     bounded_read, bounded_read_diagnostic, bounded_read_unadmitted, git_bounded,
     log_bounded_read_error, BoundedOutput, GhReadError,

@@ -14,7 +14,6 @@ use fno_agents::loopcheck::run_loop_check;
 mod space_paths;
 use space_paths::project_events;
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
