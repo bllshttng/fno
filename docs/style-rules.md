@@ -29,7 +29,7 @@ A worker who reads both rules without this section picks one and drops the other
 
 ## What the checker enforces
 
-The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts nine. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
+The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts ten. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
 
 1. A list-item sentence is 20 words or fewer. Every other sentence is 25 words or fewer.
 2. No semicolon. Write two sentences.
@@ -39,7 +39,8 @@ The house style above is the standard a person writes to. The list below is the 
 6. A paragraph is one physical line. A newline starts the next block.
 7. Mail prose and encounter evidence are 80 masked words or fewer, or whatever `config.style.word_cap.<surface>` sets. This rule does not run on PR bodies, comments, changed markdown, or progress notes.
 8. No filler or pleasantries: "please", "thanks", "basically", and the phrases "thank you", "of course", "happy to", "feel free". This rule runs on every surface, and its list is closed.
-9. No glued tokens on mail and encounter. A glued token joins two wordlist words with no separator, or a word and four or more digits. "staticprogress" and "PIDs76751" are the shapes. This rule runs only where rule 7 runs, because the cap is the pressure that pays for gluing.
+9. No glued tokens on mail and encounter. A glued token writes a word and digits as one token, or joins two wordlist words with no separator. "staticprogress" and "PIDs76751" are the shapes. This rule runs only where rule 7 runs, because the cap is the pressure that pays for gluing.
+10. A pr-body refuses a standalone node hash whose short number exists. Write the number, or the `number (hash)` pair the closure renderer emits. The checker reads the store once and fails open. An unread store flags nothing, and an unnumbered hash flags nothing.
 
 Until 2026-09-11 mail ran the word cap only, and rules 1 to 6 never saw a mail body. That was a decision, recorded in this file and in the checker's docstring. The premise aged: agent mail is read by a human in the transcript, and every mail is re-read by a model whose context it spends. Mail now runs the full rule set. Measured on 2026-09-11 against 6,964 authored bodies from the bus corpus, rules 1 to 6 refuse 18.6 percent, and rule 8 adds about 3 percent. The 80-word cap refuses as before. The gate cannot wedge the bus: the `control:` lane, a `style-exception:` line, and `FNO_STYLE_ENFORCE=0` all bypass.
 
@@ -170,7 +171,11 @@ Two vendored wordlists carry the rule, both closed. The split tier at `crates/fn
 
 The false-positive posture was measured before the rule landed, in the rule-8 manner. A prototype ran over 2,658 live bus bodies. The tuned rule fires ten times, and none of the ten is a real word. Nine are bare CamelCase identifiers like "SettingsModel". One is a glued ISO timestamp. The probe also fired on real words in earlier rounds: "ownership", "footnote", "conflicting", "withheld", "override", "outranks", "backfilled", and, in review, "beforehand", "alongside", "bottleneck", "bookkeeping", "aftermath". The protection tier exists because of that last class. A miss list cannot tell an established compound from glued words. The whole token must clear a wide lexicon before its parts count against it. Dictionary coverage, the stem pass, and the removed morphology entries spare every one. An identifier written bare reads as prose. Quote it to name it.
 
-## Rule 5 has a sharp edge
+## Rule 10 prefers the short node number
+
+The store mints every node a short sequential number: `x-aaaa` reads as `x-5555`. The number leads on the board card, the backlog list and the lead check-in. An earlier PR painted those. This rule carries the preference into prose. A pr-body that writes a standalone hash whose number exists refuses, and the violation names the number form. The pair form `x-5555 (x-aaaa)` passes, and so does an unnumbered hash. The checker reads the store once per run and fails open. A store problem never blocks a body. `--fix` never repairs rule 10: a blind renumber reaches inside paths and machine text.
+
+Measured 2026-11-06: the closure renderer, `fno do pr closure-trailer`, emits the pair form itself, so machine-written lines pass by construction. The rule reaches agent prose: a hand-written `Fixes` line, a `Retarget` line, and any node mention in the summary. The number resolver reads the exact-id tier first, so a legacy all-digit hash stays itself. A number token resolves to the hash it names. The store never renumbers, so a stale read still binds the right node.
 
 ## Rule 5 has a sharp edge
 

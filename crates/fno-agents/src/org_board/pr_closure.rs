@@ -9,9 +9,11 @@
 //! Grammar, one rule for both spellings: the keyword sits at the START of a
 //! line and matches case-insensitively, with or without a colon. Every token
 //! after it is a well-formed node id, split by commas and/or spaces. If any
-//! token is not a node id, the line is prose and claims nothing. The LAST
-//! matching line wins; a prose line is not a match and never erases an
-//! earlier good one.
+//! token is not a node id, the line is prose and claims nothing. A number's
+//! annotation tail, `(<hash>)`, is skipped rather than poisoning the line:
+//! render writes `Fixes x-5555 (x-aaaa)`, and the number token resolves to
+//! the same hash the tail names. The LAST matching line wins; a prose line
+//! is not a match and never erases an earlier good one.
 //!
 //! A body may also carry ONE approval hand-off line, `Retarget <from> <to>
 //! <approval>` (same keyword rule), whose grammar lives in `retarget` below.
@@ -26,10 +28,17 @@ const KEYWORDS: [&str; 2] = ["fixes", "backlog-closure"];
 /// The well-formed, deduplicated ids ONE line claims; empty when the line is
 /// prose (no keyword, or any malformed token).
 pub(crate) fn line_ids(line: &str) -> Vec<String> {
+    line_ids_with(line, &crate::numbers::resolve_node_ref)
+}
+
+/// `line_ids` over an injected resolver, the test seam. Production passes
+/// `numbers::resolve_node_ref`; a stub keeps unit tests off the machine's
+/// store.
+pub(crate) fn line_ids_with(line: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let Some(rest) = closure_line_rest(line) else {
         return Vec::new();
     };
-    parse_line_tokens(rest).unwrap_or_default()
+    parse_line_tokens_with(rest, resolve).unwrap_or_default()
 }
 
 /// The rest of `line` after a closure keyword, when the line opens with one.
@@ -58,18 +67,32 @@ fn closure_line_rest(line: &str) -> Option<&str> {
 
 /// The well-formed, deduplicated ids in the token soup after the keyword.
 /// `None` when any token is malformed: the line is prose and claims nothing.
-fn parse_line_tokens(rest: &str) -> Option<Vec<String>> {
+fn parse_line_tokens_with(
+    rest: &str,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Option<Vec<String>> {
     let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
     let mut ids: Vec<String> = Vec::new();
     for token in rest
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|t| !t.is_empty())
     {
+        // The number's annotation tail, `(<hash>)`: a reader of the number
+        // form skips it instead of poisoning the line as prose. The number
+        // token beside it resolves to the same node, so the pair reads as
+        // one claim.
+        if let Some(inner) = token.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+            if !id_re.is_match(inner) {
+                return None;
+            }
+            continue;
+        }
         if !id_re.is_match(token) {
             return None;
         }
-        if !ids.iter().any(|i| i == token) {
-            ids.push(token.to_string());
+        let id = resolve(token).unwrap_or_else(|| token.to_string());
+        if !ids.iter().any(|i| i == &id) {
+            ids.push(id);
         }
     }
     Some(ids)
@@ -79,12 +102,17 @@ fn parse_line_tokens(rest: &str) -> Option<Vec<String>> {
 /// `body`, order-preserved, deduplicated. A candidate line carrying any
 /// malformed token is prose: it claims nothing and does not win.
 pub(crate) fn parse(body: &str) -> Vec<String> {
+    parse_with(body, &crate::numbers::resolve_node_ref)
+}
+
+/// `parse` over an injected resolver, the test seam beside `line_ids_with`.
+pub(crate) fn parse_with(body: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let mut last: Option<Vec<String>> = None;
     for line in body.lines() {
         let Some(rest) = closure_line_rest(line) else {
             continue;
         };
-        if let Some(ids) = parse_line_tokens(rest) {
+        if let Some(ids) = parse_line_tokens_with(rest, resolve) {
             last = Some(ids);
         }
     }
@@ -123,6 +151,16 @@ fn retarget_line_rest(line: &str) -> Option<&str> {
 /// The LAST well-formed Retarget line of `body`. Any other shape is prose
 /// and never erases an earlier good line, as in `parse`.
 pub(crate) fn retarget(body: &str) -> Option<Retarget> {
+    retarget_with(body, &crate::numbers::resolve_node_ref)
+}
+
+/// `retarget` over an injected resolver, the test seam beside `parse_with`.
+/// A number token in the from or to slot resolves to the hash it names, so
+/// a number-form Retarget line binds the same node its hash spells.
+pub(crate) fn retarget_with(
+    body: &str,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Option<Retarget> {
     let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
     let approval_re =
         regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
@@ -147,9 +185,16 @@ pub(crate) fn retarget(body: &str) -> Option<Retarget> {
         {
             continue;
         }
+        // A number token resolves to the hash it names; an unresolvable one
+        // keeps its raw text, the same fail-open the closure line reads with.
+        let from = resolve(from).unwrap_or_else(|| from.to_string());
+        let to = resolve(to).unwrap_or_else(|| to.to_string());
+        if from == to {
+            continue;
+        }
         last = Some(Retarget {
-            from: from.to_string(),
-            to: to.to_string(),
+            from,
+            to,
             approval: approval.to_string(),
         });
     }
@@ -160,10 +205,18 @@ pub(crate) fn retarget(body: &str) -> Option<Retarget> {
 /// only when the line is well formed, the closure line claims `to`, and it
 /// does not claim `from`. Otherwise the line claims nothing.
 pub(crate) fn retargeted_from(body: &str) -> Vec<String> {
-    let Some(r) = retarget(body) else {
+    retargeted_from_with(body, &crate::numbers::resolve_node_ref)
+}
+
+/// `retargeted_from` over an injected resolver, the test seam.
+pub(crate) fn retargeted_from_with(
+    body: &str,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let Some(r) = retarget_with(body, resolve) else {
         return Vec::new();
     };
-    let ids = parse(body);
+    let ids = parse_with(body, resolve);
     if ids.contains(&r.to) && !ids.contains(&r.from) {
         vec![r.from]
     } else {
@@ -173,8 +226,16 @@ pub(crate) fn retargeted_from(body: &str) -> Vec<String> {
 
 /// The one spelling writers emit: `Fixes <ids>`, deduplicated, well-formed
 /// ids only; empty when nothing well-formed remains, so a caller can append
-/// the result to a body unconditionally.
-pub(crate) fn render<I, S>(node_ids: I) -> String
+/// the result to a body unconditionally. An id whose number exists reads as
+/// `x-5555 (x-aaaa)`: the number leads, the hash stays beside it as the
+/// durable key. A qualified (`@store`) or missing label falls back to the
+/// hash alone.
+pub(crate) fn render<I, S>(node_ids: I) -> String {
+    render_with(node_ids, &crate::numbers::label)
+}
+
+/// `render` over an injected label fn, the test seam beside `parse_with`.
+pub(crate) fn render_with<I, S>(node_ids: I, label: &dyn Fn(&str) -> Option<String>) -> String
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -190,7 +251,20 @@ where
     if ids.is_empty() {
         String::new()
     } else {
-        format!("Fixes {}", ids.join(" "))
+        let tokens: Vec<String> = ids
+            .iter()
+            .map(|id| match label(id) {
+                // A qualified (@store) or missing label falls back to the
+                // hash: only an unqualified number rides the line, so a
+                // reader on another machine never sees a token the grammar
+                // refuses.
+                Some(number) if !number.contains('@') && number != id => {
+                    format!("{number} ({id})")
+                }
+                _ => id.clone(),
+            })
+            .collect();
+        format!("Fixes {}", tokens.join(" "))
     }
 }
 
@@ -294,6 +368,10 @@ mod tests {
                 .get("body")
                 .and_then(|b| b.as_str())
                 .expect("case body");
+            let labels: std::collections::HashMap<String, String> = case
+                .get("labels")
+                .and_then(|v| serde_json::from_value(v.clone()).unwrap_or_default());
+            let resolve = |t: &str| labels.get(t).map(|s| s.to_string());
             let want: Vec<String> = case
                 .get("claims")
                 .and_then(|c| c.as_array())
@@ -303,7 +381,11 @@ mod tests {
                         .collect()
                 })
                 .unwrap_or_default();
-            assert_eq!(parse(body), want, "corpus case failed: {body:?}");
+            assert_eq!(
+                parse_with(body, &resolve),
+                want,
+                "corpus case failed: {body:?}"
+            );
             let want_gone: Vec<String> = case
                 .get("retargeted_from")
                 .and_then(|c| c.as_array())
@@ -314,7 +396,7 @@ mod tests {
                 })
                 .unwrap_or_default();
             assert_eq!(
-                retargeted_from(body),
+                retargeted_from_with(body, &resolve),
                 want_gone,
                 "corpus retargeted_from failed: {body:?}"
             );
@@ -323,13 +405,41 @@ mod tests {
 
     #[test]
     fn render_emits_only_the_new_spelling_and_round_trips() {
-        assert_eq!(render(["x-aaaa", "x-bbbb"]), "Fixes x-aaaa x-bbbb");
+        let none = |_: &str| None;
         assert_eq!(
-            parse(&render(["x-aaaa", "x-bbbb"])),
+            render_with(["x-aaaa", "x-bbbb"], &none),
+            "Fixes x-aaaa x-bbbb"
+        );
+        assert_eq!(
+            parse_with(&render_with(["x-aaaa", "x-bbbb"], &none), &none),
             vec!["x-aaaa", "x-bbbb"]
         );
-        assert_eq!(render(["not-an-id", "x-aaaa", "x-aaaa"]), "Fixes x-aaaa");
-        assert_eq!(render(Vec::<String>::new()), "");
+        assert_eq!(
+            render_with(["not-an-id", "x-aaaa", "x-aaaa"], &none),
+            "Fixes x-aaaa"
+        );
+        assert_eq!(render_with(Vec::<String>::new(), &none), "");
+    }
+
+    #[test]
+    fn render_writes_the_number_beside_the_hash_when_a_label_exists() {
+        let labels = |id: &str| match id {
+            "x-aaaa" => Some("x-5555".to_string()),
+            _ => None,
+        };
+        assert_eq!(render_with(["x-aaaa"], &labels), "Fixes x-5555 (x-aaaa)");
+        assert_eq!(render_with(["x-aaaa"], &labels), "Fixes x-aaaa");
+    }
+
+    #[test]
+    fn parse_reads_the_number_pair_and_skips_the_paren_tail() {
+        let labels = |t: &str| match t {
+            "x-5555" => Some("x-aaaa".to_string()),
+            _ => None,
+        };
+        assert_eq!(parse_with("Fixes x-5555 (x-aaaa)", &labels), vec!["x-aaaa"]);
+        assert_eq!(parse_with("Fixes x-5555", &labels), vec!["x-aaaa"]);
+        assert_eq!(parse_with("Fixes x-aaaa", &labels), vec!["x-aaaa"]);
     }
 
     #[test]
