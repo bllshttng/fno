@@ -138,7 +138,16 @@ pub(crate) fn strip_comments(text: &str) -> String {
 pub(crate) fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
     let missing = || format!("menu-caps: {AGENTS_SOURCE_REL} has no dispatch marker {marker:?}");
     let start = text.find(marker).ok_or_else(missing)?;
-    let opening = start + text[start..].find('{').ok_or_else(missing)?;
+    braced_region_at(text, start)
+}
+
+/// The balanced `{...}` region opening at a caller-resolved offset, for a
+/// marker whose position whitespace or a wrapped signature makes non-literal.
+fn braced_region_at<'a>(text: &'a str, start: usize) -> Result<&'a str, String> {
+    let opening = start
+        + text[start..].find('{').ok_or_else(|| {
+            format!("menu-caps: {AGENTS_SOURCE_REL} has no opening brace at offset {start}")
+        })?;
     let mut depth = 0usize;
     for (offset, ch) in text[opening..].char_indices() {
         match ch {
@@ -153,7 +162,7 @@ pub(crate) fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, 
         }
     }
     Err(format!(
-        "menu-caps: unbalanced dispatch marker {marker:?} in {AGENTS_SOURCE_REL}"
+        "menu-caps: unbalanced dispatch region in {AGENTS_SOURCE_REL} at offset {start}"
     ))
 }
 
@@ -184,7 +193,25 @@ pub(crate) fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, Stri
         .expect("static regex");
     let literal = Regex::new(r#""([a-z][a-z0-9-]*)""#).expect("static regex");
     let mut commands = BTreeSet::new();
-    let run = braced_region(&text, "async fn run(args:")?;
+    // The dispatcher signature wraps onto two lines since spawn_timing
+    // joined it, so the single-line `async fn run(args:` marker no longer
+    // matches. Keep the contract that made the marker load-bearing - the
+    // dispatcher takes `args` first and the scan reads the command dispatch
+    // out of that body - while matching the opener alone.
+    let run = {
+        let marker = "async fn run(";
+        let start = text.find(marker).ok_or_else(|| {
+            format!("menu-caps: {AGENTS_SOURCE_REL} has no dispatch marker {marker:?}")
+        })?;
+        let body = text[start + marker.len()..].trim_start();
+        if !body.starts_with("args:") {
+            return Err(format!(
+                "menu-caps: {AGENTS_SOURCE_REL} dispatcher no longer opens with args:; \
+                 the command-surface scan would read the wrong body"
+            ));
+        }
+        braced_region_at(&text, start)?
+    };
     let if_command = Regex::new(r#"\bif command == "([a-z][a-z0-9-]*)""#).expect("static regex");
     commands.extend(if_command.captures_iter(run).map(|c| c[1].to_string()));
     let matches = Regex::new(r"matches!\(\s*command\s*,([^)]*)\)").expect("static regex");
@@ -453,5 +480,25 @@ mod tests {
         assert!(got["inbox"] >= 2, "{got:?}");
         assert_eq!(got["config accounts"], 15, "{got:?}");
         assert!(got.contains_key("agents fleet"));
+    }
+
+    #[test]
+    fn the_wrapped_dispatcher_signature_still_scans() {
+        // The dispatcher signature wraps onto two lines since spawn_timing
+        // joined it; the single-line marker stopped matching and two CI
+        // checks went red on every branch (measured 2026-11-06). The scan
+        // must read the same commands from the wrapped form.
+        let inputs = Inputs {
+            collapse_map: String::new(),
+            baseline: String::new(),
+            native_tree: String::new(),
+            agents_source: "async fn run(\n    args: Vec<String>,\n    timing: Option<T>,\n) -> i32 {\n    if command == \"claim\" {}\n    if matches!(command, \"detect\" | \"top\") {}\n}\n\
+                 fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
+                 let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
+                .into(),
+            debt: String::new(),
+        };
+        let got = counts(&inputs).unwrap();
+        assert_eq!(got["fno-agents"], 7, "{got:?}");
     }
 }
