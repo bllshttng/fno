@@ -86,19 +86,14 @@ pub(crate) fn auto_mode_rules(settings: &Path) -> Value {
 
 pub(crate) fn repair_auto_mode_rules(
     settings: &Path,
+    status: &str,
     fix: bool,
     json: bool,
-) -> Option<Result<crate::cli_hooks::InstallResult, String>> {
-    if !fix || json {
+) -> Option<crate::cli_hooks::InstallResult> {
+    if !fix || json || status != "missing" {
         return None;
     }
-    match crate::cli_hooks::claude_auto_mode_allow_status(settings) {
-        Ok(true) => None,
-        Ok(false) => Some(Ok(crate::cli_hooks::install_claude_auto_mode_allow(
-            settings,
-        ))),
-        Err(error) => Some(Err(error)),
-    }
+    Some(crate::cli_hooks::install_claude_auto_mode_allow(settings))
 }
 
 /// The store the backlog reads: the db twin of the graph.json anchor, on

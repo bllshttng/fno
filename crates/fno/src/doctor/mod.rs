@@ -727,29 +727,33 @@ fn run_home(args: &[String]) -> i32 {
     }
     let mut auto_mode_fixed = false;
     let mut auto_mode_fix_failed = false;
-    if let Some(result) = report::repair_auto_mode_rules(&auto_mode_settings, fix, json) {
-        match result {
-            Err(error) => {
-                echo_stderr(&format!("fno doctor: --fix Auto Mode rules: {error}"));
-                auto_mode_fix_failed = true;
-            }
-            Ok(repaired) if repaired.error.is_some() => {
-                let error = repaired.error.unwrap_or_default();
-                echo_stderr(&format!("fno doctor: --fix Auto Mode rules: {error}"));
-                auto_mode_fix_failed = true;
-            }
-            Ok(repaired) if repaired.changed => {
-                echo_stderr(&format!(
-                    "fno doctor: --fix Auto Mode rules: repaired {}",
-                    auto_mode_settings.display()
-                ));
-                auto_mode_fixed = true;
-            }
-            Ok(_) => {
-                echo_stderr("fno doctor: --fix Auto Mode rules: already present");
-                auto_mode_fixed = true;
-            }
+    let auto_mode_status = rep
+        .value
+        .get("auto_mode_rules")
+        .and_then(|v| v.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if let Some(repaired) =
+        report::repair_auto_mode_rules(&auto_mode_settings, auto_mode_status, fix, json)
+    {
+        if let Some(error) = repaired.error {
+            echo_stderr(&format!("fno doctor: --fix Auto Mode rules: {error}"));
+            auto_mode_fix_failed = true;
+        } else if repaired.changed {
+            echo_stderr(&format!(
+                "fno doctor: --fix Auto Mode rules: repaired {}",
+                auto_mode_settings.display()
+            ));
+            auto_mode_fixed = true;
+        } else {
+            echo_stderr("fno doctor: --fix Auto Mode rules: already present");
+            auto_mode_fixed = true;
         }
+    } else if fix && !json && auto_mode_status == "unknown" {
+        echo_stderr(
+            "fno doctor: --fix Auto Mode rules: settings could not be read; left unchanged",
+        );
+        auto_mode_fix_failed = true;
     }
     if fix {
         // Heal a dead/wedged pr-watch first; the stale --fix path below
@@ -1046,16 +1050,16 @@ mod tests {
         assert_eq!(finding["status"], "missing");
         assert_eq!(std::fs::read(&settings).unwrap(), before);
 
-        assert!(report::repair_auto_mode_rules(&settings, false, false).is_none());
-        assert!(report::repair_auto_mode_rules(&settings, true, true).is_none());
+        assert!(report::repair_auto_mode_rules(&settings, "missing", false, false).is_none());
+        assert!(report::repair_auto_mode_rules(&settings, "missing", true, true).is_none());
         assert_eq!(std::fs::read(&settings).unwrap(), before);
 
-        let repaired = report::repair_auto_mode_rules(&settings, true, false)
-            .expect("non-JSON --fix attempts the repair")
-            .unwrap();
+        let repaired = report::repair_auto_mode_rules(&settings, "missing", true, false)
+            .expect("non-JSON --fix attempts the repair");
         assert!(repaired.changed && repaired.error.is_none(), "{repaired:?}");
         let finding = report::auto_mode_rules(&settings);
         assert_eq!(finding["status"], "present");
+        assert!(report::repair_auto_mode_rules(&settings, "present", true, false).is_none());
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(settings).unwrap()).unwrap();
         assert_eq!(written["model"], "opus");
