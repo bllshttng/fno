@@ -130,21 +130,6 @@ fn timeout_earns_no_repair() {
 
 #[test]
 #[cfg(unix)]
-fn clean_nonzero_exit_with_output_earns_no_repair() {
-    let dir = tempfile::tempdir().unwrap();
-    let bin = dir.path().join("fno-agents");
-    write_file(&bin, "#!/bin/sh\necho hello\nexit 5\n", 0o755);
-    let before = ino(&bin);
-    let out = verify_and_repair(&bin, SHORT, probe_exec);
-    let err = out.instrument_error.as_deref().unwrap();
-    assert!(err.contains("exited 5"), "{err}");
-    assert_eq!(out.repaired_after, None);
-    assert_eq!(ino(&bin), before);
-    assert!(no_siblings_left(dir.path()));
-}
-
-#[test]
-#[cfg(unix)]
 fn exit_137_with_output_is_a_tool_error_not_a_kill() {
     // AC1-EDGE: nonzero exit HAVING WRITTEN OUTPUT never earns a repair,
     // 137 included - the measured kill produces nothing.

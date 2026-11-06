@@ -714,7 +714,9 @@ impl Drop for EnvRestore {
 // ── the head-scoped operator merge grant ──────────────────────────────────
 
 fn law_row(authority: &str, decision: Option<&str>) -> Value {
-    let mut row = json!({"authority_source": authority});
+    // Post-cutover stamp: the rows the live `--lane law` query returns have
+    // passed the lane's ts gate, and `is_user_ruling` re-checks it.
+    let mut row = json!({"authority_source": authority, "ts": "2026-11-01T00:00:00Z"});
     if let Some(d) = decision {
         row["decision"] = json!(d);
     }
@@ -759,6 +761,15 @@ fn op_rows() {
     assert!(cmd.contains("'merge authorized for this head'"), "{cmd}");
     assert!(cmd.ends_with("--authority operator"), "{cmd}");
 
+    let chat_cmd = chat_grant_command("o/r", 42, "abc");
+    assert!(chat_cmd.starts_with("fno inbox law set '"), "{chat_cmd}");
+    assert!(chat_cmd.contains("'merge-grant:o/r#42@abc'"), "{chat_cmd}");
+    assert!(
+        chat_cmd.contains("'merge authorized for this head'"),
+        "{chat_cmd}"
+    );
+    assert!(chat_cmd.contains("user in chat:"), "{chat_cmd}");
+
     let payload = decisions_payload(vec![law_row("operator", Some(MERGE_GRANT_DECISION))]);
     assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Granted);
 
@@ -771,19 +782,47 @@ fn op_rows() {
     let payload = decisions_payload(vec![]);
     assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Absent);
 
-    // AC2-ERR: only a person at a terminal carries the grant. Rows recorded
-    // through the law door by a harness session (`chat_attested`) or without
-    // an authority read as no operator row at all: Absent, never granted.
+    // AC2-ERR: a bare chat_attested row mints no user's words, so it proves
+    // nothing, and an unknown authority is not the user either: Absent, never
+    // granted.
     let payload = decisions_payload(vec![
         law_row("chat_attested", Some(MERGE_GRANT_DECISION)),
         law_row("unknown", Some(MERGE_GRANT_DECISION)),
     ]);
     assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Absent);
 
+    // The user's own chat approval is the second grant door: a chat_attested
+    // row carrying the user's words - a quote, or a rationale that starts
+    // `user in chat:` - grants, because the words are the evidence the user
+    // spoke (decision_index::is_user_ruling).
+    let mut chat = law_row("chat_attested", Some(MERGE_GRANT_DECISION));
+    chat["quote"] = json!("4527 approved.");
+    let payload = decisions_payload(vec![chat]);
+    assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Granted);
+
+    let mut chat = law_row("chat_attested", Some(MERGE_GRANT_DECISION));
+    chat["rationale"] = json!("user in chat: \"4527 approved.\"");
+    let payload = decisions_payload(vec![chat]);
+    assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Granted);
+
+    // The words alone are not the voice: a coord-lane row (role) carrying a
+    // chat rationale is still not the user's ruling.
+    let mut role = law_row("role", Some(MERGE_GRANT_DECISION));
+    role["rationale"] = json!("user in chat: \"4527 approved.\"");
+    let payload = decisions_payload(vec![role]);
+    assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Absent);
+
     let payload = decisions_payload(vec![
         law_row("operator", Some(MERGE_GRANT_DECISION)),
         law_row("operator", Some("not this head")),
     ]);
+    assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Conflict);
+
+    // Disagreement between the two user doors is Conflict too: one door
+    // granting never overrides the other denying.
+    let mut chat = law_row("chat_attested", Some(MERGE_GRANT_DECISION));
+    chat["quote"] = json!("4527 approved.");
+    let payload = decisions_payload(vec![chat, law_row("operator", Some("not this head"))]);
     assert_eq!(head_grant_status(Some(&payload)), HeadGrant::Conflict);
 
     let payload = decisions_payload(vec![law_row("operator", None)]);

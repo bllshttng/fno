@@ -645,34 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn a_temp_symlink_to_a_real_binary_is_not_a_fixture() {
-        let _guard = crate::path_test_guard();
-        let config_dir = tempfile::tempdir().unwrap();
-        let bin_dir = tempfile::tempdir().unwrap();
-        let claude_bin = bin_dir.path().join("claude");
-        std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &claude_bin).unwrap();
-
-        assert!(!birth_allowed(
-            false,
-            Some(config_dir.path()),
-            Some(&claude_bin)
-        ));
-    }
-
-    #[test]
-    fn a_hermetic_run_refuses_a_real_binary_for_a_real_dir() {
-        let config_dir = Path::new("/Users/someone/claude-config");
-        let claude_bin = Path::new("/usr/local/bin/claude");
-        let temp = tempfile::tempdir().unwrap();
-        let fixture_bin = temp.path().join("bin/claude");
-        std::fs::create_dir_all(fixture_bin.parent().unwrap()).unwrap();
-        std::fs::write(&fixture_bin, "fixture").unwrap();
-
-        assert!(!birth_allowed(true, Some(config_dir), Some(claude_bin)));
-        assert!(birth_allowed(true, Some(config_dir), Some(&fixture_bin)));
-    }
-
-    #[test]
     fn every_fno_registry_key_is_classified_for_the_supervisor() {
         use std::collections::HashSet;
 

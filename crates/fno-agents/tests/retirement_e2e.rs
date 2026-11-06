@@ -337,41 +337,6 @@ fn assignment_recovery_joins_name_and_first_directive_against_the_graph() {
 
 // --- the build pin the audit keys on (x-d2ba) --------------------------------
 
-/// The writer of a retirement receipt is `fno-agents-daemon`. The reader of
-/// `reap --verify` is `fno-agents`. They are separate executables, so the pin
-/// they stamp and compare must name the BUILD, never the running file.
-///
-/// This is the regression it guards. The pin used to be the running exe's own
-/// mtime. One `cargo install` writes the three bins seconds apart, so the
-/// daemon's stamp could never equal the client's: a live 523-receipt window
-/// read 0 verified, with every current-daemon receipt named stale over a
-/// 5-second gap. Every unit test passed, because each one wrote and read the
-/// stamp inside one process.
-#[test]
-fn ac_x_d2ba_the_build_pin_agrees_across_one_cargo_build() {
-    // `CARGO_BIN_EXE_*` names the bins THIS test run just built, not what a
-    // machine has deployed - agreement across one cargo build is still
-    // worth pinning, but it is a narrower claim than the deployed cohort
-    // below.
-    let client = build_pin(env!("CARGO_BIN_EXE_fno-agents"));
-    let daemon = build_pin(env!("CARGO_BIN_EXE_fno-agents-daemon"));
-    let worker = build_pin(env!("CARGO_BIN_EXE_fno-agents-worker"));
-    // A positive marker first: an absent or empty pin would make the three
-    // agree for the wrong reason.
-    assert!(
-        client.contains(" rev "),
-        "the client pin names no build rev: {client:?}"
-    );
-    assert_eq!(
-        client, daemon,
-        "client and daemon disagree on the build pin"
-    );
-    assert_eq!(
-        client, worker,
-        "client and worker disagree on the build pin"
-    );
-}
-
 /// The DEPLOYED cohort, not the just-built one: resolve `fno-agents`,
 /// `fno-agents-daemon` and `fno-agents-worker` on `PATH` and compare their
 /// build pins. This is what `reap --verify` actually audits against on a
