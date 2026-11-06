@@ -967,14 +967,18 @@ fn card_pr_and_created_activity_ages_keep_right_side_fields() {
         .position(|run| [run[0].c, run[1].c, run[2].c] == ['4', '2', 's'])
         .expect("age is visible");
 
-    assert_eq!(pr_end, width - 1, "PR is flush with the panel edge");
+    assert_eq!(
+        pr_end,
+        width - 2,
+        "PR keeps one spare cell off the panel edge"
+    );
     let pr_tail = agent_cells[width - 6..]
         .iter()
         .map(|cell| cell.c)
         .collect::<String>();
     let detail = detail_cells.iter().map(|cell| cell.c).collect::<String>();
-    assert_eq!(pr_tail, "   #42");
-    assert!(detail.ends_with("– · 42s"), "{detail:?}");
+    assert_eq!(pr_tail, "  #42 ");
+    assert!(detail.ends_with("– · 42s "), "{detail:?}");
 }
 
 #[test]
@@ -990,10 +994,10 @@ fn regular_card_snapshot_shows_a_pr_when_it_fits() {
     let width = v.sideline_paint_w() - 1;
     let line = row_text(&frame, row, width);
 
-    assert!(line.ends_with("#42"), "Regular card snapshot: {line:?}");
+    assert!(line.ends_with("#42 "), "Regular card snapshot: {line:?}");
     assert_eq!(
         line.chars().skip(width - 6).collect::<String>(),
-        "   #42",
+        "  #42 ",
         "PR occupies the same six-column right-edge slot as age"
     );
 }
