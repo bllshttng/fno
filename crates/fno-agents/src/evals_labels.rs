@@ -894,7 +894,7 @@ pub(crate) struct SessionLabels {
 /// newest trace's signal kind, and the anchor span. Only proved judges'
 /// rows feed it, so an unproved judge never enriches a draft.
 pub(crate) fn label_facts(state: &Path) -> BTreeMap<String, SessionLabels> {
-    let proved: Vec<String> = calibration_rows(state)
+    let proved: BTreeSet<String> = calibration_rows(state)
         .iter()
         .filter(|j| j["proved"] == json!(true))
         .filter_map(|j| j["judge"].as_str().map(str::to_string))
