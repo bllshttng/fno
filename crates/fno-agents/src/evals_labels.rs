@@ -1396,7 +1396,7 @@ mod tests {
     }
     impl Drop for PinState {
         fn drop(&mut self) {
-            match &self.1 {
+            match &self.0 {
                 Some(v) => std::env::set_var("FNO_STATE_DIR", v),
                 None => std::env::remove_var("FNO_STATE_DIR"),
             }
