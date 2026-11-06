@@ -1,0 +1,25 @@
+id: golden-recall-recorded-ruling
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are about to work out which backlog nodes fold into the feature epic. The user stops you: "wait we decided which 17 to fold already though". No node id is in front of you; the ruling was recorded earlier.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the first command you run to recall the recorded ruling>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*fno (inbox|backlog) decisions'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source:
+    kind: correction
+    ref: "corr:d1ea980ced0795b6"
+  quote: "wait we decided which 17 to fold already though"
+  expected: "Recall the ruling with fno inbox decisions <subject> (newest first) instead of re-deriving or re-asking which nodes fold."
+  rule: "AGENTS.md fno inbox decide entry: a ruling is recorded per subject and `fno inbox decisions X` recovers it, newest first."
+  failure_type: duplicate-work
+  cost: rework
+  outcome: failed

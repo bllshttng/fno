@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-thread-view-portal-tune
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  Earlier today you ran `fno agents spawn --substrate thread alpha` and that worker is live. You now sit at a plain shell in this checkout and want the worker's live screen up in the mux. Name the exact command you run. Do not run anything; this checkout holds no live sessions. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command>`. The second line is `reason: <one line>`. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*fno +mux +thread +(--portal +(new|[0-9]+) +)?alpha' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'spawn|substrate +pane|pane +focus'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source:
+    kind: correction
+    ref: "corr:4ecebd2d0ae6629e"
+  quote: "wrong. bg thread or our thread substrates need a view. \n\nclaude agents launches an agent-view (which is the exact same thing as our sideline in our mux).\n\nThis means we need to dedicate ONE pane to ALLL thread substrates."
+  expected: "The action line names the portal tune: `fno mux thread alpha` (bare, with `--portal N`, or `--portal new`), never a pane per thread substrate."
+  rule: "docs/architecture/portals.md: a thread is the persistent lane and hosts no pane until one is created; a bare spawn is a paneless thread and opens nothing; viewing a thread is the explicit gesture `fno mux thread <key>` - no pane is ever a portal, the threads are channels."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed

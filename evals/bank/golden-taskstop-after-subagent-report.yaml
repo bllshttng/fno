@@ -1,0 +1,25 @@
+id: golden-taskstop-after-subagent-report
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are a lead session. You launched one blueprint subagent through the Agent tool; its task id is Ts7k2. The subagent has returned its plan report, you have used the report, and both readback markers passed.
+
+  What exact action do you take on that subagent now?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact action>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *taskstop' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '(fno agents|fno mux|mail|rm |kill|wait)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:a11f5046bdb8ca18"}
+  quote: "wait...NONE of the kings retracted their opus agents"
+  expected: "Each lead stops its returned opus subagent with `TaskStop <task-id>` once the report is used."
+  rule: "skills/lead SKILL.md subagents reader: once the report is used, `TaskStop <id>` releases each named id; skills/blueprint SKILL.md step 4: right after the subagent returns, stop it with TaskStop."
+  failure_type: skipped-step
+  cost: rework
+  outcome: failed

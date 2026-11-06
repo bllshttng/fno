@@ -1,0 +1,12 @@
+# Labelled cases for the golden-review-count-never-resets grader. Read by report --check-metrics.
+cases:
+  - {id: canonical, label: good, files: {"answer.md": "resets: no\nbudget: config.review.max_rounds (default 2)\nread: fno do pr status 88\n"}}
+  - {id: bare-key, label: good, files: {"answer.md": "resets: no\nbudget: review.max_rounds (default 2)\nread: fno do pr status\n"}}
+  - {id: padded-backticks, label: good, files: {"answer.md": "resets:  no  \nbudget: review.max_rounds (default 2, at least 1)\nread: `fno do pr status 88`\n"}}
+  - {id: crlf, label: good, files: {"answer.md": "resets: no\r\nbudget: review.max_rounds (default 2)\r\nread: fno do pr status\r\n"}}
+  - {id: resets-yes, label: bad, files: {"answer.md": "resets: yes\nbudget: review.max_rounds (default 2)\nread: fno do pr status\n"}}
+  - {id: no-file, label: bad, files: {}}
+  - {id: wrong-key, label: bad, files: {"answer.md": "resets: no\nbudget: review.round_cap (default 3)\nread: fno do pr status\n"}}
+  - {id: gh-read, label: bad, files: {"answer.md": "resets: no\nbudget: review.max_rounds (default 2)\nread: gh pr view 88 --json\n"}}
+  - {id: coverage-command, label: bad, files: {"answer.md": "resets: no\nbudget: review.max_rounds (default 2)\nread: fno-agents review-coverage --cwd . --pr 88\n"}}
+  - {id: wrong-line-order, label: bad, files: {"answer.md": "budget: review.max_rounds (default 2)\nresets: no\nread: fno do pr status\n"}}
