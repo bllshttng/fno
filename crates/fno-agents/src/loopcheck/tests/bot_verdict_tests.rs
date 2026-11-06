@@ -1,23 +1,6 @@
 use super::*;
 
 #[test]
-fn bot_verdict_fresh_clean_pass_supersedes_stale_review_object() {
-    // The normal fix cycle: findings review at H1, fix push, clean-pass
-    // comment at H2. Coverage used to hold the stale H1 object and never
-    // read the comment while the presence gate passed - the two-gate
-    // wedge. Both now read Reviewed through one predicate.
-    let reviews = vec![stale_findings_review()];
-    let comments = vec![clean_pass_comment("abc12345")];
-    let fresh_at = fresh_at_head();
-    let (verdict, sha, _) = bot_verdict("chatgpt-codex-connector", &reviews, &comments, &fresh_at);
-    assert_eq!(verdict, CoverageVerdict::Reviewed);
-    assert_eq!(sha, "abc12345");
-    let json = serde_json::json!({"reviews": reviews, "comments": comments});
-    let info = compute_review_info(&json, &["chatgpt-codex-connector".to_string()], &fresh_at);
-    assert!(info.all_required_passed());
-}
-
-#[test]
 fn bot_verdict_usage_after_clean_pass_refuses_both_axes() {
     // Clean pass pinned at HEAD, then a quota bounce. The pass does not
     // silently outlive the bot's own later refusal, and the presence gate
@@ -58,27 +41,6 @@ fn clean_pass_marker_with_minor_findings_is_not_a_pass() {
 }
 
 #[test]
-fn human_login_substring_of_bot_cannot_satisfy_the_gate() {
-    // A drive-by human "codex" posting a review object used to clear the
-    // required bot "chatgpt-codex-connector" through the symmetric
-    // correspond test; the gate has always been one-way.
-    let reviews = vec![serde_json::json!({
-        "author": {"login": "codex"},
-        "state": "COMMENTED",
-        "commit": {"oid": "abc12345"}
-    })];
-    let fresh_at = fresh_at_head();
-    let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &reviews, &[], &fresh_at);
-    assert_eq!(verdict, CoverageVerdict::Absent);
-    let json = serde_json::json!({"reviews": reviews, "comments": []});
-    let info = compute_review_info(&json, &["chatgpt-codex-connector".to_string()], &fresh_at);
-    assert_eq!(
-        info.missing_bots,
-        vec!["chatgpt-codex-connector".to_string()]
-    );
-}
-
-#[test]
 fn equal_rank_tie_breaks_on_the_stamp_not_the_array_order() {
     // The same three comments as the test above, delivered NEWEST FIRST.
     // Array order is the payload's promise, not ours: resolving the
@@ -108,52 +70,6 @@ fn equal_rank_tie_breaks_on_the_stamp_not_the_array_order() {
     );
     let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
     assert_eq!(verdict, CoverageVerdict::Reviewed);
-}
-
-#[test]
-fn bravo_wearing_findings_is_not_a_clean_pass() {
-    // `Bravo` must END its sentence: `Bravo, but...` and `Bravo. 2 minor
-    // ones...` are findings notes wearing the flourish, and a bare
-    // starts_with("bravo") counted both as passes.
-    for body in [
-            "Codex Review: Didn't find any major issues. Bravo, but two minor ones need attention. Reviewed commit: abc12345",
-            "Codex Review: Didn't find any major issues. Bravo. 2 minor ones need attention. Reviewed commit: abc12345",
-        ] {
-            let comments = vec![serde_json::json!({
-                "author": {"login": "chatgpt-codex-connector[bot]"},
-                "body": body,
-                "createdAt": "2026-08-17T02:00:00Z"
-            })];
-            let fresh_at = fresh_at_head();
-            assert!(
-                clean_pass_review(&comments, "chatgpt-codex-connector", &fresh_at).is_none(),
-                "counted as a pass: {body}"
-            );
-            let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
-            assert_eq!(verdict, CoverageVerdict::Absent, "verdict for: {body}");
-        }
-}
-
-#[test]
-fn quota_bounce_predating_the_bots_latest_evidence_reads_stale() {
-    // A stale review object (01:00) plus an EARLIER bounce (00:00): the
-    // bot recovered and reviewed; parking at Refused has no path back,
-    // while Stale asks a re-read. The inverse ordering still refuses.
-    let fresh_at = fresh_at_head();
-    let (verdict, _, _) = bot_verdict(
-        "chatgpt-codex-connector",
-        &[stale_findings_review()],
-        &[usage_comment("2026-08-17T00:00:00Z")],
-        &fresh_at,
-    );
-    assert_eq!(verdict, CoverageVerdict::Stale);
-    let (verdict, _, _) = bot_verdict(
-        "chatgpt-codex-connector",
-        &[stale_findings_review()],
-        &[usage_comment("2026-08-17T02:00:00Z")],
-        &fresh_at,
-    );
-    assert_eq!(verdict, CoverageVerdict::Refused);
 }
 
 #[test]

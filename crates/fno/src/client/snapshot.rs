@@ -62,9 +62,9 @@ pub enum ViewKind {
     /// The sideline with the pinned Needs input section open, as a tap on the
     /// strip count opens it.
     NeedsInput,
-    /// The sideline strip with the need-input pulse frozen on its lit beat.
+    /// The sideline strip with the need-input mark frozen pointing up.
     NeedsInputPulseOn,
-    /// The same strip frozen on its dark beat.
+    /// The same strip frozen pointing down, half a turn on.
     NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,

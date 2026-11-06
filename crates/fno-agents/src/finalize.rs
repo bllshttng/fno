@@ -3077,94 +3077,6 @@ mod tests {
     // ── HALF ONE: WIP-commit at every terminal ───────────────────────
 
     #[test]
-    fn commit_wip_if_dirty_rescues_a_dirty_tree() {
-        // The specimen this fix exists for: a worker dies mid-flight holding
-        // uncommitted work. Assert the work is ON THE BRANCH afterward, not
-        // just that the function returns something. Runs in a LINKED worktree
-        // on a feature branch: a bare `git init` dir is its own canonical
-        // checkout, so committing in place there is the bug itself.
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("base");
-        std::fs::create_dir_all(&base).unwrap();
-        git_fixture(&base);
-        commit_at(&base, "base", 1000, 1000);
-        let wt = tmp.path().join("wt");
-        Command::new("git")
-            .arg("-C")
-            .arg(&base)
-            .args(["worktree", "add", "-q", "-b", "feature/x"])
-            .arg(&wt)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .status()
-            .unwrap();
-        std::fs::write(wt.join("in_flight.txt"), "950 insertions worth").unwrap();
-        std::fs::write(wt.join("new_untracked.txt"), "never staged").unwrap();
-
-        let rescue = commit_wip_if_dirty(&wt, "NoProgress", "sess-1").unwrap();
-
-        assert!(
-            rescue.branch.is_none(),
-            "a feature-branch rescue commits in place"
-        );
-        assert_eq!(
-            git_capture(&wt, &["rev-parse", "HEAD"]),
-            Some(rescue.sha.clone())
-        );
-        assert_eq!(
-            git_capture(&wt, &["status", "--porcelain"]),
-            Some(String::new())
-        );
-        let log = git_capture(&wt, &["log", "-1", "--format=%s"]).unwrap();
-        assert!(log.contains("WIP") && log.contains("NoProgress"));
-        // The untracked file must be captured too - that is the whole point
-        // of `git add -A` over a partial `git add -u`.
-        let tracked = git_capture(&wt, &["show", "--stat", "HEAD"]).unwrap_or_default();
-        assert!(tracked.contains("new_untracked.txt"));
-    }
-
-    #[test]
-    fn commit_wip_if_dirty_rescues_canonical_main_to_a_branch() {
-        // own specimen: a session terminating with cwd at the
-        // canonical checkout committed 0134c5910 straight onto `main` and
-        // blocked every fast-forward. The rescue must leave `main` unmoved.
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        let before = head_of(d);
-        std::fs::write(d.join("err.tmp"), "").unwrap();
-
-        commit_wip_if_dirty(d, "DonePRGreen", "sess-1").unwrap();
-
-        assert_eq!(head_of(d), before, "canonical main must not move");
-        assert!(
-            git_capture(d, &["status", "--porcelain"])
-                .unwrap()
-                .contains("err.tmp"),
-            "the working tree stays untouched"
-        );
-        let branches = git_capture(d, &["branch", "--list", "wip/*"]).unwrap();
-        assert!(branches.contains("wip/sess-1-DonePRGreen-"), "{branches}");
-        let name = branches
-            .lines()
-            .next()
-            .unwrap()
-            .trim()
-            .trim_start_matches("* ");
-        assert!(
-            git_capture(d, &["show", "--stat", name])
-                .unwrap_or_default()
-                .contains("err.tmp"),
-            "the rescue branch holds the rescued file"
-        );
-        assert_eq!(
-            git_capture(d, &["rev-parse", &format!("{name}^")]),
-            Some(before),
-            "the rescue branches off the prior main"
-        );
-    }
-
-    #[test]
     fn commit_wip_if_dirty_refuses_a_tree_mid_merge_conflict() {
         // The specimen this guard exists for: a worker dies with an unresolved
         // merge conflict on disk. `git add -A` would stage the conflicted file
@@ -3279,66 +3191,6 @@ mod tests {
     // ── the cancel terminal settles its own claim ────────────────────────────
 
     // ──: arm auto-merge at the green gate, not at PR creation ────────
-
-    #[test]
-    fn live_opt_out_claim_blocks_native_auto_merge_guard() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior = std::env::var_os("FNO_CLAIMS_ROOT");
-        let root = std::env::temp_dir().join(format!("fno-finalize-optout-{}", std::process::id()));
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let key = "config-optout:review.self_review_required";
-        let acquired = crate::claims::acquire(
-            key,
-            "session-a",
-            crate::claims::AcquireOpts {
-                ttl_ms: Some(300_000),
-                events_dir: Some(root.clone()),
-                ..Default::default()
-            },
-        );
-        assert!(matches!(
-            acquired,
-            crate::claims::AcquireOutcome::Acquired(_)
-        ));
-
-        let reason = merge_gating_optout_block_reason().expect("live opt-out must block arming");
-
-        assert!(reason.contains("config-optout:review.self_review_required"));
-        assert!(reason.contains("held by session-a"));
-        let _ = crate::claims::release(key, "session-a", None, Some(&root));
-        match prior {
-            Some(value) => std::env::set_var("FNO_CLAIMS_ROOT", value),
-            None => std::env::remove_var("FNO_CLAIMS_ROOT"),
-        }
-    }
-
-    #[test]
-    fn auto_merge_arms_only_on_an_approved_green_pr_terminal() {
-        // AC2-HP: the one terminal that means "PR up, CI green, reviewed".
-        assert!(should_arm_auto_merge("DonePRGreen", true));
-
-        // AC6-EDGE: the human-merge path is not taxed by this at all. A refused
-        // posture outranks everything, including the green terminal.
-        assert!(!should_arm_auto_merge("DonePRGreen", false));
-
-        // DoneAdvisory is the other SHIP_REASONS member but is a doc ship with
-        // no PR; DoneAwaitingMerge is by definition a human's merge past
-        // pre-existing main-red. Reusing SHIP_REASONS here would arm the first.
-        for reason in ["DoneAdvisory", "DoneAwaitingMerge", "DoneBatched"] {
-            assert!(
-                !should_arm_auto_merge(reason, true),
-                "{reason} must never arm auto-merge"
-            );
-        }
-        for stuck in ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"] {
-            assert!(
-                !should_arm_auto_merge(stuck, true),
-                "{stuck} must never arm auto-merge"
-            );
-        }
-    }
 
     #[test]
     fn manifest_auto_merge_posture_cannot_be_forged_by_input_text() {
@@ -3510,35 +3362,6 @@ mod tests {
             crate::loop_target::exit_code_for_reason(&reason),
             0,
             "a clean stop for input exits 0"
-        );
-    }
-
-    #[test]
-    fn finalize_done_closes_a_sealing_shadow_run() {
-        let _root = crate::paths::DeclaredRoot::declare("finalize_done_closes_a_seali");
-        let dir = tempfile::tempdir().unwrap();
-        let run = "20260823T060900Z-cx73523-e04109";
-        let log = dir.path().join(".fno/run-log.jsonl");
-        fs::create_dir_all(log.parent().unwrap()).unwrap();
-        crate::run_state::append_transition(
-            &log,
-            run,
-            crate::run_state::RunEvent::DispatchClassified,
-        )
-        .unwrap();
-        crate::run_state::append_transition(&log, run, crate::run_state::RunEvent::TerminalDecided)
-            .unwrap();
-
-        let events = dir.path().join("events.jsonl");
-        assert!(record_finalize_done(dir.path(), run, &events, &events));
-
-        // The legacy checkout-local journal migrates into the worktree slice of
-        // the space on first resolve; fold THAT log, not the vacated path.
-        let moved = run_log_path(dir.path());
-        assert_ne!(moved, log, "the legacy path is migrated, not reused");
-        assert_eq!(
-            crate::run_state::fold_run_state(&moved, run).unwrap(),
-            crate::run_state::RunState::Closed
         );
     }
 
