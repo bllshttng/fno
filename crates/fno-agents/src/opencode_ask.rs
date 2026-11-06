@@ -106,7 +106,7 @@ pub(crate) const OPENCODE_DEFAULT_MODEL: &str = "zai-coding-plan/glm-5.3";
 pub(crate) fn require_qualified_model(model: Option<&str>) -> Result<(), String> {
     match model {
         Some(m) if !m.is_empty() && !m.contains('/') => Err(format!(
-            "opencode spells its model provider/model (e.g. {OPENCODE_DEFAULT_MODEL}); got bare {m:?}. Pass the qualified id."
+            "opencode spells its model provider/model (e.g. zai-coding-plan/glm-5.3-flash); got bare {m:?}. Pass the qualified id."
         )),
         _ => Ok(()),
     }
