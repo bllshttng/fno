@@ -11,7 +11,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 0
 
 Hide
-Type "export PS1=''; clear; python3 scripts/readme-gif/replay.py $EVENTS 24"
+Type "export PS1=''; clear; scripts/readme-gif/replay.sh $EVENTS 24"
 Enter
 Sleep 300ms
 Show
