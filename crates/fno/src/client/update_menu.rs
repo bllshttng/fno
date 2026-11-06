@@ -275,9 +275,21 @@ pub(crate) fn build_sideline_menu(
         }
         // A published release newer than a uv or brew install. Ranks
         // below a source update: a source install never reads Newer.
-        _ if matches!(release, Some(ReleaseOutcome::Newer { .. })) => {
-            if let Some(ReleaseOutcome::Newer { latest, .. }) = release {
-                rows.push(entry("⬆", &format!("release {latest} available")));
+        // A floor above the running version takes the same row: the modal
+        // it opens names the one command (the Unsupported arm).
+        _ if matches!(
+            release,
+            Some(ReleaseOutcome::Newer { .. }) | Some(ReleaseOutcome::Unsupported { .. })
+        ) =>
+        {
+            match release {
+                Some(ReleaseOutcome::Newer { latest, .. }) => {
+                    rows.push(entry("⬆", &format!("release {latest} available")));
+                }
+                Some(ReleaseOutcome::Unsupported { floor, .. }) => {
+                    rows.push(entry("⬆", &format!("below the supported floor {floor}")));
+                }
+                _ => {}
             }
             actions.push(AuxAction::OpenUpdate);
         }

@@ -8,7 +8,7 @@
 #   every channel        1. fetch the release tarball for this plugin's
 #                          version from GitHub Releases, verify its sha256,
 #                          unpack to staging, run the staged front door's
-#                          `fno update --adopt` (x-be9f). The Rust side owns
+#                          `fno update --adopt`. The Rust side owns
 #                          the proof, swap, links, marker and uv retire.
 #   fallback             2. the uv wheel path (by name, pinned rc, nightly
 #                          wheel) and then the source build, exactly as
@@ -350,7 +350,7 @@ install_source_via_uv() {
   return 1
 }
 
-# x-be9f (law d-df1f42c1): the release tag whose tarball ships this plugin's
+# The release tag whose tarball ships this plugin's
 # version. stable v<ver>, rc v<core>rc<n>, nightly the rolling tag.
 release_tag_for_version() { # release_tag_for_version <PEP 440 version> <channel>
   local base n
@@ -377,6 +377,7 @@ try_binary_install() {
   tag="$(release_tag_for_version "$SRC_VERSION" "$CHANNEL")"
   url="https://github.com/${FNO_RELEASE_REPO}/releases/download/${tag}/fno-agents-${plat}.tar.gz"
   stage="${FNO_STATE_DIR:-$HOME/.fno}/install/adopt-$$"
+  mkdir -p "$stage"
   log "fetching the release binaries: $url"
   if ! curl -fsSL --max-time 300 -o "$stage/tarball" "$url"; then
     err "the release tarball fetch failed (offline, or the release does not exist yet); falling back to the uv wheel path."
@@ -445,7 +446,7 @@ if [[ "$(cat "${FNO_STATE_DIR:-$HOME/.fno}/install/channel" 2>/dev/null)" == "bi
   exit 0
 fi
 
-# The direct install (x-be9f): the primary path on every channel. Only its
+# The direct install: the primary path on every channel. Only its
 # failure falls through to the uv wheel path and the source build below.
 if try_binary_install; then
   log "binary install adopted; the uv wheel path is not needed."

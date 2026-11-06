@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fno hook: SessionStart - wheel move session start
-# The session-start producer for the 0.4.7 upgrade path (x-be9f, law
-# d-df1f42c1): when the resolved front door is a uv tool wheel install whose
+# The session-start producer for the 0.4.7 upgrade path (the wheel-removal
+# migration law): when the resolved front door is a uv tool wheel install whose
 # receipt came from an index, start postinstall.sh detached so the move to
 # the binary install lands while the session runs. The move swaps an existing
 # fno for the same release from the same publisher, so the consent ruling
@@ -40,7 +40,7 @@ fi
 COUNT_STAMP="$STATE/install/fno_install_seen.stamp"
 count_once_per_day() {
   find "$COUNT_STAMP" -mmin -1440 >/dev/null 2>&1 && return 0
-  [[ "$(fno config get telemetry.install_count.enabled 2>/dev/null)" == "false" ]] && return 0
+  [[ "$("$FNO_BIN" config get telemetry.install_count.enabled 2>/dev/null)" == "false" ]] && return 0
   local token
   token="$(cat "$STATE/secrets/posthog-project-token" 2>/dev/null)"
   [[ -n "$token" ]] || token="${FNO_POSTHOG_PROJECT_TOKEN:-}"

@@ -1825,7 +1825,7 @@ fn main() {
     if args.get(mail_at).and_then(|a| a.to_str()) == Some("mail") {
         args.insert(mail_at, OsString::from("agents"));
     }
-    // The bridge (law d-df1f42c1): a wheel install that has not yet moved
+    // The bridge: a wheel install that has not yet moved
     // runs the move here and execs the binary install's front door with this
     // argv, so every door below - including this one - runs on the binary. A
     // failed move prints one line and lets this command run on the wheel.

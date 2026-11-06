@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x-be9f change 7: the container proof. From a clean 0.4.5 wheel install in
+# The container proof. From a clean 0.4.5 wheel install in
 # ubuntu:24.04, prove both upgrade paths land the candidate binary.
 #
 # Leg A (one fno update): 0.4.5's `fno update` runs `uv tool upgrade fno`;

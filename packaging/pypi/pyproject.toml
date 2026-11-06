@@ -1,14 +1,16 @@
-# The bridge wheel's build root (x-be9f, law d-df1f42c1): a TOML-only
+# The bridge wheel's build root: a TOML-only
 # hatchling project. The wheel carries the four Rust binaries as shared
 # scripts, so `uv tool install fno` lands a working `fno` front door. This
-# root survives x-8b53 deleting cli/ (the old root read cli/ as its package).
+# root survives the Python-runtime deletion (the old root read cli/ as its
+# package).
 #
-# THE ONE DELETION POINT: until x-8b53 lands, the wheel still carries the
-# Python package (force-include below + the fno-py console script). That
-# keeps the binary install's self-provision working (`fno do ...` installs
-# the PyPI wheel to reach fno-py) and the release smokes green. x-8b53
-# deletes the force-include block, the fno-py script line, and cli/src/fno,
-# and this root becomes packageless in the same PR that deletes Python.
+# THE ONE DELETION POINT: until the Python runtime is deleted, the wheel
+# still carries the Python package (force-include below + the fno-py
+# console script). That keeps the binary install's self-provision working
+# (`fno do ...` installs the PyPI wheel to reach fno-py) and the release
+# smokes green. The deletion PR removes the force-include block, the fno-py
+# script line, and the Python source, and this root becomes packageless in
+# that same change.
 #
 # Measured on uv 0.13.5: uv records every shared script in
 # [[tool.entrypoints]], so the first-run move's relink finds `fno` there, and
@@ -21,12 +23,12 @@ build-backend = "hatchling.build"
 [project]
 name = "fno"
 # Stamped by scripts/release/sync-version.sh from the release version (PEP 440),
-# never from cli/src/fno/__init__.py: x-8b53 deletes that file.
+# never from the Python package's __init__.py, which the deletion removes.
 dynamic = ["version"]
 requires-python = ">=3.11"
 
 [project.scripts]
-# The Python CLI console script, as today. Deleted by x-8b53 with the package.
+# The Python CLI console script, as today. The deletion PR removes it with the package.
 fno-py = "fno.cli:main"
 
 [tool.hatch.version]
@@ -37,7 +39,7 @@ pattern = "^(?P<version>.+)$"
 # bypass-selection: no auto-discovered packages; the payload is exactly the
 # force-include map plus the shared scripts.
 bypass-selection = true
-# The Python package rides as content until x-8b53 (see the header). Sources
+# The Python package rides as content until the runtime deletion (see the header). Sources
 # resolve relative to this root, one level above cli/.
 force-include = { "../../cli/src/fno" = "fno", "../../LICENSE" = "fno/_licenses/LICENSE", "../../NOTICE" = "fno/_licenses/NOTICE" }
 

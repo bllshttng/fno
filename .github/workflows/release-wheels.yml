@@ -112,8 +112,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p packaging/pypi/staged
-          # x-be9f: the bridge wheel ships the four Rust binaries only (no
-          # Python package; x-8b53 deletes cli/). The cp set is all-or-nothing:
+          # The bridge wheel ships the four binaries plus the force-included
+          # Python package until the runtime deletion. The cp set is all-or-nothing:
           # a missing binary fails this step and names itself (AC2-ERR).
           cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
              "packaging/pypi/staged/fno"

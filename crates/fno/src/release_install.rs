@@ -546,7 +546,7 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
     0
 }
 
-/// The bridge's whole job (law d-df1f42c1): a wheel install that has not yet
+/// The bridge's whole job: a wheel install that has not yet
 /// moved runs the Wheel install once at this version's release tag, adopts
 /// the binary install, and execs the binary front door with the original
 /// argv. Skips silently unless this exe is a wheel install awaiting the move;

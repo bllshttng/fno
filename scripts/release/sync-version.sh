@@ -73,8 +73,8 @@ if [[ "$arg" == "--check" ]]; then
     [[ "$got" == "$want_semver" ]] || { echo "drift: $cf = $got (want $want_semver)"; bad=1; }
   done
   for j in "${JSON_MANIFESTS[@]}"; do
-    # The bridge wheel's VERSION file must also agree with __init__.py; x-8b53
-    # deletes __init__.py and this check re-anchors on VERSION alone.
+    # The bridge wheel's VERSION file must also agree with __init__.py; the
+    # Python deletion re-anchors this check on VERSION alone.
     if ! grep -qx "$want_pep" packaging/pypi/VERSION 2>/dev/null; then
       echo "drift: packaging/pypi/VERSION = $(tr -d '[:space:]' < packaging/pypi/VERSION 2>/dev/null || echo missing) (want $want_pep)"; bad=1
     fi
@@ -99,7 +99,7 @@ is_release_version "$ver" || {
 }
 semver="$(pep_to_semver "$ver")"
 
-# 0. The bridge wheel's VERSION file (x-be9f): one PEP 440 line, read by
+# 0. The bridge wheel's VERSION file: one PEP 440 line, read by
 #    hatchling's regex version source. Sits first so every surface below is
 #    stamped from the same call.
 printf '%s\n' "$ver" > packaging/pypi/VERSION
