@@ -229,26 +229,82 @@ fn unpacked_version(unpacked: &Path) -> Result<String, String> {
         .ok_or_else(|| "the downloaded fno-agents version --json names no package".to_string())
 }
 
-/// Download `tag`, prove it ships `want`, and swap it into `bin`. Nothing
-/// is swapped on any Err.
-fn install_tag(tag: &str, want: &str, platform: &str, bin: &Path) -> Result<(), String> {
+/// Download `tag` and prove it ships `want`; return `(staging, unpacked)`.
+/// The caller removes `staging` when it is done with `unpacked`. Nothing is
+/// swapped anywhere on any Err.
+fn fetch_and_prove(tag: &str, want: &str, platform: &str) -> Result<(PathBuf, PathBuf), String> {
     let url = tarball_url(tag, platform);
     let staging = state_dir()
         .join("install")
         .join(format!("release-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
-    let result = update_prebuilt::download_verified(&url, &staging)
-        .map_err(|e| format!("fetch {url}: {e}"))
-        .and_then(|unpacked| {
-            let got = unpacked_version(&unpacked)?;
-            if got != want {
-                return Err(format!("version proof: {url} ships {got}, want {want}"));
+    let unpacked = update_prebuilt::download_verified(&url, &staging)
+        .map_err(|e| format!("fetch {url}: {e}"))?;
+    let got = unpacked_version(&unpacked)?;
+    if got != want {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("version proof: {url} ships {got}, want {want}"));
+    }
+    Ok((staging, unpacked))
+}
+
+/// Adopt an already-proven unpacked release: swap it into `bin`, relink the
+/// receipt links, write the channel marker, refresh pr-watch, and retire the
+/// uv tool when nothing still runs from it. `tool_root` is Some on the
+/// wheel's own move; None falls back to a kept tool root. Returns the tool
+/// root the retire ran for, so a fresh install (None) knows it must link
+/// `~/.local/bin` itself.
+fn adopt_unpacked(
+    unpacked: &Path,
+    tool_root: Option<&Path>,
+    bin: &Path,
+) -> Result<Option<PathBuf>, String> {
+    update_prebuilt::swap_into(unpacked, bin).map_err(|e| format!("swap: {e}"))?;
+    let tool_root = match tool_root {
+        Some(root) => {
+            let receipt = root.join("uv-receipt.toml");
+            let links = std::fs::read_to_string(&receipt)
+                .map(|t| receipt_links(&t))
+                .unwrap_or_default();
+            if !links.iter().any(|(n, _)| n == "fno") {
+                return Err(format!("{} names no fno entrypoint", receipt.display()));
             }
-            update_prebuilt::swap_into(&unpacked, bin).map_err(|e| format!("swap: {e}"))
-        });
-    let _ = std::fs::remove_dir_all(&staging);
-    result
+            relink(&links, bin)?;
+            Some(root.to_path_buf())
+        }
+        None => kept_tool_root(),
+    };
+    let marker = marker_path();
+    marker
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|_| std::fs::write(&marker, "binary\n"))
+        .map_err(|e| format!("{}: {e}", marker.display()))?;
+    // Auxiliary: a failed refresh costs its FAILED line, never the move -
+    // stranding the uv tool over it would undo the swap's progress.
+    let refresh = crate::process_admission::std_command(bin.join("fno-agents"))
+        .args(["pr-watch", "refresh", "--caller", "update", "--fno-binary"])
+        .arg(bin.join(FRONT_DOOR))
+        .stdin(Stdio::null())
+        .output();
+    if let Ok(o) = &refresh {
+        if !o.status.success() {
+            failed(
+                "pr-watch refresh",
+                &format!("exit {}", o.status.code().unwrap_or(1)),
+            );
+        }
+    }
+    if let Some(root) = tool_root.as_deref() {
+        match retire_uv_tool(&root, bin) {
+            Ok(line) => println!("fno update: {line}"),
+            Err(e) => {
+                failed("uv tool retire", &e);
+            }
+        }
+    }
+    Ok(tool_root)
 }
 
 /// The argv the front door still forwarded to `fno-py` when the move
@@ -257,9 +313,38 @@ fn install_tag(tag: &str, want: &str, platform: &str, bin: &Path) -> Result<(), 
 /// move.
 const FORWARD_PROBES: [&[&str]; 3] = [&["--version"], &["--help"], &["inbox", "outstanding"]];
 
+/// One line per live process whose argv names a path under `root`. The same
+/// over-catching read as doctor_update's `live_tool_env_processes` and
+/// postinstall.sh's: a suspicious line costs a kept tool, never a broken one.
+fn live_processes_under(root: &Path) -> Vec<String> {
+    let needle = root.to_string_lossy().to_string();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let Ok(out) = crate::process_admission::std_command("ps")
+        .args(["-axo", "pid=,args="])
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.contains(&needle) && !l.contains("ps -axo"))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Remove the uv tool once the binary `fno` no longer forwards to Python. uv
 /// deletes the entrypoint links on uninstall, so they are made again after.
 fn retire_uv_tool(tool_root: &Path, bin: &Path) -> Result<String, String> {
+    let live = live_processes_under(tool_root);
+    if !live.is_empty() {
+        return Ok(format!(
+            "keeping the uv tool: {} process(es) still run from it; the next fno update retires it",
+            live.len()
+        ));
+    }
     let receipt = tool_root.join("uv-receipt.toml");
     let Ok(text) = std::fs::read_to_string(&receipt) else {
         return Ok("no uv tool to retire".to_string());
@@ -325,6 +410,190 @@ fn failed(step: &str, why: &str) -> i32 {
     1
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The first-run move's one-hour backoff stamp: a failed move never retries
+/// from a hook more often than hourly, and never fails the user's command.
+const BACKOFF_SECS: u64 = 3_600;
+
+fn backoff_path() -> PathBuf {
+    state_dir().join("install").join("first-run-backoff")
+}
+
+fn backoff_active() -> bool {
+    std::fs::read_to_string(backoff_path())
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .is_some_and(|t| now_secs() < t.saturating_add(BACKOFF_SECS))
+}
+
+fn move_lock_path() -> PathBuf {
+    state_dir().join("install").join("first-run-move.lock")
+}
+
+/// Take the move lock, or None when another live process holds it. The file
+/// carries the holder's pid, so a crashed mover's stale lock is stolen.
+/// `create_new` closes the exists-then-create race: losing it reads as held.
+fn acquire_move_lock() -> Option<PathBuf> {
+    let path = move_lock_path();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let alive = text
+            .trim()
+            .parse::<u32>()
+            .map(|pid| {
+                crate::process_admission::std_command("ps")
+                    .args(["-p", &pid.to_string()])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            })
+            .unwrap_or(true);
+        if alive {
+            return None;
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .ok()?;
+    f.write_all(format!("{}\n", std::process::id()).as_bytes())
+        .ok()?;
+    Some(path)
+}
+
+/// Link each binary into `dir` (the PATH dir of a fresh install that has no
+/// uv receipt to relink). Each link lands as a temp symlink, then renames
+/// over the old one, so a running command never sees a missing name.
+fn link_binaries(bin: &Path, dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for name in update_prebuilt::BINARIES {
+        let link = dir.join(name);
+        let tmp = link.with_file_name(format!(".{name}.fno-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        std::os::unix::fs::symlink(bin.join(name), &tmp)
+            .and_then(|_| std::fs::rename(&tmp, &link))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("{}: {e}", link.display())
+            })?;
+    }
+    Ok(())
+}
+
+/// The `fno update --adopt <dir>` door: prove the unpacked release ships the
+/// running version, swap it in, and adopt the binary install. The staged
+/// front door that postinstall.sh unpacks runs this on a machine that may
+/// have no uv and no receipt: adopt must not require either.
+pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
+    let running = env!("CARGO_PKG_VERSION");
+    if let Err(e) = unpacked_version(unpacked).and_then(|got| {
+        (got == running).then_some(()).ok_or_else(|| {
+            format!(
+                "version proof: {} ships {got}, want {running}",
+                unpacked.display()
+            )
+        })
+    }) {
+        return failed("adopt", &e);
+    }
+    let Some(lock) = acquire_move_lock() else {
+        return failed(
+            "lock",
+            "another fno call is moving this install; let it finish, then retry",
+        );
+    };
+    let bin = bin_dir();
+    let result = adopt_unpacked(unpacked, None, &bin);
+    let _ = std::fs::remove_file(&lock);
+    let tool_root = match result {
+        Ok(r) => r,
+        Err(e) => return failed("adopt", &e),
+    };
+    if tool_root.is_none() {
+        // A fresh install has no receipt: the PATH links are this door's own
+        // job. With no HOME there is no PATH dir to own; postinstall's PATH
+        // note covers it.
+        match std::env::var_os("FNO_INSTALL_DIR")
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")))
+        {
+            Some(dir) => {
+                if let Err(e) = link_binaries(&bin, &dir) {
+                    return failed("link", &e);
+                }
+            }
+            None => eprintln!(
+                "fno update: no HOME; link {} into your PATH yourself",
+                bin.display()
+            ),
+        }
+    }
+    println!(
+        "fno update: done; {} runs {running}.",
+        bin.join(FRONT_DOOR).display()
+    );
+    0
+}
+
+/// The bridge's whole job (law d-df1f42c1): a wheel install that has not yet
+/// moved runs the Wheel install once at this version's release tag, adopts
+/// the binary install, and execs the binary front door with the original
+/// argv. Skips silently unless this exe is a wheel install awaiting the move;
+/// never fails the caller's command.
+pub(crate) fn first_run_move(args: &[std::ffi::OsString]) {
+    if backoff_active() {
+        return;
+    }
+    let InstallChannel::Wheel { tool_root } = current_channel() else {
+        return;
+    };
+    if std::fs::read_to_string(marker_path()).is_ok_and(|m| m.trim() == "binary") {
+        return;
+    }
+    let Some(platform) = update_prebuilt::platform() else {
+        return;
+    };
+    let running = env!("CARGO_PKG_VERSION");
+    let Some(tag) = release_tag(running) else {
+        return;
+    };
+    let Some(lock) = acquire_move_lock() else {
+        return; // another call is moving; this one runs on the wheel
+    };
+    let bin = bin_dir();
+    eprintln!(
+        "fno: moving this wheel install to the binary install at {}",
+        bin.join(FRONT_DOOR).display()
+    );
+    let result = fetch_and_prove(&tag, running, platform).and_then(|(staging, unpacked)| {
+        let adopted = adopt_unpacked(&unpacked, Some(&tool_root), &bin);
+        let _ = std::fs::remove_dir_all(&staging);
+        adopted
+    });
+    let _ = std::fs::remove_file(&lock);
+    if let Err(e) = result {
+        let _ = std::fs::write(backoff_path(), now_secs().to_string());
+        eprintln!("fno: the move did not finish ({e}); run: fno update");
+        return;
+    }
+    // Exec replaces this process: the caller's own door never runs on the
+    // wheel, and no stdio is touched so an interactive command keeps its tty.
+    use std::os::unix::process::CommandExt as _;
+    let err = std::process::Command::new(bin.join(FRONT_DOOR))
+        .args(args.iter())
+        .exec();
+    eprintln!("fno: the moved front door did not start: {err}");
+}
+
 /// `fno update` on a Wheel or Binary channel. Returns the exit code.
 pub(crate) fn update(channel: &InstallChannel, dry_run: bool) -> i32 {
     let Some(platform) = update_prebuilt::platform() else {
@@ -353,79 +622,46 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool) -> i32 {
         }
         InstallChannel::Other => return failed("channel", "not a wheel or binary install"),
     };
+    let tool_root = match channel {
+        InstallChannel::Wheel { tool_root } => Some(tool_root.clone()),
+        _ => None,
+    };
     let url = tarball_url(&tag, platform);
     if dry_run {
         println!(
             "Would fetch {url} and its .sha256, prove version {want}, and swap into {}",
             bin.display()
         );
-        if let InstallChannel::Wheel { tool_root } = channel {
+        if let Some(root) = &tool_root {
             println!(
                 "Would relink the uv tool links from {} into {}, write {} = binary, refresh pr-watch, and keep the uv tool while fno-py is needed",
-                tool_root.join("uv-receipt.toml").display(),
+                root.join("uv-receipt.toml").display(),
                 bin.display(),
                 marker_path().display()
             );
         }
         return 0;
     }
+    // `fno update` and the first-run move share one lock: a move already in
+    // flight owns the swap.
+    let Some(lock) = acquire_move_lock() else {
+        return failed(
+            "lock",
+            "another fno call is moving this install; let it finish, then retry",
+        );
+    };
     println!("fno update: installing {want} from {url}");
-    if let Err(e) = install_tag(&tag, &want, platform, &bin) {
+    let result = fetch_and_prove(&tag, &want, platform).and_then(|(staging, unpacked)| {
+        let adopted = adopt_unpacked(&unpacked, tool_root.as_deref(), &bin);
+        let _ = std::fs::remove_dir_all(&staging);
+        adopted
+    });
+    let _ = std::fs::remove_file(&lock);
+    if let Err(e) = result {
         return failed("install", &e);
     }
-    let tool_root = match channel {
-        InstallChannel::Wheel { tool_root } => {
-            let receipt = tool_root.join("uv-receipt.toml");
-            let links = std::fs::read_to_string(&receipt)
-                .map(|t| receipt_links(&t))
-                .unwrap_or_default();
-            if !links.iter().any(|(n, _)| n == "fno") {
-                return failed(
-                    "relink",
-                    &format!("{} names no fno entrypoint", receipt.display()),
-                );
-            }
-            if let Err(e) = relink(&links, &bin) {
-                return failed("relink", &e);
-            }
-            let marker = marker_path();
-            let wrote = marker
-                .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|_| std::fs::write(&marker, "binary\n"));
-            if let Err(e) = wrote {
-                return failed("marker", &format!("{}: {e}", marker.display()));
-            }
-            Some(tool_root.clone())
-        }
-        _ => kept_tool_root(),
-    };
-    let mut code = 0;
-    let refresh = crate::process_admission::std_command(bin.join("fno-agents"))
-        .args(["pr-watch", "refresh", "--caller", "update", "--fno-binary"])
-        .arg(bin.join(FRONT_DOOR))
-        .stdin(Stdio::null())
-        .output();
-    match refresh {
-        Ok(o) if o.status.success() => print!("{}", String::from_utf8_lossy(&o.stdout)),
-        Ok(o) => {
-            code = failed(
-                "pr-watch refresh",
-                &format!("exit {}", o.status.code().unwrap_or(1)),
-            )
-        }
-        Err(e) => code = failed("pr-watch refresh", &e.to_string()),
-    }
-    if let Some(root) = tool_root {
-        match retire_uv_tool(&root, &bin) {
-            Ok(line) => println!("fno update: {line}"),
-            Err(e) => code = failed("uv tool retire", &e),
-        }
-    }
-    if code == 0 {
-        println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
-    }
-    code
+    println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
+    0
 }
 
 #[cfg(test)]
