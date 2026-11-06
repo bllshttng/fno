@@ -286,10 +286,10 @@ fn stop_live_session(
         ));
     match stopped {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => return Err(format!("resume --route: claude stop {short:?} failed: {e}")),
+        Ok(Err(e)) => return Err(format!("resume --route: stopping {short:?} failed: {e}")),
         Err(_) => {
             return Err(format!(
-                "resume --route: claude stop {short:?} timed out after 15s"
+                "resume --route: stopping {short:?} timed out after 15s"
             ))
         }
     }
