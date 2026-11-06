@@ -1283,7 +1283,10 @@ mod tests {
             + "\ncreated_at: 2026-11-05T00:00:00Z\nrole_scope: zed\nrole_level: 2\n"
             + "role_grantor: operator\n---\n";
         std::fs::write(leads.join("zed.md.vacated"), manifest.clone()).unwrap();
-        let registry = dir.path().join("registry.json");
+        let agents = dir.path().join("agents");
+        let home = AgentsHome::at(&agents);
+        std::fs::create_dir_all(home.root()).unwrap();
+        let registry = home.registry_json();
         crate::registry_store::seed_raw(
             &registry,
             serde_json::json!({
@@ -1298,9 +1301,6 @@ mod tests {
             })
             .to_string(),
         );
-        let agents = dir.path().join("agents");
-        let home = AgentsHome::at(&agents);
-        std::fs::create_dir_all(home.root()).unwrap();
         reseat_vacated_roles(&home, &["l2".to_string()]);
         let live = leads.join("zed.md");
         assert!(live.exists(), "the manifest is restored");
