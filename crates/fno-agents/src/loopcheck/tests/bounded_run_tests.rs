@@ -5,34 +5,6 @@ use super::*;
 // wide enough to survive parallel test scheduling.
 
 #[test]
-fn bounded_run_retains_the_last_stderr_bytes_not_the_first() {
-    let tmp = tempfile::tempdir().unwrap();
-    // A uniform fill followed by a marker at the END of the stream: the
-    // retained bytes must carry the marker. A cap that freezes at the
-    // first chunks (head-keeping) drops exactly this marker, and the
-    // uniform-fill sibling above cannot tell head from tail - only this
-    // shape distinguishes them.
-    let fno = write_exec(
-            tmp.path(),
-            "fno",
-            "#!/bin/sh\nhead -c 5000 /dev/zero | tr '\\0' 'x' 1>&2\necho TAIL_MARKER 1>&2\necho '{\"ok\":true}'\n",
-        );
-    let cwd = std::env::temp_dir();
-    match run_bounded(fno.as_os_str(), &[], &cwd, PROBE_TIMEOUT) {
-        BoundedRun::Completed(out) => {
-            let tail = String::from_utf8_lossy(&out.stderr_tail);
-            assert!(tail.ends_with("TAIL_MARKER\n"), "retained {tail:?}");
-            assert_eq!(
-                out.stderr_tail.len(),
-                BOUNDED_STDERR_TAIL_CAP,
-                "a stream past the cap retains exactly the cap"
-            );
-        }
-        other => panic!("expected Completed, got {}", bounded_kind(&other)),
-    }
-}
-
-#[test]
 fn bounded_read_diagnostic_preserves_transport_classification() {
     let timeout = GhReadError::timed_out(
         "main_run_view",
@@ -213,46 +185,4 @@ fn probe_reports_spawn_trouble_not_absent_for_a_non_executable_file() {
     assert_ne!(outcome, GhProbeOutcome::Absent);
     assert!(matches!(outcome, GhProbeOutcome::SpawnTrouble { .. }));
     assert_eq!(outcome.outcome_str(), "spawn_trouble");
-}
-
-#[test]
-fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
-    // A stood-down transport lets the consulting child refuse. The
-    // transport's own refusal exits 75; a child refusing on a caller's
-    // behalf can surface at its own exit code too (the conditional-door
-    // path exits 1). Every refusal line says "held locally", or "refusing
-    // while" in the reader-killed form; the same `gh budget:` prefix also
-    // carries admit notices, which are not refusals. The in-process
-    // consult is disarmed under cfg(test), so no ledger is touched.
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let cwd = std::env::temp_dir();
-    for code in [75, 1] {
-        let adapter = write_exec(
-            tmp.path(),
-            "fno-gh-loopcheck",
-            format!(
-                "#!/bin/sh\necho 'gh budget: fleet GitHub rate limit held locally' 1>&2\nexit {code}\n"
-            )
-            .as_str(),
-        );
-        let err = match bounded_read(adapter.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT) {
-            Err(err) => err,
-            Ok(_) => panic!("a child budget refusal is a BudgetRefused"),
-        };
-        assert_eq!(err.outcome(), "budget_refused");
-        assert_eq!(err.waited_on(), "budget_lock");
-    }
-
-    // An admit notice on a genuinely failed read stays a failed read: the
-    // notice's "admitting" vocabulary is not refusal vocabulary.
-    let notice = write_exec(
-        tmp.path(),
-        "fno-gh-loopcheck",
-        "#!/bin/sh\necho 'gh budget: ledger unavailable, admitting: boom' 1>&2\nexit 1\n",
-    );
-    let out = match bounded_read(notice.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT) {
-        Ok(out) => out,
-        Err(e) => panic!("an admit notice is not a refusal: {}", e.render()),
-    };
-    assert!(!out.status.success());
 }

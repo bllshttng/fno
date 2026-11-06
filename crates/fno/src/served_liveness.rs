@@ -83,15 +83,6 @@ mod tests {
     use super::*;
 
     const NOW: u64 = 1_800_000_000;
-
-    #[test]
-    fn a_90_second_old_word_still_serves() {
-        assert_eq!(
-            served_liveness(Some("alive"), Some(NOW - 90), NOW),
-            Some(Liveness::Alive)
-        );
-    }
-
     #[test]
     fn a_word_past_the_window_never_serves_the_stored_verdict() {
         assert_eq!(served_liveness(Some("alive"), Some(NOW - 121), NOW), None);

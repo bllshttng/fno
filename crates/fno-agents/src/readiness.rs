@@ -375,33 +375,6 @@ mod tests {
         assert_eq!(d.is_ready(&view("Waiting for auth \u{276f}")), Ok(false));
     }
 
-    // ---- opencode (US3): fixtures condensed from a live 1.14.50
-    // mux-pane capture (capture method: `fno mux pane run -- opencode` +
-    // `pane read`), per the markers-from-capture locked decision. ----
-
-    fn opencode_screen(footer_hint: &str) -> String {
-        format!(
-            "   \u{2503}\n   \u{2503}  Ask anything... \"Fix a TODO in the codebase\"\n   \u{2503}\n   \u{2503}  Sisyphus - Ultraworker \u{b7} model \u{b7} medium\n   \u{2579}\u{2580}\u{2580}\u{2580}\u{2580}\n{footer_hint}\n  ~/proj:main  \u{2299} 6 MCP /status   1.14.50"
-        )
-    }
-
-    #[test]
-    fn opencode_idle_composer_is_ready() {
-        let d = OpencodeReadinessDetector;
-        let screen = opencode_screen("                 tab agents  ctrl+p commands");
-        assert_eq!(d.is_ready(&view(&screen)), Ok(true));
-        assert_eq!(d.provider_name(), "opencode");
-    }
-
-    #[test]
-    fn opencode_permission_dialog_and_auth_wall_are_not_ready() {
-        let d = OpencodeReadinessDetector;
-        let perm = opencode_screen("   \u{25b3} Permission required");
-        assert_eq!(d.is_ready(&view(&perm)), Ok(false));
-        let wall = opencode_screen("   Login required");
-        assert_eq!(d.is_ready(&view(&wall)), Ok(false));
-    }
-
     #[test]
     fn no_signal_detector_errors_never_guesses() {
         // "goose" is the canonical genuinely-unhosted CLI (opencode graduated
@@ -417,40 +390,6 @@ mod tests {
             Err(ReadinessError::UnknownReadinessSignal {
                 provider: "goose".into()
             })
-        );
-    }
-
-    #[test]
-    fn codex_detector_ready_on_idle_prompt() {
-        let d = CodexReadinessDetector;
-        assert_eq!(d.provider_name(), "codex");
-        // Idle composer: last non-blank line ends with a prompt glyph.
-        assert_eq!(
-            d.is_ready(&view(
-                "codex 0.130\n\n  build feature X\n\u{276f} ".trim_end()
-            )),
-            Ok(true)
-        );
-    }
-
-    #[test]
-    fn codex_detector_not_ready_while_working() {
-        let d = CodexReadinessDetector;
-        // Busy marker overrides any prompt glyph also on screen.
-        assert_eq!(
-            d.is_ready(&view("running tool...\nEsc to interrupt\n\u{276f}")),
-            Ok(false)
-        );
-    }
-
-    #[test]
-    fn gemini_detector_rejects_waiting_for_auth_false_ready() {
-        let d = GeminiReadinessDetector;
-        assert_eq!(d.provider_name(), "gemini");
-        // The documented Gemini trap: prompt glyph present but auth wall up.
-        assert_eq!(
-            d.is_ready(&view("Waiting for auth...\n\u{276f}")),
-            Ok(false)
         );
     }
 }

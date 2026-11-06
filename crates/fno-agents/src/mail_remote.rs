@@ -496,12 +496,17 @@ the message directly after the target; none was found"
             // Sender-side style check: the receiver's door refuses an
             // unvetted body after transit, where only the sender's `mail
             // status` shows the loss. A refused body exits 1 having
-            // written no row; a door that cannot run reads clean.
+            // written no row; a door that cannot run reads clean. The
+            // refusal text rides the door's JSON receipt, so it names the
+            // broken rules whatever any door build prints where.
             if let Some(report) = crate::mail_arm::style_door_report(&payload) {
-                eprint!("{report}");
+                // One write: report plus refusal read as a single message
+                // no capture can split, and a report without a trailing
+                // newline still separates the two lines.
                 eprintln!(
-                    "fno agents mail send: the receiver's style door refuses this \
-body; nothing was sent"
+                    "{}\nfno agents mail send: the receiver's style door refuses \
+this body; nothing was sent",
+                    report.trim_end()
                 );
                 return 1;
             }
@@ -1395,17 +1400,49 @@ mod tests {
             .position(|word| word == "--word-cap")
             .expect("cap flag");
         assert_eq!(capped[cap_at + 1], "60");
-        // The sender-side consult rides the same door without --json, so
-        // exit 1 with the human report is the refusal.
-        let report_argv = crate::mail_arm::style_door_report_argv(None);
+        // The sender-side consult rides the same door's --json receipt, so
+        // the refusal text comes from the receipt and names the rules even
+        // when a door build prints its human report nowhere the consult
+        // looks. The receipt's own human report carries the rule names and
+        // quoted words, so the sender can fix the body instead of
+        // re-sending blind.
+        let receipt = serde_json::json!({
+            "exception": null,
+            "word_count": 40,
+            "violations": [
+                {"rule": 1, "sentence_index": 2, "sentence": "this sentence runs long.",
+                 "detail": "sentence 2 is 40 words. The cap is 25."}
+            ],
+            "report": "message blocked by the style rules.\n\nrule 1 (length): sentence 2 is 40 words. The cap is 25. \"this sentence runs long.\""
+        })
+        .to_string();
+        let report = crate::mail_arm::receipt_refusal_report(receipt.as_bytes())
+            .expect("a receipt naming violations refuses");
         assert!(
-            !report_argv.iter().any(|word| word == "--json"),
-            "the report form prints the human report, no JSON receipt"
+            report.contains("rule 1 (length)") && report.contains("this sentence runs long."),
+            "the refusal carries the rule name and the quoted words: {report}"
         );
+        // A receipt without a report field still renders rule and words,
+        // so a leaner door receipt never sends the sender away empty.
+        let bare = serde_json::json!({
+            "exception": null,
+            "violations": [
+                {"rule": 7, "sentence_index": 1, "sentence": "packed sentence.",
+                 "detail": "The cap is 80 words."}
+            ]
+        })
+        .to_string();
+        let fallback = crate::mail_arm::receipt_refusal_report(bare.as_bytes())
+            .expect("violations refuse even without a report field");
         assert!(
-            report_argv.contains(&"--stdin".to_string()),
-            "the body still rides stdin"
+            fallback.contains("rule 7") && fallback.contains("packed sentence."),
+            "the fallback rendering carries rule and quoted words: {fallback}"
         );
+        // An excepted or clean receipt reads None: no refusal, no row lost.
+        let excepted =
+            serde_json::json!({"exception": "operator asked", "violations": []}).to_string();
+        assert!(crate::mail_arm::receipt_refusal_report(excepted.as_bytes()).is_none());
+        assert!(crate::mail_arm::receipt_refusal_report(b"not json").is_none());
         // The pull arm's exit reading: 0 delivers, and so does the Python
         // receipts' NOT LANDED exit (a durable demotion - the durable copy
         // is written, so a retry would duplicate it; the constant's comment

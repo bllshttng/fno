@@ -43,6 +43,7 @@ impl TerminalGuard {
     /// the alternate screen is taken. The SIGTERM handler installs here so
     /// even a kill during the splash restores the user's colors.
     pub(super) fn enter_raw() -> Result<Self, String> {
+        super::panic_log::install();
         terminal::enable_raw_mode().map_err(|e| format!("raw mode: {e}"))?;
         unsafe {
             libc::signal(libc::SIGTERM, sigterm_restore as *const () as usize);
@@ -103,6 +104,7 @@ impl Drop for TerminalGuard {
         let _ = out.write_all(MODE_RESET);
         let _ = crossterm::execute!(out, terminal::LeaveAlternateScreen, cursor::Show);
         let _ = terminal::disable_raw_mode();
+        super::panic_log::after_restore();
     }
 }
 

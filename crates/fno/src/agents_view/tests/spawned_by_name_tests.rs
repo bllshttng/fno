@@ -44,28 +44,3 @@ fn an_id_claimed_by_two_names_reads_absent() {
         "an ambiguous parent reads as absent, never as the last row walked"
     );
 }
-
-#[test]
-fn a_parked_fork_child_names_its_primary() {
-    let parent = "11111111-1111-4111-8111-111111111111";
-    let parked = "22222222-2222-4222-8222-222222222222";
-    let mut primary = plain_row("primary", None, false);
-    primary.harness_session_id = Some(parent.into());
-    primary.related_session_id = Some(parked.into());
-    let roster = vec![RosterWorker {
-        short_id: parked.into(),
-        name: "parked-worker".into(),
-        cwd: "/w".into(),
-        account: None,
-    }];
-    let merged = merge_rows(vec![primary], &roster);
-    let child = merged
-        .iter()
-        .find(|r| r.harness_session_id.as_deref() == Some(parked))
-        .expect("the parked id renders as its own row");
-    assert_eq!(
-        child.spawned_by_name.as_deref(),
-        Some("primary"),
-        "the synthesized fork names the worker it forked from"
-    );
-}

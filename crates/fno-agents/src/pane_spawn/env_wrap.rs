@@ -126,6 +126,12 @@ pub fn mesh_env_pairs(
         "-u".to_string(),
         crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
     ]);
+    // The launching terminal's Rex markers ride out like identity: a worker
+    // that carries them reads the Rex SessionStart hook's line and opens
+    // blocks in the user's session.
+    for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+        unset.extend(["-u".to_string(), key.to_string()]);
+    }
     // The credentials scrub floor, riding with an overlay the way the
     // account/route block rides in Python (mux_spawn.py:1228-1242): claude
     // only, and only when the caller carries an overlay to apply, so a plain
@@ -255,6 +261,22 @@ pub fn is_command_seed(seed: &str) -> bool {
     seed.split_whitespace()
         .next()
         .is_some_and(|first| crate::provider::parse_command_token(first).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wrapper_unset_carries_the_terminal_host_keys() {
+        let (unset, _) = mesh_env_pairs("w", "claude", None, &[], &[]);
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            assert!(
+                unset.windows(2).any(|w| w[0] == "-u" && w[1] == key),
+                "-u {key} must ride every pane wrapper, got {unset:?}"
+            );
+        }
+    }
 }
 
 /// `normalize_command`'s slash-surface leg (harness_map.py:537): the

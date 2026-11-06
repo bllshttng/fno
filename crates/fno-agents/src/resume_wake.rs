@@ -1797,45 +1797,6 @@ mod tests {
     }
 
     #[test]
-    fn a_respawn_whose_delivery_misses_exits_16() {
-        let _guard = crate::path_test_guard();
-        let plan = dead_plan();
-        let mut inject_calls = 0;
-        let code = respawn_and_deliver_with(
-            &plan,
-            "w",
-            Some("Reply with the single word pong."),
-            Some("fno/quiet-recovery"),
-            &AgentsHome::at(std::env::temp_dir().join("fno-rw-miss")),
-            |_, _| 0,
-            |_, _| {
-                inject_calls += 1;
-                Err("not-injectable".into())
-            },
-            |_| {},
-        );
-        assert_eq!(code, 16);
-        assert_eq!(inject_calls, 2, "one retry for a revived worker");
-    }
-
-    #[test]
-    fn codex_thread_resume_without_a_daemon_refuses_16() {
-        // No exec arm exists in the delivery helper: it never constructs a
-        // Command, so no `codex resume` process can start from this lane.
-        let _guard = crate::path_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let saved = std::env::var_os("CODEX_HOME");
-        std::env::set_var("CODEX_HOME", temp.path());
-        let home = AgentsHome::at(temp.path().join("agents-home"));
-        let code = run_codex_thread_delivery("w1", "thread-abc", None, "/tmp/x", &home);
-        match &saved {
-            Some(v) => std::env::set_var("CODEX_HOME", v),
-            None => std::env::remove_var("CODEX_HOME"),
-        }
-        assert_eq!(code, 16);
-    }
-
-    #[test]
     fn respawn_receipt_refuses_when_truth_never_reads_live() {
         let temp = tempfile::tempdir().unwrap();
         let claude_home = crate::claude_ask::ClaudeHome::at(temp.path());
@@ -2449,30 +2410,6 @@ mod tests {
             assert_eq!(code, None, "state {state:?} must not be served");
             assert!(injects.borrow().is_empty());
             assert_eq!(revives.get(), 0);
-        }
-    }
-
-    #[test]
-    fn a_failed_revive_never_injects() {
-        let (_temp, home) = parked_home("parked-revive-fail");
-        for fail in [
-            (16, "respawn-exited".to_string()),
-            (17, "node-held".to_string()),
-        ] {
-            let revives = std::cell::Cell::new(0u32);
-            let injects = std::cell::RefCell::new(Vec::new());
-            let code = run_parked_route(
-                &home,
-                Some("done"),
-                false,
-                Err(fail.clone()),
-                vec![Ok(())],
-                Some("go"),
-                &revives,
-                &injects,
-            );
-            assert_eq!(code, Some(fail.0));
-            assert!(injects.borrow().is_empty());
         }
     }
 

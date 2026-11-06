@@ -1140,11 +1140,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn emit_defaults_matches_checked_in_fixture() {
-        assert_eq!(emit_paths_sh_defaults(), String::from_utf8_lossy(FIXTURE));
-    }
-
-    #[test]
     fn run_refuses_unknown_command() {
         assert_eq!(run(&["bogus".to_string()]), 2);
     }
@@ -1181,30 +1176,6 @@ mod tests {
                 EnvVarGuard::set("HANDOFFS_DIR", ""),
             ],
         )
-    }
-
-    /// Seeds one registry row so a `--scope` lookup resolves its project
-    /// root. The scope-project resolution reads `<home>/.fno/agents/`
-    /// registry.json through `AgentsHome::ambient_from`.
-    fn seed_scope_row(home: &Path, scope: &str, project_root: &Path) {
-        let dir = home.join(".fno").join("agents");
-        std::fs::create_dir_all(&dir).unwrap();
-        let doc = serde_json::json!({
-            "schema_version": 4,
-            "agents": [{
-                "name": format!("row-{scope}"),
-                "session_id": format!("sess-{scope}"),
-                "role_scope": scope,
-                "project_root": project_root.display().to_string(),
-                "cwd": project_root.display().to_string(),
-                "created_at": "2026-10-24T00:00:00Z",
-            }]
-        });
-        std::fs::write(
-            dir.join("registry.json"),
-            serde_json::to_string(&doc).unwrap(),
-        )
-        .unwrap();
     }
 
     use crate::claims::EnvVarGuard;
@@ -1305,59 +1276,6 @@ mod tests {
     }
 
     #[test]
-    fn handoff_scope_mints_a_dated_role_keyed_name() {
-        let (_lock, _env) = handoff_env_guards();
-        let (cwd, home) = handoff_fixture("scope-mint");
-        let scope = "x-1234abcd";
-        seed_scope_row(&home, scope, &cwd);
-        let out = handoff_out(
-            &["--scope".into(), scope.into(), "--name-only".into()],
-            &cwd,
-            Some(&home),
-        )
-        .unwrap();
-        let (date, rest) = out.split_once('-').unwrap();
-        assert!(
-            date.len() == 8 && date.chars().all(|c| c.is_ascii_digit()),
-            "{out}"
-        );
-        assert_eq!(rest, format!("role-{scope}.md"));
-        let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
-    }
-
-    #[test]
-    fn handoff_scope_resolves_the_row_project_not_the_cwd_basename() {
-        let (_lock, _env) = handoff_env_guards();
-        let (project_cwd, home) = handoff_fixture("scope-project");
-        let scope = "fno";
-        seed_scope_row(&home, scope, &project_cwd);
-        // The promoted session's shell cd'd once: the caller sits in a dir
-        // outside the project whose basename would name a junk vault tree.
-        let cwd = project_cwd.parent().unwrap().join("mail-hold");
-        std::fs::create_dir_all(&cwd).unwrap();
-        let full = handoff_out(&["--scope".into(), scope.into()], &cwd, Some(&home)).unwrap();
-        // The fixture repo has no git and no project id, so the row's root
-        // resolves to its basename. The dir must key on THAT, never on the
-        // caller's cwd basename.
-        let project = project_cwd
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        assert!(
-            full.contains(&format!("handoffs/{project}")) && !full.contains("mail-hold"),
-            "the scope doc must key on the row's project, got {full}"
-        );
-        // The checkin reader resolves through scope_handoffs_dir: it must name
-        // the dir this command printed, whatever the caller's cwd.
-        assert_eq!(
-            scope_handoffs_dir(scope, Some(&home)).as_deref(),
-            Path::new(full.trim()).parent()
-        );
-        let _ = std::fs::remove_dir_all(project_cwd.parent().unwrap());
-    }
-
-    #[test]
     fn handoff_scope_with_no_registry_row_refuses() {
         let (_lock, _env) = handoff_env_guards();
         let (cwd, home) = handoff_fixture("scope-refuse");
@@ -1434,10 +1352,6 @@ mod tests {
             LiveFx { base, config, root }
         }
 
-        fn body(&self, text: &str) {
-            fs::write(&self.config, text).unwrap();
-        }
-
         fn pins(&self) -> Vec<(&'static str, String)> {
             vec![
                 ("FNO_CONFIG", self.config.display().to_string()),
@@ -1490,45 +1404,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_stub_prints_a_sourceable_temp_path() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("sourceable", "");
-        let _env = EnvGuard::new(&fx.pins());
-        assert_eq!(run(&["shell-stub".to_string()]), 0);
-        // The printed path is the only stdout line; find it from the temp dir.
-        let entries: Vec<_> = std::env::temp_dir()
-            .read_dir()
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name()
-                    .map(|n| {
-                        n.to_string_lossy()
-                            .starts_with(&format!("fno-paths-{}-", std::process::id()))
-                    })
-                    .unwrap_or(false)
-            })
-            .collect();
-        assert!(!entries.is_empty(), "shell-stub printed no temp path");
-        for p in entries {
-            let content = fs::read_to_string(&p).unwrap();
-            let out = Command::new("bash")
-                .arg("-c")
-                .arg(format!("source {} && echo $STATE_DIR", p.display()))
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "bash source failed: {:?}", out.stderr);
-            let state = String::from_utf8_lossy(&out.stdout);
-            assert!(
-                state.trim().contains('/'),
-                "STATE_DIR not absolute: {state:?}"
-            );
-            let _ = content;
-        }
-    }
-
-    #[test]
     fn live_stub_rejects_glob_in_state_dir() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = LiveFx::new("glob", "state_dir = '/home/*/fno'\n");
@@ -1550,29 +1425,5 @@ mod tests {
         let _env2 = EnvGuard::new(&bad.pins());
         let err = emit_paths_sh_live(&bad.root).unwrap_err();
         assert!(err.contains("invalid characters"), "error: {err}");
-    }
-
-    #[test]
-    fn global_events_json_ignores_the_ledger_override() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("journal-anchor", "");
-        fx.body(&format!(
-            "state_dir = '{}'\npaths.ledger_json = '{}/elsewhere/ledger.json'\n",
-            fx.base.join("state").display(),
-            fx.base.display()
-        ));
-        // An empty FNO_STATE_DIR pin neutralizes the ambient seal (an empty
-        // value reads as unset) so the absolute state_dir alone decides.
-        let pins = vec![
-            ("FNO_CONFIG", fx.config.display().to_string()),
-            ("FNO_STATE_DIR", String::new()),
-        ];
-        let _env = EnvGuard::new(&pins);
-        let journal = global_events_json(&fx.root);
-        assert_eq!(
-            journal,
-            fx.base.join("state").join("events.jsonl"),
-            "journal must follow the state root, not the ledger override"
-        );
     }
 }

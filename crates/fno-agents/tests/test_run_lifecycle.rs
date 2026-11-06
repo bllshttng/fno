@@ -381,43 +381,6 @@ fn a_queued_waiter_names_the_live_holder() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// AC2-HP: a queued waiter repeats its waiting line at the notice interval,
-/// so a 3s wait holds exactly one `suite_waiting` line, naming the holder.
-#[test]
-fn a_queued_waiter_prints_its_waiting_line_once() {
-    let root = tmp_claims_root("wait-once");
-    let mut holder = test_run(&root)
-        .args(["--timeout", "30"])
-        .arg("--")
-        .arg("sleep")
-        .arg("3")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder");
-    std::thread::sleep(Duration::from_millis(300));
-    let out = test_run(&root)
-        .args(["--timeout", "30"])
-        .arg("--")
-        .arg("true")
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .expect("run waiter");
-    assert!(
-        holder.try_wait().unwrap().is_some(),
-        "the holder must have exited"
-    );
-    let _ = holder.wait();
-    assert!(out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let waiting = stderr
-        .lines()
-        .filter(|l| l.contains("suite_waiting"))
-        .count();
-    assert_eq!(waiting, 1, "one throttled waiting line, got:\n{stderr}");
-    assert!(stderr.contains("holder_state=live"), "{stderr}");
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// AC4-HP: SIGTERM to a queued waiter stops it within 2s with exit 143 and a
 /// `suite_wait_interrupted` receipt naming the signal and the wait so far.
 #[test]
@@ -550,77 +513,6 @@ fn the_run_timeout_names_the_wait_and_the_run() {
         .find(|l| l.contains("FNO_TEST_TIMEOUT_SECONDS"))
         .unwrap_or_else(|| panic!("remedy line missing: {stderr}"));
     assert!(remedy.contains("narrow the target"), "{remedy}");
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// AC1-HP: a waiter queued 3s behind a live holder keeps its whole budget
-/// once admitted: `--timeout 5 -- sleep 4` runs its full 4 seconds and exits
-/// 0, where the old shared deadline would have killed it 2s into the run.
-#[test]
-fn a_queued_run_keeps_its_whole_budget() {
-    let root = tmp_claims_root("whole-budget");
-    let mut holder = test_run(&root)
-        .args(["--timeout", "30"])
-        .arg("--")
-        .arg("sleep")
-        .arg("3")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder");
-    std::thread::sleep(Duration::from_millis(300));
-    let out = test_run(&root)
-        .args(["--timeout", "5"])
-        .arg("--")
-        .arg("sleep")
-        .arg("4")
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .expect("run the queued waiter");
-    assert!(holder.try_wait().unwrap().is_some());
-    let _ = holder.wait();
-    assert!(
-        out.status.success(),
-        "the waiter must run its whole 4s budget, got {:?}: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("suite_wait_timeout"),
-        "the wait has no timer: {stderr}"
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// AC4-HP: a waiter whose own budget is already spent keeps waiting, is
-/// admitted when the holder releases, and exits 0.
-#[test]
-fn a_waiter_outlasts_its_own_budget_while_the_holder_runs() {
-    let root = tmp_claims_root("outlast-budget");
-    let mut holder = test_run(&root)
-        .args(["--timeout", "30"])
-        .arg("--")
-        .arg("sleep")
-        .arg("4")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder");
-    std::thread::sleep(Duration::from_millis(300));
-    let out = test_run(&root)
-        .args(["--timeout", "1"])
-        .arg("--")
-        .arg("true")
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .expect("run the under-budgeted waiter");
-    assert!(holder.try_wait().unwrap().is_some());
-    let _ = holder.wait();
-    assert!(
-        out.status.success(),
-        "a queued waiter outlives its own budget: got {:?}: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

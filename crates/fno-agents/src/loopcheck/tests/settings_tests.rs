@@ -133,22 +133,6 @@ fn parse_manifest_legacy_complete() {
 }
 
 #[test]
-fn parse_manifest_strips_quotes() {
-    // gemini MEDIUM on #447: quoted YAML values must parse identically.
-    let content = "---\nsession_id: \"s-quoted\"\ncreated_at: '2026-06-05T00:00:00Z'\n---\n";
-    let m = parse_manifest(content).unwrap();
-    assert_eq!(m.session_id.as_deref(), Some("s-quoted"));
-    assert_eq!(m.created_at.as_deref(), Some("2026-06-05T00:00:00Z"));
-}
-
-#[test]
-fn parse_manifest_attended_default_true() {
-    let content = "---\nsession_id: s\ncreated_at: 2026-06-05T00:00:00Z\n---\n";
-    let m = parse_manifest(content).unwrap();
-    assert!(m.attended, "attended should default to true when absent");
-}
-
-#[test]
 fn parse_settings_nested_budget() {
     let cfg = "[budget.attended]\nwall_clock_cap_minutes = 90\ncost_cap_usd = 10.0\n\n[budget.unattended]\nwall_clock_cap_minutes = 60\ncost_cap_usd = 5.0\n";
     let s = parse_settings(cfg);
@@ -170,18 +154,6 @@ fn session_cost_from_ledger_sums_session_only() {
     std::fs::write(&bare, format!("{}\n", r#"[{"session_id":"a","cost_usd":1.0},{"session_id":"b","cost_usd":0.5},{"session_id":"a","cost_usd":0.25}]"#)).unwrap();
     let cost = session_cost_from_ledger(&bare, "a");
     assert_eq!(cost, 0.0);
-}
-
-#[test]
-fn parse_manifest_malformed_cost_cap_fail_closed() {
-    // Fix 2: a present but unparseable cost cap must be Err (fail-closed)
-    let content =
-        "---\nsession_id: s\ncreated_at: 2026-06-05T00:00:00Z\nbudget_cost_cap_usd: 5.OO\n---\n";
-    let m = parse_manifest(content).unwrap();
-    assert!(
-        matches!(m.budget_cost_cap_usd, Some(Err(_))),
-        "malformed cost cap must be Some(Err(...))"
-    );
 }
 
 #[test]

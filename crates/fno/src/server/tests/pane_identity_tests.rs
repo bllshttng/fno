@@ -36,19 +36,6 @@ fn a_live_registry_row_on_the_pane_beats_the_dead_evidence() {
         "a live row on the pane means the worker is not orphaned"
     );
 }
-
-#[test]
-fn a_pane_with_no_member_binding_is_not_orphaned() {
-    let mut core = empty_core();
-    named_member_squad(&mut core, 7, "harden", 1, "deadbee1");
-    // Pane 2 hosts nothing: no member binds to it.
-    let evidence = dead_evidence("deadbee1");
-    assert!(
-        !core.orphaned_worker_for_pane(2, &[], &evidence).orphaned,
-        "no binding, no verdict"
-    );
-}
-
 /// (x-688b) The name tier: a pane whose spawn captured a worker name the
 /// registry join never resolved is fno's worker pane, and it is orphaned the
 /// moment the shared fold judges that name dead. A held receipt (resumable

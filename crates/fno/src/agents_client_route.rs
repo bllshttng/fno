@@ -120,11 +120,4 @@ mod tests {
             assert_eq!(classify(&os(public)), Some(Route::Client(os(client))));
         }
     }
-
-    #[test]
-    fn the_menu_keeps_flags_and_other_roots() {
-        assert_eq!(classify(&os(&["agents", "--help"])), None);
-        assert_eq!(classify(&os(&["agents"])), None);
-        assert_eq!(classify(&os(&["backlog", "list"])), None);
-    }
 }

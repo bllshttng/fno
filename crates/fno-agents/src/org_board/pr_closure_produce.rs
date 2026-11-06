@@ -277,6 +277,7 @@ fn bind_created_pr(
         Some(url),
         repo.as_deref(),
         false,
+        false,
         &crate::backlog::pr_link::repo_alias_map(None),
     );
     (result, matched)
@@ -445,6 +446,7 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
             pr_number,
             Some(url),
             repo.as_deref(),
+            false,
             false,
             &aliases,
         ));

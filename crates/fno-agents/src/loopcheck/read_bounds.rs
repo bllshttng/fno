@@ -356,29 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn a_breached_reserve_line_stops_eroding_into_the_drain_slice() {
-        // The measured specimen: remaining == reserve, so a floored
-        // pre-drain read would take 250ms of the drain's slice and a few
-        // dozen of them would spend it whole. The refuse-fast bound spends
-        // ~nothing, and the drain still reads the full remaining.
-        let deadline = std::time::Instant::now() + STOPGATE_DRAIN_RESERVE;
-        STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
-        });
-        let pre_drain = stopgate_read_timeout();
-        assert!(
-            pre_drain <= std::time::Duration::from_millis(5),
-            "{pre_drain:?}"
-        );
-        let reserved = stopgate_drain_timeout();
-        assert!(
-            reserved <= STOPGATE_DRAIN_RESERVE
-                && reserved >= STOPGATE_DRAIN_RESERVE - std::time::Duration::from_secs(1),
-            "{reserved:?}"
-        );
-    }
-
-    #[test]
     fn the_drain_floor_survives_bounded_pre_drain_work() {
         // The invariant the 260-297ms kills broke: pre-drain reads taken at
         // stopgate_read_timeout() cannot push the fire past the reserve

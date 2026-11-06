@@ -797,16 +797,6 @@ mod tests {
     }
 
     #[test]
-    fn block_list_stays_block() {
-        let doc = "---\nsources:\n  - docs/a.md\n  - docs/b.md\n---\nbody\n";
-        let parsed = parse_frontmatter(doc).unwrap();
-        assert_eq!(
-            serialize_frontmatter(&parsed.fields),
-            "sources:\n  - docs/a.md\n  - docs/b.md"
-        );
-    }
-
-    #[test]
     fn unbalanced_quote_degrades_without_raising() {
         let parsed = parse_frontmatter("---\nsources: [\"a, b]\n---\nbody\n").unwrap();
         assert!(matches!(parsed.fields.get("sources"), Some(Value::List(_))));

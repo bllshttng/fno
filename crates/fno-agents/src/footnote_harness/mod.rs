@@ -139,9 +139,7 @@ fn spawn(cwd: &Path) -> Result<Child, AskOutcome> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for name in crate::claims::AMBIENT_IDENTITY_NAMES {
-        cmd.env_remove(name);
-    }
+    crate::claims::scrub_identity_env(&mut cmd);
     // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
     // the child off the $HOME/.fno fallback its own resolver would take.
     cmd.env("FNO_GRAPH_JSON", launch_graph_env(cwd));

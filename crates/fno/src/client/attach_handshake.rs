@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use super::{LayoutView, View};
+use crate::mux_log::last_shutdown_line;
 use crate::proto::{read_msg, ProtoError, ServerMsg};
 
 /// The typed shape of one failure: the server accepted the attach and then
@@ -49,13 +50,20 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
     let mut busy_said = false;
     let mut stashed_modesync: Vec<u8> = Vec::new();
     loop {
-        let msg = await_attach_reply(
+        let reply = await_attach_reply(
             read_msg::<_, ServerMsg>(&mut *sock_r),
             ATTACH_BUSY_NOTICE,
             &mut busy_said,
             || eprintln!("fno: server is busy, still waiting (Ctrl-C to stop; {log_hint})"),
-        )
-        .await;
+        );
+        tokio::pin!(reply);
+        let msg = tokio::select! {
+            msg = &mut reply => msg,
+            _ = super::health::wait(view.health.deadline()) => {
+                view.health.record();
+                reply.await
+            }
+        };
         match msg {
             Ok(ServerMsg::Layout {
                 squads,
@@ -99,6 +107,7 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                         frame.cells.len()
                     ));
                 }
+                view.health.frame(std::time::Instant::now());
                 view.frames.insert(pane_id, frame);
             }
             // Info answers a pre-Attach Query; the v4 control-command replies
@@ -178,17 +187,4 @@ pub(super) async fn attach_once_more(path: &std::path::Path) -> Result<i32, Stri
             Err(e) => return Err(e),
         }
     }
-}
-
-/// The last `fno mux: shutting down (...)` line in the server's log, read
-/// from the log tail so a long-lived log costs a bounded read.
-fn last_shutdown_line(log: &std::path::Path) -> Option<String> {
-    let data = std::fs::read(log).ok()?;
-    let tail = &data[data.len().saturating_sub(65_536)..];
-    std::str::from_utf8(tail)
-        .ok()?
-        .lines()
-        .rev()
-        .find(|l| l.contains("fno mux: shutting down"))
-        .map(str::to_string)
 }

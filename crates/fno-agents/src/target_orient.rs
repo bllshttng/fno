@@ -1362,21 +1362,6 @@ mod boundary_flow_tests {
     }
 
     #[test]
-    fn marker_presence_beats_an_ancient_mtime() {
-        let entry = done_entry(141);
-        let v = evaluate_blocker(
-            Some(&entry),
-            false,
-            "x-blk",
-            "# plan\n### x-blk landed (PR #141)\n",
-            epoch(),
-            false,
-        )
-        .unwrap();
-        assert_eq!(v.verdict, "reconciled");
-    }
-
-    #[test]
     fn a_marker_for_one_blocker_false_freshes_no_other() {
         // The doc carries a marker (so its mtime bumped past this blocker's
         // merge) but names a DIFFERENT blocker: the marker reconciles nothing

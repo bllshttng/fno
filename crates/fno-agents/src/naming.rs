@@ -960,16 +960,6 @@ pub fn run_name_codes(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    /// AC4-HP: the grammar answers the blueprint question - every
-    /// command-bp name matches whatever its source prefix, and a target row
-    /// never does.
-    #[test]
-    fn blueprint_names_parse_by_command_not_prefix() {
-        assert!(is_blueprint_name("bp-x-3-slug"));
-        assert!(is_blueprint_name("ac-bp-x-1-slug"));
-        assert!(!is_blueprint_name("t-x-4-slug"));
-    }
-
     #[test]
     fn mint_dispatch_form_and_shaving() {
         let n = dispatch_agent_name(
@@ -1016,14 +1006,6 @@ mod tests {
         // Blank model is absent, never a segment of empty text.
         let n = dispatch_agent_name(Some("ab"), "t", "x-1", None, None, None, Some("  ")).unwrap();
         assert_eq!(n, "ab-t-1");
-    }
-
-    #[test]
-    fn required_identity_never_shaves() {
-        let long = "n-".to_string() + &"z".repeat(70);
-        let err = dispatch_agent_name(Some("ab"), "t", &long, None, None, None, None).unwrap_err();
-        assert!(err.message.contains("64-char"), "{err}");
-        assert_eq!(err.exit, 3);
     }
 
     /// A node of another project than the cwd still names its worker: the

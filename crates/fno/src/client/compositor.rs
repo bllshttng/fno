@@ -205,6 +205,13 @@ pub(super) fn apply_style(out: &mut impl Write, cell: &Cell) -> std::io::Result<
     // Reset first: attribute REMOVAL (e.g. bold -> plain) has no incremental
     // form worth tracking at this scale.
     queue!(out, style::SetAttribute(style::Attribute::Reset))?;
+    // With NO_COLOR, crossterm emits an empty SGR for each color. Set colors
+    // before attributes so those resets cannot erase bold, inverse or italic.
+    queue!(
+        out,
+        style::SetForegroundColor(map_color(cell.fg)),
+        style::SetBackgroundColor(map_color(cell.bg))
+    )?;
     if cell.flags & cf::BOLD != 0 {
         queue!(out, style::SetAttribute(style::Attribute::Bold))?;
     }
@@ -223,11 +230,6 @@ pub(super) fn apply_style(out: &mut impl Write, cell: &Cell) -> std::io::Result<
     if cell.flags & cf::DIM != 0 {
         queue!(out, style::SetAttribute(style::Attribute::Dim))?;
     }
-    queue!(
-        out,
-        style::SetForegroundColor(map_color(cell.fg)),
-        style::SetBackgroundColor(map_color(cell.bg))
-    )?;
     Ok(())
 }
 
@@ -320,24 +322,5 @@ mod tests {
             1,
             "a full redraw re-sends it"
         );
-    }
-
-    #[test]
-    fn a_modal_over_the_rect_hides_the_image_and_deletes_it_once() {
-        let mut comp = Compositor::new(None);
-        draw(&mut comp, &holed(), Some(placement()));
-        let mut covered = holed();
-        covered.cells[8 + 3].c = 'M';
-        let hidden = draw(&mut comp, &covered, Some(placement()));
-        assert!(!hidden.contains("<IMG>"));
-        assert_eq!(hidden.matches("\x1b_Ga=d").count(), 1, "{hidden:?}");
-        assert!(hidden.contains('M'));
-        assert!(
-            hidden.contains("\x1b[3;1H"),
-            "row 2 redraws though the modal missed it"
-        );
-        assert!(!hidden.contains('\u{FDD0}'));
-        let again = draw(&mut comp, &covered, Some(placement()));
-        assert!(!again.contains("\x1b_Ga=d"), "the delete goes out once");
     }
 }

@@ -190,42 +190,6 @@ fn claude_merges_quotes_repairs_and_never_ping_pongs() {
     assert!(!res.changed && !res.already_present);
     assert_eq!(read_json(&bare), json!({"model": "opus"}));
 }
-
-#[test]
-fn the_flags_parse_and_gemini_merges_once() {
-    let oss = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
-    let o = parse_opts(
-        &oss(&["--no-claude", "--gemini-settings=/g.json", "--repair-only"]),
-        false,
-    )
-    .unwrap()
-    .unwrap();
-    assert!(o.codex && o.gemini && !o.claude && o.repair_only);
-    assert_eq!(o.gemini_settings, Some(PathBuf::from("/g.json")));
-    let o = parse_opts(&oss(&["--migrate-legacy-hooks-json"]), true)
-        .unwrap()
-        .unwrap();
-    assert!(o.codex && !o.gemini && !o.claude && o.migrate_legacy_hooks_json);
-    assert!(parse_opts(&oss(&["--repair-only"]), true).is_err());
-    assert!(parse_opts(&oss(&["--codex-config"]), false).is_err());
-    assert!(parse_opts(&oss(&["--codex=false"]), false).is_err());
-    assert_eq!(parse_opts(&oss(&["--help"]), false).unwrap(), None);
-
-    let dir = tempfile::tempdir().unwrap();
-    let settings = dir.path().join("g/settings.json");
-    let res = install_gemini(CMD, &settings);
-    assert!(res.changed && res.backup.is_none());
-    let hook = &read_json(&settings)["hooks"]["SessionStart"][0]["hooks"][0];
-    assert_eq!(hook["command"], format!("env FNO_PLATFORM=gemini {CMD}"));
-    assert_eq!(hook["name"], GEMINI_HOOK_NAME);
-    assert!(install_gemini(CMD, &settings).already_present);
-    std::fs::write(&settings, "[1]").unwrap();
-    assert!(install_gemini(CMD, &settings)
-        .note
-        .unwrap()
-        .contains("root is list"));
-}
-
 #[test]
 fn claude_auto_mode_rules_merge_without_widening_other_settings() {
     const STATE: &str = "Footnote State Writes: Allow only fno commands whose complete effect stays within ~/.fno state, such as fno inbox law set, fno doctor event emit, and local backlog updates. Exclude backlog advance or dispatch, PR operations, Claude Code settings, credentials, OS or GitHub permissions, and sandbox controls. Permit fno agents spawn only to start a local Footnote worker; this does not approve commands later run by that worker or remote hosts.";

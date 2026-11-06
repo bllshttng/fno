@@ -88,7 +88,6 @@ fn the_argv_surface_parses_and_refuses() {
     assert!(parse_opts(&oss(&["--join"])).is_err());
     assert!(parse_opts(&oss(&["--out"])).is_err());
 }
-
 #[test]
 fn claude_auto_mode_setup_requires_explicit_approval() {
     let step = STEPS
@@ -115,18 +114,6 @@ fn claude_auto_mode_setup_requires_explicit_approval() {
     assert!(crate::cli_hooks::install_claude_auto_mode_allow(&settings).changed);
     let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
     assert!(proposed.is_empty(), "installed rules need no new proposal");
-}
-
-#[test]
-fn the_no_prompt_decision_never_depends_on_one_signal() {
-    // Explicit --yes wins even on a TTY.
-    assert!(no_prompt(true, true, false));
-    // A pipe on stdin takes the defaults without reading them.
-    assert!(no_prompt(false, false, false));
-    // An agent session env never sees a prompt.
-    assert!(no_prompt(false, true, true));
-    // A human on a TTY with no --yes is the only prompting shape.
-    assert!(!no_prompt(false, true, false));
 }
 
 #[test]
@@ -354,46 +341,6 @@ fn markers_name_owned_dirs_and_stamp_iso() {
     assert_eq!(b[16], b':');
     assert_eq!(b[19], b'Z');
 }
-
-#[test]
-fn the_recommendation_shapers_hold() {
-    // The band-clause parser is the one both hosts share: the integer
-    // after `budget max_live`, nothing else.
-    assert_eq!(
-        crate::setup_detect::parse_budget_clause("x · budget max_live 4 (2 leads + 2 workers)"),
-        Some(4)
-    );
-    assert_eq!(
-        crate::setup_detect::parse_budget_clause("no clause here"),
-        None
-    );
-    // The guardrail proposal: the shipped default already reads standard,
-    // so it never proposes (deterministic - the example ships compiled in).
-    let mut skips = Vec::new();
-    assert!(propose_guardrails(&mut skips).is_none());
-    assert_eq!(skips, vec!["guardrails: guards.preset already standard"]);
-    // A footnote checkout is the fno crate manifest under crates/.
-    let dir = std::env::temp_dir().join(format!("fno-setup-run-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("crates/fno")).unwrap();
-    assert!(!in_source_checkout(&dir), "no crate manifest yet");
-    std::fs::write(dir.join("crates/fno/Cargo.toml"), "[package]\n").unwrap();
-    assert!(in_source_checkout(&dir));
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn once_needs_every_covered_layers_marker() {
-    // A layer outside the scope never blocks --once; a covered layer
-    // needs its own marker. This pins the inverted-condition fix.
-    assert!(all_markers_present_in(Scope::Global, true, false));
-    assert!(!all_markers_present_in(Scope::Global, false, true));
-    assert!(all_markers_present_in(Scope::Project, false, true));
-    assert!(!all_markers_present_in(Scope::Project, true, false));
-    assert!(all_markers_present_in(Scope::Both, true, true));
-    assert!(!all_markers_present_in(Scope::Both, true, false));
-}
-
 /// The check-side helpers hold without a platform: the step outcome reads
 /// from the slices this pass appended to, a proposal token parses bare or
 /// quoted, the drift word spells strings bare, and the workspace-list

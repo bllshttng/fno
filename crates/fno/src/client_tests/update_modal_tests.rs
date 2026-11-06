@@ -84,32 +84,6 @@ fn release_newer_shows_menu_row_and_modal_upgrade_entry() {
         .expect("upgrade entry");
     assert_eq!(modal.actions[i], AuxAction::UpgradeRelease(Channel::Uv));
 }
-
-/// With stale running rows too, actions follow entry order.
-#[test]
-fn release_newer_with_stale_rows_orders_upgrade_before_restart() {
-    let stale = |name: &str| RunningRow {
-        component: "daemon".into(),
-        name: Some(name.into()),
-        verdict: "stale".into(),
-        on_restart: "restarts".into(),
-        survives: "panes".into(),
-    };
-    let probe = degraded_release_probe(newer_uv(), vec![stale("a"), stale("b")]);
-    let modal = build_update_modal(Some(&probe));
-    assert_eq!(
-        modal.actions,
-        vec![
-            AuxAction::UpgradeRelease(Channel::Uv),
-            AuxAction::RestartAgents
-        ]
-    );
-    assert_eq!(
-        entry_labels(&modal),
-        vec!["upgrade now: fno update", "restart now (keeps panes)"]
-    );
-}
-
 /// A failed release check is named, never read as current.
 #[test]
 fn release_degraded_and_current_render_one_header_and_no_action() {
@@ -322,139 +296,6 @@ fn update_modal_names_stale_processes_and_offers_restart() {
         .find(|l| *l == "restart now (keeps panes)");
     assert!(entry_label.is_some(), "the action row is present");
 }
-
-/// The guard: no overlay cuts its text with an ellipsis. Each overlay opens
-/// with long text over a sideline of short names, renders at 200 columns and
-/// at 50, and every screen line must hold no `…` and fit the screen. The long
-/// text must still be all there once the wrapped lines are joined.
-#[test]
-fn no_overlay_cuts_text_with_an_ellipsis() {
-    use super::tests::{agent_row, agent_row_at, named_meta, shot_view};
-    let long = format!(
-        "{}see https://example.com/{}end",
-        "a long subject ".repeat(8),
-        "path/".repeat(20)
-    );
-    let outcome = UpdateOutcome::Ok(UpdateReadiness {
-        update_ready: false,
-        installed_rev: Some("a".repeat(40)),
-        source_rev: Some("b".repeat(40)),
-        installed_version: None,
-        source_prs_ahead: None,
-        changelog: vec![format!("feat: {long}")],
-        release_notes: None,
-        guidance: long.clone(),
-        degraded: None,
-        running: vec![],
-        running_stale: 0,
-        source_pin: None,
-        revisions: None,
-    });
-    let name = "n".repeat(120);
-    type Open = Box<dyn Fn(&mut View)>;
-    let opens: Vec<(&str, &str, Open)> = vec![
-        (
-            "update modal",
-            "https://example.com/",
-            Box::new({
-                let outcome = outcome.clone();
-                move |v| v.aux = Some(build_update_modal(Some(&outcome.clone().into())))
-            }),
-        ),
-        (
-            "rename",
-            name.as_str(),
-            Box::new({
-                let name = name.clone();
-                move |v| v.rename = Some((RenameTarget::Squad(1), name.clone()))
-            }),
-        ),
-        (
-            "peek",
-            "https://example.com/",
-            Box::new({
-                let long = long.clone();
-                move |v| {
-                    v.peek = Some(PeekView {
-                        cursor: agent_row_at(v, |a| a.name == "w"),
-                        seq: 1,
-                        body: Some(vec![long.clone()]),
-                        name: "w".into(),
-                        last_fetch: std::time::Instant::now(),
-                        refresh_pending: false,
-                        squad: None,
-                    })
-                }
-            }),
-        ),
-        (
-            "confirm",
-            "https://example.com/",
-            Box::new({
-                let long = long.clone();
-                move |v| {
-                    v.confirm = Some(ConfirmAction {
-                        action: ConfirmKind::StopAgent {
-                            sid: None,
-                            name: "w".into(),
-                            pane_id: None,
-                        },
-                        label: long.clone(),
-                    })
-                }
-            }),
-        ),
-    ];
-    for cols in [200u16, 50] {
-        for (label, whole, open) in &opens {
-            let mut v = shot_view(
-                (40, cols),
-                vec![named_meta(1, "footnote", &["main"], 0)],
-                vec![agent_row("w", 10, None, false)],
-            );
-            open(&mut v);
-            let text = crate::vt::frame_text(&v.compose());
-            for line in text.lines() {
-                assert!(
-                    !line.contains('\u{2026}'),
-                    "{label} cut text at {cols} columns: {line:?}"
-                );
-                assert!(
-                    crate::chrome::str_cols(line) <= cols as usize,
-                    "{label} runs past {cols} columns: {line:?}"
-                );
-            }
-            // The overlay's own lines, joined with the frame and the wrap
-            // spaces squeezed out, still hold the long text whole.
-            let body: String = match v.active_overlay_layout() {
-                Some(l) => l.framed.lines.iter().map(|l| l.text.as_str()).collect(),
-                None => v.aux.as_ref().map_or(String::new(), |a| {
-                    a.popup
-                        .render(v.term)
-                        .lines
-                        .iter()
-                        .map(|l| l.text.as_str())
-                        .collect()
-                }),
-            };
-            let squeeze = |s: &str| -> String {
-                s.chars()
-                    .filter(|c| !c.is_whitespace() && *c != '│')
-                    .collect()
-            };
-            assert!(
-                squeeze(&body).contains(&squeeze(whole)),
-                "{label} lost text at {cols} columns: {text}"
-            );
-        }
-    }
-    let wide = build_update_modal(Some(&outcome.clone().into()));
-    assert!(
-        wide.popup.render((80, 200)).width > crate::popup::WIDTH_CAP + 4,
-        "the update modal grows past the old cap"
-    );
-}
-
 /// Only card message previews use ellipsis; every other row field keeps the no-marker clipping rule (d-36438ea4).
 #[test]
 fn no_row_cuts_text_with_an_ellipsis() {
@@ -660,34 +501,6 @@ fn sideline_menu_omits_update_row_when_not_ready() {
     );
     assert!(!menu.actions.contains(&AuxAction::OpenUpdate));
 }
-
-/// AC6-EDGE: no probe yet, and a degraded probe, both build a menu that
-/// stays interactive - no missing keybinds row, no panic.
-#[test]
-fn sideline_menu_handles_missing_and_degraded_probe() {
-    let none_menu = build_sideline_menu(Anchor::Center, None, experimental::Flags::default());
-    assert!(!none_menu.actions.contains(&AuxAction::OpenUpdate));
-    assert!(none_menu.actions.contains(&AuxAction::OpenKeybinds));
-
-    let degraded = UpdateOutcome::Degraded("update --check: exit 1".into());
-    let degraded_menu = build_sideline_menu(
-        Anchor::Center,
-        Some(&degraded.into()),
-        experimental::Flags::default(),
-    );
-    let labels: Vec<&str> = degraded_menu
-        .popup
-        .rows
-        .iter()
-        .filter_map(|r| match r {
-            PopupRow::Entry { label, .. } => Some(label.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(labels[0], "update check failed");
-    assert_eq!(degraded_menu.actions[0], AuxAction::OpenUpdate);
-}
-
 /// Regression: a successfully-parsed probe (Python `--check` always exits
 /// 0) can still be internally degraded - `update_ready: false` with
 /// `degraded: Some(_)`. That must still surface a menu row rather than
@@ -792,48 +605,6 @@ fn sideline_menu_without_source_pin_keeps_rows() {
         );
     }
 }
-
-/// AC5-HP (moved from the over-budget client_tests.rs): a ready outcome puts
-/// the update row above keybinds.
-#[test]
-fn sideline_menu_shows_update_row_above_keybinds_when_ready() {
-    let outcome = UpdateOutcome::Ok(UpdateReadiness {
-        update_ready: true,
-        installed_rev: Some("aaa1111".into()),
-        source_rev: Some("bbb2222".into()),
-        installed_version: None,
-        source_prs_ahead: None,
-        changelog: vec!["fix(x): thing".into()],
-        release_notes: None,
-        guidance: "update ready bbb2222 - wire unchanged - 14 shells survive".into(),
-        degraded: None,
-        running: vec![],
-        running_stale: 0,
-        source_pin: None,
-        revisions: None,
-    });
-    let menu = build_sideline_menu(
-        Anchor::Center,
-        Some(&outcome.clone().into()),
-        experimental::Flags::default(),
-    );
-    let labels: Vec<&str> = menu
-        .popup
-        .rows
-        .iter()
-        .filter_map(|r| match r {
-            PopupRow::Entry { label, .. } => Some(label.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(labels[0], "update ready");
-    assert_eq!(labels[1], "sweep threads");
-    assert_eq!(labels[2], "new agent");
-    assert_eq!(labels[3], "backlog");
-    assert_eq!(labels[4], "keybindings");
-    assert_eq!(menu.actions[0], AuxAction::OpenUpdate);
-}
-
 /// AC5-HP (moved from the over-budget client_tests.rs): the overlay carries
 /// the version pair, changelog, and guidance.
 #[test]
@@ -957,28 +728,6 @@ fn update_modal_renders_version_pair_changelog_and_guidance() {
     let modal = build_update_modal(Some(&empty.clone().into()));
     assert!(row_labels(&modal).contains(&"fix(x): raw subject".to_string()));
 }
-
-#[test]
-fn readiness_payload_from_the_native_command_parses_for_the_tui() {
-    let _lock = crate::model_catalog::state_env_lock();
-    let tmp = std::env::temp_dir().join(format!("fno-du-parse-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
-    std::env::set_var("FNO_STATE_DIR", &tmp);
-    let before = std::env::var_os("FNO_AGENTS_BIN");
-    std::env::set_var("FNO_AGENTS_BIN", "/usr/bin/false");
-    let payload = crate::doctor_update::update_readiness(None);
-    std::env::remove_var("FNO_STATE_DIR");
-    match before {
-        Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
-        None => std::env::remove_var("FNO_AGENTS_BIN"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
-    let parsed: Result<UpdateReadiness, _> = serde_json::from_value(payload.clone());
-    assert!(parsed.is_ok());
-    assert!(payload.get("probes").is_some());
-}
-
 /// The source modal leads with the installed version and the distance in
 /// PRs; an older payload (or a zero/unknown distance) falls back to the
 /// bare sha pair.

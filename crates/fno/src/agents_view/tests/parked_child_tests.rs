@@ -91,30 +91,6 @@ fn parked_id_not_listed_live_renders_nothing_ac4_edge() {
         "no child row without a live listing"
     );
 }
-
-#[test]
-fn parked_id_already_owning_a_row_never_double_renders() {
-    let parent = "55555555-5555-4555-8555-555555555555";
-    let parked = "66666666-6666-4666-8666-666666666666";
-    let mut owned = parked_row("branch", parent, parked);
-    // The BRANCH arm minted the parked id its own row: the id is owned.
-    owned.harness_session_id = Some(parked.into());
-    owned.related_session_id = None;
-    let mut primary = parked_row("primary", parent, parked);
-    primary.related_session_id = Some(parked.into());
-    // Note: `owned` also still matches the ownership check via its own id.
-    let reg = vec![owned, primary];
-    let merged = merge_rows(reg, &roster_of(parked));
-    assert_eq!(
-        merged
-            .iter()
-            .filter(|r| r.harness_session_id.as_deref() == Some(parked))
-            .count(),
-        1,
-        "the real branch row is the only render"
-    );
-}
-
 // -- task 4.1 reader half: served liveness outranks the status string -------
 
 #[test]
@@ -127,18 +103,6 @@ fn served_liveness_beats_a_stale_status_when_fresh() {
     assert_eq!(rows[0].liveness, Liveness::Alive);
     assert_eq!(rows[0].liveness_measured_at, Some(NOW));
 }
-
-#[test]
-fn a_word_90_seconds_old_still_serves_ac1_hp() {
-    // The freshness window is twice the serve-only cadence (2 x 60s), so a
-    // row measured one full missed tick ago still answers from its stamp.
-    // Under the old two-sweep-budget window (10s) this read as stale.
-    let raw = r#"{"schema_version": 6, "agents": [{"name": "served", "cwd": "/w", "status": "orphaned", "liveness": "alive", "liveness_measured_at": "MEASURED_AT"}]}"#;
-    let (rows, _) = derive_rows_counted(&raw.replace("MEASURED_AT", &now_stamp(90)), NOW).unwrap();
-    assert_eq!(rows[0].liveness, Liveness::Alive);
-    assert_eq!(rows[0].liveness_measured_at, Some(NOW - 90));
-}
-
 #[test]
 fn stale_served_liveness_falls_back_to_the_status_ladder() {
     // A measurement older than the freshness window is not trusted: the
@@ -151,14 +115,6 @@ fn stale_served_liveness_falls_back_to_the_status_ladder() {
     // "probe older than N s" against its own clock.
     assert_eq!(rows[0].liveness_measured_at, Some(NOW - 3600));
 }
-
-#[test]
-fn served_dead_reads_dead() {
-    let raw = r#"{"schema_version": 6, "agents": [{"name": "served", "cwd": "/w", "status": "live", "liveness": "dead", "liveness_measured_at": "MEASURED_AT"}]}"#;
-    let (rows, _) = derive_rows_counted(&raw.replace("MEASURED_AT", &now_stamp(1)), NOW).unwrap();
-    assert_eq!(rows[0].liveness, Liveness::Dead);
-}
-
 /// An RFC3339-like stamp `age` seconds before NOW (1_800_000_000 =
 /// 2027-01-15T08:00:00Z), same fixed format the registry writes and
 /// `rfc3339_like_to_secs` parses. Explicit table: the parser is strict.

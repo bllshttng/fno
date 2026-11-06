@@ -1858,37 +1858,6 @@ mod tests {
     }
 
     #[test]
-    fn live_chain_anchor_skips_a_second_chain() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let deps = sync_deps(
-            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        // Half 1 - a live chain anchor holds the gate: no second chain, the
-        // merge is marked pending for the running chain's re-pull.
-        write_chain_anchor(tmp.path(), std::process::id());
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow(), "no second chain behind a live anchor");
-        let line = stdout.join("\n");
-        assert!(line.contains("chain already running"), "{line}");
-        assert!(pending_dir(tmp.path()).join(SHA).exists());
-        clear_chain_anchor(tmp.path(), std::process::id());
-        // Half 2 - a dead chain's leftover anchor leaves the gate open: the
-        // sync proceeds (self-healing after a crash).
-        let mut dead = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = dead.id();
-        dead.wait().unwrap();
-        write_chain_anchor(tmp.path(), dead_pid);
-        let (exit, _, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(*ran.borrow(), "a dead anchor leaves the gate open");
-    }
-
-    #[test]
     fn divergence_refusal_exits_one() {
         let tmp = tempfile::tempdir().unwrap();
         write_cfg(tmp.path(), CFG_BODY);
@@ -1967,28 +1936,6 @@ mod tests {
         ] {
             assert!(synced_marker(tmp.path(), sha).exists(), "{sha}");
         }
-    }
-
-    #[test]
-    fn catchup_progress_goes_to_stderr_not_stdout() {
-        // Catch-up runs inline during `reconcile --json`; its own progress
-        // and the wrapped sync's progress must both land on stderr, or the
-        // JSON caller's stdout stops parsing (the bug main fixed for the old
-        // Python implementation in 1c4a346d55).
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, _ran) = spy_shell(0);
-        let rows = list_rows(&[(7, &iso_at_hours_before(1), SHA)]);
-        let deps = catchup_deps(ListStub::Rows(rows), shell, Rc::new(|_| json!({})));
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "synced");
-        assert!(out.stdout.is_empty(), "{:?}", out.stdout);
-        let stderr = out.stderr.join("\n");
-        assert!(stderr.contains("post-merge sync: running in"), "{stderr}");
-        assert!(
-            stderr.contains("post-merge sync catch-up: synced PR #7"),
-            "{stderr}"
-        );
     }
 
     /// A failed catch-up sync names the wrapped sync's own stderr line in

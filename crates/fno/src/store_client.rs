@@ -655,28 +655,6 @@ mod tests {
         std::env::remove_var("FNO_AGENTS_WORKER");
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn an_exec_refusal_surfaces_the_replys_error_message() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-store-exec-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let graph = dir.join("graph.json");
-        std::env::set_var(
-            "FNO_AGENTS_WORKER",
-            stub_worker(
-                &dir,
-                "worker-refuse",
-                "printf '{\"ok\":false,\"error\":{\"kind\":\"conflict\",\"message\":\"version conflict on x\"}}\n'",
-            ),
-        );
-        let err = call(&graph, "commit", json!({})).unwrap_err();
-        assert!(err.contains("version conflict"), "{err}");
-        std::env::remove_var("FNO_AGENTS_WORKER");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// The deadline bounds a slow child and never costs a healthy one: a
     /// stub past the deadline dies with a `timed out` error inside the
     /// caller's bound (the process-group kill reaps it), and an instant

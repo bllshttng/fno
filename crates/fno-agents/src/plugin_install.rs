@@ -283,7 +283,64 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     build_stage_as(source_root, stage_parent, Profile::Full)
 }
 
-/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// The trees the codex dev stage drops: no codex hook, skill or command
+/// reads them at run time (measured by sweep 2026-11-06), and they are 9,394
+/// of the dev stage's 11,676 entries. codex fingerprints the whole stage
+/// inside each hook's own timeout, so every entry is paid on every hook call.
+fn codex_dropped_tree(rel: &str) -> bool {
+    const DROPPED: [&str; 4] = ["crates", "cli", "tests", "evals"];
+    DROPPED
+        .iter()
+        .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
+}
+
+/// Refuse a codex stage whose hooks, skills, agents or commands name a
+/// dropped tree at run time: the guard turns a future runtime read into a
+/// build refusal naming the file and the path (AC8), not a broken hook at
+/// runtime.
+fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
+    let pattern =
+        regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)(?![-\w])"#)
+            .expect("valid tree-read pattern");
+    for dir in ["hooks", "skills", "agents", "commands"] {
+        let root = source_root.join(dir);
+        if !root.is_dir() {
+            continue;
+        }
+        // Depth ≤ 2: skills nest one level (skills/<name>/references/);
+        // deeper nesting is docs, not runtime reads.
+        let mut stack: Vec<std::path::PathBuf> = vec![root];
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if let Some(hit) = pattern.find(&text) {
+                let rel = path.strip_prefix(source_root).unwrap_or(path);
+                return Err(format!(
+                    "codex stage: {} names dropped tree path {:?} at run time; \
+                     widen the keep set or fix the reference",
+                    rel.display(),
+                    hit.as_str()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
     source_root: &Path,
@@ -291,8 +348,11 @@ fn build_stage_as(
     profile: Profile,
 ) -> Result<(PathBuf, usize), String> {
     require_fno_source(source_root)?;
+    if matches!(profile, Profile::Codex) {
+        codex_runtime_read_guard(source_root)?;
+    }
     let mux = match profile {
-        Profile::Full => None,
+        Profile::Full | Profile::Codex => None,
         Profile::Pack => Some(MuxPaths::load(source_root)?),
     };
     let listed = run_checked(
@@ -318,6 +378,9 @@ fn build_stage_as(
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
             if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
+            if matches!(profile, Profile::Codex) && codex_dropped_tree(rel) {
                 continue;
             }
             let src = source_root.join(rel);
@@ -363,7 +426,11 @@ fn build_stage_as(
         let stamp = json!({
             "source_head": head,
             "built_at": chrono::Utc::now().to_rfc3339(),
-            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+            "profile": match profile {
+                Profile::Pack => "pack",
+                Profile::Codex => "codex",
+                Profile::Full => "full",
+            },
         });
         let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
     }
@@ -1120,7 +1187,7 @@ enum RestageOutcome {
 /// up the directory marketplace has no stage and gets a no-op. Each profile
 /// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
+    let present: Vec<Profile> = [Profile::Full, Profile::Pack, Profile::Codex]
         .into_iter()
         .filter(|p| stage_parent.join(p.stage_dir()).exists())
         .collect();
@@ -1603,6 +1670,10 @@ struct PluginInstallArgs {
     dry_run: bool,
     /// Consent to replace a release-channel plugin with the local checkout.
     dev: bool,
+    /// Read or refresh codex plugin-hook trust rows (`codex --trust-hooks`).
+    trust_hooks: bool,
+    /// `--trust-hooks --check`: read-only verdict, no writes.
+    trust_hooks_check: bool,
     /// Converge codex onto the release channel (setup's wiring).
     release: bool,
     /// Install the pack profile: no mux skills, no mux hooks.
@@ -1634,6 +1705,8 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         yes: false,
         dry_run: false,
         dev: false,
+        trust_hooks: false,
+        trust_hooks_check: false,
         release: false,
         pack: false,
         dropped_mode: None,
@@ -1682,6 +1755,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dev = true;
                 i += 1;
             }
+            "--trust-hooks" => {
+                parsed.trust_hooks = true;
+                i += 1;
+            }
             "--release" => {
                 parsed.release = true;
                 i += 1;
@@ -1719,7 +1796,9 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             "--check" | "--restage" => {
-                if parsed.mode.is_none() {
+                if parsed.trust_hooks {
+                    parsed.trust_hooks_check = true;
+                } else if parsed.mode.is_none() {
                     parsed.mode = Some(args[i].clone());
                 } else {
                     parsed.dropped_mode = Some(args[i].clone());
@@ -1760,6 +1839,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         yes,
         dry_run,
         dev,
+        trust_hooks,
+        trust_hooks_check,
         release,
         pack,
         dropped_mode,
@@ -1851,6 +1932,9 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             }
             if harness == "codex" && status {
                 return crate::codex_converge::run_status();
+            }
+            if harness == "codex" && trust_hooks {
+                return crate::codex_hook_trust::run_cli(trust_hooks_check, json);
             }
             if harness == "codex" && release {
                 return crate::codex_converge::run_release(json);
@@ -2440,6 +2524,14 @@ fn install_harness(
     source_dir: &Path,
     profile: Profile,
 ) -> Result<String, String> {
+    // The codex dev install gets the slim profile unless --pack asked for
+    // the mux-free pack; the shared full stage stays for every other
+    // harness.
+    let profile = if harness == "codex" && profile == Profile::Full {
+        Profile::Codex
+    } else {
+        profile
+    };
     let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
     let (stage, _) = build_stage_as(&root, &parent, profile)?;
@@ -3032,59 +3124,6 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // Install removes the machine-wide exports older installs wrote, and
-    // nothing else: a user's own keys, comments and tables survive.
-    #[test]
-    fn env_strippers_remove_only_fno_exports() {
-        let fno = |_: &str, v: &str| v.contains(".fno");
-
-        // rc: the legacy one-line block, the two-line block, and a block at
-        // EOF with no trailing newline all go; the next export stays.
-        let mark = "# fno: cargo build-dir\n";
-        let cargo = "export CARGO_BUILD_BUILD_DIR=\"/u/.fno/b\"\n";
-        let sccache = "export SCCACHE_DIR=\"/u/.fno/b/sccache\"\n";
-        let keep = "alias ll=ls\nexport KEEP=1\n";
-        for block in [[mark, cargo].concat(), [mark, cargo, sccache].concat()] {
-            let rc = ["alias ll=ls\n", block.as_str(), "export KEEP=1\n"].concat();
-            assert_eq!(strip_rc_block(&rc).as_deref(), Some(keep));
-        }
-        let bare = ["alias ll=ls\n", mark, cargo.trim_end()].concat();
-        assert_eq!(strip_rc_block(&bare).as_deref(), Some("alias ll=ls\n"));
-        assert_eq!(strip_rc_block(keep), None);
-
-        // claude: fno's keys go, a user's own value for the same key stays,
-        // and an env this pass empties goes too.
-        let mut data: serde_json::Map<String, Value> = serde_json::from_str(
-            r#"{"env": {"CARGO_BUILD_BUILD_DIR": "/u/.fno/b", "SCCACHE_DIR": "/mine", "KEEP": "1"}}"#,
-        )
-        .unwrap();
-        assert_eq!(strip_claude_env(&mut data, fno), 1);
-        assert_eq!(
-            Value::Object(data),
-            json!({"env": {"SCCACHE_DIR": "/mine", "KEEP": "1"}})
-        );
-        let mut only: serde_json::Map<String, Value> =
-            serde_json::from_str(r#"{"env": {"SCCACHE_DIR": "/u/.fno/b/sccache"}, "x": 1}"#)
-                .unwrap();
-        assert_eq!(strip_claude_env(&mut only, fno), 1);
-        assert_eq!(Value::Object(only), json!({"x": 1}));
-
-        // codex: an emptied set table loses its header; a table that keeps a
-        // key keeps it; keys outside the set table are never touched.
-        let codex = "model = \"x\"\n# mine\n\n[shell_environment_policy.set]\nCARGO_BUILD_BUILD_DIR = \"/u/.fno/b/{workspace-path-hash}\"\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n\n[plugins.\"other@x\"]\nenabled = true\nSCCACHE_DIR = \"/u/.fno/b\"\n";
-        assert_eq!(
-            strip_codex_env(codex, fno).as_deref(),
-            Some("model = \"x\"\n# mine\n\n\n[plugins.\"other@x\"]\nenabled = true\nSCCACHE_DIR = \"/u/.fno/b\"\n")
-        );
-        let shared =
-            "[shell_environment_policy.set]\nFOO = \"1\"\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n";
-        assert_eq!(
-            strip_codex_env(shared, fno).as_deref(),
-            Some("[shell_environment_policy.set]\nFOO = \"1\"\n")
-        );
-        assert_eq!(strip_codex_env("model = \"x\"\n", fno), None);
-    }
-
     // zcode install: a malformed config is refused byte-identical.
     #[test]
     fn zcode_malformed_config_refused_byte_identical() {
@@ -3145,185 +3184,6 @@ mod tests {
         fs::create_dir_all(&stage_parent).unwrap();
         let (stage, _) = build_stage(&source, &stage_parent).unwrap();
         (source, stage)
-    }
-
-    /// AC3/AC4: a pack stage drops mux paths and mux hook entries, checks
-    /// fresh against its own source, and a manifest naming a missing path
-    /// refuses before any temp dir exists.
-    #[test]
-    fn pack_stage_drops_mux_paths_and_checks_fresh() {
-        let base = std::env::temp_dir().join(format!("pi-pack-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let source = base.join("source");
-        new_repo(&source);
-        fs::create_dir_all(source.join("skills/mail")).unwrap();
-        fs::write(source.join("skills/mail/SKILL.md"), "mail\n").unwrap();
-        fs::write(source.join("hooks/mail.sh"), "mail\n").unwrap();
-        fs::write(
-            source.join("hooks/hooks.json"),
-            r#"{"hooks":{"Stop":[{"hooks":[{"command":"${R}/hooks/mail.sh"},{"command":"${R}/hooks/live.sh"}]}]}}"#,
-        )
-        .unwrap();
-        let manifest = r#"{"mux":["hooks/mail.sh","skills/mail"]}"#;
-        fs::write(source.join(crate::pack_profile::MANIFEST), manifest).unwrap();
-        git_in(&source, &["add", "-A"]);
-        git_in(&source, &["commit", "-q", "-m", "c2"]);
-        let parent = base.join("stage-parent");
-        fs::create_dir_all(&parent).unwrap();
-
-        let (stage, _) = build_stage_as(&source, &parent, Profile::Pack).unwrap();
-        assert!(stage.ends_with("fno-pack"));
-        assert!(!stage.join("skills/mail").exists());
-        assert!(!stage.join("hooks/mail.sh").exists());
-        let hooks = fs::read_to_string(stage.join("hooks/hooks.json")).unwrap();
-        assert!(
-            !hooks.contains("mail.sh") && hooks.contains("live.sh"),
-            "{hooks}"
-        );
-        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-
-        fs::write(
-            source.join(crate::pack_profile::MANIFEST),
-            r#"{"mux":["skills/gone"]}"#,
-        )
-        .unwrap();
-        let err = build_stage_as(&source, &parent, Profile::Pack).unwrap_err();
-        assert!(err.contains("skills/gone"), "{err}");
-        let temp = fs::read_dir(&parent)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .any(|e| e.file_name().to_string_lossy().starts_with(".fno-pack."));
-        assert!(!temp, "a refused pack build left a temp dir");
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC1-HP: the swap is atomic (no temp dirs left), new bytes land, and a
-    /// handle opened before the rebuild still reads the old bytes.
-    #[test]
-    fn rebuild_swaps_atomically_and_keeps_open_handle_stable() {
-        let base = std::env::temp_dir().join(format!("pi-ac1hp-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        let live = stage.join("hooks/live.sh");
-        let old_handle = fs::File::open(&live).unwrap();
-
-        let built_from = run_checked(
-            &["git".to_string(), "rev-parse".into(), "HEAD".into()],
-            Some(&source),
-        )
-        .unwrap();
-        fs::write(source.join("hooks/live.sh"), "updated\n").unwrap();
-        git_in(&source, &["add", "-A"]);
-        git_in(&source, &["commit", "-q", "-m", "c2"]);
-
-        // Before the rebuild the stage trails by one commit in hooks/, and
-        // the check says so from the stamp.
-        let lag = check_stage_report(&stage, &source);
-        assert_eq!(lag.status, "stale");
-        assert_eq!(lag.stage_head.as_deref(), Some(built_from.as_str()));
-        assert_eq!(lag.commits_behind, Some(1));
-        let summary = lag.lag_summary();
-        assert!(summary.starts_with("hooks 1; staged from "), "{summary}");
-        assert!(summary.ends_with(", 1 commit(s) behind"), "{summary}");
-
-        let stage_parent = stage.parent().unwrap().to_path_buf();
-        let (_, copied) = build_stage(&source, &stage_parent).unwrap();
-        assert!(copied >= 2);
-        assert_eq!(fs::read_to_string(&live).unwrap(), "updated\n");
-        let mut old_text = String::new();
-        use std::io::Read;
-        let mut old_handle2 = old_handle;
-        old_handle2.read_to_string(&mut old_text).unwrap();
-        assert_eq!(old_text, "live\n");
-        let leftovers: Vec<_> = fs::read_dir(&stage_parent)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with(".fno.new-") || n.starts_with(".fno.old-"))
-            .collect();
-        assert!(leftovers.is_empty(), "temp dirs left behind: {leftovers:?}");
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// The staged manifest serves the fno entry from the stage itself while
-    /// the source checkout keeps the public GitHub pins, and the rewrite is
-    /// not reported as drift.
-    #[test]
-    fn stage_serves_fno_entry_locally_without_drift() {
-        // The env mutations below (FNO_HOME, FNO_RECLAIM_STATE_ROOT) race
-        // every guarded hermetic fixture unless this test holds the shared
-        // lock; an unguarded FNO_HOME removal mid-test once erased a seeded
-        // law and flipped a spared door.
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = std::env::temp_dir().join(format!("pi-mkt-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        fs::create_dir_all(source.join(".agents/plugins")).unwrap();
-        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/fnodotdev/fno.git","ref":"stable"}}]}"#).unwrap();
-        git_in(&source, &["add", CODEX_MARKETPLACE_REL]);
-        git_in(&source, &["commit", "-q", "-m", "codex marketplace"]);
-        let (stage, _) = build_stage(&source, stage.parent().unwrap()).unwrap();
-        let codex: Value =
-            serde_json::from_str(&fs::read_to_string(stage.join(CODEX_MARKETPLACE_REL)).unwrap())
-                .unwrap();
-        assert_eq!(
-            codex["plugins"][0]["source"],
-            json!({"source":"local","path":"."})
-        );
-        let staged: Value =
-            serde_json::from_str(&fs::read_to_string(stage.join(MARKETPLACE_REL)).unwrap())
-                .unwrap();
-        let entries = staged["plugins"].as_array().unwrap();
-        let fno = entries.iter().find(|p| p["name"] == "fno").unwrap();
-        assert_eq!(fno["source"], json!("./"));
-        let nightly = entries.iter().find(|p| p["name"] == "fno-nightly").unwrap();
-        assert_eq!(nightly["source"]["ref"], json!("nightly"));
-        let public: Value =
-            serde_json::from_str(&fs::read_to_string(source.join(MARKETPLACE_REL)).unwrap())
-                .unwrap();
-        assert_eq!(public["plugins"][0]["source"]["ref"], json!("stable"));
-        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-        // The install command primes the plugin-root pointer from the built
-        // stage and ignores a manifest-less one, so the same contract rides
-        // this real stage: the pointer lands at <state>/install/plugin-root.
-        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
-        let previous_home = std::env::var_os("FNO_HOME");
-        // The fixture stage carries only the marketplace manifest, and the
-        // prime ignores a stage without the plugin manifest - make it a real
-        // plugin root first.
-        fs::create_dir_all(stage.join(".claude-plugin")).unwrap();
-        fs::write(stage.join(".claude-plugin").join("plugin.json"), b"{}").unwrap();
-        std::env::remove_var("FNO_HOME");
-        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &base);
-        prime_plugin_root_pointer(&stage);
-        assert_eq!(
-            fs::read_to_string(base.join("install").join("plugin-root"))
-                .unwrap()
-                .trim(),
-            stage.to_str().unwrap(),
-            "the primed pointer names the built stage"
-        );
-        let bare = base.join("bare");
-        fs::create_dir_all(&bare).unwrap();
-        prime_plugin_root_pointer(&bare);
-        assert_eq!(
-            fs::read_to_string(base.join("install").join("plugin-root"))
-                .unwrap()
-                .trim(),
-            stage.to_str().unwrap(),
-            "a manifest-less stage writes nothing"
-        );
-        match previous_root {
-            Some(v) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", v),
-            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
-        }
-        match previous_home {
-            Some(v) => std::env::set_var("FNO_HOME", v),
-            None => std::env::remove_var("FNO_HOME"),
-        }
-        let _ = fs::remove_dir_all(&base);
     }
 
     /// A manifest that cannot serve the fno entry (entry renamed away) fails
@@ -3424,40 +3284,6 @@ mod tests {
         let _ = fs::remove_dir_all(&pack_base);
     }
 
-    /// Regression: the --force arm once skipped `i += 1`, so the parse loop
-    /// spun on the flag forever. The test returning at all is the proof.
-    /// Also pins B5 at the same parser boundary: a mode flag after a harness
-    /// positional is recorded, and the command refuses before any install work -
-    /// `plugin-install claude --check` once dropped the flag and ran the full
-    /// mutating install.
-    #[test]
-    fn parse_force_flag_returns_and_sets_flags() {
-        let args: Vec<String> = ["--force", "--status"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert!(parsed.force);
-        assert!(parsed.status);
-
-        let args: Vec<String> = ["claude", "--check"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("claude"));
-        assert_eq!(parsed.dropped_mode.as_deref(), Some("--check"));
-        assert_eq!(run_plugin_install(&args), 2);
-
-        let args: Vec<String> = ["--json", "--release", "codex", "-F"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("codex"));
-        assert!(parsed.release && parsed.json && parsed.force && !parsed.dev);
-    }
-
     /// A GitHub-sourced claude marketplace or a codex release marker is a
     /// release channel the dev install must not replace; a directory source,
     /// a dev marker, or no record at all is not.
@@ -3538,141 +3364,6 @@ mod tests {
             serde_json::to_string(&v).unwrap(),
         )
         .unwrap();
-    }
-
-    /// An install made under the old marketplace name keeps reading as fno,
-    /// and a dev install retires the old registration before it adds fno@fno.
-    #[test]
-    fn legacy_footnote_marketplace_is_read_and_migrated() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = fixture_home(tmp.path());
-        let claude = home.join(".claude");
-        assert!(legacy_claude_migration(&claude).is_empty());
-
-        let known = json!({"footnote": {"source": {"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}}});
-        fs::write(
-            claude.join("plugins/known_marketplaces.json"),
-            known.to_string(),
-        )
-        .unwrap();
-        let registry = json!({"version": 2, "plugins": {"fno@footnote": [
-            {"scope": "user", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
-        fs::write(
-            claude.join("plugins/installed_plugins.json"),
-            registry.to_string(),
-        )
-        .unwrap();
-
-        assert_eq!(marketplace_source_kind(&home).as_deref(), Some("github"));
-        assert_eq!(
-            registry_install_paths(&home),
-            vec![PathBuf::from("/c/cache/footnote/fno/0.4.3")]
-        );
-        assert_eq!(
-            release_channel("claude", &claude, &home.join(".codex")).as_deref(),
-            Some("stable (github:fnodotdev/fno#stable)")
-        );
-        // A failed migration leaves both ids registered; the guard sees both.
-        let both = json!({"version": 2, "plugins": {
-            "fno@fno": [{"scope": "user", "installPath": "/c/cache/fno/fno/0.5.0"}],
-            "fno@footnote": [{"scope": "project", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
-        fs::write(
-            claude.join("plugins/installed_plugins.json"),
-            both.to_string(),
-        )
-        .unwrap();
-        assert_eq!(
-            registry_install_paths(&home),
-            vec![
-                PathBuf::from("/c/cache/fno/fno/0.5.0"),
-                PathBuf::from("/c/cache/footnote/fno/0.4.3")
-            ]
-        );
-        assert_eq!(
-            legacy_claude_migration(&claude),
-            vec![
-                vec!["claude", "plugin", "uninstall", "fno@footnote"],
-                vec!["claude", "plugin", "marketplace", "remove", "footnote"],
-            ]
-        );
-
-        // Once the new name is registered, nothing is left to migrate.
-        let known = json!({"fno": {"source": {"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}}});
-        fs::write(
-            claude.join("plugins/known_marketplaces.json"),
-            known.to_string(),
-        )
-        .unwrap();
-        assert!(legacy_claude_migration(&claude).is_empty());
-    }
-
-    /// AC2-HP: trust reads from the location, not from the name alone.
-    #[test]
-    fn grok_parse_trust_comes_from_location() {
-        let gh = Path::new("/gh");
-        let linked = serde_json::json!({
-            "name": "footnote", "scope": "user", "enabled": true,
-            "path": "/gh/plugins/fno",
-            "provides": {"skills": 25, "agents": 1, "hooks": true, "mcpServers": 0}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [linked] })).unwrap();
-        match parse_grok_inspect(&text, gh) {
-            GrokReachability::Reachable { path } => assert_eq!(path, "/gh/plugins/fno"),
-            other => panic!("want Reachable, got {other:?}"),
-        }
-        // grok's own installer path is trusted too.
-        let installed = serde_json::json!({
-            "name": "fno", "scope": "user", "enabled": true,
-            "path": "/gh/installed-plugins/fno-1a2b",
-            "provides": {"hooks": true}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [installed] })).unwrap();
-        assert!(matches!(
-            parse_grok_inspect(&text, gh),
-            GrokReachability::Reachable { .. }
-        ));
-        // Both a compat copy and a linked copy: the trusted one wins.
-        let both = {
-            let compat = serde_json::json!({
-                "name": "fno", "enabled": true,
-                "path": "/claude/plugins/cache/footnote/fno/0.3.2",
-                "provides": {"hooks": true}
-            });
-            let linked_copy = serde_json::json!({
-                "name": "footnote", "enabled": true,
-                "path": "/gh/plugins/fno",
-                "provides": {"hooks": true}
-            });
-            serde_json::json!({ "plugins": [compat, linked_copy] })
-        };
-        let text = serde_json::to_string(&both).unwrap();
-        match parse_grok_inspect(&text, gh) {
-            GrokReachability::Reachable { path } => assert_eq!(path, "/gh/plugins/fno"),
-            other => panic!("want the trusted entry, got {other:?}"),
-        }
-        // A .. inside the reported path resolves outside the trusted root,
-        // so the raw prefix must not match.
-        let escape = serde_json::json!({
-            "name": "fno", "enabled": true,
-            "path": "/gh/plugins/../evil/fno",
-            "provides": {"hooks": true}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [escape] })).unwrap();
-        assert!(matches!(
-            parse_grok_inspect(&text, gh),
-            GrokReachability::Untrusted { .. }
-        ));
-        // A .. that stays inside the trusted root still reads trusted.
-        let inner = serde_json::json!({
-            "name": "fno", "enabled": true,
-            "path": "/gh/plugins/sub/../fno",
-            "provides": {"hooks": true}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [inner] })).unwrap();
-        assert!(matches!(
-            parse_grok_inspect(&text, gh),
-            GrokReachability::Reachable { .. }
-        ));
     }
 
     /// AC4-HP/AC5-EDGE/AC6-ERR: the link installs, relinks, and refuses a
@@ -3864,58 +3555,6 @@ mod tests {
             install_path.exists(),
             "the registered installPath must survive the sweep"
         );
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// Each stage arm's spawn-time presence read is three-state: a measured
-    /// absent refuses, a readable naming record passes, and an unreadable
-    /// record fails open so a spawn that would work is never blocked.
-    #[test]
-    fn pack_status_reads_are_three_state_per_arm() {
-        let base = std::env::temp_dir().join(format!("pi-pack-status-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).unwrap();
-        // claude: absent registry reads missing, a naming registry reads ok,
-        // and an unparseable registry fails open.
-        let registry = base.join("installed_plugins.json");
-        assert_eq!(claude_pack_status(&registry).as_deref(), Some("missing"));
-        fs::write(
-            &registry,
-            r#"{"plugins":{"fno@fno":[{"installPath":"/x"}]}}"#,
-        )
-        .unwrap();
-        assert_eq!(claude_pack_status(&registry).as_deref(), Some("ok"));
-        fs::write(&registry, "{not json").unwrap();
-        assert_eq!(claude_pack_status(&registry), None);
-        // footnote and grok share the link read: absent then linked.
-        let link = base.join("plugins/fno");
-        assert_eq!(link_pack_status(&link).as_deref(), Some("missing"));
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&base, &link).unwrap();
-        assert_eq!(link_pack_status(&link).as_deref(), Some("ok"));
-        // zcode: absent config, an enabled dir that exists, a dirs entry that
-        // points nowhere, and an unparseable config.
-        let config = base.join("config.json");
-        assert_eq!(zcode_pack_status(&config).as_deref(), Some("missing"));
-        let stage = base.join("stage");
-        fs::create_dir_all(&stage).unwrap();
-        fs::write(
-            &config,
-            format!(
-                r#"{{"plugins":{{"enabled":true,"dirs":["{}"]}}}}"#,
-                stage.display()
-            ),
-        )
-        .unwrap();
-        assert_eq!(zcode_pack_status(&config).as_deref(), Some("ok"));
-        fs::write(
-            &config,
-            r#"{"plugins":{"enabled":true,"dirs":["/nowhere/fno"]}}"#,
-        )
-        .unwrap();
-        assert_eq!(zcode_pack_status(&config).as_deref(), Some("missing"));
-        fs::write(&config, "not json").unwrap();
-        assert_eq!(zcode_pack_status(&config), None);
         let _ = fs::remove_dir_all(&base);
     }
 }

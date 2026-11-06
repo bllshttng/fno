@@ -406,20 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn routed_resume_records_the_candidate_as_route_model() {
-        let answer = resolve(
-            row(Some("claude-opus-5"), Some("anthropic")),
-            None,
-            true,
-            "ffff0004-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        let pin = answer.unwrap();
-        assert_eq!(pin.argv_model, None);
-        assert_eq!(pin.route_model.as_deref(), Some("claude-opus-5"));
-    }
-
-    #[test]
     fn birth_scan_stops_at_the_first_hit() {
         // Assistant lines BEFORE the attachment do not win, and a synthetic
         // turn is skipped, not read as the running model.

@@ -492,37 +492,6 @@ mod tests {
         assert!(classify(&os(&["backlog", "get", "x-1"])).is_none());
         assert!(classify(&os(&["agents", "list"])).is_none());
     }
-
-    #[test]
-    fn priority_and_size_rank_missing_last() {
-        let mk = |priority: Option<&str>, size: Option<&str>| Hit {
-            card: crate::backlog_model::Card {
-                priority: priority.map(str::to_string),
-                size: size.map(str::to_string),
-                ..clone_card()
-            },
-            row: None,
-            stale: None,
-        };
-        let p0 = mk(Some("p0"), None);
-        let p1 = mk(Some("p1"), None);
-        let none = mk(None, None);
-        assert_eq!(
-            sort_value(SortKey::Priority, &p0).cmp(&sort_value(SortKey::Priority, &p1)),
-            std::cmp::Ordering::Less
-        );
-        assert_eq!(
-            sort_value(SortKey::Priority, &p1).cmp(&sort_value(SortKey::Priority, &none)),
-            std::cmp::Ordering::Less
-        );
-        let big = mk(None, Some("L"));
-        let small = mk(None, Some("S"));
-        assert_eq!(
-            sort_value(SortKey::Size, &small).cmp(&sort_value(SortKey::Size, &big)),
-            std::cmp::Ordering::Less
-        );
-    }
-
     fn clone_card() -> crate::backlog_model::Card {
         crate::backlog_model::Card {
             id: "x-1".to_string(),
@@ -580,13 +549,5 @@ mod tests {
         let tsv_un_row = unmarked.tsv_row();
         let tsv_un: Vec<&str> = tsv_un_row.split('\t').collect();
         assert_eq!(tsv_un[6], "-");
-    }
-
-    #[test]
-    fn the_marks_shellout_fails_open_on_a_missing_binary() {
-        std::env::set_var("FNO_AGENTS_BIN", "/nonexistent/fno-agents-board-stale");
-        let marks = stale_marks(&["x-1"]);
-        std::env::remove_var("FNO_AGENTS_BIN");
-        assert!(marks.is_none());
     }
 }

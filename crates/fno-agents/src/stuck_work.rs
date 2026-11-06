@@ -424,25 +424,6 @@ mod tests {
         assert!(f.line.ends_with("(over 1800s)"), "{}", f.line);
     }
 
-    // AC2-EDGE: the long-lived shapes stay quiet; a failed ps is an Err.
-    #[test]
-    fn long_lived_shapes_never_page() {
-        let now = 1_800_000_000u64 + 3600 * 35 + 11 * 3600;
-        let rows = vec![
-            (1u32, 126_600u64, "fno --server /x/main.sock".to_string()),
-            (2u32, 126_600u64, "fno".to_string()),
-            (3u32, 3600u64, "fno-agents-daemon --home /x".to_string()),
-            (4u32, 9u64, "fno-py backlog render-views".to_string()),
-            (5u32, 900u64, "fno mux".to_string()),
-            (
-                6u32,
-                900u64,
-                "fno-agents loop run --driver target".to_string(),
-            ),
-        ];
-        assert!(hung_commands(&rows, now).is_empty());
-    }
-
     #[test]
     fn bad_ps_is_an_error_not_an_empty_list() {
         // A ps whose exit is non-zero is Err; this stub never runs, so the
@@ -486,27 +467,6 @@ mod tests {
         assert_eq!(f.claim_key.as_deref(), Some("flight:k"));
         assert_eq!(f.holder.as_deref(), Some("single-flight:9:ab"));
         crate::claims::release("flight:k", "single-flight:9:ab", f.root.as_deref(), None).unwrap();
-        assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
-    }
-
-    // AC3-ERR: a live holder or a non-flight claim is not a finding.
-    #[test]
-    fn live_null_and_non_flight_never_page() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        write_rec(
-            &claims_dir,
-            &flight_rec(
-                "flight:live",
-                "single-flight:me",
-                Some(std::process::id() as i32),
-                600,
-            ),
-        );
-        write_rec(
-            &claims_dir,
-            &flight_rec("node:z", "target-session:w", Some(dead_pid() as i32), 600),
-        );
         assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
     }
 }

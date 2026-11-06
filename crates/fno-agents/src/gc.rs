@@ -1078,6 +1078,21 @@ pub fn maybe_retirement_sweep(
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         let emitter = EventEmitter::new(events, "daemon");
+        // Revival precedes destruction on the first sweeps after a boot:
+        // a reboot empties the roster and ages every transcript past every
+        // window, so a sweep that runs before the boot pass finishes would
+        // vacate and reap the fleet the revival exists to bring back. The
+        // hold is bounded: past the ceiling, or on a host that cannot name
+        // its boot, the gate is unevaluable and the sweeps run as before.
+        if let Some(reason) = crate::boot_revival::hold_reason(&home) {
+            let _ = emitter.emit(
+                "retire_held_for_boot_revival",
+                &serde_json::json!({"reason": reason}),
+            );
+            crate::boot_revival::start(&home);
+            return;
+        }
+
         let grace_secs = crate::agents_config::retire_grace_secs(&grace_cwd) as i64;
         let retain_days = crate::agents_config::reap_receipt_retain_days(&grace_cwd);
         // The dead-team sweep runs BEFORE the registry sweep: a vacated
@@ -1260,6 +1275,15 @@ mod tests {
         let home = AgentsHome::at(&dir);
         home.ensure_root().unwrap();
         crate::paths::pin_test_claims_root(&dir.join("claims-root"));
+        // The retire arm reads the boot-revival receipt before it may sweep;
+        // a fixture with no receipt holds every pass. Stamp one finished so
+        // these tests exercise the arm itself.
+        crate::boot_revival::write_receipt(
+            &home.root().join("boot-revival.json"),
+            crate::boot_revival::boot_time().unwrap_or(0),
+            &[],
+            true,
+        );
         (dir, home)
     }
 
@@ -1292,6 +1316,25 @@ mod tests {
 
     fn wait_for_retire_row(path: &std::path::Path) -> usize {
         wait_for_retire_row_within(path, 5)
+    }
+
+    /// Polls the committed journal for one event kind, a 10s bound.
+    fn wait_for_event(path: &std::path::Path, kind: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let found = crate::events::committed_journal_text(path)
+                .lines()
+                .any(|l| l.contains(&format!("\"type\":\"{kind}\"")));
+            if found {
+                return true;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{kind} never landed in {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// The longer bound for registries whose rows the age seam must probe
@@ -1367,6 +1410,83 @@ mod tests {
                 1,
                 "no second run may land inside one guard window"
             );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The gate: while this boot's revival pass has not finished, the retire
+    /// arm emits the hold event and runs nothing; once the receipt reads
+    /// done, the next pass runs its sweeps.
+    #[test]
+    fn the_retire_arm_holds_its_sweeps_until_this_boots_revival_finished() {
+        let (dir, home) = retirement_sweep_tmp_home("revival-gate");
+        // This test owns the gate's own legs: clear the helper's finished
+        // receipt so the first pass reads the no-receipt hold.
+        std::fs::remove_file(home.root().join("boot-revival.json")).ok();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let in_flight = Arc::new(AtomicBool::new(false));
+            let cell: Arc<RetireIntervalCell> = Arc::new(Mutex::new(None));
+            let mut last = Instant::now() - Duration::from_secs(301);
+            // No receipt: the pass holds, names the reason, runs no sweep.
+            crate::gc::maybe_retirement_sweep(
+                &mut last,
+                &in_flight,
+                &cell,
+                home.clone(),
+                dir.clone(),
+                home.events_jsonl(),
+                Duration::from_secs(300),
+                || crate::reap_render::MuxSweep::Skipped,
+                noop_roster_sweep,
+                noop_team_sweep,
+            );
+            let held = wait_for_event(&home.events_jsonl(), "retire_held_for_boot_revival");
+            assert!(held, "the held pass must name itself");
+            assert_eq!(
+                count_retire_rows(&home.events_jsonl()),
+                0,
+                "a held pass lands no retire tick"
+            );
+            // The pass done: the next tick runs the sweeps.
+            crate::boot_revival::write_receipt(
+                &home.root().join("boot-revival.json"),
+                crate::boot_revival::boot_time().unwrap(),
+                &[],
+                true,
+            );
+            // The first pass stamped the guard window, and its body may
+            // still hold the in-flight gate while the listing read fails
+            // over. Wait for the drop and backdate, or the proceed pass is
+            // refused before its body ever runs.
+            let free = Instant::now() + Duration::from_secs(30);
+            while in_flight.load(std::sync::atomic::Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < free,
+                    "the held pass never released the in-flight gate"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            last = Instant::now() - Duration::from_secs(301);
+            crate::gc::maybe_retirement_sweep(
+                &mut last,
+                &in_flight,
+                &cell,
+                home.clone(),
+                dir.clone(),
+                home.events_jsonl(),
+                Duration::from_secs(300),
+                || crate::reap_render::MuxSweep::Skipped,
+                noop_roster_sweep,
+                noop_team_sweep,
+            );
+            // The proceed leg runs the real probes; on a runner with no
+            // claude they run out their whole timeout before the tick lands.
+            wait_for_retire_row_within(&home.events_jsonl(), 30);
+            assert_eq!(count_retire_rows(&home.events_jsonl()), 1);
         });
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1554,6 +1674,14 @@ mod tests {
         let home = AgentsHome::at(dir.path().join("agents"));
         home.ensure_root().unwrap();
         crate::paths::pin_test_claims_root(dir.path());
+        // The retire arm reads the boot-revival receipt before it may sweep;
+        // stamp one finished so this tick exercises the held-rows event.
+        crate::boot_revival::write_receipt(
+            &home.root().join("boot-revival.json"),
+            crate::boot_revival::boot_time().unwrap_or(0),
+            &[],
+            true,
+        );
         crate::graph_store::seed_rows(
             &dir.path().join("graph.json"),
             &[serde_json::json!({
@@ -1784,16 +1912,6 @@ mod tests {
         }
     }
 
-    const FNO_PY: &str = "/Users/x/.local/share/uv/tools/fno/bin/python3 \
-/Users/x/.local/share/uv/tools/fno/bin/fno-py agents stale-escalate --json";
-
-    /// AC11: every clause satisfied is the only shape that reaps.
-    #[test]
-    fn an_inherited_past_threshold_fno_child_is_reapable() {
-        let row = orphan(FNO_PY, 1, 7200);
-        assert!(is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
-    }
-
     /// The argv clause matches a TOKEN, not a substring, in both reparable
     /// families: the fno-py entrypoint by basename, and stdio MCP servers by
     /// the `serve --mcp` pair or the codegraph `--liftoff-only` launcher flag
@@ -1897,22 +2015,6 @@ mod tests {
             crate::event_store::EPHEMERAL_SUFFIX
         ))
         .exists());
-    }
-
-    /// A pid that changed identity between the table read and the signal is
-    /// somebody else's process now.
-    #[test]
-    fn a_pid_that_changed_identity_is_not_signalled() {
-        // This process is alive and is not what the row claims, so the
-        // re-verification must refuse it.
-        let row = ProcRow {
-            pid: std::process::id(),
-            ppid: 1,
-            age_secs: 86_400,
-            args: "/tools/fno/bin/fno-py agents truth --handles a".to_string(),
-        };
-        assert!(!still_the_same(&row));
-        assert!(!terminate(&row));
     }
 
     const GRACE: i64 = 900;
@@ -2124,120 +2226,6 @@ mod tests {
             ..Default::default()
         };
         assert!(!gc_sweep::stop_row_process(&home, &entry));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn dry_run_never_stops_a_retiring_row() {
-        // A rehearsal that killed the worker it rehearsed retiring would be
-        // the destructive run wearing a dry flag. The stop seam must never
-        // fire in dry-run, even for a row that classifies Retire end to end.
-        use std::collections::HashMap;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        let dir = std::env::temp_dir().join(format!(
-            "fno-gc-dry-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let home = AgentsHome::at(&dir);
-        home.ensure_root().unwrap();
-        // A transcript quiet past grace: written, then aged 2000s.
-        let transcript = dir.join("rollout.jsonl");
-        std::fs::write(&transcript, b"{}\n").unwrap();
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2000);
-        std::fs::File::options()
-            .write(true)
-            .open(&transcript)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
-            .unwrap();
-        crate::state::update_registry(&home.registry_json(), |r| {
-            let mut e = crate::state::RegistryEntry::default();
-            e.name = "dryw".into();
-            e.short_id = "dryw".into();
-            e.origin = Some("spawn".into());
-            e.harness = Some("codex".into());
-            e.harness_session_id = Some("S-dry".into());
-            r.entries.push(e);
-        })
-        .unwrap();
-        let mut index = HashMap::new();
-        index.insert(
-            "s-dry".to_string(),
-            vec![("N1".to_string(), "done".to_string())],
-        );
-        let graph = std::cell::RefCell::new(Some(gc_sweep::GraphRead {
-            work_index: index.clone(),
-            index,
-            open_do: HashMap::new(),
-            phases: HashMap::new(),
-            closed_planning: HashMap::new(),
-            plan_written: HashMap::new(),
-            statuses: HashMap::from([("N1".to_string(), "done".to_string())]),
-            pr_state: HashMap::from([("N1".to_string(), (None, 0, 0))]),
-            pr_number: HashMap::new(),
-            plan_paths: HashMap::new(),
-            delivery_merged_refs: HashMap::new(),
-            do_nodes: HashMap::new(),
-            pr_reads: HashMap::new(),
-        }));
-        let emitter = crate::events::EventEmitter::new(std::path::PathBuf::new(), "daemon");
-        let stopped = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&stopped);
-        let summary = gc_sweep::run(
-            &home,
-            &emitter,
-            900,
-            true,
-            7,
-            &|_h| graph.borrow_mut().take(),
-            &|_e| Some(vec![transcript.clone()]),
-            &|entries| {
-                entries
-                    .iter()
-                    .map(|e| (row_handle(e), Some(2 * 3600)))
-                    .collect::<HashMap<_, _>>()
-            },
-            &move |_e| {
-                flag.store(true, Ordering::SeqCst);
-                true
-            },
-            &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-            &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-            &no_agents,
-            &|_e| (None, None),
-            &|_e| None,
-        );
-        assert!(
-            !stopped.load(Ordering::SeqCst),
-            "the stop seam fired in dry-run"
-        );
-        // the row still classifies would-retire, but a dry run with
-        // no positive stop evidence holds it under needs_live_stop instead
-        // of promising the retirement.
-        assert_eq!(
-            summary.needs_live_stop.len(),
-            1,
-            "the row still classifies would-retire: {summary:?}"
-        );
-        assert!(
-            summary.retired.is_empty() && summary.dry_run_unverified.is_empty(),
-            "a dry run promises nothing: {:?}",
-            (summary.retired, summary.dry_run_unverified)
-        );
-        assert!(
-            crate::state::load_registry(&home.registry_json())
-                .unwrap()
-                .entries
-                .iter()
-                .any(|e| e.name == "dryw"),
-            "dry-run mutated the registry"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

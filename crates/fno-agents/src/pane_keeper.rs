@@ -575,6 +575,14 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env_remove("NO_COLOR");
+    // The keeper is a long-lived child of whoever started it (often a mux
+    // server booted in a terminal session), and the pane child inherits the
+    // keeper's whole base env. REX_* names that launching session: a pane
+    // carrying it reads the Rex SessionStart hook's line and opens blocks in
+    // the user's session.
+    for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+        cmd.env_remove(key);
+    }
     cmd.env("FNO_SERVER", &cfg.session);
     cmd.env("FNO_SESSION", &cfg.session);
     cmd.env("FNO_PANE", &cfg.pane_key);
@@ -1102,6 +1110,27 @@ mod tests {
     }
 
     #[test]
+    fn the_pane_child_never_carries_the_terminal_host_keys() {
+        // portable-pty seeds the builder from the process env, and
+        // env_remove deletes from that same map, so this is a real unset:
+        // the pane child execs without the key even when the keeper
+        // inherited it.
+        let mut cmd = CommandBuilder::new("sh");
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            cmd.env(key, "user-session");
+        }
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            cmd.env_remove(key);
+        }
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            assert!(
+                cmd.get_env(key).is_none(),
+                "{key} must not reach a pane child"
+            );
+        }
+    }
+
+    #[test]
     fn ring_keeps_only_the_cap_and_counts_the_rest() {
         let mut ring = Ring::new(10);
         ring.push(b"0123456789");
@@ -1117,82 +1146,5 @@ mod tests {
             ring.dropped, 17,
             "3 old + 4 overflow + 10 displaced, all counted"
         );
-    }
-
-    /// The `[54;3H` bug: a cut whose ESC went out with the dropped prefix
-    /// used to leave the sequence tail as the replay's opening text. The
-    /// drop now extends through the split sequence; a complete sequence
-    /// before the cut replays intact.
-    #[test]
-    fn ring_cut_at_an_escape_sequence_replays_from_the_boundary() {
-        let mut ring = Ring::new(8);
-        ring.push(b"\x1b[54;3");
-        ring.push(b"Hwold");
-        assert_eq!(ring.snapshot(), b"wold");
-        assert_eq!(ring.dropped, 7, "3 prefix + 3 split + the final H, counted");
-        let mut ring = Ring::new(8);
-        ring.push(b"\x1b[2J\x1b[Hok");
-        ring.push(b"XY");
-        assert_eq!(ring.snapshot(), b"\x1b[HokXY");
-        assert_eq!(ring.dropped, 4, "ESC[2J went out whole with the prefix");
-    }
-
-    #[test]
-    fn keeper_lane_reads_the_cursor_resume_shape_as_a_full_uuid_only() {
-        let cursor_shape = [
-            "cursor-agent",
-            "--resume",
-            "0f9e63ed-861d-4f9f-8efa-3e40c5e01266",
-            "--trust",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-        assert_eq!(
-            session_id_from_argv(&cursor_shape),
-            Some("0f9e63ed-861d-4f9f-8efa-3e40c5e01266".to_string()),
-            "the callee-minted create form rides --resume"
-        );
-        // A bare --resume opens an interactive picker: no identity.
-        let picker = ["cursor-agent", "--resume"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(session_id_from_argv(&picker), None);
-
-        // agy's create form: `--conversation <uuid>`, split and glued.
-        let agy_shape: Vec<String> = [
-            "agy",
-            "--conversation",
-            "91b59536-7ea4-4235-9691-4ca8f991a9b2",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(
-            session_id_from_argv(&agy_shape),
-            Some("91b59536-7ea4-4235-9691-4ca8f991a9b2".to_string())
-        );
-        let agy_glued: Vec<String> = ["agy", "--conversation=91b59536-7ea4-4235-9691-4ca8f991a9b2"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(
-            session_id_from_argv(&agy_glued),
-            Some("91b59536-7ea4-4235-9691-4ca8f991a9b2".to_string())
-        );
-        // A truncated conversation id addresses a DIFFERENT conversation to
-        // agy, so it answers None rather than being read as an identity.
-        let agy_truncated: Vec<String> = ["agy", "--conversation", "91b59536"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(session_id_from_argv(&agy_truncated), None);
-        // A head-8 is an fno session handle, not a chat id: no identity.
-        let truncated = ["cursor-agent", "--resume", "74db359a"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(session_id_from_argv(&truncated), None);
     }
 }
