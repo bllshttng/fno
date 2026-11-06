@@ -6,6 +6,17 @@
 //! daemon.rs at shrink-only, so message construction lives here instead of
 //! growing the handler.
 
+pub(crate) fn self_removal(
+    name: &str,
+    row_session: Option<&str>,
+    current_session: Option<&str>,
+) -> Option<String> {
+    let current = current_session.filter(|id| !id.trim().is_empty())?;
+    (row_session == Some(current)).then(|| {
+        format!("agent {name} names this session; a worker cannot remove its own registry row")
+    })
+}
+
 /// Build the Busy-refusal detail for a stored-live claude background thread.
 /// `row` is the harness row id (or the `(no harness row id)` placeholder);
 /// `row_present` only means something when `roster_known` holds; `warnings`
