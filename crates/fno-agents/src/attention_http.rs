@@ -987,9 +987,10 @@ mod tests {
         Instant::now() + std::time::Duration::from_secs(60)
     }
 
-    // The wire contract with ntfy's JSON publish: every action body is a
-    // string and priority an integer. Two 400s came from breaking this
-    // shape (priority as a word, then the action body as an object).
+    // The wire contract with ntfy's JSON publish: every http action body is
+    // a string and priority an integer; a view action carries only a url.
+    // Two 400s came from breaking this shape (priority as a word, then the
+    // action body as an object).
     #[test]
     fn ntfy_actions_carry_string_bodies_and_an_integer_priority() {
         let sink = ntfy_sink();
@@ -1010,8 +1011,16 @@ mod tests {
             let actions = body["actions"].as_array().expect("actions array");
             assert!(!actions.is_empty());
             for action in actions {
+                assert!(action["action"] == "http" || action["action"] == "view");
+                if action["action"] == "view" {
+                    assert!(action["url"].is_string(), "a view action carries its url");
+                    continue;
+                }
                 let text = action["body"].as_str().unwrap_or_else(|| {
-                    panic!("action body must be a JSON string, got {}", action["body"])
+                    panic!(
+                        "http action body must be a JSON string, got {}",
+                        action["body"]
+                    )
                 });
                 let inner: Value = serde_json::from_str(text).expect("body content parses as JSON");
                 assert!(
