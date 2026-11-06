@@ -54,9 +54,7 @@ Reading them from `$HOME` would make them differ between the two lanes below, an
 
 ### The channel an env fixture cannot close
 
-`_carveout_ledger_root` resolves from the caller's **CWD** via `git worktree list`.
-No environment variable bounds that, so the carve-out channel is closed at the reader (`_hermetic_promise_carveout_gate` in `tests/py/conftest.py`) for the pytest tree, and by running from a non-worktree directory for a shell test.
-This is a real limit of the env-level cure, stated here rather than papered over.
+`_carveout_ledger_root` resolves from the caller's **CWD** via `git worktree list`. No environment variable bounds that. The pytest tree closes the carve-out channel at the reader (`_hermetic_promise_carveout_gate` in `tests/py/conftest.py`). A shell test closes it by running from a non-worktree directory. This is a real limit of the env-level cure, stated here rather than papered over.
 
 ### The channel a pin cannot reach: a hand-built path
 
@@ -77,8 +75,7 @@ The same rule covers the operator's screen. The notify dispatch owner (`crates/f
 - every `bash tests/*.sh` step in the smoke registry, via `_smoke_env`
 - `cargo nextest` / `cargo test`, per crate
 
-One `neutralise` call there covers all three.
-No shell mirror and no Rust mirror exist, so none can drift: a guard placed on one of N reachable paths is decorative.
+One `neutralise` call there covers all three. No shell mirror and no Rust mirror exist, so none can drift: a guard placed on one of N reachable paths is decorative.
 
 `tests/py/conftest.py` additionally applies the `fno-agents test-run env` answer **at module load**, which covers a developer running a bare `pytest tests/py`. Module load rather than a fixture, because a helper can freeze a path at import time, and a fixture is already too late.
 
@@ -93,8 +90,7 @@ Neutralising alone cannot detect a test that reads ambient state, because afterw
 - If the surface is complete, `neutralise(poison(E)) == neutralise(E)`, the child is identical to the clean lane, and the dirty lane is green.
 - If the surface missed a name, that name survives the copy into the child, a test that reads it sees an `fno-poison-*` sentinel, and it fails **naming itself**.
 
-A green clean lane beside a red dirty lane on the same commit is the divergence; no diffing machinery is needed, and the failing test id is the attribution.
-The invariant this rests on is asserted directly by the unit tests in `crates/fno-agents/src/test_env.rs`, not inferred from a green suite.
+A green clean lane beside a red dirty lane on the same commit is the divergence; no diffing machinery is needed, and the failing test id is the attribution. The invariant this rests on is asserted directly by the unit tests in `crates/fno-agents/src/test_env.rs`, not inferred from a green suite.
 
 The poison profile (`tests/py/fixtures/ambient-poison/`) is derived from the three measured specimens.
 Values are sentinels rather than plausible data: a leak has to fail loudly, and a realistic value might quietly pass and teach nobody anything.
@@ -128,7 +124,7 @@ The final populated full smoke run completed with 18,789 passed, 127 skipped, an
 
 ## Cached declared state
 
-The R5 guard walked every `lru_cache` and `cache` decorator under `cli/src/fno`, so a cached declared-state reader could not outlive a test's root. That tree is deleted, and the guard went with it. A Rust reader that caches declared state keys the cache on the declared root, and the reader's own unit test pins that.
+The R5 guard walked every `lru_cache` and `cache` decorator under `cli/src/fno`, so a cached declared-state reader did not outlive a test's root. That tree is deleted, and the guard went with it. A Rust reader that caches declared state keys the cache on the declared root, and the reader's own unit test pins that.
 
 ## State accessor fence
 
@@ -154,7 +150,7 @@ The rule names the directory, not a state root. `STATE_DIR` cannot be read here.
 
 The Rust runtime carries the same rule inside the lib crate, and only there. `AgentsHome::from_env` and `durable_spaces_root` refuse the ambient `$HOME` fallback under `cfg!(test)` unless a root is declared, because `cargo test` sandboxes no `HOME`. A test declares one with `paths::DeclaredRoot`, which pins `FNO_SPACES_DIR` and `FNO_AGENTS_HOME` under `std::env::temp_dir()` and restores them on drop.
 
-The fno porcelain follows the same rule. Under `cfg!(test)`, `scrape::fno_bin` and `loopcheck::loopcheck_fno_bin` answer only a declared `FNO_BIN` / `FNO_LOOPCHECK_FNO_BIN`; undeclared, each answers a path that cannot exec. A raw `cargo test` inherits the calling session's identity, and the installed fno's parent push would mail that session a false `[fno:blocked]` alarm, which is exactly what two distress lib tests did to a lead session on 2026-09-21.
+The fno porcelain follows the same rule. Under `cfg!(test)`, `scrape::fno_bin` and `loopcheck::loopcheck_fno_bin` answer only a declared `FNO_BIN` / `FNO_LOOPCHECK_FNO_BIN`. Undeclared, each answers a path that cannot exec. A raw `cargo test` inherits the calling session's identity. The installed fno's parent push then mails that session a false `[fno:blocked]` alarm. Two distress lib tests did exactly that to a lead session on 2026-09-21.
 
 Two resolvers, not every resolver. `claims::global_claims_root` carries the same `$HOME` fallback and is unfenced, so a bare `cargo test --lib` still creates `$HOME/.fno/claims`. That was measured on 2026-09-07. The poisoned-HOME canary is what catches it, so this page names the gap instead of claiming it closed.
 

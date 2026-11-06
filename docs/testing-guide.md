@@ -501,7 +501,7 @@ Before resetting a `COMPLETE` or `BLOCKED` state file, the helper checks the `cr
 - Enforces the interactive spend cap
 - Checks the routed model against the attested one
 
-**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs`; the skill-local probe is a shim over the command):**
+**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs`. The skill-local probe is a shim over the command.):**
 
 - Counts tokens from the transcript and reports `used_pct` against a per-family window
 

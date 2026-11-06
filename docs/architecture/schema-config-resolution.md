@@ -1,13 +1,13 @@
 # Schema and config resolution from a foreign cwd
 
-How `fno` finds its events schema and resolves project and config paths when it runs from a directory that is not the footnote checkout, and why those two concerns stay decoupled.
+This page covers how `fno` finds its events schema and resolves project and config paths from a foreign cwd. A foreign cwd is any directory outside the footnote checkout. It also says why those two concerns stay decoupled.
 
 ## The problem
 
 `fno` ships inside the footnote plugin but runs from any repo. Two resolution paths once broke from a foreign cwd.
 
 1. **Schema resolution.** The bash event validator loaded the schema from a file in the checkout. From a repo that did not vendor that file, it found the schema only through `FNO_REPO_ROOT` or `CLAUDE_PLUGIN_ROOT`. Neither is set in a plain terminal, so a gate write refused with `schema unavailable`.
-2. **Config resolution.** The workaround an operator reaches for, `export FNO_REPO_ROOT=<footnote checkout>`, is an overloaded lever. Project and config resolution read `FNO_REPO_ROOT` first. So exporting it to fix the schema also repoints every `fno config get` at the footnote project instead of the cwd repo. That read is wrong and silent.
+2. **Config resolution.** The workaround an operator reaches for, `export FNO_REPO_ROOT=<footnote checkout>`, is an overloaded lever. Project and config resolution read `FNO_REPO_ROOT` first. So exporting it to fix the schema also repoints every `fno config get` at the footnote project. That read is wrong and silent.
 
 ## The schema is compiled in
 
@@ -17,7 +17,7 @@ How `fno` finds its events schema and resolves project and config paths when it 
 
 ## FNO_REPO_ROOT scopes project and config only
 
-`crates/fno-agents/src/paths.rs` reads `FNO_REPO_ROOT` first when it resolves the repo root, for tests and CI where git is unavailable. Since the schema no longer needs it, `FNO_REPO_ROOT` has one job: project and config scoping. Do not export it from inside another repo. It repoints `fno config get` at the pinned project.
+`crates/fno-agents/src/paths.rs` reads `FNO_REPO_ROOT` first to resolve the repo root, for tests and CI where git is unavailable. Since the schema no longer needs it, `FNO_REPO_ROOT` has one job: project and config scoping. Do not export it from inside another repo. It repoints `fno config get` at the pinned project.
 
 ## Files
 

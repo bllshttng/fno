@@ -49,8 +49,7 @@ Selection is deterministic and every hit names the rule that produced it, so a b
 | `rust-family` | `crates/<crate>/**` | the registry steps that own the crate |
 | `infra-broad` | the runner, the selector, shared test config, a workflow | the selector's own contract tests |
 
-Anything else is listed as `unmapped` and selects nothing.
-Inference is best effort, and the full gate, not the selector, is the completeness backstop.
+Anything else is listed as `unmapped` and selects nothing. Inference is best effort, and the full gate, not the selector, is the completeness backstop.
 
 Three mechanisms keep a partial green from reading as a full one.
 The header says `CHANGED SUBSET` and never `FULL`.

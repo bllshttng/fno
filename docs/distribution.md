@@ -21,8 +21,7 @@ exercised for the Phase 7+ deferral.
 
 ### Crate names
 
-`fno-agents` (crates.io) and `fno` (PyPI) are the real publish targets. They live in
-**separate registries** and do not collide with each other. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno`.
+`fno-agents` (crates.io) and `fno` (PyPI) are the real publish targets. They live in **separate registries** and do not collide with each other. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno`.
 
 ## The bridge wheel
 
@@ -85,8 +84,6 @@ Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The reh
   - **Bump-on-script-change:** the deployed `fno.sh` is byte-identical to this repo's `scripts/install/fno.sh`. The fno-web Worker serves it and owns none of its logic. When this script changes, treat the change as a deliberate, tagged, redeployed event. Promote a stable (creating the `vX.Y.Z` tag). Bump the Worker's `INSTALL_SCRIPT_URL` pin to that tag. Redeploy `fno.sh`. That tag-bump cost is the intended consequence of pinning the served script to a tag.
 - [x] brew channel: the own tap repo is created, with `Formula/fno.rb` built from `scripts/install/homebrew/fno.rb`. The tap serves 0.3.1 for macOS. Each stable promotion re-bumps `url` and `sha256`. The 0.4.0 bump lands with that promotion's tap step. Move the tap by GitHub repo transfer + redirect. Never delete it. Deleting the old repo breaks that redirect, and every installed user resolves through it.
 
-Version lockstep is no longer hand-maintained: `scripts/release/sync-version.sh` is the
-single propagation point, and `--check` is the drift guard that fails when any surface
-lags the release version.
+Version lockstep is no longer hand-maintained. `scripts/release/sync-version.sh` is the single propagation point. Its `--check` is the drift guard. If any surface lags the release version, the check fails.
 
 The one exception is `buddy`: it versions on its own (0.0.1 today). Its marketplace entry tracks `main`, not the `stable` ref. A buddy release is a PR that bumps `plugins/buddy/.claude-plugin/plugin.json`, never an fno stable promotion.

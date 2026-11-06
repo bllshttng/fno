@@ -206,10 +206,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 Blockers: `blocked_by=`, `blocked_by+=`, `blocked_by-=` on `update`.
 A node with an open blocker derives to `status: blocked` automatically.
 
-**Every transition here has a correction.**
-An inverse that nothing a caller reads ever names is as bad as a missing one.
-`fno backlog remove` existed and worked for a long time while nothing mentioned it.
-An agent therefore ruled that no delete command existed, and another project kept 23 nodes it believed un-file-able.
+**Every transition here has a correction.** An inverse that nothing a caller reads ever names is as bad as a missing one. `fno backlog remove` existed and worked for a long time while nothing mentioned it. An agent therefore ruled that no delete command existed, and another project kept 23 nodes it believed un-file-able.
 
 Reopening is guarded rather than free.
 When a referenced PR is MERGED, `reopen` refuses.

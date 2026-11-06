@@ -21,7 +21,7 @@ Lead responses with the next action, number multi-step work, give concrete time 
 6. **Comments earn their place.** Match the surrounding file's comment density and idiom; add one only for a non-obvious invariant, race, or why-not-the-obvious. Never ticket/PR/node IDs. `scripts/ci/check-no-internal-refs.sh` fails on node IDs, prose and code alike; bare ticket and PR numbers still have no gate.
 7. **Reproduce before you fix.** Reproduce a bug end-to-end on the real user path before editing; the repro is also the proof the fix landed. When a UI is in the loop, exercise it and be picky (see #4).
 8. **Quality outweighs cost.** Prefer quality, simplicity and robustness over effort; never overrides #2.
-9. **Delete a leg, never a harness forcing two to agree.** Protocol: [dual-implementation-inventory](docs/architecture/dual-implementation-inventory.md). The Python runtime is gone, so `crates/` is the one leg. Plans check the inventory for any surface a skill, hook or script still duplicates, cite it by file:line or rg-absent, and explain one-leg fixes.
+9. **Delete a leg, never a harness forcing two to agree.** Protocol: [dual-implementation-inventory](docs/architecture/dual-implementation-inventory.md). The Python runtime is gone, so `crates/` is the one leg. Plans check the inventory for any surface that a skill, hook or script still duplicates. Cite it by file:line or rg-absent, and explain one-leg fixes.
 
 ## Pitfalls corpus (capped)
 
@@ -120,7 +120,7 @@ NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / 
 | `<space>/worktrees/<name>/STATE.md` / `SUMMARY.md` / `00-INDEX.md` | repo space | Wave progress / completion / strategy | /execute, operator, /blueprint |
 | `{plan_path}.artifacts/` | plan-relative | Quick-plan sidecar | target stop hook |
 
-Paths resolve via `crates/fno-agents/src/paths.rs`; override under `config.paths.*`; check with `fno config doctor`. [path-config](docs/path-config.md). A state-root TOP-LEVEL write needs an owner + lifetime in [state-root-inventory](docs/state-root-inventory.md); session-keyed files go in a subfolder.
+Paths resolve via `crates/fno-agents/src/paths.rs`. Override them under `config.paths.*`, and check them with `fno config doctor`. [path-config](docs/path-config.md). A state-root TOP-LEVEL write needs an owner + lifetime in [state-root-inventory](docs/state-root-inventory.md). Session-keyed files go in a subfolder.
 
 ### Ship vocabulary
 
