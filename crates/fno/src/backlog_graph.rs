@@ -115,26 +115,29 @@ pub fn graph(inp: &Inputs, cards: &[Card], requested_focus: Option<&str>) -> Opt
 
     let mut by_layer: BTreeMap<u16, Vec<GraphNode>> = BTreeMap::new();
     let mut done_counts: HashMap<&str, usize> = HashMap::new();
-    let mut done_kinds: HashSet<(String, EdgeKind)> = HashSet::new();
+    let mut done_owners: HashMap<&str, &str> = HashMap::new();
     for card in &ordered {
         let Some(&layer) = family_layers.get(card.id.as_str()) else {
             continue;
         };
-        let parent = tree_parent(&card.id);
         if card.column == "Done" && card.id != root {
-            if let Some(parent) = parent {
+            let mut current = card.id.as_str();
+            let mut ancestors = HashSet::new();
+            let mut owner = None;
+            while ancestors.insert(current) {
+                let Some(parent) = tree_parent(current).filter(|id| card_by_id.contains_key(id))
+                else {
+                    break;
+                };
+                if parent == root || card_by_id[parent].column != "Done" {
+                    owner = Some(parent);
+                    break;
+                }
+                current = parent;
+            }
+            if let Some(parent) = owner {
+                done_owners.insert(card.id.as_str(), parent);
                 *done_counts.entry(parent).or_default() += 1;
-                let kind = row_by_id
-                    .get(card.id.as_str())
-                    .map(|row| {
-                        if field_id(row, "contained_in") == Some(parent) {
-                            EdgeKind::Contained
-                        } else {
-                            EdgeKind::Parent
-                        }
-                    })
-                    .unwrap_or(EdgeKind::Parent);
-                done_kinds.insert((parent.to_string(), kind));
                 continue;
             }
         }
@@ -168,21 +171,27 @@ pub fn graph(inp: &Inputs, cards: &[Card], requested_focus: Option<&str>) -> Opt
         let Some(row) = row_by_id.get(card.id.as_str()) else {
             continue;
         };
+        let child = done_owners
+            .get(card.id.as_str())
+            .map(|owner| format!("done:{owner}"))
+            .unwrap_or_else(|| card.id.clone());
         for (field, kind) in [
             ("parent", EdgeKind::Parent),
             ("contained_in", EdgeKind::Contained),
         ] {
             for parent in field_ids(row, field) {
-                if family_layers.contains_key(parent) {
-                    edges.push(GraphEdge {
-                        from: parent.to_string(),
-                        to: card.id.clone(),
-                        kind,
+                let parent = done_owners
+                    .get(parent)
+                    .map(|owner| format!("done:{owner}"))
+                    .or_else(|| {
+                        family_layers
+                            .contains_key(parent)
+                            .then(|| parent.to_string())
                     });
-                } else if done_counts.contains_key(parent) {
+                if let Some(parent) = parent.filter(|parent| *parent != child) {
                     edges.push(GraphEdge {
-                        from: parent.to_string(),
-                        to: format!("done:{parent}"),
+                        from: parent,
+                        to: child.clone(),
                         kind,
                     });
                 }
@@ -246,20 +255,6 @@ pub fn graph(inp: &Inputs, cards: &[Card], requested_focus: Option<&str>) -> Opt
             stub: Some(Stub::Outside),
             card: None,
         });
-    }
-
-    for (parent, kind) in done_kinds {
-        let target = format!("done:{parent}");
-        if !edges
-            .iter()
-            .any(|edge| edge.to == target && edge.kind == kind)
-        {
-            edges.push(GraphEdge {
-                from: parent,
-                to: target,
-                kind,
-            });
-        }
     }
 
     for nodes in by_layer.values_mut() {

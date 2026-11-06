@@ -102,6 +102,36 @@ fn graph_board_returns_the_focused_family_and_collapses_done_children() {
             "missing {edge}"
         );
     }
+
+    let nested = fixture(vec![
+        json!({"id": "x-e", "status": "in_progress", "type": "epic"}),
+        json!({"id": "x-d", "status": "done", "parent": "x-e"}),
+        json!({"id": "x-done", "status": "done", "parent": "x-d"}),
+        json!({"id": "x-open", "status": "ready", "parent": "x-d"}),
+    ]);
+    let nested_graph = board(
+        &nested,
+        &Query::from_pairs(&[
+            ("view".into(), "graph".into()),
+            ("focus".into(), "x-e".into()),
+        ])
+        .unwrap(),
+    )
+    .graph
+    .unwrap();
+    assert!(nested_graph.nodes.iter().any(|node| {
+        node.id == "done:x-e"
+            && matches!(
+                &node.stub,
+                Some(crate::backlog_graph::Stub::Done { count: 2 })
+            )
+    }));
+    assert!(!nested_graph.nodes.iter().any(|node| node.id == "done:x-d"));
+    assert!(nested_graph.edges.iter().any(|edge| {
+        edge.from == "done:x-e"
+            && edge.to == "x-open"
+            && edge.kind == crate::backlog_graph::EdgeKind::Parent
+    }));
 }
 
 #[test]
