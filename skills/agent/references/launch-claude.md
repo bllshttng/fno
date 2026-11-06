@@ -14,7 +14,7 @@ cd <repo-root> && claude --bg --name <name> --model sonnet --effort high --permi
 A route rides a `--settings` file, never your shell env. Ask spawn for the exact line, then run what it prints:
 
 ```bash
-fno agents spawn --name <name> '/fno:target <node>' -P zai -m 'glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print
+fno agents spawn --name <name> '/fno:target <node>' --route='zai/glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print
 ```
 
 The print writes the lane's settings file and launches nothing. The line it prints reads `claude --bg --settings <file> --model 'glm-5.3-flash[1m]' ...`. Drop `--print` to have spawn run the same line for you.

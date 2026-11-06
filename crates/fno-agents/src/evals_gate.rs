@@ -30,6 +30,12 @@
 //! a pass: no result by the limit, or a spent budget, is red and names the
 //! cause and the clearing command. A baseline the compare cannot answer reads
 //! pending, never red: the head re-runs once a main run covers its tasks.
+//!
+//! **The settle.** Grading a finished run also runs outside the tick, on the
+//! daemon's one-minute `evals_settle` sweep: a fleet-loaded sweep saturates
+//! the tick's budget, and a green run once waited over an hour for a tick
+//! with room. Both graders take the state-dir settle lock, so one finished
+//! run grades exactly once; an idle gate costs the sweep one state read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -326,6 +332,75 @@ fn save_state(dir: &Path, state: &State) {
     let tmp = dir.join(format!("state.json.{}", std::process::id()));
     if std::fs::write(&tmp, text).is_ok() {
         let _ = std::fs::rename(&tmp, dir.join("state.json"));
+    }
+}
+
+/// The settle lock: the tick's gate pass and the daemon's minute settle both
+/// grade finished runs from one `state.json`, and the lock admits one grader
+/// per finished run - without it, a tick landing the same second the daemon
+/// settles posts the verdict twice and files the regression nodes twice. It
+/// lives beside the state it guards, so both drivers resolve it from the one
+/// history path. A holder that died mid-grade loses it: a dead pid at once,
+/// any holder past the two-minute wall. Either way - acquired or held - the
+/// caller's state is re-read: another grader may have settled the run while
+/// this pass loaded stale state, and a grader that graded its stale clone
+/// would post the verdict twice. `None` says "nothing here for you".
+struct SettleLock {
+    path: PathBuf,
+    holder: String,
+}
+
+/// A grader whose lock outlived its usefulness: dead pid, or two minutes.
+const SETTLE_LOCK_WALL_S: u64 = 120;
+
+impl SettleLock {
+    fn acquire_or_sync(dir: &Path, state: &mut State) -> Option<Self> {
+        // A gate whose first run never saved state has no dir yet.
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join("settle.lock");
+        let holder = std::process::id().to_string();
+        for _ in 0..2 {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+            {
+                use std::io::Write as _;
+                let _ = writeln!(file, "{holder}");
+                *state = load_state(dir);
+                return Some(Self { path, holder });
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let held = text.trim().to_string();
+            let dead = held
+                .parse::<u32>()
+                .map(|pid| !crate::evals_arm::pid_alive(pid))
+                .unwrap_or(true);
+            let aged = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > SETTLE_LOCK_WALL_S);
+            if dead || aged {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+            *state = load_state(dir);
+            return None;
+        }
+        *state = load_state(dir);
+        None
+    }
+}
+
+impl Drop for SettleLock {
+    fn drop(&mut self) {
+        if std::fs::read_to_string(&self.path)
+            .map(|t| t.trim() == self.holder)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -985,6 +1060,42 @@ fn ref_bank(p: &Paths, slot: &str) -> PathBuf {
     }
 }
 
+/// The exited main run, graded under the settle lock: whichever driver - the
+/// tick's gate pass or the daemon's minute settle - takes the lock grades it,
+/// and the other re-reads state and finds nothing. `None` reads "still
+/// running, or settled by the other grader just now".
+fn settle_main_run(p: &Paths, d: &Deps, state: &mut State) -> Option<String> {
+    let Some(run) = state.main_run.clone() else {
+        return None;
+    };
+    let alive = (d.alive)(run.pid);
+    if alive && d.now.timestamp() - run.started <= MAIN_LIMIT_S {
+        return None;
+    }
+    let _lock = SettleLock::acquire_or_sync(&p.state_dir, state)?;
+    let Some(run) = state.main_run.clone() else {
+        return None;
+    };
+    let alive = (d.alive)(run.pid);
+    if alive && d.now.timestamp() - run.started <= MAIN_LIMIT_S {
+        return None;
+    }
+    if alive {
+        (d.kill)(run.pid);
+    }
+    state.main_run = None;
+    let seat = if run.seat == LEAD.name {
+        &LEAD
+    } else {
+        &WORKER
+    };
+    let note = finish_main(p, d, state, seat, &run.cohort);
+    // Same self-persistence as the head settle: the minute arm has no
+    // trailing save, and an unpersisted grade would repeat.
+    save_state(&p.state_dir, state);
+    Some(note)
+}
+
 fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd: f64) -> String {
     if let Some(run) = state.main_run.clone() {
         let over = d.now.timestamp() - run.started > MAIN_LIMIT_S;
@@ -992,16 +1103,8 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
         if alive && !over {
             return format!("main {} running", run.cohort);
         }
-        if alive {
-            (d.kill)(run.pid);
-        }
-        state.main_run = None;
-        let seat = if run.seat == LEAD.name {
-            &LEAD
-        } else {
-            &WORKER
-        };
-        return finish_main(p, d, state, seat, &run.cohort);
+        return settle_main_run(p, d, state)
+            .unwrap_or_else(|| format!("main {} running", run.cohort));
     }
     let day = format!(
         "gate-main-{}-{}",
@@ -1380,6 +1483,24 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
         .iter()
         .any(|pr| pr.number == run.pr && pr.sha == run.sha);
     let alive = (d.alive)(run.pid);
+    let over = alive && d.now.timestamp() - run.started > HEAD_LIMIT_S;
+    // A run still in flight on a current head is nobody's settle; skip
+    // before the lock so the minute sweep's cost is one probe.
+    if current && alive && !over {
+        return;
+    }
+    let Some(_lock) = SettleLock::acquire_or_sync(&p.state_dir, state) else {
+        return;
+    };
+    // The state is fresh under the lock: the other grader may have settled
+    // this run while this pass loaded it.
+    let Some(run) = state.head_run.clone() else {
+        return;
+    };
+    let current = prs
+        .iter()
+        .any(|pr| pr.number == run.pr && pr.sha == run.sha);
+    let alive = (d.alive)(run.pid);
     if !current {
         if alive {
             (d.kill)(run.pid);
@@ -1469,6 +1590,9 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     if post_status(p, d, slug, &run.sha, status, &text) {
         state.heads.insert(run.sha.clone(), disposition.into());
         state.head_run = None;
+        // The settle persists itself: the minute arm has no trailing save,
+        // and an unpersisted settle would re-grade and re-post each minute.
+        save_state(&p.state_dir, state);
     }
 }
 
@@ -1664,31 +1788,19 @@ fn spawn_detached(argv: &[String], cwd: &Path, log: &Path) -> Result<u32, String
         .map_err(|e| e.to_string())
 }
 
-/// One pass of both legs. The daemon's tick calls this first, and it never
-/// fails the tick: its note lands in `state.json`.
-pub(crate) fn tick(
-    history: &Path,
-    fno_bin: &str,
-    repo: &Path,
-    graph: Option<&Path>,
-    can_launch: bool,
-) {
+/// The production `Deps` both drivers share: git/gh probes, the detached
+/// spawner, pid liveness and kill, the real zai window. The closures are
+/// locals, so `Deps` borrows them only for the call's scope.
+fn with_live_deps<T>(body: impl FnOnce(&Deps<'_>) -> T) -> T {
     let run = crate::stacked_base_stamp::runner("git", "gh");
-    let paths = Paths {
-        history,
-        fno_bin,
-        repo,
-        state_dir: state_dir(history),
-        graph,
-    };
+    let slot_runner =
+        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let kill = |pid: u32| {
         // SAFETY: the run leads its own session, so -pid is only its group.
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     };
-    let slot_runner =
-        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let deps = Deps {
         run: &run,
         slot_run: &slot_runner,
@@ -1698,11 +1810,91 @@ pub(crate) fn tick(
         room: &real_room,
         now: Utc::now(),
     };
-    tick_with(&paths, &deps, can_launch);
+    body(&deps)
+}
+
+/// One pass of both legs. The daemon's tick calls this first, and it never
+/// fails the tick: its note lands in `state.json`.
+pub(crate) fn tick(
+    history: &Path,
+    fno_bin: &str,
+    repo: &Path,
+    graph: Option<&Path>,
+    can_launch: bool,
+) {
+    let paths = Paths {
+        history,
+        fno_bin,
+        repo,
+        state_dir: state_dir(history),
+        graph,
+    };
+    with_live_deps(|d| tick_with(&paths, d, can_launch));
+}
+
+/// The minute settle's one pass: grade a finished gate run here instead of
+/// waiting for a pr-watch tick with budget left - a fleet-loaded sweep
+/// saturates the tick, and a green run once waited over an hour. Never
+/// launches: launches stay on the tick's gate pass. An idle gate costs one
+/// state read; a run still in flight costs one pid probe. Returns the note
+/// the sweep journals, `"idle"` when nothing is in flight.
+pub(crate) fn daemon_settle(history: &Path, fno_bin: &str, repo: &Path) -> String {
+    let paths = Paths {
+        history,
+        fno_bin,
+        repo,
+        state_dir: state_dir(history),
+        graph: None,
+    };
+    with_live_deps(|d| daemon_settle_with(&paths, d))
+}
+
+/// The injectable core, so the settle's note contract is testable without
+/// git, gh or a live pid table.
+fn daemon_settle_with(paths: &Paths, d: &Deps) -> String {
+    let mut state = load_state(&paths.state_dir);
+    if state.head_run.is_none() && state.main_run.is_none() {
+        return "idle".into();
+    }
+    let mut notes: Vec<String> = Vec::new();
+    {
+        if state.main_run.is_some() {
+            match settle_main_run(&paths, d, &mut state) {
+                Some(note) => notes.push(note),
+                None => notes.push("main in flight".into()),
+            }
+        }
+        if let Some(run) = state.head_run.clone() {
+            let alive = (d.alive)(run.pid);
+            let over = alive && d.now.timestamp() - run.started > HEAD_LIMIT_S;
+            if alive && !over {
+                notes.push(format!("head {} in flight", short(&run.sha)));
+            } else {
+                // One PR read settles it, however the tick's budget sits.
+                let read = crate::stacked_base_stamp::origin_slug(paths.repo, d.run)
+                    .and_then(|slug| open_prs(&paths, d, &slug).map(|prs| (slug, prs)));
+                match read {
+                    Some((slug, prs)) => {
+                        settle_head_run(&paths, d, &mut state, &slug, &prs);
+                        if state.head_run.is_some() {
+                            notes.push(format!("head {} held", short(&run.sha)));
+                        } else {
+                            notes.push("head settled".into());
+                        }
+                    }
+                    None => notes.push("head pr read failed".into()),
+                }
+            }
+        }
+    }
+    if notes.is_empty() {
+        "idle".into()
+    } else {
+        notes.join("; ")
+    }
 }
 
 /// The zero-match answer. Heads on this machine but not this sha is a true
-/// negative; no heads at all means this machine likely never ran the gate, so
 /// the line points at the status that names the owner.
 fn zero_match_line(record_here: bool, prefix: &str, found: usize) -> String {
     let count = format!("gate-retry: {found} heads match {prefix}");
@@ -2759,6 +2951,156 @@ mod tests {
 
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
+    }
+
+    // ── the settle lock ────────────────────────────────────────────────────
+
+    /// Two graders, one finished run: the daemon settles a run whose grading
+    /// tick loaded state before the settle saved. The second grader holds a
+    /// stale clone with `head_run` still set; the lock admits the first and
+    /// the second re-reads state under the lock and finds nothing, so the
+    /// verdict posts once.
+    #[test]
+    fn a_second_grader_holding_a_stale_state_never_reposts_a_settled_run() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        let now = Utc::now();
+        w.state(|s| {
+            s.head_run = Some(HeadRun {
+                pr: 7,
+                sha: SHA.into(),
+                cohort: cohort.clone(),
+                pid: 4242,
+                started: (now - chrono::Duration::seconds(30)).timestamp(),
+                tasks: vec!["g1".into()],
+                skipped: Vec::new(),
+                built: true,
+            });
+        });
+        let posts = RefCell::new(Vec::<String>::new());
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["gh", "api", "--method", "POST", _, "-f", _, _, _, _, _] => {
+                    posts.borrow_mut().push("posted".into());
+                    ok("{}")
+                }
+                _ => ok("{}"),
+            }
+        };
+        let is_alive = |_: u32| false;
+        let noop_kill = |_: u32| {};
+        let noop_room = |_: &Path, _: DateTime<Utc>| Some(true);
+        let deps = Deps {
+            run: &run,
+            slot_run: &run,
+            spawn: &|_, _, _| Ok(0),
+            alive: &is_alive,
+            kill: &noop_kill,
+            room: &noop_room,
+            now,
+        };
+        let paths = Paths {
+            history: &w.history(),
+            fno_bin: "fno",
+            repo: w.dir.path(),
+            state_dir: dir_of(&w),
+            graph: None,
+        };
+        let slug = "o/r";
+        let prs = vec![Pr {
+            number: 7,
+            sha: SHA.into(),
+            armed: false,
+        }];
+        let mut state = load_state(&paths.state_dir);
+        settle_head_run(&paths, &deps, &mut state, slug, &prs);
+        assert_eq!(posts.borrow().len(), 1, "the first grader posts");
+        let settled = load_state(&paths.state_dir);
+        assert!(settled.head_run.is_none(), "the run cleared");
+
+        // The racing grader loaded state before the settle saved. Its stale
+        // clone still carries the run; the lock is free now (the first
+        // grader released), so it acquires, re-reads, and finds nothing.
+        let mut stale = load_state(&paths.state_dir);
+        stale.head_run = Some(HeadRun {
+            pr: 7,
+            sha: SHA.into(),
+            cohort: cohort.clone(),
+            pid: 4242,
+            started: (now - chrono::Duration::seconds(30)).timestamp(),
+            tasks: vec!["g1".into()],
+            skipped: Vec::new(),
+            built: true,
+        });
+        settle_head_run(&paths, &deps, &mut stale, slug, &prs);
+        assert_eq!(posts.borrow().len(), 1, "the stale grader must not repost");
+        // And it synced: the stale clone's run is gone after the re-read.
+        assert!(stale.head_run.is_none());
+    }
+
+    /// The daemon's minute settle settles a finished head run without any
+    /// pr-watch tick: one gh read, one verdict post, the run cleared.
+    #[test]
+    fn the_minute_settle_grades_a_finished_head_run_within_one_pass() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        let now = Utc::now();
+        w.state(|s| {
+            s.head_run = Some(HeadRun {
+                pr: 7,
+                sha: SHA.into(),
+                cohort: cohort.clone(),
+                pid: 4242,
+                started: (now - chrono::Duration::seconds(30)).timestamp(),
+                tasks: vec!["g1".into()],
+                skipped: Vec::new(),
+                built: true,
+            });
+        });
+        let posts = RefCell::new(Vec::<String>::new());
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["gh", "api", "--method", "POST", _, "-f", _, _, _, _, _] => {
+                    posts.borrow_mut().push("posted".into());
+                    ok("{}")
+                }
+                ["gh", "api", e] if e.contains("/pulls?") => {
+                    let row = json!({"number": 7,
+                        "auto_merge": Value::Null,
+                        "head": {"sha": SHA, "repo": {"full_name": "o/r"}}});
+                    ok(&Value::Array(vec![row]).to_string())
+                }
+                ["gh", "api", e] if e.contains("remote") => ok("git@github.com:o/r.git\n"),
+                ["git", "remote", ..] => ok("git@github.com:o/r.git\n"),
+                _ => ok("{}"),
+            }
+        };
+        let is_alive = |_: u32| false;
+        let noop_kill = |_: u32| {};
+        let noop_room = |_: &Path, _: DateTime<Utc>| Some(true);
+        let deps = Deps {
+            run: &run,
+            slot_run: &run,
+            spawn: &|_, _, _| Ok(0),
+            alive: &is_alive,
+            kill: &noop_kill,
+            room: &noop_room,
+            now,
+        };
+        let paths = Paths {
+            history: &w.history(),
+            fno_bin: "fno",
+            repo: w.dir.path(),
+            state_dir: dir_of(&w),
+            graph: None,
+        };
+        let note = daemon_settle_with(&paths, &deps);
+        assert!(note.contains("settled"), "{note}");
+        assert_eq!(posts.borrow().len(), 1, "one verdict posts");
     }
 
     // ── the disarm sweep ─────────────────────────────────────────────────

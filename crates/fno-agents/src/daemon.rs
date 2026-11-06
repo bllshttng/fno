@@ -726,9 +726,9 @@ fn rm_take_worktree_with(
 
 pub(crate) fn rm_take_worktree(entry: &state::RegistryEntry) -> Option<PruneOutcome> {
     rm_take_worktree_with(entry, &worktree_gate, &|cwd| {
-        // Run git FROM the worktree: the daemon's own cwd is usually not a
-        // repository, and `git worktree remove` needs one to resolve against.
-        // A forced self-removal from inside the leaf is allowed by git.
+        crate::worktree::init_lock::release_stale(cwd);
+        // Run git FROM the worktree (the daemon's cwd is usually no repo);
+        // git allows a forced self-removal from inside the leaf.
         let mut cmd = std::process::Command::new("git");
         cmd.current_dir(cwd)
             .args(["worktree", "remove", "--force", cwd]);

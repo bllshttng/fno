@@ -535,6 +535,9 @@ fn create_branch_arm(
     } else {
         create_fresh_arm(top, name, branch, wt, br, &mut base_note)
     };
+    // Every exit releases the lock a killed or crashed add leaves behind;
+    // a finished add already dropped it and this is a no-op.
+    super::init_lock::release(top, wt, std::time::Duration::ZERO);
     let Some(add) = add else {
         err.push_str("worktree ensure: git worktree add failed: timed out\n");
         return 1;

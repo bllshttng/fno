@@ -40,6 +40,16 @@ else
     }
 fi
 
+if [[ -f "${_WT_LIFECYCLE_DIR}/worktree-init-lock.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${_WT_LIFECYCLE_DIR}/worktree-init-lock.sh"
+else
+    # A partial deploy keeps today's behavior: locks go unread and unreleased.
+    wt_lock_verdict() { echo free; }
+    wt_lock_reason() { return 1; }
+    wt_release_init_lock() { return 1; }
+fi
+
 if [[ -f "${_WT_LIFECYCLE_DIR}/worktree-removal-event.sh" ]]; then
     # shellcheck source=/dev/null
     source "${_WT_LIFECYCLE_DIR}/worktree-removal-event.sh"
@@ -1119,7 +1129,7 @@ case "${1:-status}" in
             fi
 
             N_TOTAL=0; N_REAP=0; N_FAIL=0
-            N_DIRTY=0; N_UNPUSHED=0; N_UNMERGED=0; N_LIVE=0; N_PROC=0; N_SALVAGE=0; N_NEEDCONF=0; N_APP_OWNED=0; N_PERM=0; N_UNBORN=0; N_DONE=0
+            N_DIRTY=0; N_UNPUSHED=0; N_UNMERGED=0; N_LIVE=0; N_PROC=0; N_SALVAGE=0; N_NEEDCONF=0; N_APP_OWNED=0; N_PERM=0; N_UNBORN=0; N_DONE=0; N_LOCKED=0
             # The done-node arm is a MERGED-mode authority: a tree
             # whose node reads done/superseded (or, node-less, whose branch is
             # merged) with clean tracked content may go, branch kept, untracked
@@ -1226,6 +1236,15 @@ case "${1:-status}" in
                 if _wt_live "$wt"; then
                     printf '%-18s %-34s %s\n' "kept (live-session)" "$branch" "$wt"; N_LIVE=$((N_LIVE + 1)); continue
                 fi
+                # 3b. a lock git will honor. A stale "initializing" lock is a
+                #     dead setup's leftover: archive-worktree.sh releases it
+                #     before removing. Any other lock, or a young initializing
+                #     one, keeps the tree and says so.
+                LOCK_VERDICT="$(wt_lock_verdict "$wt")"
+                case "$LOCK_VERDICT" in
+                    other|fresh-init)
+                        printf '%-18s %-34s %s\n' "kept (locked)" "$branch" "$wt  ($(wt_lock_reason "$wt"))"; N_LOCKED=$((N_LOCKED + 1)); continue ;;
+                esac
                 # 4. rooted processes, each named and classified. A
                 #    hit the classifier cannot positively place is a holder;
                 #    absence of a recognised holder is never proof the tree
@@ -1258,6 +1277,7 @@ case "${1:-status}" in
                 if [[ -z "$APPLY" || -n "$DRY_RUN" ]]; then
                     DN_LABEL="would-archive"
                     [[ -n "$DN_FLAG" ]] && DN_LABEL="would-archive (done-node)"
+                    [[ "$LOCK_VERDICT" == "stale-init" ]] && DN_LABEL="$DN_LABEL (stale init lock)"
                     printf '%-18s %-34s %s\n' "$DN_LABEL" "$branch" "$wt"
                     [[ -n "$ROWS" ]] && wt_occupancy_print_rows "$ROWS"
                     N_REAP=$((N_REAP + 1)); continue
@@ -1291,7 +1311,7 @@ case "${1:-status}" in
                 _reap_jobs "__MISSING__" "$CANONICAL_MAIN"
             fi
 
-            KEPT=$((N_DIRTY + N_UNPUSHED + N_UNMERGED + N_LIVE + N_PROC + N_SALVAGE + N_NEEDCONF + N_APP_OWNED + N_PERM + N_UNBORN))
+            KEPT=$((N_DIRTY + N_UNPUSHED + N_UNMERGED + N_LIVE + N_PROC + N_SALVAGE + N_NEEDCONF + N_APP_OWNED + N_PERM + N_UNBORN + N_LOCKED))
             echo ""
             if [[ "$N_TOTAL" -eq 0 ]]; then
                 echo "No non-canonical worktrees found."
@@ -1299,8 +1319,8 @@ case "${1:-status}" in
                 EXECUTED=""; [[ -n "$APPLY" && -z "$DRY_RUN" ]] && EXECUTED="1"
                 COMMAND="would archive"; [[ -n "$EXECUTED" ]] && COMMAND="archived"
                 SUFFIX=""; [[ -z "$EXECUTED" ]] && SUFFIX="  [dry-run: no changes made; pass --apply to execute]"
-                printf 'Summary: %d %s (%d done-node), %d kept (%d unmerged, %d unpushed, %d unborn, %d dirty, %d live-session, %d processes, %d salvage-failed, %d needs-confirmation, %d app-owned, %d permanent), %d failed, enumerated %d judged %d%s\n' \
-                    "$N_REAP" "$COMMAND" "$N_DONE" "$KEPT" "$N_UNMERGED" "$N_UNPUSHED" "$N_UNBORN" "$N_DIRTY" "$N_LIVE" "$N_PROC" "$N_SALVAGE" "$N_NEEDCONF" "$N_APP_OWNED" "$N_PERM" "$N_FAIL" "$N_ENUM" "$N_TOTAL" "$SUFFIX"
+                printf 'Summary: %d %s (%d done-node), %d kept (%d unmerged, %d unpushed, %d unborn, %d dirty, %d live-session, %d processes, %d salvage-failed, %d needs-confirmation, %d app-owned, %d permanent, %d locked), %d failed, enumerated %d judged %d%s\n' \
+                    "$N_REAP" "$COMMAND" "$N_DONE" "$KEPT" "$N_UNMERGED" "$N_UNPUSHED" "$N_UNBORN" "$N_DIRTY" "$N_LIVE" "$N_PROC" "$N_SALVAGE" "$N_NEEDCONF" "$N_APP_OWNED" "$N_PERM" "$N_LOCKED" "$N_FAIL" "$N_ENUM" "$N_TOTAL" "$SUFFIX"
             fi
             exit 0
         fi
@@ -1393,14 +1413,35 @@ case "${1:-status}" in
                     echo "  SKIP: $wt (processes: $(printf '%s\n' "$pids" | grep -c .))"
                     continue
                 fi
+                # A locked tree refuses `git worktree remove`, so the dry run
+                # must not call it removable. An "initializing" lock past the
+                # stale bound is a dead setup's leftover and is released at
+                # apply time; any other lock is on purpose and keeps the tree.
+                LOCK_VERDICT="$(wt_lock_verdict "$wt")"
+                case "$LOCK_VERDICT" in
+                    other)
+                        echo "  SKIP: $wt (locked: $(wt_lock_reason "$wt"))"
+                        continue ;;
+                    fresh-init)
+                        echo "  SKIP: $wt (locked: initializing, younger than ${WT_INIT_LOCK_STALE_SECS}s; setup may still be running)"
+                        continue ;;
+                esac
                 # Dry-run is the default for BOTH removal modes; an explicit
                 # --dry-run wins even if --apply was also passed (a safety
                 # wrapper appending --dry-run must never be ignored), mirroring
                 # the --merged mode's precedence.
                 if [[ -z "$APPLY" || -n "$DRY_RUN" ]]; then
-                    echo "  WOULD REMOVE: $wt ($AGE_DAYS days old, branch: $BRANCH)"
+                    LOCK_NOTE=""
+                    [[ "$LOCK_VERDICT" == "stale-init" ]] && LOCK_NOTE=", stale initializing lock: unlocks first"
+                    echo "  WOULD REMOVE: $wt ($AGE_DAYS days old, branch: $BRANCH$LOCK_NOTE)"
                     WOULD=$((WOULD + 1))
                 else
+                    if [[ "$LOCK_VERDICT" == "stale-init" ]]; then
+                        wt_release_init_lock "$wt" "$WT_INIT_LOCK_STALE_SECS" || {
+                            echo "  FAILED: $wt stale initializing lock could not be released (try: git worktree unlock $wt)"
+                            continue
+                        }
+                    fi
                     declare -F cargo_build_dir_remove_for_wt >/dev/null 2>&1 && cargo_build_dir_remove_for_wt "$wt" || true
                     if git worktree remove --force "$wt" 2>/dev/null; then
                         echo "  REMOVED: $wt (branch $BRANCH preserved)"
