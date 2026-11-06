@@ -1366,9 +1366,11 @@ mod tests {
             .iter()
             .find(|l| l.hits.iter().any(|(_, _, len)| *len == 9))
             .expect("the footer line carries the close target");
-        assert_eq!(row.hits, vec![(ESC_CLOSE_HIT, char_off + 1, 9)]);
+        // The footer wears the body's 2-cell side pad, so the span moves with it.
+        let pad = 2;
+        assert_eq!(row.hits, vec![(ESC_CLOSE_HIT, pad + char_off + 1, 9)]);
         // The span is inside the line and lands on the words.
-        let words: String = row.text.chars().skip(char_off + 1).take(9).collect();
+        let words: String = row.text.chars().skip(pad + char_off + 1).take(9).collect();
         assert_eq!(words, "esc close");
 
         // No words, no FOOTER target: a footer without "esc close"/"esc"
