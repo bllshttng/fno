@@ -693,16 +693,14 @@ mod tests {
     #[test]
     fn a_node_ref_resolves_the_exact_hash_first_then_the_number() {
         let (_dir, _graph, conn) = conn();
-        conn.execute(
-            "CREATE TABLE nodes (id TEXT PRIMARY KEY, created_at INTEGER)",
-            [],
-        )
+        crate::backlog::nodes::ensure_table(&conn).unwrap();
+        let node = crate::backlog::model::Node::from_json(&json!({
+            "id": "x-5555", "slug": "n-5555", "title": "N", "type": "feature",
+            "status": "ready", "priority": "p2", "domain": "code",
+            "created_at": "2026-09-11T00:00:00+00:00",
+        }))
         .unwrap();
-        conn.execute(
-            "INSERT INTO nodes (id, created_at) VALUES ('x-5555', 1)",
-            [],
-        )
-        .unwrap();
+        crate::backlog::nodes::save(&conn, &node).unwrap();
         conn.execute(
             "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) VALUES ('n:x', 5555, 'x-9999', 'local', 'h', 0)",
             [],
