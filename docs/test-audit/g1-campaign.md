@@ -21,7 +21,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | Declarations, Python | 532 | 243 |
 | Declarations, Rust | 1,306 | 576 |
 | Collected cases, Python (scope collect) | 557 | 246 |
-| Collected cases, Rust (CI logs) | 1,305 | 586 (cli-ci run 42087237752, the x-809b note's count re-read from the same run) |
+| Collected cases, Rust (CI logs) | 1,305 | 586 (cli-ci run 42087237752, re-read from the same run's job logs) |
 
 ## Files
 
