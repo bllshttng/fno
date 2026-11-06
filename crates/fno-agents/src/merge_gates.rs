@@ -1789,7 +1789,7 @@ mod tests {
         std::fs::write(
             repo.join(".fno").join("config.toml"),
             format!(
-                "[obsidian]\nenabled = true\nvault = \"{}\"\n",
+                "[project]\nid = \"fno-web\"\n\n[obsidian]\nenabled = true\nvault = \"{}\"\n",
                 vault.display()
             ),
         )
