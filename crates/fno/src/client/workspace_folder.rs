@@ -231,12 +231,22 @@ impl View {
         }
     }
 
-    /// The create overlay's footer: the folder it will send.
-    pub(super) fn create_hint(&self, name: &str) -> String {
-        if let Some(path) = &self.folder_pick.path {
-            return format!("folder: {path}▏ tab completes, esc back");
+    /// The create form's footer: what the keys do.
+    pub(super) fn create_hint(&self) -> &'static str {
+        if self.folder_pick.path.is_some() {
+            "tab completes the path, esc goes back to the name"
+        } else {
+            "enter creates, ↑↓ pick a folder, tab types a path"
         }
-        let shown = match self.create_folder(name) {
+    }
+
+    /// The create form's folder row: the folder it will send, or the path
+    /// being typed (with its caret).
+    pub(super) fn create_folder_row(&self, name: &str) -> String {
+        if let Some(path) = &self.folder_pick.path {
+            return format!("{path}▏");
+        }
+        match self.create_folder(name) {
             Ok(CreateOrigin::Folder(p)) => abbrev_home(&p),
             Ok(CreateOrigin::NoFolder) => "none (rows join by a move only)".to_string(),
             _ => {
@@ -248,8 +258,7 @@ impl View {
                 };
                 format!("same as {ws} ({folder})")
             }
-        };
-        format!("folder: {shown} ↑↓ tab to type")
+        }
     }
 
     /// A workspace section's Add folder: the picker of live-row folders.
@@ -301,7 +310,7 @@ mod tests {
         assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::Viewed));
         v.cycle_create_folder("fnh", false);
         assert_eq!(v.create_folder("fnh"), folder("/code/fnh"));
-        assert!(v.create_hint("fnh").starts_with("folder: "));
+        assert_eq!(v.create_folder_row("fnh"), "/code/fnh");
     }
 
     #[test]

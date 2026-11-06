@@ -261,7 +261,7 @@ impl Chrome {
         // (popup width rules): ` tab ` rows need the strip inside the border.
         let widest = |t: &Option<String>| t.iter().flat_map(|t| t.lines()).map(str_cols).max();
         let sub_w = widest(&self.subtitle).unwrap_or(0);
-        let foot_w = widest(&self.footer).unwrap_or(0);
+        let foot_w = widest(&self.footer).map_or(0, |w| w + 4);
         // Strip: a leading space, then per tab `● label` with two spaces
         // between tabs - matching `tab_row`'s assembly.
         let tabs_w = if self.tabs.is_empty() {
@@ -481,15 +481,19 @@ pub fn frame(body: &[BodyLine], chrome: &Chrome, body_w: usize, scroll: Option<S
     // Footer rides above the bottom border under Full; under Bare the esc hint
     // IS the bottom border, so a footer (if any was set) is ignored there.
     if chrome.level == Level::Full {
+        let pad = footer_pad(inner_w);
         for f in chrome.footer.iter().flat_map(|f| f.lines()) {
-            let mut row = content_row(f, Role::Footer, inner_w);
+            let padded = format!("{}{f}", " ".repeat(pad));
+            let mut row = content_row(&padded, Role::Footer, inner_w);
             // The close words are a mouse target, defined once here so every
             // popup that sets this footer inherits the clickable close (a
             // per-modal hit test leaves the others printing the same lie).
             // Only when the words survived the row's width: a hit span reaching
             // past the border would advertise a click target that is not drawn.
-            if let Some((off, len)) = esc_close_span(f).filter(|&(off, len)| off + len <= inner_w) {
-                row.hits.push((ESC_CLOSE_HIT, off + 1, len)); // +1: past the left border
+            if let Some((off, len)) =
+                esc_close_span(f).filter(|&(off, len)| pad + off + len <= inner_w)
+            {
+                row.hits.push((ESC_CLOSE_HIT, pad + off + 1, len)); // +1: past the left border
             }
             out.push(row);
         }
@@ -742,6 +746,16 @@ fn edge_row(
     row.extend(inner);
     row.push((right, Role::Border));
     flatten(row)
+}
+
+/// The side pad a footer row shares with the body rows: two cells when the
+/// row has room, degrading 2 -> 1 -> 0 as the width shrinks.
+fn footer_pad(inner_w: usize) -> usize {
+    if inner_w >= 4 {
+        2
+    } else {
+        usize::from(inner_w > 1)
+    }
 }
 
 /// `│ content │`, content left-aligned, padded with spaces (same role) so the
