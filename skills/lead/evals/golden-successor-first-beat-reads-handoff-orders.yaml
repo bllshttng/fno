@@ -23,6 +23,6 @@ golden:
   quote: "On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds)."
   expected: "line: Handoff orders (canon doc), beats: first-beat-and-changed."
   rule: "skills/lead: a successor's first beat reads the handoff orders from the beat output, before it dispatches anything."
-  failure_type: missed-context
+  failure_type: stale-state
   cost: rework
   outcome: failed
