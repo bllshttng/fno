@@ -49,7 +49,7 @@ If `fno backlog get <scope>` finds no node, this machine's backlog does not hold
 ## On titling
 
 - `fno agents org init --scope <scope> --harness-session-id <full session id>`. Read the full id with `printenv CLAUDE_CODE_SESSION_ID` on claude, or `printenv CODEX_THREAD_ID` on codex. The stop hook matches the manifest id to the transcript name. So the 8-character handle from `fno agents registry whoami --json` does not work. Print level, scope, mail handle. The output can carry a settled-findings section. Those titles are what this epic already established. Read them before the first check-in. Never re-derive them.
-- Read the canon doc before the first check-in. A successor's first beat prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds); later beats print only when the blocks changed.
+- Read the canon doc before the first check-in. On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds). Only a changed-blocks beat prints again.
 - Session id changed under a live role? Run `fno agents org init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
