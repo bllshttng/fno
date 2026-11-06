@@ -486,8 +486,8 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     assert!(!card_line::has_loading(&remote_row, graph, 0));
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
-    assert_eq!(card_line::node_span(&a, 30), Some(24..30));
-    assert_eq!(card_line::node_span(&a, 21), Some(15..21));
+    assert_eq!(card_line::node_span(&a, 30), Some(23..29));
+    assert_eq!(card_line::node_span(&a, 21), Some(14..20));
     assert_eq!(card_line::node_span(&a, 5), None);
     // The node is a tap target where it is painted.
     let mut agents = lead_and_worker();
