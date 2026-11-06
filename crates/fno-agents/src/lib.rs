@@ -2014,6 +2014,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // arm and `fno agents reap`). Python's attended `lead done` emits the
     // same kind through the shared emitter.
     "agent_team_vacated",
+    // The retire arm held its vacates and row reaps: this boot's revival
+    // pass has not finished, and the hold names its reason (gc.rs gate).
+    "retire_held_for_boot_revival",
+    // A vacated lead manifest restored and its row re-stamped after the
+    // holder revived (boot_revival.rs reseat).
+    "agent_team_reseated",
     // The schema's canonical spelling of the same vacate (the alias pair in
     // event_store::EVENT_TYPE_ALIASES): the native `org done` and the team
     // spawn's succession write it.
