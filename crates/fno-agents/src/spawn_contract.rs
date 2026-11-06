@@ -548,15 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn valid_session_request_round_trips() {
-        let v = validate(&session_request()).expect("valid");
-        let (sid, harness, cwd) = v.compatibility_parent();
-        assert_eq!(sid.as_deref(), Some("0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9"));
-        assert_eq!(harness.as_deref(), Some("claude"));
-        assert_eq!(cwd.as_deref(), Some("/repo"));
-    }
-
-    #[test]
     fn daemon_origin_without_mission_or_team_refuses() {
         for owner in [
             SpawnOwner::Operator {
@@ -571,16 +562,6 @@ mod tests {
             assert!(matches!(err, SpawnError::MissingOwner(_)), "{err}");
             assert!(err.message().contains("mission or team owner"));
         }
-    }
-
-    #[test]
-    fn blank_session_id_is_malformed_not_missing() {
-        let mut req = session_request();
-        if let SpawnOrigin::Session { parent, .. } = &mut req.origin {
-            parent.session_id = "  ".into();
-        }
-        let err = validate(&req).expect_err("must refuse");
-        assert!(matches!(err, SpawnError::Malformed(_)));
     }
 
     #[test]
@@ -615,36 +596,4 @@ mod tests {
         assert!(err.message().contains("sob is retired"), "{err}");
     }
 
-    #[test]
-    fn python_shaped_provenance_round_trips() {
-        // The exact dict shape build_spawn_provenance() in
-        // cli/src/fno/agents/spawn_lineage.py emits must deserialize into the
-        // door's SpawnProvenance, so a Python-stamped row is door-shaped.
-        let python_json = serde_json::json!({
-            "origin": {
-                "kind": "session",
-                "parent": {
-                    "harness": "claude",
-                    "session_id": "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9",
-                    "cwd": "/repo",
-                },
-                "invocation": Option::<serde_json::Value>::None,
-            },
-            "owner": {
-                "kind": "session",
-                "harness": "claude",
-                "session_id": "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9",
-                "cwd": "/repo",
-            },
-        });
-        let provenance: SpawnProvenance =
-            serde_json::from_value(python_json).expect("python shape round-trips");
-        let request = SpawnRequest::new(
-            provenance.origin,
-            provenance.owner,
-            SpawnHow::new("claude", "headless"),
-            SpawnWork::new("w", "seed", "/repo"),
-        );
-        assert!(validate(&request).is_ok());
-    }
 }

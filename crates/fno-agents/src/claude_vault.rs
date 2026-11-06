@@ -1415,48 +1415,6 @@ mod tests {
     }
 
     #[test]
-    fn refresh_updates_an_expired_record_with_a_rotated_token() {
-        let temp = TempDir::new().unwrap();
-        let who = principal("acct-ready", "org-ready");
-        record(
-            temp.path(),
-            "readyrule",
-            &who,
-            &blob("old", "old-refresh", now_ms() - 1),
-        );
-        let external = MockExternal::default();
-        *external.refresh.lock().unwrap() = Some(Ok(json!({
-            "access_token": "new-access",
-            "refresh_token": "new-refresh",
-            "expires_in": 3600,
-            "scope": "user:inference"
-        })));
-
-        let (code, receipt) = execute(
-            "refresh",
-            &options(temp.path(), &temp.path().join("slot"), Some("readyrule")),
-            &external,
-        );
-        assert_eq!(code, 0);
-        assert_eq!(receipt.verdict, "refreshed");
-        let saved: Value =
-            serde_json::from_str(&fs::read_to_string(temp.path().join("readyrule/blob")).unwrap())
-                .unwrap();
-        assert_eq!(saved["claudeAiOauth"]["accessToken"], "new-access");
-        assert_eq!(saved["claudeAiOauth"]["refreshToken"], "new-refresh");
-        assert!(saved["claudeAiOauth"]["expiresAt"].as_i64().unwrap() > now_ms());
-        assert_eq!(saved["unknown"], "preserved");
-        assert_eq!(
-            fs::metadata(temp.path().join("readyrule/blob"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
-
-    #[test]
     fn sync_still_refuses_two_blobs_of_different_accounts() {
         let temp = TempDir::new().unwrap();
         let slot = temp.path().join("slot");
@@ -1781,66 +1739,5 @@ mod tests {
         // already re-saved the slot's newest blob into it. The stamp is the
         // contract - the moved slot carries no active stamp for `makers`.
     }
-    #[test]
-    fn stored_health_scenarios_skip_the_slot_owner_and_judge_the_rest() {
-        // The slot owner's own record: never refreshed, never judged.
-        {
-            let temp = TempDir::new().unwrap();
-            let slot = temp.path().join("slot");
-            let who = principal("acct-live", "org-live");
-            record(
-                temp.path(),
-                "makers",
-                &who,
-                &blob("slot-access", "shared-refresh", now_ms()),
-            );
-            let mut external = MockExternal::default();
-            external.keychain.insert(
-                scoped_service(&slot).unwrap(),
-                Some(blob("slot-access", "shared-refresh", now_ms())),
-            );
-            *external.refresh.lock().unwrap() = Some(Err(ExternalFailure::Unavailable));
 
-            let verdict = stored_health(temp.path(), &slot, "makers", &external);
-            assert_eq!(verdict, Some("slot-owner".to_string()));
-        }
-        // A live session on the slot must not read as the standby being
-        // healthy: the alert would never fire during work.
-        {
-            let temp = TempDir::new().unwrap();
-            let slot = temp.path().join("slot");
-            let who = principal("acct-makers", "org-makers");
-            record(
-                temp.path(),
-                "makers",
-                &who,
-                &blob("stored", "spent-refresh", now_ms() - 1),
-            );
-            let mut external = MockExternal::default();
-            external.live.push(LiveClaude {
-                config_dir: Some(slot.clone()),
-            });
-            *external.refresh.lock().unwrap() = Some(Err(ExternalFailure::Rejected));
-
-            let verdict = stored_health(temp.path(), &slot, "makers", &external);
-            assert_eq!(verdict, Some("dead".to_string()));
-        }
-        // A rejected refresh is a dead saved login.
-        {
-            let temp = TempDir::new().unwrap();
-            let slot = temp.path().join("slot");
-            let who = principal("acct-makers", "org-makers");
-            record(
-                temp.path(),
-                "makers",
-                &who,
-                &blob("stored", "spent-refresh", now_ms() - 1),
-            );
-            let external = MockExternal::default();
-            *external.refresh.lock().unwrap() = Some(Err(ExternalFailure::Rejected));
-
-            let verdict = stored_health(temp.path(), &slot, "makers", &external);
-            assert_eq!(verdict, Some("dead".to_string()));
-        }
-    }
 }

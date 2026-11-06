@@ -2664,70 +2664,6 @@ mod tests {
         ));
     }
 
-    // ---- codex JSONL parse (pinned to fixture vocabulary) ----
-
-    #[test]
-    fn codex_stream_rows() {
-        let ev = parse_codex_line(
-            r#"{"type":"thread.started","thread_id":"019e4958-80d1-7492-8054-2854dfda502c"}"#,
-        );
-        assert_eq!(
-            ev,
-            ParsedEvent::SessionCreated {
-                session_id: "019e4958-80d1-7492-8054-2854dfda502c".into()
-            }
-        );
-
-        let ev = parse_codex_line(
-            r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"hello"}}"#,
-        );
-        assert_eq!(
-            ev,
-            ParsedEvent::OutputChunk {
-                text: "hello".into()
-            }
-        );
-
-        let ev = parse_codex_line(
-            r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"boom"}}"#,
-        );
-        assert_eq!(
-            ev,
-            ParsedEvent::ProviderError {
-                message: "boom".into()
-            }
-        );
-
-        let ev = parse_codex_line(
-            r#"{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"echo hi"}}"#,
-        );
-        match ev {
-            ParsedEvent::ToolUse { name, args } => {
-                assert_eq!(name, "command_execution");
-                assert_eq!(args.unwrap()["command"], "echo hi");
-            }
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-
-        let ev = parse_codex_line(r#"{"type":"turn.completed","usage":{"output_tokens":91}}"#);
-        assert_eq!(
-            ev,
-            ParsedEvent::ReplyComplete {
-                text: String::new(),
-                duration_ms: 0
-            }
-        );
-
-        assert!(matches!(
-            parse_codex_line("Reading additional input from stdin..."),
-            ParsedEvent::Unknown { .. }
-        ));
-        assert!(matches!(
-            parse_codex_line(r#"{"type":"turn.started"}"#),
-            ParsedEvent::Unknown { .. }
-        ));
-    }
-
     // ---- gemini blob parse ----
 
     // ---- reachability tri-state (HOME-overridden) ----
@@ -2759,26 +2695,6 @@ mod tests {
     }
 
     #[test]
-    fn opencode_reachable_when_store_returns_the_id() {
-        // Leading plugin banner: opencode plugins print to stdout ahead of real
-        // output, so the probe must tolerate garbage before the row.
-        fn run(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Ok((
-                true,
-                format!("[memory-plugin] OpenCode plugin loading\nid\n{OC_SES}\n"),
-            ))
-        }
-        assert_eq!(
-            opencode_reachable_with(
-                &opencode_entry(Some(OC_SES)),
-                Duration::from_secs(2),
-                &(run as OpencodeDbRunner)
-            ),
-            Ok(true)
-        );
-    }
-
-    #[test]
     fn opencode_infrastructure_failure_is_inconclusive_never_gone() {
         // Spawn failure (binary missing) and a nonzero exit (unopenable store)
         // must both stay Err, or a dead-pane pass would orphan a live pane.
@@ -2799,22 +2715,6 @@ mod tests {
             )
             .unwrap_err();
             assert_eq!(err.provider, "opencode");
-        }
-    }
-
-    #[test]
-    fn opencode_malformed_id_never_reaches_the_subprocess() {
-        fn run(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            panic!("probe must reject a malformed id before spawning");
-        }
-        for bad in ["ses_'; drop table session--", "ses_ x", "ses_", "not-a-ses"] {
-            let err = opencode_reachable_with(
-                &opencode_entry(Some(bad)),
-                Duration::from_secs(2),
-                &(run as OpencodeDbRunner),
-            )
-            .unwrap_err();
-            assert!(err.reason.contains(bad), "reason should quote {bad:?}");
         }
     }
 

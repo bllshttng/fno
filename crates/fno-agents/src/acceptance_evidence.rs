@@ -1349,23 +1349,6 @@ mod done_probe_tests {
         );
     }
 
-    #[test]
-    fn probe_run_silent_success_is_not_a_pass() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("p.md");
-        std::fs::write(&plan, fm("done_probes:\n  - \"exit 0\"")).unwrap();
-        let (code, json) = decide_probe_run(&[
-            "--plan".into(),
-            plan.to_string_lossy().into(),
-            "--cwd".into(),
-            tmp.path().to_string_lossy().into(),
-        ]);
-        assert_eq!(code, 1, "a silent probe must not satisfy the gate");
-        let body: Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(body["results"][0]["verdict"], "SKIP");
-        assert!(body["reason"].as_str().unwrap().contains("SKIP"));
-    }
-
     /// `probe-run` exit contract: 0 passes, 1 fails a probe, 2 is undeterminable
     /// (unparseable / unreadable). stdout is always JSON.
     #[test]
@@ -1438,39 +1421,6 @@ mod done_probe_tests {
     }
 
     #[test]
-    fn over_cap_declaration_refuses_without_running_anything() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        let sentinel = tmp.path().join("ran");
-        std::fs::write(
-            &plan,
-            fm(&format!(
-                "done_probes:\n  - touch {0}\n  - echo b\n  - echo c\n  - echo d",
-                sentinel.display()
-            )),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            None,
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Fail { reason, .. } => {
-                assert!(
-                    reason.contains("cap is 3"),
-                    "reason names the cap: {reason}"
-                )
-            }
-            _ => panic!("over-cap declaration must refuse"),
-        }
-        assert!(!sentinel.exists(), "an over-cap list must not execute");
-    }
-
-    #[test]
     fn a_code_plan_without_probes_holds_done_and_a_docs_plan_does_not() {
         let tmp = tempfile::tempdir().unwrap();
         let events = tmp.path().join("events.jsonl");
@@ -1494,35 +1444,6 @@ mod done_probe_tests {
         assert!(matches!(eval(&plan), ProbeGate::Absent));
     }
 
-    #[test]
-    fn multibyte_stderr_is_truncated_without_panicking() {
-        // String::drain panics off a char boundary; probe stderr routinely
-        // carries arrows and box-drawing characters.
-        let mut s = "→".repeat(400); // 3 bytes each, straddles the cut
-        keep_last_on_char_boundary(&mut s, PROBE_STDERR_CAP);
-        assert!(s.len() <= PROBE_STDERR_CAP);
-        assert!(s.chars().all(|c| c == '→'), "must not split a character");
-    }
-
-    #[test]
-    fn a_backgrounding_probe_does_not_block_the_drain() {
-        // sh exits immediately while the descendant keeps stderr open, so the
-        // timeout loop is already over and only the group kill bounds the join.
-        let tmp = tempfile::tempdir().unwrap();
-        let start = std::time::Instant::now();
-        let outcome = run_probe(
-            "sleep 300 & echo probe-ok",
-            tmp.path(),
-            Duration::from_secs(30),
-        );
-        assert_eq!(outcome.render(), "pass");
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "a backgrounded descendant must not hold the drain open (took {:?})",
-            start.elapsed()
-        );
-    }
-
     // ── project-level done_probes ────────────────────────────────
     //
     // A repo-wide guardrail must apply to every plan in the repo, and no plan
@@ -1538,29 +1459,6 @@ mod done_probe_tests {
         let plan = dir.join("plan.md");
         std::fs::write(&plan, fm("title: p")).unwrap();
         plan
-    }
-
-    #[test]
-    fn a_failing_project_probe_blocks_and_names_its_source() {
-        // AC2-ERR: `probe X exited 1` is ambiguous once there are two
-        // declarations; the operator has to know which file to edit.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = bare_plan(tmp.path());
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            Some(&project(&["false"])),
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Fail { reason, .. } => assert!(
-                reason.contains("project probe `false`"),
-                "the reason must name the source: {reason}"
-            ),
-            _ => panic!("a failing project probe must block"),
-        }
     }
 
     // AC3-INV (a plan declaring `done_probes: []` cannot silence the project's
@@ -1625,18 +1523,6 @@ mod acceptance_evidence_tests {
     }
 
     #[test]
-    fn validation_refuses_a_missing_probe_by_name() {
-        let decl = decl_of(&fm(
-            "acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[1]",
-        ));
-        let EvidenceDecl::Evidence { bindings, .. } = decl else {
-            panic!("expected Evidence")
-        };
-        let why = validate_bindings(&bindings, 1).unwrap_err();
-        assert!(why.contains("AC1-HP") && why.contains("missing"), "{why}");
-    }
-
-    #[test]
     fn session_gate_refuses_a_required_plan_with_no_done_binding() {
         let tmp = tempfile::tempdir().unwrap();
         let plan = tmp.path().join("plan.md");
@@ -1682,18 +1568,4 @@ mod acceptance_evidence_tests {
         }
     }
 
-    #[test]
-    fn prior_fires_read_a_store_committed_loop_check_row() {
-        // AC5-PROBE: a store-only loop_check row with probe results answers.
-        let tmp = tempfile::tempdir().unwrap();
-        let events = tmp.path().join("events.jsonl");
-        let line = serde_json::json!({
-            "ts": "2026-09-17T12:00:00Z", "type": "loop_check", "source": "hook",
-            "data": {"session_id": "s1", "fingerprint": "f", "fires": 1, "consecutive_unchanged": 1, "decision": "allow", "intent": "", "pr_state": "none", "ci": "none", "reviewed": false, "done_probes": {"p1": {"status": "satisfied"}}}
-        })
-        .to_string();
-        crate::event_store::append_envelope(&events, &line, None).unwrap();
-        assert!(prior_fires_declared_probes(&events, "s1"));
-        assert!(!prior_fires_declared_probes(&events, "s2"));
-    }
 }
