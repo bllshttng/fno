@@ -1470,7 +1470,9 @@ mod tests {
                 noop_roster_sweep,
                 noop_team_sweep,
             );
-            wait_for_retire_row(&home.events_jsonl());
+            // The proceed leg runs the real probes; on a runner with no
+            // claude they run out their whole timeout before the tick lands.
+            wait_for_retire_row_within(&home.events_jsonl(), 30);
             assert_eq!(count_retire_rows(&home.events_jsonl()), 1);
         });
         let _ = std::fs::remove_dir_all(&dir);
