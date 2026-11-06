@@ -126,23 +126,21 @@ fn config_i64(cwd: &Path, key: &str, default: i64) -> i64 {
 
 fn config_str(cwd: &Path, key: &str, default: &str) -> String {
     crate::agents_config::config_lookup(cwd, &["agents", "consult", key])
-        .and_then(|v| v.as_str())
-        .map(str::trim)
+        .and_then(|v| v.as_str().map(str::to_string))
+        .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
-        .unwrap_or(default)
-        .to_string()
+        .unwrap_or_else(|| default.to_string())
 }
 
 /// The lane names `agents.consult.lanes` allows, empty (off) by default.
 fn config_lanes(cwd: &Path) -> Vec<String> {
     crate::agents_config::config_lookup(cwd, &["agents", "consult", "lanes"])
-        .and_then(|v| v.as_array())
+        .and_then(|v| v.as_array().cloned())
         .map(|rows| {
             rows.iter()
                 .filter_map(|v| v.as_str())
-                .map(str::trim)
+                .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default()

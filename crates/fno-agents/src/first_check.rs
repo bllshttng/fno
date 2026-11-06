@@ -486,7 +486,7 @@ fn consult_worker_line(row: &RegistryEntry) -> Option<(String, String)> {
     let root = std::path::Path::new(&row.project_root);
     let lanes: Vec<String> =
         crate::agents_config::config_lookup(root, &["agents", "consult", "lanes"])
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_array().cloned())
             .map(|rows| {
                 rows.iter()
                     .filter_map(|v| v.as_str())
