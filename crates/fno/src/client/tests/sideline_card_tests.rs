@@ -154,15 +154,18 @@ fn card_group_by_lead_nests_workers_under_their_lead() {
     v.agent_sort = AgentSort::Squad;
     v.group_by_lead = true;
     let (rows, depths) = v.display_rows_with_depths();
-    let nested: Vec<(&str, usize)> = rows
+    let names: Vec<&str> = rows
         .iter()
-        .zip(&depths)
-        .filter_map(|(r, d)| match r {
-            DisplayRow::Agent(a) => Some((a.name.as_str(), *d)),
+        .filter_map(|r| match r {
+            DisplayRow::Agent(a) => Some(a.name.as_str()),
             _ => None,
         })
         .collect();
-    assert_eq!(nested, vec![("zed-lead", 0), ("amy-worker", 1)]);
+    assert_eq!(names, vec!["zed-lead", "amy-worker"]);
+    assert!(
+        depths.iter().all(|d| *d == 0),
+        "cards never indent: {depths:?}"
+    );
 }
 
 #[test]

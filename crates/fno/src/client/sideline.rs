@@ -92,6 +92,28 @@ pub(super) fn sort_name(column: AgentSortColumn) -> &'static str {
     }
 }
 
+/// The card head's words: the sort and, when cards group by lead, the
+/// grouping. The longest form that leaves two spare cells off the border
+/// wins, so the narrow rail keeps the sort whole and shortens the rest.
+fn card_head_caption(grouped: bool, column: AgentSortColumn, arrow: &str, room: usize) -> String {
+    let name = sort_name(column);
+    let sort = format!("sort: {name} {arrow}");
+    let tiers = if grouped {
+        vec![
+            format!("grouped: lead \u{b7} {sort}"),
+            format!("by lead \u{b7} {sort}"),
+            format!("lead \u{b7} {name} {arrow}"),
+        ]
+    } else {
+        vec![format!("{sort} \u{b7} node \u{b7} PR"), sort]
+    };
+    let room = room.saturating_sub(2);
+    match tiers.iter().find(|t| t.chars().count() <= room) {
+        Some(fit) => fit.clone(),
+        None => tiers.last().cloned().unwrap_or_default(),
+    }
+}
+
 fn head_label(column: AgentSortColumn) -> &'static str {
     match column {
         AgentSortColumn::Status => "st",
@@ -1334,22 +1356,12 @@ impl View {
                     vec![
                         rt_cell(String::new(), Color::Default, cell_flags::DIM, false),
                         rt_cell(
-                            {
-                                // The sort rides whole; the node and PR caption
-                                // joins it only where the name cell has room.
-                                let sort = format!(
-                                    "sort: {} {}",
-                                    sort_name(self.agent_sort.column),
-                                    arrow(self.agent_sort.column)
-                                );
-                                let full = format!("{sort} \u{b7} node \u{b7} PR");
-                                // Two spare cells keep the caption off the border.
-                                if full.chars().count() + 2 <= name_w {
-                                    full
-                                } else {
-                                    sort
-                                }
-                            },
+                            card_head_caption(
+                                self.group_by_lead,
+                                self.agent_sort.column,
+                                arrow(self.agent_sort.column),
+                                name_w,
+                            ),
                             Color::Default,
                             cell_flags::DIM,
                             true,
@@ -1438,7 +1450,7 @@ impl View {
                         DisplayRow::CardDetail(a),
                         DisplayRow::CardMetrics(a),
                     ]);
-                    out_depths.extend([depth; 3]);
+                    out_depths.extend([0, 0, 0]);
                     // The dashed rule rides between adjacent cards (the
                     // operator's 2026-10-04 spacing mockup): no rule before a
                     // header, a blank, or the section's end.
