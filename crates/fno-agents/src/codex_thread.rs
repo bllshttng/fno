@@ -2688,6 +2688,31 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
     Ok(carry)
 }
 
+/// The MCP servers an fno-spawned codex thread starts WITHOUT:
+/// `mcp_servers.<name>.enabled=false` rides every worker's `thread/start` and
+/// `thread/resume` config map. The codex app-server spawns one MCP server
+/// process per loaded thread and reaps none of them, so a worker lane that
+/// never calls a server still pays its process for the daemon's whole life
+/// (measured 2026-11-06: one `rea` npm child per thread, 15 children under
+/// the daemon against 9 loaded threads). A spawn that names
+/// `mcp_servers.<name>.` itself keeps every key it set; only the absent
+/// names land disabled.
+const WORKER_DISABLED_MCP_SERVERS: &[&str] = &["rea"];
+
+fn merged_thread_config(
+    config: Option<&serde_json::Map<String, Value>>,
+) -> Option<serde_json::Map<String, Value>> {
+    let mut merged = config.cloned().unwrap_or_default();
+    for name in WORKER_DISABLED_MCP_SERVERS {
+        let prefix = format!("mcp_servers.{name}.");
+        if merged.keys().any(|key| key.starts_with(&prefix)) {
+            continue;
+        }
+        merged.insert(format!("mcp_servers.{name}.enabled"), Value::Bool(false));
+    }
+    Some(merged)
+}
+
 /// The hook-trust bypass posture the thread lane carries in its `config` map.
 ///
 /// CLI lanes pass `--dangerously-bypass-hook-trust`; a daemon-hosted thread
@@ -2735,8 +2760,8 @@ fn thread_start_request_with_options(
     if let Some(project_id) = project_id.filter(|id| !id.is_empty()) {
         params["projectId"] = json!(project_id);
     }
-    // Absent or empty keeps the frame byte-identical to the pre-config form.
-    if let Some(config) = config.filter(|config| !config.is_empty()) {
+    if let Some(config) = merged_thread_config(config.as_ref()).filter(|config| !config.is_empty())
+    {
         params["config"] = Value::Object(config);
     }
     json!({"id": id, "method": "thread/start", "params": params}).to_string()
@@ -2761,7 +2786,8 @@ fn thread_resume_request_with_options(
     if let Some(model) = model.filter(|model| !model.is_empty()) {
         params["model"] = json!(model);
     }
-    if let Some(config) = config.filter(|config| !config.is_empty()) {
+    if let Some(config) = merged_thread_config(config.as_ref()).filter(|config| !config.is_empty())
+    {
         params["config"] = Value::Object(config);
     }
     json!({"id": id, "method": "thread/resume", "params": params}).to_string()
@@ -2946,6 +2972,60 @@ mod tests {
         assert_eq!(read_only["params"]["approvalPolicy"], "on-request");
     }
 
+    /// The leak fix: an fno-spawned worker starts WITHOUT the MCP servers the
+    /// disabled list names, on the start frame and the resume frame alike.
+    #[test]
+    fn worker_thread_frames_disable_the_default_mcp_server() {
+        let yolo = resolve_thread_posture(None, Some("yolo"), None).expect("yolo maps");
+        let frame: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &yolo,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            frame["params"]["config"]["mcp_servers.rea.enabled"],
+            json!(false),
+            "the default disable rides thread/start: {frame}"
+        );
+        let resume: Value = serde_json::from_str(&thread_resume_request_with_options(
+            1,
+            "thread-p",
+            std::path::Path::new("/tmp/w"),
+            None,
+            &yolo,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            resume["params"]["config"]["mcp_servers.rea.enabled"],
+            json!(false),
+            "the default disable rides thread/resume: {resume}"
+        );
+    }
+    #[test]
+    fn an_explicit_mcp_override_survives_the_default_disable() {
+        let mut config = serde_json::Map::new();
+        config.insert("mcp_servers.rea.enabled".to_string(), json!(true));
+        let merged = merged_thread_config(Some(&config)).expect("merged");
+        assert_eq!(
+            merged.get("mcp_servers.rea.enabled"),
+            Some(&json!(true)),
+            "the spawn's own mcp_servers.rea pair wins"
+        );
+        let mut other = serde_json::Map::new();
+        other.insert("mcp_servers.node_repl.enabled".to_string(), json!(false));
+        let merged = merged_thread_config(Some(&other)).expect("merged");
+        assert_eq!(merged.get("mcp_servers.rea.enabled"), Some(&json!(false)));
+        assert_eq!(
+            merged.get("mcp_servers.node_repl.enabled"),
+            Some(&json!(false))
+        );
+    }
+
     /// AC1: a codex that ships hook trust gets `bypass_hook_trust` in the
     /// start frame's config map, and a caller-supplied key wins over the
     /// lane's posture (`-c bypass_hook_trust=false` stays false).
@@ -2994,9 +3074,10 @@ mod tests {
         assert_eq!(control["params"]["config"]["bypass_hook_trust"], true);
     }
 
-    /// AC2: an unknown codex version bypasses nothing, so every frame stays
-    /// byte-identical to the pre-bypass form: no config key where none was,
-    /// and a caller's own config rides through untouched.
+    /// AC2: an unknown codex version bypasses nothing, so no frame carries
+    /// the bypass key and a caller's own config rides through untouched. The
+    /// worker MCP disable still fills the absent names: the config param
+    /// predates the supported codex floor, so the map is not a skew surface.
     #[test]
     fn unknown_codex_keeps_hook_trust_frames_byte_identical() {
         let caller_config = {
@@ -3013,7 +3094,10 @@ mod tests {
             config_with_hook_trust_bypass(None, false).as_ref(),
         ))
         .unwrap();
-        assert!(frame["params"].get("config").is_none());
+        // The bypass key is the protocol-skew surface, not the config map
+        // itself: the worker MCP disable fills the absent names on every
+        // frame, and the config param predates the supported codex floor.
+        assert!(frame["params"]["config"].get("bypass_hook_trust").is_none());
         let resumed: Value = serde_json::from_str(&thread_resume_request_with_options(
             1,
             "thread-b",

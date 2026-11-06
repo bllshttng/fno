@@ -697,11 +697,9 @@ pub(crate) fn blocked_short_ids_from_rows(
 /// who run Claude with a non-default home). When unset, `$HOME/.claude/daemon`.
 pub const DAEMON_DIR_ENV: &str = "FNO_CLAUDE_DAEMON_DIR";
 
-/// The Claude Code config root (`$HOME/.claude`): the rule-file git repo the
-/// corrections post-commit hook watches. `CLAUDE_DIR_OVERRIDE` mirrors the
-/// bash-side override (scripts/autocorrect-pack.sh) so tests and alt-home
-/// setups redirect the whole tree. Read-only consumers; footnote stores no
-/// state there.
+/// The Claude Code config root (`$HOME/.claude`). `CLAUDE_DIR_OVERRIDE`
+/// redirects the whole tree for tests and alt-home setups. Read-only
+/// consumers; footnote stores no state there.
 pub fn config_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("CLAUDE_DIR_OVERRIDE") {
         return PathBuf::from(v);

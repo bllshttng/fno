@@ -58,8 +58,11 @@ use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, Sweep
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
 pub(crate) mod attach_handshake;
+mod health;
 mod launch;
+mod panic_log;
 mod placement_pickers;
+mod report;
 pub mod snapshot;
 
 use self::placement_pickers::{
@@ -394,7 +397,7 @@ fn run_inner(session: &str) -> Result<i32, String> {
     let _ = proto::mux_dir();
     if let Some((w, _remedy)) = proto::pending_config_warning() {
         let _ = proto::ensure_mux_dir();
-        client_log_append(&proto::mux_dir().join("client-warnings.log"), w);
+        crate::mux_log::client("warn", w);
     }
     // Nested same-server guard (AC3-UI/EDGE): BEFORE any socket, spawn, or
     // terminal mode change. `FNO_SERVER` (and the legacy `FNO_SESSION`) is
@@ -411,20 +414,6 @@ fn run_inner(session: &str) -> Result<i32, String> {
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
     runtime.block_on(attach_handshake::attach_once_more(&path))
-}
-
-/// Append one line to a log file under the mux dir, best-effort. The shared
-/// write behind both the e2e breadcrumbs and the config-warning log: one
-/// append mechanism, never stderr (see [`e2e_client_log`] for the rule).
-fn client_log_append(path: &Path, msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        use std::io::Write;
-        let _ = writeln!(f, "{msg}");
-    }
 }
 
 /// Connect to a live server, or spawn one and connect. AC3-ERR: a dead
@@ -514,24 +503,11 @@ fn log_path(socket: &Path) -> PathBuf {
     socket.with_extension("log")
 }
 
-/// CI diagnostics: connect-path breadcrumbs, FNO_E2E-gated, appended
-/// to `<mux_dir>/client-<pid>.log` (the e2e harness dumps every `*.log` in
-/// its scratch on a timeout). NEVER stderr: pre-TUI stderr reaches the
-/// client's PTY, and any byte there trips the harness's screen-not-empty
-/// gates before the client has actually attached.
+/// Connect-path breadcrumbs share the client log without painting over the TUI.
 fn e2e_client_log(msg: std::fmt::Arguments<'_>) {
-    if std::env::var_os("FNO_E2E").is_none() {
-        return;
+    if std::env::var_os("FNO_E2E").is_some() {
+        crate::mux_log::client("info", &format!("pid {}: {msg}", std::process::id()));
     }
-    let ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let line = format!("[{ms} pid {}] {msg}", std::process::id());
-    client_log_append(
-        &proto::mux_dir().join(format!("client-{}.log", std::process::id())),
-        &line,
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -699,6 +675,8 @@ pub(crate) struct View {
     session: String,
     layout: LayoutView,
     frames: HashMap<u64, Frame>,
+    health: health::Health,
+    report: Option<report::Report>,
     /// Manual sideline toggle; narrow terminals override it (auto-hide).
     /// Orthogonal to [`View::density`]: this is visibility, that is how much
     /// each visible row shows. `Slim` is a narrow rail, NOT a hidden panel.
@@ -1843,6 +1821,8 @@ impl View {
         // canonical size, so nothing changes until the first drag.
         let sideline_width = stored_width.unwrap_or_else(|| canonical_width(density));
         View {
+            health: health::Health::new(Instant::now()),
+            report: None,
             term,
             session,
             layout,
@@ -2487,6 +2467,7 @@ impl View {
     fn menu_usurping_open(&self) -> bool {
         self.launcher.is_some()
             || self.keys_modal.is_some()
+            || self.report.is_some()
             || self.row_menu.is_some()
             || self.aux.is_some()
             || self.connections.is_some()
@@ -4423,7 +4404,9 @@ impl View {
         file_viewer::draw(self, &mut cells, rows, cols);
         bell::draw(self, &mut cells, rows, cols);
         let (overlay_origin, overlay_dims) = self.overlay_viewport();
-        if let Some(m) = &self.feed_detail {
+        if self.report.is_some() {
+            report::draw(self, &mut cells, rows, cols);
+        } else if let Some(m) = &self.feed_detail {
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if questions::draw_detail(
             self,
@@ -6480,6 +6463,7 @@ async fn attach_and_run(
     .await
     .map_err(|e| format!("attach failed: {e}"))?;
 
+    view.health = health::Health::new(Instant::now());
     let stashed_modesync =
         attach_handshake::read_preamble(&mut sock_r, &mut view, &log_hint).await?;
 
@@ -6877,7 +6861,11 @@ async fn attach_and_run(
                 meter_tx.clone(),
             );
         }
+        let health_deadline = report::deadline(&view);
         tokio::select! {
+            _ = health::wait(health_deadline) => {
+                if let Err(error) = report::tick(&mut view, &mut compositor) { break Err(error); }
+            },
             msg = srv_rx.recv() => match msg.unwrap_or(Err(ProtoError::Closed)) {
                 Ok(ServerMsg::Frame { pane_id, frame }) => {
                     if !frame.geometry_ok() {
@@ -6895,6 +6883,7 @@ async fn attach_and_run(
                         // from this frame, so streaming output neither paints
                         // a stale span nor scans at frame cadence.
                         view.link_hover.on_frame(pane_id, Instant::now());
+                        view.health.frame(Instant::now());
                         view.frames.insert(pane_id, frame);
                         if let Err(e) = compositor.draw(&view.compose()) {
                             break Err(format!("draw: {e}"));
@@ -7916,11 +7905,16 @@ async fn dispatch_event(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<DispatchFlow, String> {
     match event {
+        Event::Report => {
+            report::open(view);
+            return Ok(DispatchFlow::Break);
+        }
         Event::Forward(chunk) => {
             // Reliable channel: awaited send, input is NEVER dropped.
             write_msg(sock_w, &ClientMsg::Input(chunk))
                 .await
                 .map_err(|e| format!("input send failed: {e}"))?;
+            view.health.input(Instant::now());
         }
         Event::ShowPaneIds => {
             view.reveal_pane_ids_at(Instant::now());

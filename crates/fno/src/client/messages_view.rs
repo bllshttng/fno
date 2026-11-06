@@ -2100,6 +2100,7 @@ async fn submit_parked(
     )
     .await
     .map_err(|e| format!("submit input send failed: {e}"))?;
+    view.health.input(std::time::Instant::now());
     view.set_notice(format!(
         "submit sent to {name}; the state moves once its turn record holds the message"
     ));

@@ -394,7 +394,7 @@ impl BoardView {
 
     /// The cheap reading: one duration in, one log line out per
     /// 30s window while the board paints. Lives in
-    /// `<mux dir>/client-warnings.log`.
+    /// `<mux dir>/client.log`.
     pub(crate) fn record_paint(&self, micros: u128) {
         self.paint_stats.borrow_mut().record(micros);
     }
@@ -407,7 +407,7 @@ impl BoardView {
         self.keys_overlay || self.facet.is_some() || self.colpick.is_some()
     }
 
-    /// Flush a due paint-stats window to `<mux dir>/client-warnings.log`.
+    /// Flush a due paint-stats window to `<mux dir>/client.log`.
     /// Called each run-loop pass while the board is open.
     pub(crate) fn flush_paint_stats(&self) {
         let due = self.paint_stats.borrow().due();
@@ -415,8 +415,7 @@ impl BoardView {
             return;
         }
         let line = self.paint_stats.borrow_mut().take_line();
-        let path = crate::proto::mux_dir().join("client-warnings.log");
-        super::client_log_append(&path, &line);
+        crate::mux_log::client("info", &line);
     }
 }
 

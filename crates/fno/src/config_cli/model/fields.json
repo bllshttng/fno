@@ -2097,6 +2097,10 @@
      "default": "repo"
     },
     {
+     "name": "report_parent",
+     "default": null
+    },
+    {
      "name": "prefix",
      "default": null
     },
@@ -3313,6 +3317,7 @@
   "active_backlog.mission",
   "mux.shell_integration",
   "mux.board_scope",
+  "mux.report_parent",
   "mux.prefix",
   "mux.preset",
   "mux.keys",

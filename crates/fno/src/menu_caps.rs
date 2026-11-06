@@ -184,7 +184,7 @@ pub(crate) fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, Stri
         .expect("static regex");
     let literal = Regex::new(r#""([a-z][a-z0-9-]*)""#).expect("static regex");
     let mut commands = BTreeSet::new();
-    let run = braced_region(&text, "async fn run(args:")?;
+    let run = braced_region(&text, "async fn run(")?;
     let if_command = Regex::new(r#"\bif command == "([a-z][a-z0-9-]*)""#).expect("static regex");
     commands.extend(if_command.captures_iter(run).map(|c| c[1].to_string()));
     let matches = Regex::new(r"matches!\(\s*command\s*,([^)]*)\)").expect("static regex");
@@ -438,7 +438,7 @@ mod tests {
             collapse_map: "current-leaf\ttier\nlead board\tT1\nwhoami x\tT1\n".into(),
             baseline: "# c\ninbox a !--hid\nfno-agents\n".into(),
             native_tree: native,
-            agents_source: "async fn run(args: X) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
+            agents_source: "async fn run(\n    args: X,\n    timing: Y,\n) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
                  fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
                  let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
                 .into(),

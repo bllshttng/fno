@@ -66,7 +66,7 @@ impl Core {
             .get(&hello.pane)
             .and_then(|entry| entry.pty.child_pid());
         if !self.is_passive(id) || child.map(|pid| format!("pid:{pid}")) != Some(hello.identity) {
-            eprintln!("fno mux: client {id} link to pane {} refused", hello.pane);
+            crate::mux_log!(warn; "fno mux: client {id} link to pane {} refused", hello.pane);
             return Flow::Continue;
         }
         let live: Vec<u64> = self.clients.iter().map(|c| c.id).collect();

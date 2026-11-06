@@ -4,7 +4,7 @@
 
 Canonical enum for the `blocked_reason.kind` field in `target-state.md` and the `last_blocked_reason.kind` field on graph nodes (`~/.fno/graph.json`). Phases 01-04 of the typed-blocker plan establish that BLOCKED can only be authored by hook-verifiable trip signals; this phase classifies *what kind* of BLOCKED was reached.
 
-Skills, hooks, preflight, and per-phase verifiers reference this file when setting `blocked_reason`. Downstream consumers (the autocorrect spec, megawalk retros, postmortems) read the same enum.
+When skills, hooks, preflight, or per-phase verifiers set `blocked_reason`, they read this file. Downstream consumers (eval traces, megawalk retros, postmortems) read the same enum.
 
 ## Tier 1 - Trip signals (LLM-side BLOCKED transitions)
 
@@ -41,9 +41,9 @@ Set by the hook, preflight, sigma-review wrapper, or other infrastructure code p
 
 | kind | meaning | example details |
 |------|---------|----------------|
-| `other` | anything not matching above | free-text in details, classified later by autocorrect |
+| `other` | anything not matching above | free-text in details, classified later by retros |
 
-Use `other` only when the producing code path knows the BLOCKED is novel and not yet worth a dedicated kind. The autocorrect spec mines `other` entries to identify recurring classes that should be promoted into the enum.
+When the producing code path knows the BLOCKED is novel and not yet worth a dedicated kind, use `other`. Retros mine `other` entries to identify recurring classes to promote into the enum.
 
 ## Adding a new kind
 
@@ -52,9 +52,9 @@ The enum is closed: adding a new kind requires a code change (`scripts/lib/block
 Decision rule for one-time vs recurring:
 
 - **One-time (use `other`):** A specific failure mode that is unlikely to recur or whose handling is fully captured by the free-text `details` field.
-- **Recurring (extend the enum):** A failure mode that has occurred 3+ times across recent runs and that downstream consumers (autocorrect, retros) want to switch on. Open a follow-up spec; add the kind in tier 2; document the example.
+- **Recurring (extend the enum):** A failure mode that occurred 3+ times across recent runs. Downstream consumers (eval traces, retros) switch on it. Open a follow-up spec. Add the kind in tier 2. Document the example.
 
-The closed-enum invariant matters because every downstream consumer (autocorrect rules, megawalk retros, postmortem templates) switches on `kind`. A free-text drift would silently bypass classification.
+The closed-enum invariant matters because every downstream consumer (eval traces, megawalk retros, postmortem templates) switches on `kind`. A free-text drift silently bypasses classification.
 
 ## State-file shape
 
@@ -71,7 +71,7 @@ blocked_reason:
   trip_signal: <enum|null> # one of {user_cancel, circuit_breaker, rollback_exhausted} when kind is a tier-1 trip; null otherwise
 ```
 
-A graph node mirror at `~/.fno/graph.json[node_id].last_blocked_reason` holds the same structured object plus `blocked_count` (incremented on every BLOCKED transition for that node). The autocorrect spec reads the graph mirror so it can correlate failure modes per-node across the whole backlog.
+A graph node mirror at `~/.fno/graph.json[node_id].last_blocked_reason` holds the same structured object plus `blocked_count` (incremented on every BLOCKED transition for that node). Retros read the graph mirror so they can correlate failure modes per-node across the whole backlog.
 
 Legacy in-flight states with free-text `blocked_reason: "string"` are migrated to `{kind: 'other', details: 'string', trip_signal: null, ...}` automatically by `bt_get_blocked` on first read; a warning is logged.
 

@@ -33,8 +33,7 @@ pub(crate) fn entry_status<'a>(entry: &'a Value) -> &'a str {
 /// around a forwarded HOME, so a sealed Rust child reads the graph its parent
 /// wrote. A `~`-prefixed carrier expands like Python's, so both legs resolve
 /// the same store. Mirrors the FNO_HOME-first resolution every other
-/// client-side command in this crate uses (see
-/// `finalize::append_corrections_pointer`). Does not read
+/// client-side command in this crate uses. Does not read
 /// `config.paths.graph_json` - a batch convenience read is not where a
 /// config-driven relocation belongs, and `--graph` covers a test or an
 /// operator override in the meantime.

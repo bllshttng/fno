@@ -45,7 +45,7 @@ WHERE EXISTS (SELECT 1 FROM nodes WHERE id = substr(?1, 3) || '-' || n)) \
 SELECT n FROM c ORDER BY n DESC LIMIT 1), ?2, ?3, ?4, strftime('%s','now')";
 
 const LOCAL_STORE: &str = "local";
-const NODE_KIND: &str = "n:";
+pub(crate) const NODE_KIND: &str = "n:";
 const TICK: Duration = Duration::from_secs(60);
 const MINT_BATCH: usize = 200;
 
@@ -568,6 +568,55 @@ pub fn sweep(
     }
 }
 
+/// Mint one key right now and read its label back: the create receipt's
+/// synchronous front half of [`sweep`], keyed to the row just written. The
+/// daemon beat stays the authority. Any error, including an unreachable
+/// primary, reads `None`, and the next beat mints the same key as a no-op.
+pub fn mint_now(graph: &Path, key: &str) -> Option<String> {
+    let remote = crate::store_remote::configured().ok().flatten();
+    let host = crate::mail::address::normalize_host(&crate::claims::hostname());
+    mint_now_at(graph, key, remote.as_ref(), &host)
+}
+
+/// [`mint_now`] over an explicit store and host, so tests stay local.
+pub(crate) fn mint_now_at(
+    graph: &Path,
+    key: &str,
+    remote: Option<&Remote>,
+    host: &str,
+) -> Option<String> {
+    let conn = open_write_at(graph).ok()?;
+    let outcome: Result<(), String> = (|| {
+        let Some(remote) = remote else {
+            for missing_key in unnumbered(&conn, vec![key.to_string()], LOCAL_STORE) {
+                mint_local(&conn, &missing_key, LOCAL_STORE, host)?;
+            }
+            return Ok(());
+        };
+        static SCHEMA: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if SCHEMA.get().is_none() {
+            remote.script(DDL)?;
+            let _ = SCHEMA.set(());
+        }
+        let missing = unnumbered(&conn, vec![key.to_string()], remote.host());
+        if missing.is_empty() {
+            return Ok(());
+        }
+        mint_remote(remote, &missing, host)?;
+        pull(remote, &conn)?;
+        Ok(())
+    })();
+    if outcome.is_err() {
+        return None;
+    }
+    // The store this machine counts in: the caller's remote, else local.
+    let current = match remote {
+        Some(remote) => remote.host().to_string(),
+        None => LOCAL_STORE.to_string(),
+    };
+    label_in(&conn, key.strip_prefix(NODE_KIND).unwrap_or(key), &current)
+}
+
 /// Every node id, oldest first, so history reads x-1..x-N in filing order.
 fn node_ids_oldest_first(graph: &Path) -> Vec<String> {
     let Some(conn) = open_read_at(graph) else {
@@ -756,6 +805,32 @@ mod tests {
         assert_eq!(found("fb-1").as_deref(), Some("fb-cccc"));
         assert_eq!(found("x-2"), None);
         assert_eq!(found("x-aaaa"), None);
+    }
+
+    #[test]
+    fn mint_now_labels_a_new_node_and_a_second_call_is_a_noop() {
+        let (_dir, graph, conn) = conn();
+        conn.execute_batch("CREATE TABLE nodes AS SELECT 'x-2' AS id")
+            .unwrap();
+        // `x-2` is a real hash, so the first minted node skips it, exactly
+        // like the beat's NODE_INSERT.
+        assert_eq!(
+            mint_now_at(&graph, "n:x-aaaa", None, "h").as_deref(),
+            Some("x-1")
+        );
+        // The second call mints nothing and reads the same label back.
+        assert_eq!(
+            mint_now_at(&graph, "n:x-aaaa", None, "h").as_deref(),
+            Some("x-1")
+        );
+        assert_eq!(label_in(&conn, "x-aaaa", "local").unwrap(), "x-1");
+    }
+
+    #[test]
+    fn mint_now_reads_none_when_the_store_cannot_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("missing-dir").join("graph.db");
+        assert_eq!(mint_now_at(&graph, "n:x-aaaa", None, "h"), None);
     }
 
     #[test]
