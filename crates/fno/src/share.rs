@@ -1287,13 +1287,6 @@ mod tests {
             .collect()
     }
 
-    fn mails(effects: &[Effect]) -> Vec<&Effect> {
-        effects
-            .iter()
-            .filter(|e| matches!(e, Effect::Mail { .. }))
-            .collect()
-    }
-
     #[test]
     fn consent_machine_rows() {
         let now = Instant::now();

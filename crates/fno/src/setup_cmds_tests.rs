@@ -3,7 +3,6 @@
 //! and the scaffold's re-ask, cancel and stop paths.
 
 use super::*;
-use serde_json::json;
 
 fn oss(pieces: &[&str]) -> Vec<OsString> {
     pieces.iter().map(OsString::from).collect()
@@ -55,27 +54,6 @@ fn the_claim_and_the_plan_filter() {
     let all = tiers(true);
     assert!(!always.is_empty() && always.iter().all(|t| t == "always"));
     assert!(all.len() > always.len() && all.iter().any(|t| t == "advanced"));
-}
-
-/// Queued answers and set results; records every write that landed.
-struct Fake {
-    verdict: Value,
-    answers: Vec<Option<&'static str>>,
-    set_results: Vec<Result<(), (i32, String)>>,
-    writes: Vec<(String, String)>,
-    lines: Vec<String>,
-}
-
-impl Fake {
-    fn new(verdict: Value, answers: Vec<Option<&'static str>>) -> Fake {
-        Fake {
-            verdict,
-            answers,
-            set_results: vec![],
-            writes: vec![],
-            lines: vec![],
-        }
-    }
 }
 
 impl Io for Fake {

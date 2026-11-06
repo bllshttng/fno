@@ -1,7 +1,6 @@
 //! The read model's tests, mounted by backlog_model.rs.
 
 use super::*;
-use crate::proto::AgentBadge;
 use serde_json::json;
 
 fn row(harness_session: Option<&str>) -> AgentRow {

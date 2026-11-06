@@ -1897,21 +1897,6 @@ fn a_thread_pin_moves_between_rows_and_survives_an_upsert() {
 // there, and only the clock separates them, so this is the case most likely
 // to destroy something a person is still using.
 
-/// A member-less squad stamped `created_at`, for the grace tests.
-fn empty_squad(created_at: &str) -> StoredSquad {
-    StoredSquad {
-        thread_pins: Vec::new(),
-        name: String::new(),
-        key: "k1".into(),
-        origins: vec!["/alive".into()],
-        members: Vec::new(),
-        created_at: created_at.into(),
-        tab_specs: Vec::new(),
-        tab_trees: Vec::new(),
-        active_tab: None,
-    }
-}
-
 /// 2026-08-13T12:00:00Z in epoch seconds, from an INDEPENDENT implementation
 /// (`python3 -c "datetime.fromisoformat(...).timestamp()"`), so a wrong
 /// parser cannot agree with itself. The first value written here was wrong
@@ -1928,33 +1913,4 @@ fn stamp_parser_matches_a_known_epoch() {
         parse_stamp_epoch("2024-02-29T00:00:00Z"),
         Some(1_709_164_800)
     );
-}
-fn tomb(id: &str) -> StoredMember {
-    StoredMember {
-        attach_id: id.into(),
-        tombstone: true,
-        tombstone_reason: None,
-        detached: false,
-        tab_name: None,
-        cwd: None,
-        worker: None,
-        harness: None,
-        harness_session_id: None,
-        pane_id: None,
-    }
-}
-
-fn worker_member(name: &str) -> StoredMember {
-    StoredMember {
-        attach_id: String::new(),
-        tombstone: false,
-        tombstone_reason: None,
-        detached: false,
-        tab_name: None,
-        cwd: None,
-        worker: Some(name.into()),
-        harness: None,
-        harness_session_id: None,
-        pane_id: None,
-    }
 }

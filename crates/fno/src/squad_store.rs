@@ -2232,22 +2232,6 @@ fn mutate_lifecycle(f: impl FnOnce(&mut Vec<ExternalLifecycle>)) -> io::Result<(
     mutate_file(|sf| f(&mut sf.external_lifecycle))
 }
 
-/// Walk `exe`'s ancestors for the nearest directory carrying a cargo build-tree
-/// marker (`.rustc_info.json` or `CACHEDIR.TAG`). Every exec'd test binary lives
-/// under a build tree - `target/{debug,release,...}` with the classic layout, or
-/// `<build-dir>/<hash>/debug/deps` under build.build-dir, where the markers sit
-/// on the hash dir and no ancestor is named `target`. No installed binary
-/// (`~/.cargo/bin`, homebrew, a deployed `fno`) carries a marker. Pure over the
-/// path so the marker logic is unit-testable; [`assert_writable`] feeds it
-/// `current_exe()`. A bare directory named `target` without a marker is NOT a
-/// build tree (the marker is what proves cargo owns it), so a coincidentally
-/// named dir never trips the guard.
-fn build_tree_target_dir(exe: &std::path::Path) -> Option<PathBuf> {
-    exe.ancestors()
-        .find(|d| d.join(".rustc_info.json").exists() || d.join("CACHEDIR.TAG").exists())
-        .map(|d| d.to_path_buf())
-}
-
 /// Refuse a squad-store write from a build-tree binary unless `FNO_AGENTS_HOME`
 /// is set (the sole escape hatch: tests point it at a temp dir, dogfooding at
 /// `$HOME/.fno`). The call site in [`mutate_file`] is `#[cfg(not(test))]`: an

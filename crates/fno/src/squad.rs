@@ -780,16 +780,6 @@ mod tests {
         }
     }
 
-    fn git(args: &[&str], cwd: &Path) {
-        let ok = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .expect("git runs")
-            .status
-            .success();
-        assert!(ok, "git {args:?} failed in {cwd:?}");
-    }
     #[test]
     fn squad_non_git_cwd_falls_back_to_literal_and_caches() {
         let scratch = Scratch::new("literal");

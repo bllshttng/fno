@@ -347,64 +347,6 @@ pub fn resolve_keymap(
     )
 }
 
-// Test-only since the live-map wrappers went: the pub entry points had no
-// callers, and the refusal rules below are what the tests still pin.
-#[cfg(test)]
-fn resolve_prefix_change_with_rebinds(
-    spec: &str,
-    live_rebinds: &[(String, u8)],
-) -> Result<Keymap, String> {
-    let requested = parse_key(spec);
-    let specs: Vec<(String, String)> = live_rebinds
-        .iter()
-        .map(|(action, byte)| (action.clone(), key_disp(*byte)))
-        .collect();
-    let (map, warnings) = resolve_keymap(Some(spec), &specs);
-    if requested != Some(map.prefix) || map.rebinds != live_rebinds || !warnings.is_empty() {
-        return Err(warnings
-            .first()
-            .map(|warning| warning.0.clone())
-            .unwrap_or_else(|| "prefix could not be applied exactly; unchanged".to_string()));
-    }
-    Ok(map)
-}
-
-#[cfg(test)]
-fn resolve_rebind_with(
-    prefix: u8,
-    live: &[(String, u8)],
-    action: &str,
-    byte: u8,
-) -> Result<Keymap, String> {
-    let default = default_bindings()
-        .into_iter()
-        .find(|kb| kb.action == action)
-        .map(|kb| kb.key);
-    // Moving an action back to its shipped key drops the rebind.
-    let mut specs: Vec<(String, String)> = live
-        .iter()
-        .filter(|(a, _)| a != action)
-        .map(|(a, b)| (a.clone(), key_disp(*b)))
-        .collect();
-    if default != Some(byte) {
-        specs.push((action.to_string(), key_disp(byte)));
-    }
-    let (map, warnings) = resolve_keymap(Some(&key_disp(prefix)), &specs);
-    if let Some(warning) = warnings.first() {
-        return Err(warning.0.clone());
-    }
-    if !bindings_for(&map)
-        .iter()
-        .any(|kb| kb.action == action && kb.key == byte)
-    {
-        return Err(format!(
-            "config.mux.keys.{action}: {} could not be applied; unchanged",
-            key_disp(byte)
-        ));
-    }
-    Ok(map)
-}
-
 /// The whole `[mux.keys]` table for a map, as the JSON object `fno config
 /// set mux.keys` takes.
 pub fn rebinds_json(map: &Keymap) -> String {
@@ -2805,7 +2747,6 @@ mod tests {
         );
     }
 
-    const RESIZE_R: Event = Event::Cmd(Command::ResizeDir(Dir::Right));
     #[test]
     fn pane_id_chord_is_rebindable_and_repeats_without_prefix() {
         assert_eq!(format!("{:?}", resolve_chord(b'\\')), "ShowPaneIds");

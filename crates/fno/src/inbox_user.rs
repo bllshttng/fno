@@ -411,36 +411,4 @@ mod tests {
         assert!(classify_inbox_day(&mk(&["inbox", "day", "nope"])).is_none());
         assert!(classify_inbox_day(&mk(&["inbox", "day", "start", "--json"])).is_none());
     }
-    fn unclaimed_inbox_words_render_help_or_refuse_and_never_forward() {
-        let help = |a: &[&str]| match classify_inbox_menu(&mk(a)) {
-            Some(InboxMenu::Help { text, bare }) => Some((text, bare)),
-            _ => None,
-        };
-        let refusal = |a: &[&str]| match classify_inbox_menu(&mk(a)) {
-            Some(InboxMenu::Refuse(m)) => Some(m),
-            _ => None,
-        };
-        let (page, bare) = help(&["inbox"]).unwrap();
-        assert!(bare && page.contains("approvals") && page.contains("peers"));
-        assert_eq!(help(&["inbox", "--help"]).map(|h| h.1), Some(false));
-        let (user, bare) = help(&["inbox", "user", "--help"]).unwrap();
-        assert!(!bare && user.contains("ack") && user.contains("status"));
-        assert!(help(&["inbox", "operator"]).unwrap().1);
-        let (cmd, _) = help(&["inbox", "user", "ack", "--help"]).unwrap();
-        assert!(cmd.contains("--outcome"));
-        assert!(help(&["inbox", "approvals", "decide", "-h"]).is_some());
-        assert!(refusal(&["inbox", "bogus"])
-            .unwrap()
-            .contains("no such command 'bogus'"));
-        assert!(refusal(&["inbox", "user", "status", "--bogus"])
-            .unwrap()
-            .contains("unrecognized"));
-        assert!(refusal(&["inbox", "user", "bogus"])
-            .unwrap()
-            .contains("no such command"));
-        assert!(refusal(&["inbox", "law", "nope"])
-            .unwrap()
-            .contains("unrecognized"));
-        assert!(classify_inbox_menu(&mk(&["agents"])).is_none());
-    }
 }

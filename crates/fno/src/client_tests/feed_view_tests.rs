@@ -6,7 +6,6 @@
 //! session id offers nothing. The click resolver and the painter must invert
 //! each other exactly.
 
-use super::tests::{two_pane_view, view_with_agents};
 use super::*;
 use crate::client::feed_detail::{self, destination, Destination};
 use crate::client::feed_view::{feed_panel_lines, feed_row_item, FeedOverlay};

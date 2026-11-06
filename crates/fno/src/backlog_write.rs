@@ -216,19 +216,6 @@ mod tests {
         );
     }
 
-    fn review_pr() -> crate::pr_diff::PrRef {
-        crate::pr_diff::parse_pr_url("https://github.com/o/r/pull/7").expect("a pull URL")
-    }
-
-    fn comment(line: u32, removed: bool, text: &str) -> ReviewComment {
-        ReviewComment {
-            path: "src/a.rs".into(),
-            line,
-            removed,
-            source: "  let x = 1;  ".into(),
-            text: text.into(),
-        }
-    }
     // AC4/AC8 halves: the shell-out reports the exit fact and the command's own
     // last line. FNO_BIN is process-global, so the existing guard serializes
     // the tests that repoint it.

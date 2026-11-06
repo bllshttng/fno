@@ -1,7 +1,6 @@
 //! The `fit` placement tests (v80, x-ae47): where the server commits a
 //! server-chosen tab. Parent helpers resolve through the glob.
 use super::*;
-use crate::mux_cli::{parse_pane_args, PaneCmd};
 
 fn full_tab(id: TabId, leaves: [u64; 4]) -> Tab {
     Tab {
@@ -189,18 +188,3 @@ fn run_pane_refuses_fit_with_explicit_geometry() {
 }
 
 // -- parser and wire shape (crate::mux_cli) --------------------------------
-
-/// Local OsString helper; the mux_cli tests-mod helper is not crate-visible.
-fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
-    args.iter().map(std::ffi::OsString::from).collect()
-}
-
-fn op_of(word: &str) -> crate::cli_args::PaneOp {
-    use crate::cli_args::{MuxTail, PaneOp};
-    let t = || MuxTail { tail: Vec::new() };
-    match word {
-        "run" => PaneOp::Run(t()),
-        "ls" => PaneOp::Ls(t()),
-        _ => panic!("no test op mapping for {word}"),
-    }
-}

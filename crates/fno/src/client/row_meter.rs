@@ -138,7 +138,6 @@ impl View {
 
 #[cfg(test)]
 mod tests {
-    use super::{cost_cell, name_w, skeleton_cell, token_cell};
     #[test]
     fn cost_is_dollars_and_tokens_compact() {
         assert_eq!(cost_cell(42), "~$0.42");

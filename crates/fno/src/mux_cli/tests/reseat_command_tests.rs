@@ -1,7 +1,6 @@
 //! The registry half of `fno mux thread reseat`: row resolution and the
 //! mux-ref flip, pure or on a scratch registry, no server in the loop (the
 //! topology half is covered by the server reseat tests).
-use super::*;
 use crate::mux_cli::reseat_command::{clear_mux_refs, resolve_reseat_target, ReseatFail};
 
 const REGISTRY: &str = r#"{

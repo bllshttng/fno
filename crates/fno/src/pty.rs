@@ -1704,11 +1704,6 @@ fn clear_wedge_cooldown() {
     LAST_OPENPTY_TIMEOUT.with(|c| c.set(None));
 }
 
-#[cfg(test)]
-fn set_total_timeouts(n: usize) {
-    TOTAL_TIMEOUTS.with(|c| c.set(n));
-}
-
 /// The soft `RLIMIT_NOFILE` to install, or `None` when the current soft limit
 /// already stands at the installable ceiling. `cap` is the platform's
 /// per-process file cap, when it has one separate from the hard limit.

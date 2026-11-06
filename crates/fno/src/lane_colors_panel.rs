@@ -313,9 +313,6 @@ mod tests {
         Theme::from_name("footnote-superscript").0
     }
 
-    fn paper() -> Theme {
-        Theme::from_name("footnote-paper").0
-    }
     #[test]
     fn lane_color_picker_lists_the_parser_vocabulary_and_marks_the_current() {
         // The ANSI names STAY; each name gains a filled

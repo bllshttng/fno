@@ -963,10 +963,6 @@ mod tests {
         args.iter().map(OsString::from).collect()
     }
 
-    fn os_raw(bytes: &[u8]) -> OsString {
-        OsString::from_vec(bytes.to_vec())
-    }
-
     #[test]
     fn registry_root_and_mux_have_help_and_no_duplicates() {
         let cmd = FnoRoot::command();

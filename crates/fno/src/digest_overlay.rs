@@ -534,11 +534,6 @@ pub fn theme_role_overrides(
 }
 
 #[cfg(test)]
-mod colorfgbg_tests {
-    use super::colorfgbg_is_light;
-}
-
-#[cfg(test)]
 mod theme_role_override_tests {
     use super::{apply_overrides_to, parse_override_color};
     use crate::proto::Color;
@@ -1988,16 +1983,9 @@ mod tests {
 
 #[cfg(test)]
 mod user_theme_tests {
-    use super::{
-        join_warnings, materialize_user_theme, merge_theme_layers, set_themes_dir_for_test,
-        user_themes,
-    };
-    use crate::keys::KeymapWarning;
+    use super::user_themes;
     use crate::proto::Color;
     use crate::theme::{ground_set, Theme};
-    use std::path::Path;
-
-    use super::ENVIRONMENT_LOCK;
 
     fn spec(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -2006,62 +1994,6 @@ mod user_theme_tests {
             .collect()
     }
 
-    fn assert_user_theme_loads_inherits_and_overrides() {
-        let (t, w) = materialize_user_theme(
-            "midnight",
-            &spec(&[
-                ("inherit", "tokyo-night"),
-                ("base", "#101018"),
-                ("brand", " RED "),
-            ]),
-        );
-        assert!(w.is_empty(), "{w:?}");
-        assert_eq!(t.name, "midnight");
-        assert_eq!(t.inherit_from, "tokyo-night");
-        assert_eq!(t.base, Color::Rgb(0x10, 0x10, 0x18));
-        assert_eq!(t.brand, Color::Indexed(1));
-        // Untouched roles ride the parent.
-        assert_eq!(t.sel, Theme::from_name("tokyo-night").0.sel);
-    }
-
-    fn assert_default_inherit_and_unknown_inherit_warn() {
-        let (t, w) = materialize_user_theme("bare", &spec(&[]));
-        assert!(w.is_empty());
-        assert_eq!(t.inherit_from, "footnote-superscript");
-        let (t, w) = materialize_user_theme("typo", &spec(&[("inherit", "solarized")]));
-        assert_eq!(w.len(), 1, "{w:?}");
-        assert!(w[0].0.contains("mux.themes.typo.inherit"), "{w:?}");
-        assert_eq!(t.inherit_from, "footnote-superscript");
-    }
-
-    fn assert_bad_hex_and_unknown_role_warn_and_are_ignored() {
-        let (t, w) =
-            materialize_user_theme("sloppy", &spec(&[("base", "#zzzzzz"), ("wat", "#112233")]));
-        assert_eq!(w.len(), 2, "{w:?}");
-        assert!(w[0].0.contains("mux.themes.sloppy.base"), "{w:?}");
-        assert!(w[1].0.contains("not a theme role"), "{w:?}");
-        assert_eq!(
-            t.base,
-            Theme::from_name("footnote-superscript").0.base,
-            "the bad hex is ignored, the role keeps its parent value"
-        );
-    }
-
-    fn assert_user_theme_paints_its_ground_through_its_parents_palette() {
-        let (t, w) = materialize_user_theme(
-            "midnight",
-            &spec(&[("inherit", "footnote-superscript"), ("base", "#0f0f14")]),
-        );
-        assert!(w.is_empty());
-        let osc = ground_set(&t).expect("an inherited slot table means a ground");
-        let s = String::from_utf8(osc).unwrap();
-        assert!(
-            s.contains("\x1b]11;#0f0f14"),
-            "the user base is the OSC 11 ground: {s:?}"
-        );
-        // The parent's 16-slot table rides (OSC 4 slots emitted).
-        assert!(s.contains("\x1b]4;0;"), "parent palette slots ride: {s:?}");
-    }
     #[test]
     fn built_ins_outrank_user_names_and_unknown_names_still_warn() {
         let shipped = Theme::from_name("gruvbox").0;

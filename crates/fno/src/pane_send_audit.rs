@@ -349,24 +349,8 @@ pub(crate) fn pane_send_audit_events_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mux_cli::{dispatch, parse_pane_args, PaneCmd, SendSource, EXIT_ERROR};
     use std::ffi::OsString;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-
-    fn os(args: &[&str]) -> Vec<OsString> {
-        args.iter().map(OsString::from).collect()
-    }
-
-    fn op_of(word: &str) -> crate::cli_args::PaneOp {
-        use crate::cli_args::{MuxTail, PaneOp};
-        let t = || MuxTail { tail: Vec::new() };
-        match word {
-            "ls" => PaneOp::Ls(t()),
-            "read" => PaneOp::Read(t()),
-            "send" => PaneOp::Send(t()),
-            _ => panic!("no test op mapping for {word}"),
-        }
-    }
 
     fn control_test_sock(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("fno-control-{}-{name}.sock", std::process::id()))

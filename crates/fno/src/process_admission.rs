@@ -1483,9 +1483,6 @@ fn snapshot_linux() -> Result<Vec<ProcessRow>, CensusFailure> {
 
 #[cfg(test)]
 mod tests {
-    /// The brake tests drive the process-global FNO_MACHINE_BRAKE path; the
-    /// suite runs two threads, so both tests hold this lock end to end.
-    static BRAKE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     use super::*;
     /// The namespace is a process-global env var, so two of these tests

@@ -1,7 +1,5 @@
 use super::*;
 
-use crate::server::portal_reach::{portal_replay_placement, row_answers_key};
-
 // ---- (x-8f9d) portals: the one thread pane becomes an addressable set --
 
 /// The reach command naming an explicit portal index.

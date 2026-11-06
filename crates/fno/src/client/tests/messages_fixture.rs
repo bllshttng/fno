@@ -549,20 +549,6 @@ async fn messages_reply_board_contracts() {
     }
     crate::view_store::clear_test_path();
 }
-/// The fixture projection, detached from the reply test's own apply.
-fn fixture_projection() -> serde_json::Value {
-    serde_json::json!({
-        "participants": [
-            {"key":"s1","name":"first","system":false,"live":true},
-            {"key":"s-c","name":"candor","system":false,"live":true},
-        ],
-        "threads": [],
-        "system": {},
-        "channels": [{"scope":"fno","rows":[]}],
-        "announcements": [],
-        "unreadable": 0,
-    })
-}
 
 /// The Me thread: picking an agent lists the user's own thread with it
 /// first (unread off the chat-id read marks), and the detail paints the

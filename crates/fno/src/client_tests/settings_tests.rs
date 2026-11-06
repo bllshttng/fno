@@ -34,14 +34,6 @@ impl Keys {
         assert!(self.buf.is_empty(), "settings keys never reach a pane");
     }
 
-    /// A real Esc press: the lone byte, then the quiet-window flush.
-    async fn esc(&mut self, v: &mut View) {
-        self.send(v, b"\x1b").await;
-        overlay_keys::flush_lone_esc(v, &mut self.scanner, &mut self.buf)
-            .await
-            .unwrap();
-    }
-
     /// A left press and release on the settings cell showing `needle`.
     async fn tap(&mut self, v: &mut View, needle: &str) {
         let (row, col) = aux_cell(v, needle);
@@ -74,40 +66,6 @@ fn frame_text(v: &mut View) -> Vec<String> {
         .lines()
         .map(String::from)
         .collect()
-}
-
-/// Pin config reads and writes to a temp file and a `fno` stub that
-/// accepts every `config set`, so a test save never touches a real config.
-struct IsolatedConfig {
-    _dir: tempfile::TempDir,
-    _lock: std::sync::MutexGuard<'static, ()>,
-    restore: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-impl IsolatedConfig {
-    fn new() -> Self {
-        use std::os::unix::fs::PermissionsExt;
-        let lock = crate::digest_overlay::ENVIRONMENT_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.toml");
-        std::fs::write(&config, "").unwrap();
-        let stub = dir.path().join("fno-stub");
-        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let restore = ["FNO_CONFIG", "FNO_BIN"]
-            .into_iter()
-            .map(|k| (k, std::env::var_os(k)))
-            .collect();
-        std::env::set_var("FNO_CONFIG", &config);
-        std::env::set_var("FNO_BIN", &stub);
-        IsolatedConfig {
-            _dir: dir,
-            _lock: lock,
-            restore,
-        }
-    }
 }
 
 impl Drop for IsolatedConfig {

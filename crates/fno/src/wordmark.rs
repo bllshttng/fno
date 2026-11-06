@@ -20,7 +20,6 @@ pub fn one_row() -> Vec<(&'static str, Role)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Theme;
 
     #[test]
     fn one_row_is_the_fullwidth_f_then_the_bracketed_no() {

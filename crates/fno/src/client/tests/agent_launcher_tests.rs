@@ -10,8 +10,6 @@ use super::agent_launcher::{
 use super::*;
 use crate::model_catalog::ModelState;
 use crate::proto::agent_launch::{AgentLaunchUpdate, LaunchState};
-use ratatui_core::buffer::Buffer as RtBuffer;
-use ratatui_core::layout::Rect as RtRect;
 
 struct WireVersionFixture(std::path::PathBuf);
 
@@ -889,21 +887,6 @@ fn pill_view(_guard: &std::sync::MutexGuard<'static, ()>) -> (View, WireVersionF
     (v, _wire_fixture)
 }
 
-fn launch_argv(v: &mut View, keys: &[u8]) -> Vec<String> {
-    let mut sock: Vec<u8> = Vec::new();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let _ = super::agent_launcher::launcher_keys(v, keys, &mut sock).await;
-    });
-    if sock.is_empty() {
-        panic!("no launch went to the wire for {keys:?}");
-    }
-    let mut wire = std::io::Cursor::new(sock);
-    match crate::proto::read_msg_sync(&mut wire).unwrap() {
-        crate::proto::ClientMsg::AgentLaunch(request) => request.extra_flags,
-        other => panic!("composer wrote a different client message: {other:?}"),
-    }
-}
 #[test]
 fn a_chip_owned_typed_flag_still_refuses_at_submit() {
     // AC11-ERR: `--cwd /x` committed verbatim refuses at submit, naming the
@@ -1884,28 +1867,6 @@ fn unreachable(name: &str, provider: &str, reason: &str) -> super::agent_launche
     m
 }
 
-fn row_labels(rows: &[crate::popup::PopupRow]) -> Vec<String> {
-    rows.iter()
-        .filter_map(|r| match r {
-            crate::popup::PopupRow::Entry { label, .. } => Some(label.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn glyph_of(rows: &[crate::popup::PopupRow], label: &str) -> String {
-    rows.iter()
-        .filter_map(|r| match r {
-            crate::popup::PopupRow::Entry {
-                glyph, label: l, ..
-            } if l == label => Some(glyph.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .next()
-        .unwrap_or_default()
-}
 #[test]
 fn nokey_row_enter_shows_connect_steps_and_esc_returns_to_more() {
     let mut v = view_with_launcher();

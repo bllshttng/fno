@@ -2192,28 +2192,6 @@ mod tests {
         );
     }
 
-    /// A fake uv tool venv with one dist-info carrying `body`; returns the
-    /// tool dir. The layout mirrors uv's (lib/pythonX.Y/site-packages).
-    fn fake_tool_dir(body: Option<&str>) -> PathBuf {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static N: AtomicU32 = AtomicU32::new(0);
-        let root = env::temp_dir().join(format!(
-            "fno-boot-receipt-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let dist = root
-            .join("fno")
-            .join("lib")
-            .join("python3.13")
-            .join("site-packages")
-            .join("fno-0.4.1.dev20261003.dist-info");
-        fs::create_dir_all(&dist).unwrap();
-        if let Some(body) = body {
-            fs::write(dist.join("direct_url.json"), body).unwrap();
-        }
-        root
-    }
     #[test]
     fn dev_source_rows() {
         // US2: pure parse of [dev].source from a flat config.toml body.

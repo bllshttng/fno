@@ -2630,13 +2630,6 @@ mod tests {
 
     // -- OSC 133 block store (Task 1.2) ----------------------------------------
 
-    /// Feed one full command's markers + output: prompt, output-start, text,
-    /// done-with-exit. `\r\n` moves to a fresh row so blocks don't overwrite.
-    fn run_command(pane: &mut Pane, output: &str, exit: i32) {
-        pane.feed(b"\x1b]133;A\x07$ \x1b]133;B\x07\x1b]133;C\x07");
-        pane.feed(output.as_bytes());
-        pane.feed(format!("\x1b]133;D;{exit}\x07\r\n").as_bytes());
-    }
     #[test]
     fn strip_ansi_rows() {
         // AC1-ERR: CSI color, a non-133 OSC title, a 2-byte escape, and invalid

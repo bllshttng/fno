@@ -573,30 +573,4 @@ mod tests {
         let (band, _) = composed_fg("terminal", Color::Rgb(0x37, 0x37, 0x37));
         assert_eq!(band, Color::Rgb(0x70, 0x70, 0x70));
     }
-
-    fn view_with(area: (u16, u16), rect: (u16, u16)) -> View {
-        let mut view = View::new(
-            (30, 100),
-            "main".into(),
-            LayoutView {
-                squads: vec![meta(1, "footnote", 1, 0)],
-                active_squad: 1,
-                panes: vec![(
-                    10,
-                    Rect {
-                        x: 0,
-                        y: 0,
-                        rows: rect.0,
-                        cols: rect.1,
-                    },
-                )],
-                focus: 10,
-                area,
-                agents: vec![],
-                focus_node: None,
-            },
-        );
-        view.frames.insert(10, text_frame(rect.0, rect.1, 'a'));
-        view
-    }
 }
