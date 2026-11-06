@@ -108,10 +108,12 @@ fn card_head_caption(grouped: bool, column: AgentSortColumn, arrow: &str, room: 
         vec![format!("{sort} \u{b7} node \u{b7} PR"), sort]
     };
     let room = room.saturating_sub(2);
-    match tiers.iter().find(|t| t.chars().count() <= room) {
+    let fit = match tiers.iter().find(|t| t.chars().count() <= room) {
         Some(fit) => fit.clone(),
         None => tiers.last().cloned().unwrap_or_default(),
-    }
+    };
+    // The caption rides the cell's right edge: a trailing space keeps it off the border.
+    format!("{fit} ")
 }
 
 fn head_label(column: AgentSortColumn) -> &'static str {
@@ -748,7 +750,12 @@ impl View {
                 DisplayRow::Sel(row)
                     if row.tab.is_none() && row.squad == self.layout.active_squad
             );
-            let band_w = if r == 0 { btn_reserved } else { text_w };
+            // A band's text keeps one spare cell off the rail border.
+            let band_w = if r == 0 {
+                btn_reserved
+            } else {
+                text_w.saturating_sub(1)
+            };
             let legacy = match drow {
                 DisplayRow::Sel(row) => {
                     let Some(squad) = self.layout.squads.iter().find(|s| s.id == row.squad) else {
