@@ -361,6 +361,7 @@ pub(crate) fn dispatch_with(
         "--".to_string(),
     ]);
     keeper_argv.extend(argv.iter().cloned());
+    let argv_sid = crate::pane_keeper::session_id_from_argv(&keeper_argv);
     let spec = LaunchSpec {
         argv: keeper_argv,
         sock: sock.clone(),
@@ -395,7 +396,7 @@ pub(crate) fn dispatch_with(
             // serves), while an identity bug means the keeper answering is
             // ours and still alive.
             let answered = py_repr_opt(answered_sid.as_deref());
-            let expected = py_repr_opt(crate::pane_keeper::session_id_from_argv(&keeper_argv));
+            let expected = py_repr_opt(argv_sid.as_deref());
             if crate::agent_lock::pid_is_alive(launched as u64) {
                 return refused(SpawnRefusal::err(
                     format!(
@@ -1362,7 +1363,7 @@ mod tests {
                                 let reply = serde_json::json!({
                                     "keeper_pid": 4242,
                                     "child_pid": 4243,
-                                    "argv": self.identify_argv,
+                                    "argv": self.identify_argv.clone(),
                                 });
                                 let payload = serde_json::to_vec(&reply).unwrap();
                                 let _ = stream.write_all(&encode(&Frame::IdentifyReply(payload)));
