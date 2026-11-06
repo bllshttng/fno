@@ -17,7 +17,7 @@ pub mod plan_write;
 pub mod settings;
 pub mod table;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::path::Path;
 
 // The routing-table constants, ported verbatim from

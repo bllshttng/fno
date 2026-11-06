@@ -2185,6 +2185,24 @@ fn is_live_writer(status: AgentStatus) -> bool {
     )
 }
 
+/// The agent-list row's substitution marker: the object naming BOTH
+/// values on a substituted verdict, null on match-or-unknown. Null is the
+/// unknown shape too - a row whose probe has not answered must never read as
+/// clean. Mirrors `format._model_substitution_marker` in the Python emitter.
+fn model_substitution_marker(
+    requested: Option<&str>,
+    observed: &serde_json::Value,
+) -> serde_json::Value {
+    if crate::state::model_substitution(requested, Some(observed)) == "substituted" {
+        json!({
+            "requested": requested,
+            "observed": observed.get("model"),
+        })
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 /// Outcome of the pre-spawn single-writer claim acquisition.
 #[derive(Debug)]
 enum ClaimOutcome {
@@ -2565,6 +2583,12 @@ async fn spawn_claude_stream_lane(
         json!({"short_id": short_id, "harness": "claude", "status": "live", "lane": "stream"}),
     )
 }
+
+/// The turn a seedless codex thread spawn takes so a rollout exists
+/// and the worker is attachable immediately. Deliberately trivial: it must
+/// cost one small turn and leave a transcript line an operator reads as
+/// startup rather than as work someone asked for.
+const WARMUP_SEED: &str = "Reply with the single word: ready.";
 
 /// Map a provider name string to a per-CLI readiness detector.
 ///
