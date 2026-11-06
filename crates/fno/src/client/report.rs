@@ -14,6 +14,7 @@ pub(super) struct Report {
     preview_request: Option<String>,
     draft: Option<IssueDraft>,
     scroll: usize,
+    pan: usize,
     carry: agent_launcher::LauncherEsc,
     issue: Option<String>,
     node: Option<String>,
@@ -113,6 +114,51 @@ async fn publish(draft: &IssueDraft) -> Result<String, String> {
     }
 }
 
+const PREVIEW_COLS: usize = 60;
+
+fn code_room(term: (u16, u16)) -> usize {
+    PREVIEW_COLS
+        .min(
+            (term.1 as usize)
+                .saturating_sub(chrome::Chrome::FRAME_COLS * 2)
+                .max(1),
+        )
+        // One leading space and two cells of air at the row's right edge.
+        .saturating_sub(3)
+}
+
+fn code_window(line: &str, offset: usize, width: usize) -> String {
+    let cols = chrome::str_cols(line);
+    let tail = chrome::clip_tail(line, cols.saturating_sub(offset));
+    let gap = cols
+        .saturating_sub(chrome::str_cols(&tail) + offset)
+        .min(width);
+    chrome::clip(&format!("{}{tail}", " ".repeat(gap)), width)
+}
+
+fn review_lines(body: &str) -> impl Iterator<Item = (&str, bool)> {
+    body.lines().scan(None::<usize>, |fence, line| {
+        let trimmed = line.trim_start();
+        let ticks = trimmed.bytes().take_while(|&c| c == b'`').count();
+        let literal = fence.is_some() || ticks >= 3;
+        if let Some(open) = *fence {
+            if ticks >= open && trimmed[ticks..].trim().is_empty() {
+                *fence = None;
+            }
+        } else if ticks >= 3 {
+            *fence = Some(ticks);
+        }
+        Some((line, literal))
+    })
+}
+
+fn code_block(text: &str) -> String {
+    // A pane's own Markdown fences must not close the captured block.
+    let ticks = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat((ticks + 1).max(3));
+    format!("{fence}text\n{text}\n{fence}")
+}
+
 impl Report {
     fn new(context: String, parent: Option<String>) -> Self {
         Self {
@@ -125,6 +171,7 @@ impl Report {
             preview_request: None,
             draft: None,
             scroll: 0,
+            pan: 0,
             carry: Default::default(),
             issue: None,
             node: None,
@@ -229,7 +276,7 @@ impl Report {
         });
     }
 
-    fn popup(&self) -> Popup {
+    fn popup(&self, term: (u16, u16)) -> Popup {
         let auth = match self.auth {
             None => "Checking gh authentication for fnodotdev/fno…",
             Some(true) => "Public issue: github.com/fnodotdev/fno. Copy: your fno backlog (its sharing settings apply).",
@@ -248,8 +295,10 @@ impl Report {
             if !self.notice.is_empty() {
                 rows.push(PopupRow::Text(self.notice.clone()));
             }
-            rows.extend(draft.body.lines().map(|line| {
-                if line.starts_with("## ") {
+            rows.extend(review_lines(&draft.body).map(|(line, literal)| {
+                if literal {
+                    PopupRow::Text(code_window(line, self.pan, code_room(term)))
+                } else if line.starts_with("## ") {
                     PopupRow::Header(line.into())
                 } else {
                     PopupRow::Text(line.into())
@@ -262,19 +311,19 @@ impl Report {
                     " filing…"
                 } else if self.auth == Some(true) {
                     if self.issue.is_some() || self.node.is_some() {
-                        " ↑↓ scroll · Enter retry · Esc close"
+                        " ↑↓ scroll · ←→ pan · Enter retry · Esc close"
                     } else {
-                        " ↑↓ scroll · Enter send · Esc edit"
+                        " ↑↓ scroll · ←→ pan · Enter send · Esc edit"
                     }
                 } else {
-                    " ↑↓ scroll · Enter backlog only · Esc edit"
+                    " ↑↓ scroll · ←→ pan · Enter backlog only · Esc edit"
                 },
             )
         } else {
             let mut rows = vec![
-                PopupRow::Info { label: "type".into(), value: if self.feature { "idea" } else { "bug" }.into() },
+                PopupRow::Header(format!("type: {}", if self.feature { "idea" } else { "bug" })),
                 self.field.row("description"),
-                PopupRow::Text("Includes terminal text, focused row, build and up to 40 lines from client and server logs. Check the full preview for private details before sending.".into()),
+                PopupRow::Text("Includes focused pane text, focused row, build and up to 40 lines from client and server logs. Check the full preview for private details before sending.".into()),
                 PopupRow::Text(auth.into()),
             ];
             if !self.notice.is_empty() {
@@ -289,18 +338,33 @@ impl Report {
         let mut popup = Popup::new(rows, Anchor::Center)
             .title(title)
             .footer(footer)
-            .plain_body();
+            .plain_body()
+            .width_cap(PREVIEW_COLS);
         popup.scroll = self.scroll;
         popup
     }
 
     fn scroll_limit(&self, term: (u16, u16)) -> usize {
-        let popup = self.popup();
+        let popup = self.popup(term);
         popup
             .render((u16::MAX, term.1))
             .lines
             .len()
             .saturating_sub(popup.render(term).lines.len())
+    }
+
+    fn pan_limit(&self, term: (u16, u16)) -> usize {
+        self.draft
+            .as_ref()
+            .map(|draft| {
+                review_lines(&draft.body)
+                    .filter(|(_, literal)| *literal)
+                    .map(|(line, _)| chrome::str_cols(line))
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_sub(code_room(term))
+            })
+            .unwrap_or(0)
     }
 
     fn complete(&mut self, result: Outcome) -> bool {
@@ -315,6 +379,7 @@ impl Report {
             Outcome::Draft(Ok(draft)) => {
                 self.draft = Some(draft);
                 self.scroll = 0;
+                self.pan = 0;
                 self.notice.clear();
             }
             Outcome::Draft(Err(error)) => {
@@ -329,6 +394,7 @@ impl Report {
                 notice,
             } => {
                 self.scroll = 0;
+                self.pan = 0;
                 self.issue = issue;
                 self.node = node;
                 self.notice = notice;
@@ -340,21 +406,17 @@ impl Report {
 }
 
 pub(super) fn open(view: &mut View) {
-    let frame = crate::vt::frame_text(&view.compose());
-    let rows = view.display_rows();
+    let frame = view
+        .frames
+        .get(&view.layout.focus)
+        .filter(|frame| frame.geometry_ok())
+        .map(crate::vt::frame_text)
+        .unwrap_or_else(|| "[focused pane text unavailable]".into());
     let agent = view
-        .selector
-        .and_then(|i| rows.get(i))
-        .and_then(|row| match row {
-            DisplayRow::Agent(a) => Some(*a),
-            _ => None,
-        })
-        .or_else(|| {
-            view.layout
-                .agents
-                .iter()
-                .find(|a| view.row_hosts_pane(a, view.layout.focus))
-        });
+        .layout
+        .agents
+        .iter()
+        .find(|a| view.row_hosts_pane(a, view.layout.focus));
     let row = agent
         .map(|a| {
             format!(
@@ -366,8 +428,8 @@ pub(super) fn open(view: &mut View) {
         })
         .unwrap_or_else(|| format!("pane: {}\nno agent row", view.layout.focus));
     let server_log = crate::proto::mux_dir().join(format!("{}.log", view.session));
-    let context = format!("## Build\nversion: {}\nrevision: {}\ndirty: {}\n\n## Focused row\n{}\n\n## Frame\n```text\n{}\n```\n\n## Server log\n```text\n{}\n```\n\n## Client log\n```text\n{}\n```", BUILD_VERSION, env!("FNO_MUX_GIT_REV"), env!("FNO_MUX_GIT_DIRTY"), row, frame,
-        crate::mux_log::tail(&server_log, 40), crate::mux_log::tail(&crate::mux_log::client_path(), 40));
+    let context = format!("## Build\nversion: {}\nrevision: {}\ndirty: {}\n\n## Focused row\n{}\n\n## Frame\n{}\n\n## Server log\n{}\n\n## Client log\n{}", BUILD_VERSION, env!("FNO_MUX_GIT_REV"), env!("FNO_MUX_GIT_DIRTY"), row, code_block(&frame),
+        code_block(&crate::mux_log::tail(&server_log, 40)), code_block(&crate::mux_log::tail(&crate::mux_log::client_path(), 40)));
     view.clear_peek();
     let mut report = Report::new(
         context,
@@ -388,6 +450,8 @@ pub(super) fn keys(view: &mut View, bytes: &[u8]) {
     if report.draft.is_some() {
         let limit = report.scroll_limit(view.term);
         report.scroll = report.scroll.min(limit);
+        let pan_limit = report.pan_limit(view.term);
+        report.pan = report.pan.min(pan_limit);
         for key in report.carry.fold_carry(bytes, bytes.is_empty()) {
             match key {
                 LKey::Esc => {
@@ -397,11 +461,17 @@ pub(super) fn keys(view: &mut View, bytes: &[u8]) {
                     }
                     report.draft = None;
                     report.scroll = 0;
+                    report.pan = 0;
                     report.notice.clear();
                 }
                 LKey::Up => report.scroll = report.scroll.saturating_sub(1),
                 LKey::Down => report.scroll = report.scroll.saturating_add(1).min(limit),
-                LKey::Home => report.scroll = 0,
+                LKey::Left => report.pan = report.pan.saturating_sub(8),
+                LKey::Right => report.pan = report.pan.saturating_add(8).min(pan_limit),
+                LKey::Home => {
+                    report.scroll = 0;
+                    report.pan = 0;
+                }
                 LKey::End => report.scroll = limit,
                 LKey::Enter => {
                     report.send();
@@ -492,7 +562,14 @@ pub(super) async fn snapshot(view: &mut View, preview: bool) -> Result<(), Strin
 
 pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
     if let Some(report) = &view.report {
-        draw_popup_overlay(cells, rows, cols, &report.popup(), view.term, &view.theme);
+        draw_popup_overlay(
+            cells,
+            rows,
+            cols,
+            &report.popup(view.term),
+            view.term,
+            &view.theme,
+        );
     }
 }
 

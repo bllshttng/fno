@@ -402,7 +402,10 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     )
     .unwrap();
     std::fs::set_permissions(&door, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let draft_body = format!("## What happened?\n\nportal stopped\n{}\n[session] <local path> [host]\nreport-frame-evidence feedback-row probe-bbbb server-log-evidence client-log-evidence\nfno-feedback-ref: report-preview-ref\n", (0..50).map(|n| format!("diagnostic line {n}")).collect::<Vec<_>>().join("\n"));
+    let box_top = format!("┌{}┐", "─".repeat(70));
+    let box_bottom = format!("└{}┘", "─".repeat(70));
+    let box_body = format!("│ focus-left {} right-edge │", " ".repeat(45));
+    let draft_body = format!("## What happened?\n\nportal stopped\n## Frame\n```text\n{box_top}\n{box_body}\n{box_bottom}\n```\n{}\n[session] <local path> [host]\nreport-frame-evidence feedback-row probe-bbbb server-log-evidence client-log-evidence\nfno-feedback-ref: report-preview-ref\n", (0..50).map(|n| format!("diagnostic line {n}")).collect::<Vec<_>>().join("\n"));
     std::fs::write(scratch.0.join("draft.json"), serde_json::json!({"title":"[bug] portal stopped", "body":draft_body, "ref":"report-preview-ref"}).to_string()).unwrap();
     let gh = scratch.0.join("gh");
     std::fs::write(
@@ -498,17 +501,27 @@ exit 1
                 ..Default::default()
             };
             let layout: ServerMsg = serde_json::from_value(serde_json::json!({"Layout": {
-                "squads": [{"id": 1, "name": "report", "canonical_cwd": cwd, "tabs": [{"id": 1, "name": "shell"}], "active_tab": 0, "panes": 1}],
-                "active_squad": 1, "panes": [[1, {"x": 0, "y": 0, "rows": rows, "cols": cols}]], "focus": 1, "area": [rows, cols], "agents": [row]
+                "squads": [{"id": 1, "name": "report", "canonical_cwd": cwd, "tabs": [{"id": 1, "name": "shell"}], "active_tab": 0, "panes": 2}],
+                "active_squad": 1, "panes": [[1, {"x": 0, "y": 0, "rows": rows / 2, "cols": cols}], [2, {"x": 0, "y": rows / 2, "rows": rows - rows / 2, "cols": cols}]], "focus": 1, "area": [rows, cols], "agents": [row]
             }})).unwrap();
-            let mut pane = fno::vt::Pane::new(rows, cols);
-            pane.feed(b"report-frame-evidence\r\n$ ");
+            let mut pane = fno::vt::Pane::new(rows / 2, cols);
+            pane.feed(b"report-frame-evidence\r\n```\r\n$ ");
             write_msg_sync(&mut stream, &layout).unwrap();
             write_msg_sync(
                 &mut stream,
                 &ServerMsg::Frame {
                     pane_id: 1,
                     frame: pane.frame(),
+                },
+            )
+            .unwrap();
+            let mut other = fno::vt::Pane::new(rows - rows / 2, cols);
+            other.feed(b"OTHER-PANE-PRIVATE\r\n");
+            write_msg_sync(
+                &mut stream,
+                &ServerMsg::Frame {
+                    pane_id: 2,
+                    frame: other.frame(),
                 },
             )
             .unwrap();
@@ -543,11 +556,14 @@ exit 1
             ("FNO_BIN", door.to_str().unwrap()),
             ("RECORD_DIR", scratch.0.to_str().unwrap()),
             ("PATH", &report_path),
+            ("NO_COLOR", "1"),
             ("FNO_REPO_ROOT", config_root.to_str().unwrap()),
         ],
     );
     h.wait_screen(15, |s| {
-        s.contains("feedback-row") && s.contains("report-frame-evidence")
+        s.contains("feedback-row")
+            && s.contains("report-frame-evidence")
+            && s.contains("OTHER-PANE-PRIVATE")
     });
     for (name, text) in [
         ("main.log", "server-log-evidence"),
@@ -567,13 +583,28 @@ exit 1
     let report_screen = h.wait_screen(5, |s| s.contains("report a problem"));
     let body_column = report_screen
         .lines()
-        .find_map(|line| line.find("Includes terminal text"))
+        .find_map(|line| line.find("Includes focused pane text"))
         .expect("report capture notice");
     let footer_column = report_screen
         .lines()
         .find_map(|line| line.find("Tab type"))
         .expect("report action hints");
     assert_eq!(footer_column, body_column, "report footer aligns with body");
+    for label in ["type", "description"] {
+        let (row, line) = report_screen
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(label))
+            .unwrap();
+        let col = line[..line.find(label).unwrap()].chars().count();
+        let frame = h.pane.frame();
+        assert_ne!(
+            frame.cells[row * frame.cols as usize + col].flags & fno::proto::cell_flags::BOLD,
+            0,
+            "{label} label must be bold: row={row} col={col} text={line:?} cell={:?}",
+            frame.cells[row * frame.cols as usize + col]
+        );
+    }
     let cursor_deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         h.screen();
@@ -588,7 +619,20 @@ exit 1
     }
     h.type_bytes(b"\x1b[<0;100;7M\x1b[<0;100;7m");
     h.type_bytes(b"portal stopped\r");
-    h.wait_screen(15, |s| s.contains("review GitHub issue"));
+    let preview = h.wait_screen(15, |s| s.contains("review GitHub issue"));
+    let lines: Vec<_> = preview.lines().collect();
+    let border = lines
+        .iter()
+        .position(|line| line.contains('┌'))
+        .expect("frame top border");
+    assert!(
+        lines[border + 1].contains("│ focus-left"),
+        "frame lines must not rewrap"
+    );
+    h.type_bytes(b"\x1b[C\x1b[C\x1b[C");
+    h.wait_screen(5, |s| s.contains("right-edge"));
+    h.type_bytes(b"\x1b[H");
+    h.wait_screen(5, |s| s.contains("│ focus-left"));
     assert!(
         !scratch.0.join("issue-calls").exists(),
         "preview must not publish"
@@ -666,6 +710,18 @@ exit 1
     );
     assert!(!body.contains(session));
     let captured = std::fs::read_to_string(scratch.0.join("draft-argv")).unwrap();
+    assert!(
+        captured.contains("````text\nreport-frame-evidence\n```"),
+        "pane Markdown cannot close the captured block"
+    );
+    assert!(
+        !captured.contains("OTHER-PANE-PRIVATE"),
+        "other panes must not enter the report"
+    );
+    assert!(
+        !captured.contains("working unknown"),
+        "mux chrome must not enter the pane capture"
+    );
     for evidence in [
         session,
         "report-frame-evidence",

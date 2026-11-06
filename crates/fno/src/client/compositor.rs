@@ -205,6 +205,13 @@ pub(super) fn apply_style(out: &mut impl Write, cell: &Cell) -> std::io::Result<
     // Reset first: attribute REMOVAL (e.g. bold -> plain) has no incremental
     // form worth tracking at this scale.
     queue!(out, style::SetAttribute(style::Attribute::Reset))?;
+    // With NO_COLOR, crossterm emits an empty SGR for each color. Set colors
+    // before attributes so those resets cannot erase bold, inverse or italic.
+    queue!(
+        out,
+        style::SetForegroundColor(map_color(cell.fg)),
+        style::SetBackgroundColor(map_color(cell.bg))
+    )?;
     if cell.flags & cf::BOLD != 0 {
         queue!(out, style::SetAttribute(style::Attribute::Bold))?;
     }
@@ -223,11 +230,6 @@ pub(super) fn apply_style(out: &mut impl Write, cell: &Cell) -> std::io::Result<
     if cell.flags & cf::DIM != 0 {
         queue!(out, style::SetAttribute(style::Attribute::Dim))?;
     }
-    queue!(
-        out,
-        style::SetForegroundColor(map_color(cell.fg)),
-        style::SetBackgroundColor(map_color(cell.bg))
-    )?;
     Ok(())
 }
 
