@@ -679,7 +679,7 @@ pub fn run_repair(action: &str, cwd: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::claims::{encode_key, hostname, machine_id, now_ms, SCHEMA_VERSION};
-    use crate::tick_ledger::{UnmeasuredRetry, SCHED_LAUNCHD};
+    use crate::tick_ledger::SCHED_LAUNCHD;
 
     fn row(arm: &str, sched: &str) -> ArmStatus {
         ArmStatus {
