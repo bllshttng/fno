@@ -3074,9 +3074,10 @@ mod tests {
         assert_eq!(control["params"]["config"]["bypass_hook_trust"], true);
     }
 
-    /// AC2: an unknown codex version bypasses nothing, so every frame stays
-    /// byte-identical to the pre-bypass form: no config key where none was,
-    /// and a caller's own config rides through untouched.
+    /// AC2: an unknown codex version bypasses nothing, so no frame carries
+    /// the bypass key and a caller's own config rides through untouched. The
+    /// worker MCP disable still fills the absent names: the config param
+    /// predates the supported codex floor, so the map is not a skew surface.
     #[test]
     fn unknown_codex_keeps_hook_trust_frames_byte_identical() {
         let caller_config = {
@@ -3093,7 +3094,10 @@ mod tests {
             config_with_hook_trust_bypass(None, false).as_ref(),
         ))
         .unwrap();
-        assert!(frame["params"].get("config").is_none());
+        // The bypass key is the protocol-skew surface, not the config map
+        // itself: the worker MCP disable fills the absent names on every
+        // frame, and the config param predates the supported codex floor.
+        assert!(frame["params"]["config"].get("bypass_hook_trust").is_none());
         let resumed: Value = serde_json::from_str(&thread_resume_request_with_options(
             1,
             "thread-b",
