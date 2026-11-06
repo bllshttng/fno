@@ -186,7 +186,7 @@ CONTEXT_RUNNER="${FNO_AGENTS_FRONT:-fno-agents}"
 # 2026-10-30 and 2026-11-01); production transcripts append, but the fixture
 # shape is the honest contract. Keyed by the transcript basename the payload
 # handed us.
-TSTATS="$(cksum < "$TRANSCRIPT" 2>/dev/null || true)"
+TSTATS="$(cksum 2>/dev/null < "$TRANSCRIPT" || true)"
 TSTATS="$(printf '%s' "$TSTATS" | tr -c '0-9' '-')"
 if command -v jq >/dev/null 2>&1 && command -v "$CONTEXT_RUNNER" >/dev/null 2>&1; then
     PROBE_OUT=$(hook_cache_serve "ctxprobe-$TBASE" 300 "$TSTATS" -- \
