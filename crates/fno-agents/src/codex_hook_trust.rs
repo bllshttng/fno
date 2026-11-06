@@ -142,7 +142,7 @@ fn run(home: &Path, write: bool) -> HookTrustReport {
             Ok(runtime) => runtime,
             Err(error) => return Err(format!("trust runtime: {error}")),
         };
-        runtime.block_on(trust_flow(&socket_for_thread, home, write))
+        runtime.block_on(trust_flow(&socket_for_thread, &home, write))
     })
     .join()
     .unwrap_or_else(|_| Err("trust thread panicked".to_string()));
