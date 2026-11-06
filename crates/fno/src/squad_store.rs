@@ -2237,6 +2237,13 @@ fn mutate_lifecycle(f: impl FnOnce(&mut Vec<ExternalLifecycle>)) -> io::Result<(
 /// `$HOME/.fno`). The call site in [`mutate_file`] is `#[cfg(not(test))]`: an
 /// in-process unit test already isolates via [`set_test_path`], and the guard
 /// would otherwise fire on every one of them (they all run under `target/`).
+#[cfg(not(test))]
+fn build_tree_target_dir(exe: &std::path::Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .find(|d| d.join(".rustc_info.json").exists() || d.join("CACHEDIR.TAG").exists())
+        .map(|d| d.to_path_buf())
+}
+
 /// It covers the OTHER arm - the exec'd binary and the library as linked into
 /// integration tests - where the thread-local override does not exist and
 /// [`squads_path`] resolves the real `$HOME/.fno`. Forgetting the env var then

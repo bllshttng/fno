@@ -46,12 +46,13 @@ mod wire_version;
 mod workspace_folder;
 use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
-#[cfg(test)]
 use self::rename_overlay::RenameTarget;
 pub use row_menu::SplitOpens;
 #[cfg(test)]
 use row_menu::{build_row_menu, row_menu_execute_selected};
 use row_menu::{build_tab_menu, row_menu_keys, row_menu_mouse};
+#[cfg(test)]
+use sweep_scope::parse_sweep_receipt;
 use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
 
 // Pickers, the launch moment and the snapshot action live in their own

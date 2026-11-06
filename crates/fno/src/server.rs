@@ -48,7 +48,6 @@ use crate::restore_liveness::{
     classify_member, no_resume_form_reason, restore_worker_refusal_reason, worker_registry_match,
     MemberVerdict,
 };
-#[cfg(test)]
 use crate::spawn_journal::{
     receipt_for_member, scan_spawn_journal, worker_binding_key, BatchReplay, DetachedPane,
     HeldWorker, ReentrySpawnRequest, ReentryVerdict, SpawnJournal,
