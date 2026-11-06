@@ -137,7 +137,8 @@ const HOOK_TRUST_FLAG_MIN_VERSION: &str = "0.148.0";
 /// plugin install never trusts, so a worker would run without fno's guards and
 /// Stop hook. Only hook review is skipped; sandbox and approval stay as the
 /// posture set them. Valid on `codex`, `exec`, `exec resume` and `resume`.
-/// Mirror of `codex.py::codex_hook_trust_args`.
+/// The thread lane carries the same posture as the `bypass_hook_trust`
+/// config override (`codex_thread::config_with_hook_trust_bypass`).
 pub fn hook_trust_flag() -> Vec<String> {
     // `FNO_CODEX_VERSION` pins the answer, and the Python twin reads the same
     // key, so a run that sets it gets one argv from both runtimes. Empty

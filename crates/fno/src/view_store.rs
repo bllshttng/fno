@@ -232,6 +232,10 @@ struct StoreFile {
     /// The card's `node · PR` header row. Default absent = true (shown).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     card_head: Option<serde_json::Value>,
+    /// Nest workers under their lead in the card layout. Default absent =
+    /// false: cards sit flat, and the list layout always nests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group_by_lead: Option<serde_json::Value>,
     /// The manual reorder sequence (agent names, display order). Default
     /// absent = empty (everything sorts by name at the manual column).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -922,6 +926,23 @@ pub fn load_card_head() -> bool {
 pub fn save_card_head(on: bool) {
     mutate(|file| {
         file.card_head = serde_json::to_value(on).ok();
+    });
+}
+
+pub fn load_group_by_lead() -> bool {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return false;
+    }
+    read_raw()
+        .group_by_lead
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(false)
+}
+
+pub fn save_group_by_lead(on: bool) {
+    mutate(|file| {
+        file.group_by_lead = serde_json::to_value(on).ok();
     });
 }
 

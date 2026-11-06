@@ -1440,6 +1440,7 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
             .env("FNO_SPAWN_GATE", "0")
             .env("FNO_E2E", "1")
             .env("FNO_AGENTS_HOME", &root)
+            .env("FNO_CLAIMS_ROOT", root.join("claims"))
             .env("FNO_CONFIG", &config)
             .env("DEVCONTAINER_LOG", &log)
             .env("PROBE_EXIT", probe_exit)

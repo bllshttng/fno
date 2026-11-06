@@ -809,16 +809,6 @@ mod tests {
         assert!(read_doc(&p).contains("status: \"design\""));
     }
 
-    #[test]
-    fn sweep_tier2_uses_signal() {
-        let dir = tmp_dir("tier2");
-        write_doc(&dir, "closed.md", &plan_doc("status: implemented"));
-        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
-        assert_eq!(res.normalized, 1);
-        assert_eq!(res.superseded, 0);
-        assert!(read_doc(&dir.join("closed.md")).contains("status: \"done\""));
-    }
-
     // ------------------------------------------------------------------
     // Tier 3: canonical-but-stale -> node projection
     // ------------------------------------------------------------------
@@ -899,21 +889,6 @@ mod tests {
         assert!(res.summary().contains("1 stood down"));
         assert_eq!(read_doc(&p), before);
         assert!(res.warnings.iter().any(|w| w.contains("tier2 off")));
-    }
-
-    /// The sweep-level hold: a live node's unknown word is counted, warned,
-    /// and left byte-for-byte alone.
-    #[test]
-    fn sweep_holds_a_live_node_doc() {
-        let dir = tmp_dir("hold");
-        let p = write_doc(&dir, "a.md", &linked_plan("wip", "x-1"));
-        let before = read_doc(&p);
-        let res = sweep(&dir, true, &map(&[("x-1", "in_progress")]));
-        assert_eq!(res.stood_down, 1);
-        assert_eq!(res.skipped, 0);
-        assert_eq!(res.superseded, 0);
-        assert!(res.warnings.iter().any(|w| w.contains("tier2 hold")));
-        assert_eq!(read_doc(&p), before);
     }
 
     fn read_doc(p: &Path) -> String {

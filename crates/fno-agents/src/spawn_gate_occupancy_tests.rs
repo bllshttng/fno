@@ -25,6 +25,7 @@ struct OccupancyFixture {
     _lock: std::sync::MutexGuard<'static, ()>,
     dir: std::path::PathBuf,
     registry: std::path::PathBuf,
+    roster_log: std::path::PathBuf,
     pid: u32,
     prior: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
@@ -45,6 +46,7 @@ impl OccupancyFixture {
         let home = dir.join("agents-home");
         let claims_root = dir.join("claims-root");
         let fnodir = dir.join(".fno");
+        let roster_log = dir.join("claude-reads.log");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&claims_root).unwrap();
         std::fs::create_dir_all(&fnodir).unwrap();
@@ -58,7 +60,11 @@ impl OccupancyFixture {
         // roster row can resolve to the fixture node.
         let bin = dir.join("stub-bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let _ = crate::write_exec_stub(&bin, "claude", "#!/bin/sh\necho '{\"agents\": []}'\n");
+        let roster_script = format!(
+            "#!/bin/sh\nprintf 'read\\n' >> '{}'\nprintf '%s\\n' '{{\"agents\": []}}'\n",
+            roster_log.display()
+        );
+        let _ = crate::write_exec_stub(&bin, "claude", &roster_script);
         // The transcript store redirect: an empty projects dir keeps the
         // reachability read off the real machine's store.
         let claude_dir = dir.join("claude-dir");
@@ -73,6 +79,7 @@ impl OccupancyFixture {
         let path_var = std::env::var_os("PATH");
         let claude_dir_var = std::env::var_os("CLAUDE_DIR_OVERRIDE");
         let fno_home_var = std::env::var_os("FNO_HOME");
+        let state_dir_var = std::env::var_os("FNO_STATE_DIR");
         let prior_home = std::env::var_os(crate::paths::HOME_ENV);
         let prior_claims = std::env::var_os("FNO_CLAIMS_ROOT");
         let prior_config = std::env::var_os("FNO_CONFIG");
@@ -85,11 +92,13 @@ impl OccupancyFixture {
             _lock: lock,
             dir,
             registry: std::path::PathBuf::new(),
+            roster_log,
             pid,
             prior: vec![
                 ("PATH", path_var),
                 ("CLAUDE_DIR_OVERRIDE", claude_dir_var),
                 ("FNO_HOME", fno_home_var),
+                ("FNO_STATE_DIR", state_dir_var),
                 (crate::paths::HOME_ENV, prior_home),
                 ("FNO_CLAIMS_ROOT", prior_claims),
                 ("FNO_CONFIG", prior_config),
@@ -104,6 +113,7 @@ impl OccupancyFixture {
         std::env::set_var("PATH", std::env::join_paths(&paths).unwrap());
         std::env::set_var("CLAUDE_DIR_OVERRIDE", &claude_dir);
         std::env::set_var("FNO_HOME", &fno_home);
+        std::env::set_var("FNO_STATE_DIR", &fno_home);
         std::env::set_var(crate::paths::HOME_ENV, &home);
         std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
         std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
@@ -119,6 +129,7 @@ impl OccupancyFixture {
             &[
                 Self::graph_node("x-occ-node"),
                 Self::graph_node("x-occ-other"),
+                Self::graph_node("x-ecf4"),
             ],
         )
         .expect("seed fixture graph");
@@ -159,6 +170,12 @@ impl OccupancyFixture {
             "entries": entries,
         });
         crate::registry_store::replace_document(&self.registry, registry);
+    }
+
+    fn roster_reads(&self) -> usize {
+        std::fs::read_to_string(&self.roster_log)
+            .map(|contents| contents.lines().count())
+            .unwrap_or_default()
     }
 
     fn spawn_on(&self, node: &str, caller_session: Option<&str>) -> Result<GateGuard, Refusal> {
@@ -239,6 +256,60 @@ fn the_occupancy_arm_admits_unoccupied_and_excluded() {
 }
 
 #[test]
+fn guard_and_gate_share_one_roster_read() {
+    let fixture = OccupancyFixture::new();
+    let params = serde_json::json!({
+        "node": "x-ecf4",
+        "slug": "occ-ecf4",
+        "plan": "/tmp/occ-ecf4-plan.md",
+        "session_phase": "execute",
+        "substrate": "thread",
+        "message": "seed turn",
+    });
+    let _scope = crate::backlog::worked::RosterScope::open();
+    let hold = crate::spawn_guard::guard_client_spawn(&params, "t-second-occ", &fixture.dir, None)
+        .expect("node guard should admit")
+        .expect("node guard should retain its claim");
+    let gate = fixture
+        .spawn_on("x-ecf4", None)
+        .expect("the same occupancy answer should admit at the gate");
+
+    assert_eq!(
+        fixture.roster_reads(),
+        1,
+        "guard and gate share one roster read"
+    );
+
+    drop(gate);
+    drop(hold);
+}
+
+#[test]
+fn guard_occupancy_does_not_require_a_graph_read() {
+    let fixture = OccupancyFixture::new();
+    let graph = fixture.dir.join("fno-home/db/graph.db");
+    std::fs::write(&graph, b"not a sqlite database").unwrap();
+    let params = serde_json::json!({
+        "node": "x-ecf4",
+        "slug": "occ-ecf4",
+        "plan": "/tmp/occ-ecf4-plan.md",
+        "session_phase": "execute",
+        "substrate": "thread",
+        "message": "seed turn",
+    });
+
+    let hold = crate::spawn_guard::guard_client_spawn(&params, "t-second-occ", &fixture.dir, None)
+        .expect("node guard should admit from the provider roster")
+        .expect("node guard should retain its claim");
+    assert_eq!(
+        fixture.roster_reads(),
+        1,
+        "the guard reads the provider roster once"
+    );
+    drop(hold);
+}
+
+#[test]
 fn a_finished_row_admits_the_node() {
     let fixture = OccupancyFixture::new();
     fixture.write_entries(vec![fixture.worker_on(
@@ -252,4 +323,42 @@ fn a_finished_row_admits_the_node() {
     // a fresh spawn once the worker's own row reads exited.
     check_node_occupancy("x-occ-node", None, false)
         .expect("an exited row is positive evidence of the end; the arm admits");
+}
+
+#[test]
+fn one_roster_scope_shells_the_claude_roster_once() {
+    let fixture = OccupancyFixture::new();
+    fixture.write_entries(vec![fixture.worker_on(
+        "fork-occ-fixture",
+        "sess-occ-fork",
+        "x-occ-other",
+        "live",
+    )]);
+    let count = fixture.dir.join("roster-runs");
+    let script = format!(
+        "#!/bin/sh\necho run >> '{}'\necho '{{\"agents\": []}}'\n",
+        count.display()
+    );
+    let _ = crate::write_exec_stub(&fixture.dir.join("stub-bin"), "claude", &script);
+    let runs = || {
+        std::fs::read_to_string(&count)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    };
+
+    // The guard and both gate occupancy arms replay one provider reading.
+    let scope = crate::backlog::worked::RosterScope::open();
+    let overlay = crate::backlog::worked::reachable_workers_by_node_excluding(None)
+        .expect("the guard's roster read");
+    assert!(!overlay.contains_key("x-occ-node"), "{overlay:?}");
+    check_node_occupancy("x-occ-node", None, false).expect("admit arm");
+    check_node_occupancy("x-occ-other", None, false)
+        .expect_err("the replayed reading still names the live worker");
+    assert_eq!(runs(), 1, "one scope shells the roster once");
+
+    // A queued pass forgets the reading and reads afresh.
+    crate::backlog::worked::forget_roster_reading();
+    check_node_occupancy("x-occ-node", None, false).expect("dequeue arm");
+    assert_eq!(runs(), 2, "a forgotten reading re-reads");
+    drop(scope);
 }

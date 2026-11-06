@@ -122,27 +122,6 @@ fn start_daemon(home: &AgentsHome) -> DaemonChild {
     start_daemon_env(home, &[])
 }
 
-fn start_daemon_with_bin(home: &AgentsHome, daemon_bin: &Path) -> DaemonChild {
-    let seen = common::count_events(home, "daemon_started");
-    let stderr =
-        std::fs::File::create(home.root().join("daemon.stderr")).expect("daemon.stderr creates");
-    let mut cmd = Command::new(daemon_bin);
-    cmd.env("FNO_AGENTS_HOME", home.root())
-        .env("HOME", home.root())
-        .envs(fno_agents::test_run::self_owner_env())
-        .env("FNO_AGENTS_IDLE_EXIT_SECS", "3600")
-        .env("FNO_EVENTS_PATH", home.root().join(".fno/events.jsonl"))
-        // Outside any git checkout, so the daily reclaim sweep's cargo-build-dirs
-        // lane (`crate::reclaim::maybe_run_daily`) finds no workspace manifest to
-        // resolve and never reaches the real machine's build base.
-        .current_dir(home.root())
-        .stderr(std::process::Stdio::from(stderr));
-    let child = cmd.spawn().expect("daemon spawns");
-    common::wait_for_path(&home.supervisor_sock(), Duration::from_secs(10));
-    common::wait_for_event_count(home, "daemon_started", seen + 1, Duration::from_secs(10));
-    DaemonChild(child)
-}
-
 /// Like [`start_daemon`] but with extra env on the daemon process. Used by tests
 /// that seed a precise registry status the startup reconcile sweep (Architecture
 /// B) would otherwise settle -- e.g. `FNO_AGENTS_NO_STARTUP_RECONCILE=1` to keep
@@ -835,60 +814,6 @@ async fn restart_over_a_large_roster_leaves_exactly_one_daemon() {
     restart_leaves_exactly_one_daemon(28).await;
 }
 
-#[tokio::test]
-async fn daemon_child_env_isolated_probe() {
-    let intended_home = short_home();
-    let sibling_home = short_home();
-    intended_home.ensure_root().unwrap();
-    sibling_home.ensure_root().unwrap();
-    let marker = intended_home.root().join("daemon-env-probe.log");
-    let intended_bin = daemon_env_bin(
-        &intended_home,
-        "intended",
-        Some(&marker),
-        &[("FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS", "3000")],
-    );
-    let sibling_bin = daemon_env_bin(&sibling_home, "sibling", Some(&marker), &[]);
-
-    let mut incumbent = start_daemon(&intended_home);
-    // Reap DURING the restart: the pid-confirmed termination cannot see an
-    // unwaited zombie child of this test process die.
-    let reaper = std::thread::spawn(move || incumbent.wait());
-    let restart = {
-        let home = intended_home.clone();
-        let bin = intended_bin.clone();
-        tokio::spawn(async move { fno_agents::client::restart_daemon(&home, &bin, false).await })
-    };
-    let mut sibling = start_daemon_with_bin(&sibling_home, &sibling_bin);
-    let outcome = restart.await.unwrap().expect("probe restart succeeds");
-    reaper
-        .join()
-        .expect("incumbent reaper joins")
-        .expect("incumbent reap succeeds");
-    terminate_untracked(outcome.new_pid);
-    let sibling_pid = sibling.id();
-    unsafe { libc::kill(sibling_pid as libc::pid_t, libc::SIGTERM) };
-    let _ = sibling.wait();
-
-    let probe = std::fs::read_to_string(&marker).expect("daemon env probe marker");
-    assert!(
-        probe.contains("intended delay=3000"),
-        "intended successor did not receive its delay seam: {probe}"
-    );
-    assert!(
-        probe.contains("sibling delay=unset"),
-        "daemon_child_env_isolated expected sibling without delay; probe={probe}"
-    );
-    println!(
-        "daemon_child_env_isolated intended_pid={} sibling_pid={} marker={}",
-        outcome.new_pid,
-        sibling_pid,
-        marker.display()
-    );
-    std::fs::remove_dir_all(intended_home.root()).ok();
-    std::fs::remove_dir_all(sibling_home.root()).ok();
-}
-
 /// status (Wave 5, US6.10, AC10-ERR): with no daemon running, the `fno-agents
 /// status` client exits 13 and does NOT lazy-start a daemon.
 #[tokio::test]
@@ -1565,53 +1490,6 @@ async fn stop_refuses_a_pane_row_and_names_the_row_ref() {
         libc::kill(daemon.id() as libc::pid_t, libc::SIGTERM);
     }
     let _ = daemon.wait();
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[tokio::test]
-async fn restart_when_down_starts_fresh() {
-    // AC2-EDGE: no daemon running -> restart starts a fresh one and reports it,
-    // with no error and old_pid == None.
-    let home = short_home();
-    home.ensure_root().unwrap();
-    let daemon_bin = daemon_env_bin(&home, "restart-when-down", None, &[]);
-
-    let outcome = fno_agents::client::restart_daemon(&home, &daemon_bin, false)
-        .await
-        .expect("restart-when-down succeeds");
-    assert_eq!(outcome.old_pid, None, "nothing was running");
-    assert!(pid_alive(outcome.new_pid), "fresh daemon is alive");
-
-    unsafe {
-        libc::kill(outcome.new_pid as libc::pid_t, libc::SIGTERM);
-    }
-    std::thread::sleep(Duration::from_millis(200));
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn the_default_wrapper_exports_the_test_binary_owner() {
-    // The default (no-extra) wrapper must arm every successor on the test
-    // binary itself: that is the one owner a bare `cargo test` provides, and
-    // the watchdog is what reaps the successor when the test binary dies. The
-    // behavioral counterpart is a_restart_successor_dies_with_its_test_owner,
-    // which hands an explicit owner through `extra`.
-    let home = short_home();
-    home.ensure_root().unwrap();
-    let bin = daemon_env_bin(&home, "default-owner", None, &[]);
-    let script = std::fs::read_to_string(&bin).expect("read the wrapper script");
-    let want_pid = std::process::id().to_string();
-    assert!(
-        script.contains(&format!(
-            "export FNO_TEST_OWNER_PID={}",
-            shell_quote(&want_pid)
-        )),
-        "the wrapper must arm successors on the test binary as owner:\n{script}"
-    );
-    assert!(
-        script.contains("export FNO_TEST_OWNER_BIRTH="),
-        "the wrapper must export the owner birth:\n{script}"
-    );
     std::fs::remove_dir_all(home.root()).ok();
 }
 

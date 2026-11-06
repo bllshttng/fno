@@ -199,8 +199,6 @@ use bot_nudge::{
 };
 pub(crate) use bot_verdict::bot_verdict;
 use bot_verdict::{clean_pass_review, usage_limit_comment_by};
-#[cfg(test)]
-use bounded_run::BOUNDED_STDERR_TAIL_CAP;
 pub(crate) use bounded_run::{
     bounded_read, bounded_read_diagnostic, bounded_read_unadmitted, git_bounded,
     log_bounded_read_error, BoundedOutput, GhReadError,
@@ -3411,15 +3409,6 @@ mod tests {
         })
     }
 
-    fn stale_findings_review() -> Value {
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "state": "COMMENTED",
-            "commit": {"oid": "0000000000"},
-            "submittedAt": "2026-08-17T01:00:00Z"
-        })
-    }
-
     fn fresh_at_head() -> impl Fn(&str) -> Freshness {
         |sha: &str| {
             if sha == "abc12345" {
@@ -3431,13 +3420,6 @@ mod tests {
     }
 
     // ── nudge state ────────────────────────────────────────────────────
-
-    fn nudge_now() -> DateTime<Utc> {
-        "2026-07-06T02:00:00Z".parse().unwrap()
-    }
-    fn mention(body: &str, created: &str) -> Value {
-        serde_json::json!({"body": body, "createdAt": created})
-    }
 
     // ── step 2: inline findings + severity + addressed (US2) ────────────────
 

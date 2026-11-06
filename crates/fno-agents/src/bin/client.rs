@@ -325,21 +325,28 @@ fn main() {
         std::process::exit(fno_agents::pr_watch::run(&args[1..]));
     }
     // A spawn is admitted in process (spawn_seam) before run() parses it.
+    let mut spawn_timing = fno_agents::spawn_seam::SpawnTiming::for_spawn(&args);
     let args = match fno_agents::spawn_seam::admit_spawn(args) {
         Ok(args) => args,
         Err(code) => std::process::exit(code),
     };
+    if let Some(timing) = spawn_timing.as_mut() {
+        timing.record_seam();
+    }
     // Every other client command passes its own seam (agents_seam).
     let command = args.first().cloned().unwrap_or_default();
     let args = match fno_agents::agents_seam::prepare(&command, args) {
         Ok(args) => args,
         Err(code) => std::process::exit(code),
     };
-    let code = rt.block_on(run(args));
+    let code = rt.block_on(run(args, spawn_timing));
     std::process::exit(code);
 }
 
-async fn run(args: Vec<String>) -> i32 {
+async fn run(
+    args: Vec<String>,
+    mut spawn_timing: Option<fno_agents::spawn_seam::SpawnTiming>,
+) -> i32 {
     if args.is_empty() {
         print_help();
         return 0;
@@ -1568,6 +1575,7 @@ async fn run(args: Vec<String>) -> i32 {
     // and fall through to the daemon RPC unchanged.
     let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
     let mut promotion = None;
+    let mut roster_scope: Option<fno_agents::backlog::worked::RosterScope> = None;
     if method == "agent.spawn" && command_owned == "spawn" {
         if let Some(map) = params.as_object_mut() {
             if let Err((line, code)) = fno_agents::spawn_bare::admit(map) {
@@ -1606,18 +1614,33 @@ async fn run(args: Vec<String>) -> i32 {
             // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
             // the pane spine answers every harness arm itself - the Python
             // bounce this branch kept for unseated shapes is deleted.
-            return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
-                let code =
-                    fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
-                fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name)
-            });
+            let caller_session =
+                fno_agents::spawn_promote::gate_input(promotion.as_ref()).caller_session;
+            return fno_agents::spawn_guard::run_guarded_pane(
+                &params,
+                &agent_name,
+                caller_session.as_deref(),
+                || {
+                    let code =
+                        fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+                    fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name)
+                },
+            );
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; a spawn no arm takes falls
         // through to the daemon RPC below.
         let promoted = promotion.as_ref();
-        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &mut spawn_hold, promoted)
-        {
+        // The guard and the gate share one roster read; each gate closes it.
+        roster_scope = Some(fno_agents::backlog::worked::RosterScope::open());
+        if let Some(code) = maybe_run_spawn(
+            &home,
+            &params,
+            &agent_name,
+            &mut spawn_hold,
+            promoted,
+            spawn_timing.as_mut(),
+        ) {
             fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
             let code = fno_agents::spawn_promote::settle(promoted, code, &agent_name);
             if code == 0 {
@@ -1739,12 +1762,15 @@ async fn run(args: Vec<String>) -> i32 {
         None
     };
     let daemon_wait = params.get("wait_secs").and_then(Value::as_f64);
-    let req = Request::new(1, method, params);
+    let mut req = Request::new(1, method, params);
 
     let daemon_spawn_gate = if daemon_bound_thread_spawn {
         let config_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        match fno_agents::spawn_bare::gate_with_wait(daemon_wait, || {
-            fno_agents::spawn_gate::run_gate(
+        let gate_started = std::time::Instant::now();
+        let mut gate_work = std::time::Duration::ZERO;
+        let gate_result = fno_agents::spawn_bare::gate_with_wait(daemon_wait, || {
+            let run_started = std::time::Instant::now();
+            let result = fno_agents::spawn_gate::run_gate(
                 &config_cwd,
                 &home.registry_json(),
                 fno_agents::spawn_gate::GateInput {
@@ -1755,8 +1781,15 @@ async fn run(args: Vec<String>) -> i32 {
                     route_provider: daemon_gate_route_provider.clone(),
                     ..fno_agents::spawn_promote::gate_input(promotion.as_ref())
                 },
-            )
-        }) {
+            );
+            gate_work += run_started.elapsed();
+            result
+        });
+        if let Some(timing) = spawn_timing.as_mut() {
+            timing.record_gate(gate_work, gate_started.elapsed().saturating_sub(gate_work));
+        }
+        drop(roster_scope.take());
+        match gate_result {
             Ok(guard) => Some(guard),
             Err(refusal) => {
                 if let Some(receipt) = &refusal.receipt {
@@ -1768,6 +1801,20 @@ async fn run(args: Vec<String>) -> i32 {
     } else {
         None
     };
+
+    if daemon_bound_thread_spawn
+        && req
+            .params
+            .get("node")
+            .and_then(Value::as_str)
+            .is_some_and(|node| !node.trim().is_empty())
+    {
+        if let Some(timing) = spawn_timing.as_ref() {
+            if let Some(params) = req.params.as_object_mut() {
+                params.insert("stage_ms".into(), timing.client_stage_ms());
+            }
+        }
+    }
 
     let call_result = if command_owned == "rm" {
         let Ok(result) = fno_agents::restart_run::rm_after_drift_repair(
@@ -2091,6 +2138,7 @@ fn maybe_run_spawn(
     name: &str,
     hold: &mut Option<fno_agents::spawn_guard::SpawnHold>,
     promotion: Option<&fno_agents::spawn_promote::Promotion>,
+    mut spawn_timing: Option<&mut fno_agents::spawn_seam::SpawnTiming>,
 ) -> Option<i32> {
     use fno_agents::agy_ask::dispatch_agy_once_with_effort;
     use fno_agents::claude_ask::{
@@ -2404,10 +2452,20 @@ fn maybe_run_spawn(
     // The family-2 node guard runs after the cwd it judges and before the
     // gate. The caller owns the hold, so a codex thread keeps its keys across
     // the daemon RPC, and every exit before a proven launch releases them.
-    *hold = match fno_agents::spawn_guard::guard_client_spawn(params, name, &cwd) {
+    let caller_session = fno_agents::spawn_promote::gate_input(promotion).caller_session;
+    let guard_started = std::time::Instant::now();
+    *hold = match fno_agents::spawn_guard::guard_client_spawn(
+        params,
+        name,
+        &cwd,
+        caller_session.as_deref(),
+    ) {
         Ok(hold) => hold,
         Err(code) => return Some(code),
     };
+    if let Some(timing) = spawn_timing.as_deref_mut() {
+        timing.record_guard(guard_started.elapsed());
+    }
     let mut gate_guard = if substrate == "pane" || codex_thread_fallthrough {
         None
     } else {
@@ -2448,6 +2506,11 @@ fn maybe_run_spawn(
             }
         }
     };
+    // A codex thread's gate runs later, around the daemon RPC, and closes
+    // the roster scope there.
+    if !codex_thread_fallthrough {
+        fno_agents::backlog::worked::close_roster_scope();
+    }
 
     // Each provider module defines its OWN AskOutcome struct (nominally
     // distinct types), so `emit!` prints+returns inline per arm rather than via
