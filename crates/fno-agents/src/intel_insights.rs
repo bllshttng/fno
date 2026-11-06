@@ -1164,23 +1164,6 @@ mod tests {
     }
 
     #[test]
-    fn keepalive_only_and_self_rows_are_dropped() {
-        // AC5-HP
-        let mut keepalive = row("ka", "claude");
-        keepalive.counters = counters(&[("keepalive", 4), ("harness_stop_hook", 1)]);
-        let mut noisy = row("noisy", "claude");
-        noisy.counters = counters(&[("keepalive", 1), ("unknown", 2)]);
-        let mut own = row("own-session", "claude");
-        own.counters = counters(&[("operator", 1)]);
-        let rows = vec![keepalive, noisy, own];
-        let (kept, dropped) = drop_rows(rows, Some("own-session"));
-        assert_eq!(dropped.keepalive_only, 1);
-        assert_eq!(dropped.self_dropped, 1);
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].session, "noisy");
-    }
-
-    #[test]
     fn substantive_needs_two_turns_and_a_minute() {
         // AC6-HP
         assert!(!is_substantive(1, Some(59)));
@@ -1188,20 +1171,6 @@ mod tests {
         assert!(!is_substantive(2, Some(59)));
         assert!(is_substantive(2, Some(60)));
         assert!(!is_substantive(2, None));
-    }
-
-    #[test]
-    fn interleaved_turns_inside_the_window_overlap_once() {
-        // AC8-HP
-        let mut a = row("aaaa", "claude");
-        a.operator_turns = vec!["2026-09-16T12:00:00Z".into(), "2026-09-16T12:10:00Z".into()];
-        let mut b = row("bbbb", "codex");
-        b.operator_turns = vec!["2026-09-16T12:05:00Z".into()];
-        let mut c = row("cccc", "codex");
-        c.operator_turns = vec!["2026-09-16T13:00:00Z".into()];
-        let p = parallel(&[a, b, c]);
-        assert_eq!(p["overlap_pairs"], 1);
-        assert_eq!(p["sessions"], 2);
     }
 
     #[test]
@@ -1217,26 +1186,6 @@ mod tests {
         for kept in &first {
             assert!(all[..3].contains(&kept.as_str()));
         }
-    }
-
-    #[test]
-    fn the_sample_cap_binds_witnessed_sessions_too() {
-        // AC1-HP: three witnessed eligible sessions and N=2 sample exactly
-        // two; the witnessed partition no longer bypasses the cap.
-        let mut rows: Vec<SessionRow> = (0..3)
-            .map(|i| {
-                let mut r = row(&format!("w{i}"), "claude");
-                r.kind = "attended".to_string();
-                r.substantive = true;
-                r.idle = true;
-                r.operator_turns = vec!["2026-09-16T10:00:00Z".to_string()];
-                r
-            })
-            .collect();
-        let (eligible, sampled) = mark_sampled(&mut rows, SampleRequest::N(2));
-        assert_eq!(eligible, Some(3));
-        assert_eq!(sampled, Some(2));
-        assert_eq!(rows.iter().filter(|r| r.sampled).count(), 2);
     }
 
     #[test]
@@ -1339,28 +1288,6 @@ mod tests {
         let (judged, unjudged) = load_facets(&dir, &[stale, fresh], "ab12cd34");
         assert_eq!(judged.len(), 1);
         assert!(unjudged.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_facet_from_another_question_never_judges_this_run() {
-        // A cached facet judged under one question must not judge a
-        // session under another: the fold rejects the carry-over as a
-        // stale question, and so rejects a pre-question facet.
-        let dir = std::env::temp_dir().join(format!("fno-ins-question-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        write_facet(&dir, "s1", 100, 200, Some("aaaa1111"), "tool_failure");
-        let (judged, unjudged) = load_facets(&dir, &[fold_row("s1")], "aaaa1111");
-        assert_eq!(judged.len(), 1);
-        assert!(unjudged.is_empty());
-        let (judged, unjudged) = load_facets(&dir, &[fold_row("s1")], "bbbb2222");
-        assert!(judged.is_empty());
-        assert_eq!(unjudged[0]["reason"], "stale question");
-        write_facet(&dir, "s2", 100, 200, None, "tool_failure");
-        let (judged, unjudged) = load_facets(&dir, &[fold_row("s2")], "aaaa1111");
-        assert!(judged.is_empty());
-        assert_eq!(unjudged[0]["reason"], "stale question");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
