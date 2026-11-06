@@ -19,7 +19,7 @@ state_dir = "~/.fno/"
 plans_dir = ".fno/plans/"
 # Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name.
 plans_filename = "%Y%m%d-{slug}-{node}.md"
-# Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = "fnodotdev/fno"`.
+# Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-ins already carry this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = "fnodotdev/fno"`.
 repo_aliases = {}
 # Repo-wide ship-gate probes: shell commands loop-check runs (60s each, cap 3 per source) before it will grant DonePRGreen, alongside any a plan declares. Both lists must pass; a plan can add probes and can never silence these. A probe is an OBSERVATION - one that mutates the repo races the session's own edits, and its only backstops are the timeout and the block reason.
 done_probes = []

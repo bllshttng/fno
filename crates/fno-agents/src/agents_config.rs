@@ -1641,11 +1641,31 @@ pub fn auto_continue_select_timeout_s(cwd: &Path) -> u64 {
     120
 }
 
-/// `[repo_aliases]` (default empty): rename map `old = "new"` between
-/// `owner/repo` slugs. A url recorded under a repo's former name binds and
-/// heals against the renamed repo; `bllshttng/fno = "fnodotdev/fno"` is the
-/// specimen. Keys and values are lowercased; a malformed leaf (non-string
-/// value, empty side) drops that entry, never the whole table.
+/// The renames this project already knows: where fno itself used to live.
+/// A url recorded under a former name binds and heals against the renamed
+/// repo without waiting for a config row or a gh probe; a config row or a
+/// cached gh-facts rename row wins over these.
+const BUILTIN_REPO_ALIASES: [(&str, &str); 3] = [
+    ("bllshttng/fno", "fnodotdev/fno"),
+    ("bllshttng/footnote", "fnodotdev/fno"),
+    ("bllshttng/fnh", "fno-sh/footnote"),
+];
+
+/// The built-in rename map alone, no config read. The plugin rename scan
+/// names old registrations against these without touching a workspace.
+pub(crate) fn builtin_repo_aliases() -> std::collections::BTreeMap<String, String> {
+    BUILTIN_REPO_ALIASES
+        .iter()
+        .map(|(old, new)| ((*old).to_string(), (*new).to_string()))
+        .collect()
+}
+
+/// `[repo_aliases]`: rename map `old = "new"` between `owner/repo` slugs.
+/// The default carries this project's own moves (`bllshttng/*` to
+/// `fnodotdev/fno`, `bllshttng/fnh` to `fno-sh/footnote`); a config row
+/// overrides it, and `bllshttng/fno = "fnodotdev/fno"` is the specimen.
+/// Keys and values are lowercased; a malformed leaf (non-string value,
+/// empty side) drops that entry, never the whole table.
 pub fn repo_aliases(cwd: &Path) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     for path in config_candidates(cwd) {
@@ -1671,6 +1691,11 @@ pub fn repo_aliases(cwd: &Path) -> std::collections::BTreeMap<String, String> {
             // alias wins, like every getter here.
             out.entry(old).or_insert(new);
         }
+    }
+    // Config rows decided first; the built-ins fill the gaps, so a machine
+    // that set the map by hand keeps deciding.
+    for (old, new) in BUILTIN_REPO_ALIASES {
+        out.entry(old.to_string()).or_insert(new.to_string());
     }
     out
 }
@@ -2793,6 +2818,52 @@ mod tests {
             config_value_deep(&root.join("proj"), &["no", "such", "key"]).is_none(),
             "no candidate carries the key -> None"
         );
+    }
+
+    #[test]
+    fn repo_aliases_ships_project_renames_and_a_config_row_wins() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let root = std::env::temp_dir().join(format!("fno-aliases-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let empty_global = root.join("empty-global.toml");
+        std::fs::write(&empty_global, "").unwrap();
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
+
+        // No config names the key anywhere: the built-ins answer.
+        let map = repo_aliases(&root);
+        for (old, new) in [
+            ("bllshttng/fno", "fnodotdev/fno"),
+            ("bllshttng/footnote", "fnodotdev/fno"),
+            ("bllshttng/fnh", "fno-sh/footnote"),
+        ] {
+            assert_eq!(
+                map.get(old).map(String::as_str),
+                Some(new),
+                "the built-in rename {old} -> {new} answers without a config row"
+            );
+        }
+
+        // A config row overrides a built-in; the others stay.
+        let proj = root.join(".fno");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join("config.toml"),
+            "[repo_aliases]\n\"bllshttng/fnh\" = \"someone-else/moved\"\n",
+        )
+        .unwrap();
+        let map = repo_aliases(&root);
+        assert_eq!(
+            map.get("bllshttng/fnh").map(String::as_str),
+            Some("someone-else/moved"),
+            "the config row overrides the built-in"
+        );
+        assert_eq!(
+            map.get("bllshttng/fno").map(String::as_str),
+            Some("fnodotdev/fno"),
+            "the other built-ins keep answering"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
