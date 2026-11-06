@@ -1784,8 +1784,6 @@ mod tests {
         }
     }
 
-    
-
     /// The argv clause matches a TOKEN, not a substring, in both reparable
     /// families: the fno-py entrypoint by basename, and stdio MCP servers by
     /// the `serve --mcp` pair or the codegraph `--liftoff-only` launcher flag

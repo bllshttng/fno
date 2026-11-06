@@ -2707,8 +2707,6 @@ mod tests {
         });
     }
 
-    
-
     // ---- test helpers (no external tempfile dep) ----
 
     fn tempdir() -> PathBuf {

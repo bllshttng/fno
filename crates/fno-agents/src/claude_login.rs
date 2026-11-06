@@ -297,5 +297,4 @@ mod tests {
             "{verdict:?}"
         );
     }
-
 }

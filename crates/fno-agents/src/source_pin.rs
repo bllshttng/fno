@@ -1169,5 +1169,4 @@ mod tests {
         assert_eq!(a.eligibility, "divergent");
         assert_eq!(a.path, Some(clone_cli));
     }
-
 }

@@ -2268,5 +2268,4 @@ mod tests {
             assert!(error.contains(detail), "{detail}: {error}");
         }
     }
-
 }

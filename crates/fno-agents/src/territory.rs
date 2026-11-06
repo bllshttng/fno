@@ -1474,7 +1474,6 @@ max_concurrent = 0
             other => panic!("node claim fixture failed: {other:?}"),
         }
     }
-
 }
 
 #[cfg(test)]

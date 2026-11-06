@@ -367,9 +367,7 @@ mod tests {
     /// real env vars, and a parallel test's unpinned read must not race it.
     struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
 
-    impl EnvGuard {
-
-    }
+    impl EnvGuard {}
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {

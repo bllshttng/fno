@@ -1957,5 +1957,4 @@ fn sweep_target(cwd: &Path, since: i64, repo: Option<String>, json_out: bool) ->
 #[cfg(test)]
 mod parity_tests {
     use super::*;
-
 }

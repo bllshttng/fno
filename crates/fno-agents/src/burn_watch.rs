@@ -1934,5 +1934,4 @@ mod tests {
         );
         assert!(claims_error.is_err(), "claim read failure must surface");
     }
-
 }

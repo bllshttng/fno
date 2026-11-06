@@ -852,12 +852,6 @@ mod tests {
         assert!(decide(cmd).is_none(), "should have allowed: {cmd:?}");
     }
 
-    
-    
-    
-    
-    
-
     #[test]
     fn refuses_each_unbounded_shape() {
         for cmd in [
