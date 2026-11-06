@@ -386,6 +386,20 @@ fn claim_holder() -> String {
     format!("team-names@{}", crate::claims::hostname())
 }
 
+/// Release the claim a draw took for `name`, so a command that refused
+/// after drawing returns the name to the pool: a drawn name binds only when
+/// the whole command succeeds. Best-effort: a failed release only prints,
+/// and the next naming read still sees the claim until its lease lapses.
+pub(crate) fn release_name_claim(name: &str, root: Option<&Path>) {
+    let key = format!("name:{}", name.to_ascii_lowercase());
+    if let Err(e) = crate::claims::release(&key, &claim_holder(), root, None) {
+        eprintln!(
+            "name draw: releasing the claim on {} failed ({e})",
+            crate::team_names::display(name, 1)
+        );
+    }
+}
+
 /// A free person name for a nameless `--promote` spawn: a random pool name
 /// no machine ever used. Nothing is recorded here, because the grant's own
 /// bind writes the history row and a `drawn` row would make that bind's

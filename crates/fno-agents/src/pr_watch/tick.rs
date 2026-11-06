@@ -47,7 +47,7 @@ fn phase_cap(name: &str, merge_cap: f64) -> Option<f64> {
         "sweep" => SWEEP_CAP_S,
         // The arm over every catch-up root: 23.1s measured over 12 roots.
         "notify_watch" => 30.0,
-        "heal" | "evals" => 10.0,
+        "heal" => 10.0,
         "stranded" => 60.0,
         "recovery" => 90.0,
         "watchdog" => 30.0,
@@ -1091,83 +1091,6 @@ fn phase_heal(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
     Ok(())
 }
 
-fn evals_arm_fno_bin() -> String {
-    crate::scrape::fno_bin().to_string_lossy().into_owned()
-}
-
-/// The eval bank's demand leg: guards and the receipt parse here; the due
-/// read, gate, detached run and journal live in `evals-arm`.
-fn phase_evals(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
-    clock::set_phase("evals");
-    let days = int_cfg(&t.cwd, &["evals", "schedule_days"], 7);
-    let row = |skip: Option<&str>, detail: &str, acted: i64| {
-        let detail: String = detail.chars().take(400).collect();
-        t.live
-            .emitter
-            .row("evals", days * 86400, acted, skip, Some(&detail));
-    };
-    if days <= 0 {
-        row(Some("evals_off"), "evals.schedule_days 0", 0);
-        return Ok(());
-    }
-    if !t.autonomy {
-        row(Some("autonomy_off"), "config.autonomy.enabled is false", 0);
-        return Ok(());
-    }
-    let stale = match int_cfg(&t.cwd, &["evals", "stale_days"], 7) {
-        0 => 7,
-        value => value,
-    };
-    let history = crate::evals::history_path();
-    let run = || -> Result<Value, DoorError> {
-        let health = clock::door(
-            &["evals-trend"],
-            Some(&json!({"op": "health", "history": history, "stale_days": stale})),
-            30.0,
-        )?;
-        // The wheel's `doctor` family is signpost-only; the front door serves
-        // it natively, so the arm must invoke `fno`, never `fno-py`.
-        let fno_bin = evals_arm_fno_bin();
-        let argv: Vec<String> = vec![
-            "evals-arm".into(),
-            "--summary-json".into(),
-            health.to_string(),
-            "--history".into(),
-            history.display().to_string(),
-            "--events".into(),
-            t.live.emitter.journal.display().to_string(),
-            "--fno-bin".into(),
-            fno_bin,
-            "--schedule-days".into(),
-            days.to_string(),
-            "--stale-days".into(),
-            stale.to_string(),
-        ];
-        let out = clock::door_raw(&argv, clock::left().filter(|l| *l > 1.0).unwrap_or(30.0))?;
-        if out.code != 0 {
-            let tail: String = out.stderr.chars().take(160).collect();
-            return Err(DoorError::Failed(format!(
-                "evals-arm exited {}: {tail}",
-                out.code
-            )));
-        }
-        let last = out.stdout.lines().rev().find(|l| !l.trim().is_empty());
-        Ok(last
-            .and_then(|l| serde_json::from_str(l).ok())
-            .unwrap_or(json!({})))
-    };
-    match run() {
-        Err(DoorError::Cut) => return Err(DoorError::Cut),
-        Err(DoorError::Failed(why)) => row(Some("arm_failed"), &why, 0),
-        Ok(answer) => row(
-            answer.get("skip_reason").and_then(Value::as_str),
-            answer.get("detail").and_then(Value::as_str).unwrap_or(""),
-            answer.get("acted").and_then(Value::as_i64).unwrap_or(0),
-        ),
-    }
-    Ok(())
-}
-
 /// Report, never reap: only STRANDED rows get pushed and filed; only UNKNOWN
 /// rows get recorded. The sweep always feeds the board's provenance cache;
 /// the lane's arming decides only whether it acts.
@@ -1549,7 +1472,6 @@ pub fn run(args: &[String]) -> i32 {
     tick.run_phase("sweep", Some("pr_watch_sweep"), 1, 0, phase_sweep);
     tick.run_phase("notify_watch", Some("notify_watch"), 1, 0, phase_notify);
     tick.run_phase("heal", None, 1, 0, phase_heal);
-    tick.run_phase("evals", None, 1, 0, phase_evals);
     // The fleet tail: the PR lane never pays all three p90s in one tick.
     tick.run_phase("stranded", Some("stranded"), 3, 0, phase_stranded);
     tick.run_phase("recovery", Some("recovery"), 3, 1, phase_recovery);
@@ -1595,26 +1517,6 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_evals_arm_resolves_the_front_door_not_fno_py() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", "/opt/front-door/fno");
-        assert_eq!(evals_arm_fno_bin(), "/opt/front-door/fno");
-        std::env::remove_var("FNO_BIN");
-        let bin = evals_arm_fno_bin();
-        assert!(
-            !bin.ends_with("fno-py"),
-            "the arm must never fall back to fno-py: the wheel's doctor family is signpost-only"
-        );
-        match saved {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-    }
 
     #[test]
     fn the_deadline_stays_under_the_interval_and_the_env_seam_is_unclamped() {

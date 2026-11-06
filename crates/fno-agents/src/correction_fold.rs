@@ -124,6 +124,13 @@ pub(crate) struct FoldReceipt {
     pub(crate) append_error: Option<String>,
     pub(crate) cache_reset: Option<String>,
     pub(crate) files_read: u64,
+    /// Files the listing handed this pass, and how many of those the pass
+    /// could not read at all (open, seek, or head-sample failure). The
+    /// fail-open rule reports a clean zero-file tick, so without these two
+    /// counters a CI-only read failure is indistinguishable from an empty
+    /// store.
+    pub(crate) listed_files: u64,
+    pub(crate) unread_files: u64,
     pub(crate) bytes_read: u64,
     pub(crate) rows_appended: u64,
     pub(crate) rows_replayed: u64,
@@ -947,12 +954,12 @@ fn fold_file(
     ctx: &PassCtx,
     out: &mut ScanOut,
     bytes: &mut u64,
-) {
+) -> bool {
     let Ok(mut f) = std::fs::File::open(&file.path) else {
-        return;
+        return false;
     };
     if f.seek(SeekFrom::Start(cur.offset)).is_err() {
-        return;
+        return false;
     }
     let mut reader = std::io::BufReader::new(&mut f);
     let mut buf = Vec::new();
@@ -970,6 +977,7 @@ fn fold_file(
         cur.offset += n as u64;
         *bytes += n as u64;
     }
+    true
 }
 
 /// A rendered source: re-read only when the store stamp moved, resume at the
@@ -1023,6 +1031,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
         listed.extend(source.sessions(0).into_iter().map(|f| (i, f)));
     }
     listed.sort_by(|a, b| b.1.mtime.cmp(&a.1.mtime));
+    receipt.listed_files = listed.len() as u64;
     let mut changed = receipt.cache_reset.is_some();
     let mut bytes = 0u64;
     for (i, file) in &listed {
@@ -1074,6 +1083,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
                     String::new()
                 } else {
                     let Some(head) = head_sample(&file.path, head_len) else {
+                        receipt.unread_files += 1;
                         continue;
                     };
                     head
@@ -1128,19 +1138,19 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
                 &mut out,
                 &mut bytes,
             );
-        } else {
-            fold_file(
-                file,
-                &mut cur,
-                &mut state,
-                inputs.budget,
-                room,
-                &inputs.bus,
-                &mut inputs.witness,
-                &ctx,
-                &mut out,
-                &mut bytes,
-            );
+        } else if !fold_file(
+            file,
+            &mut cur,
+            &mut state,
+            inputs.budget,
+            room,
+            &inputs.bus,
+            &mut inputs.witness,
+            &ctx,
+            &mut out,
+            &mut bytes,
+        ) {
+            receipt.unread_files += 1;
         }
         // The cursor advances only once its rows are stored: a failed append
         // replays this tail next tick, and the store ignores what already landed.

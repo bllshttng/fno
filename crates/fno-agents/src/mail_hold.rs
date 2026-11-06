@@ -149,12 +149,37 @@ pub(crate) fn row_matches_token(entry: &crate::state::RegistryEntry, token: &str
         || entry.name == token
 }
 
-/// Find the registry row `session_id` addresses, returning its index.
-fn row_for_session(registry: &crate::state::Registry, session_id: &str) -> Option<usize> {
-    registry
+/// The single row `token` addresses, or None when zero or TWO OR MORE rows
+/// answer it. The short-form arms of [`row_matches_token`] (the first-eight
+/// handle and the legacy last-eight) can name two same-window codex sessions;
+/// a winner there stamps, gates or releases the wrong worker's hold. A
+/// multi-match refuses and names the candidates on stderr.
+pub(crate) fn sole_row_for_token(registry: &crate::state::Registry, token: &str) -> Option<usize> {
+    let matches: Vec<usize> = registry
         .entries
         .iter()
-        .position(|e| row_matches_token(e, session_id))
+        .enumerate()
+        .filter(|(_, e)| row_matches_token(e, token))
+        .map(|(i, _)| i)
+        .collect();
+    if matches.len() <= 1 {
+        return matches.first().copied();
+    }
+    let named: Vec<&str> = matches
+        .iter()
+        .filter_map(|&i| registry.entries[i].harness_session_id.as_deref())
+        .collect();
+    eprintln!(
+        "refusing ambiguous session token {token:?}: {} rows answer to it ({}); send the full session id",
+        matches.len(),
+        named.join(", ")
+    );
+    None
+}
+
+/// Find the registry row `session_id` addresses, returning its index.
+fn row_for_session(registry: &crate::state::Registry, session_id: &str) -> Option<usize> {
+    sole_row_for_token(registry, session_id)
 }
 
 /// Stamp the row `bus-only` (or clear the stamp for `--off`) under the
@@ -1792,6 +1817,36 @@ pub(crate) mod tests {
     }
 
     const SID: &str = "cccccccc-1111-2222-3333-444455556666";
+
+    /// Two same-window codex rows share a first-eight head: a short token
+    /// answers to both and resolves to nothing, while the full id still names
+    /// one row.
+    #[test]
+    fn a_short_token_two_rows_answer_to_resolves_to_nothing() {
+        let mut registry = crate::state::Registry::default();
+        for (name, sid) in [
+            (
+                "t-parked-prompt-blocked",
+                "01a1ad25-f04f-7220-8b8e-6c41a3bad0dd",
+            ),
+            ("t-composer-flags", "01a1ad25-7752-7020-a858-4253ed259833"),
+        ] {
+            let mut row = crate::state::RegistryEntry::default();
+            row.name = name.to_string();
+            row.harness = Some("codex".to_string());
+            row.harness_session_id = Some(sid.to_string());
+            registry.entries.push(row);
+        }
+        assert_eq!(sole_row_for_token(&registry, "01a1ad25"), None);
+        assert_eq!(
+            sole_row_for_token(&registry, "01a1ad25-f04f-7220-8b8e-6c41a3bad0dd"),
+            Some(0)
+        );
+        assert_eq!(
+            sole_row_for_token(&registry, "01a1ad25-7752-7020-a858-4253ed259833"),
+            Some(1)
+        );
+    }
 
     #[test]
     fn arming_a_registered_session_stamps_the_row_and_writes_the_conversation_clock() {

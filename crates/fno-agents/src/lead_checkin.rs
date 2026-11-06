@@ -291,107 +291,6 @@ pub(crate) fn sanitize_scope_key(scope: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// The raw text between `<!-- fno:user -->` and its close, marker lines
-/// excluded. A missing closing marker is CONTENT, never a parse error: the
-/// capture runs to the next marker fence, one of the writer's own section
-/// headings, or end of file. Mirrors scripts/lib/canon-doc-marker.sh.
-fn extract_user_marker(text: &str) -> Option<String> {
-    const WRITER_HEADINGS: [&str; 5] = [
-        "## Merge order and why (",
-        "## Open decisions awaiting the operator (",
-        "## Gaps and open thinking (",
-        "## Workarounds in force (",
-        "## User notes (",
-    ];
-    let mut grabbed = String::new();
-    let mut inside = false;
-    for line in text.lines() {
-        if !inside {
-            if line.contains("<!-- fno:user -->") {
-                inside = true;
-            }
-            continue;
-        }
-        if line.contains("<!-- /fno:user -->") {
-            return Some(grabbed);
-        }
-        let fence = line.trim_end();
-        if fence.starts_with("<!-- fno:")
-            && fence.ends_with(" -->")
-            && fence[9..fence.len() - 4].len() > 0
-            && fence[9..fence.len() - 4]
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Some(grabbed);
-        }
-        if WRITER_HEADINGS.iter().any(|h| line.starts_with(h)) {
-            return Some(grabbed);
-        }
-        grabbed.push_str(line);
-        grabbed.push('\n');
-    }
-    if inside {
-        Some(grabbed)
-    } else {
-        None
-    }
-}
-
-/// True when the captured user-block text is only the seed placeholder.
-fn is_user_placeholder(text: &str) -> bool {
-    const PLACEHOLDER: &str =
-        "_(write here; the machine reads this every refresh and never edits it)_";
-    let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
-    !text.is_empty() && strip(text) == strip(PLACEHOLDER)
-}
-
-/// The read check. Every canon refresh ends the doc with a fresh `Recall
-/// word:` line, so a word this lead has not acknowledged means a compaction
-/// or refresh since its last read. Only `--recall <that word>` passes and
-/// records it. No doc, or a doc with no word, passes.
-fn recall_gate(handoffs_dir: &Path, scope: &str, given: Option<&str>) -> Result<(), String> {
-    let Ok(doc) = team_handoff_doc(handoffs_dir, scope) else {
-        return Ok(());
-    };
-    let Ok(text) = std::fs::read_to_string(&doc) else {
-        return Ok(());
-    };
-    let Some(word) = text
-        .lines()
-        .rev()
-        .find_map(|l| l.strip_prefix("Recall word: ").map(str::trim))
-    else {
-        return Ok(());
-    };
-    let name = doc.file_name().and_then(|n| n.to_str()).unwrap_or("canon");
-    let ack = doc.with_file_name(format!(".{name}.recalled"));
-    let acked = std::fs::read_to_string(&ack).unwrap_or_default();
-    if acked.trim() == word {
-        return Ok(());
-    }
-    if given == Some(word) {
-        std::fs::write(&ack, word).map_err(|e| format!("{}: {e}", ack.display()))?;
-        return Ok(());
-    }
-    Err(format!(
-        "your canon doc changed since your last read. Feeling amnesia? Your memory is here. Read all of it: {}. Then rerun with --recall <the word on its last line>.",
-        doc.display()
-    ))
-}
-
-fn r_user_notes(handoffs_dir: &Path, scope: &str) -> Result<Value, String> {
-    let doc = team_handoff_doc(handoffs_dir, scope)?;
-    let text =
-        std::fs::read_to_string(&doc).map_err(|e| format!("{}: unreadable: {e}", doc.display()))?;
-    let block = extract_user_marker(&text)
-        .ok_or_else(|| "user block marker missing or doc unreadable".to_string())?;
-    if is_user_placeholder(&block) {
-        return Ok(Value::Null);
-    }
-    Ok(Value::String(block))
-}
-
 pub(crate) fn board_queue<'a>(board: &'a Value, name: &str) -> Result<&'a Value, String> {
     for q in board
         .get("queues")
@@ -1255,10 +1154,22 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     let scope = ctx.scope.clone();
     let events_paths = ctx.events_paths.clone();
     let since = since.map(str::to_string);
+    take_reading(&mut readings, beat_started, "session_orders", {
+        let handoffs_dir = handoffs_dir.clone();
+        let scope = scope.clone();
+        move || {
+            let (session_id, _harness) = crate::claims::resolve_identity();
+            crate::lead_checkin_orders::r_session_orders(
+                &handoffs_dir,
+                &scope,
+                session_id.as_deref(),
+            )
+        }
+    });
     take_reading(&mut readings, beat_started, "user_notes", {
         let handoffs_dir = handoffs_dir.clone();
         let scope = scope.clone();
-        move || r_user_notes(&handoffs_dir, &scope)
+        move || crate::lead_checkin_orders::r_user_notes(&handoffs_dir, &scope)
     });
     take_reading(&mut readings, beat_started, "board", {
         let board = board.clone();
@@ -2037,6 +1948,23 @@ fn render_lines_with(
                 lines.extend(Some(render(&reading.value)).filter(|l| !l.is_empty()));
             }
         }
+    }
+
+    match by_name("session_orders") {
+        Some(r) if r.ok && !r.value.is_null() => {
+            lines.push("Handoff orders (canon doc):".into());
+            for l in r
+                .value
+                .as_str()
+                .unwrap_or("")
+                .trim_end_matches('\n')
+                .split('\n')
+            {
+                lines.push(l.to_string());
+            }
+        }
+        Some(r) if !r.ok => lines.push(format!("READER FAILED session_orders: {}", r.error)),
+        _ => {}
     }
 
     match by_name("user_notes") {
@@ -3065,7 +2993,11 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         }
     }
     if user_command {
-        if let Err(msg) = recall_gate(&ctx.handoffs_dir, &ctx.scope, recall.as_deref()) {
+        if let Err(msg) = crate::lead_checkin_orders::recall_gate(
+            &ctx.handoffs_dir,
+            &ctx.scope,
+            recall.as_deref(),
+        ) {
             eprintln!("lead: {msg}");
             return 2;
         }
@@ -3603,26 +3535,46 @@ mod tests {
     }
 
     #[test]
-    fn marker_rows() {
-        let doc = "intro\n<!-- fno:user -->\nline one\n<!-- /fno:user -->\ntail\n";
-        assert_eq!(extract_user_marker(doc), Some("line one\n".to_string()));
-
-        let doc = "<!-- fno:user -->\nkept\n## Merge order and why (r1)\nnot kept\n";
-        assert_eq!(extract_user_marker(doc), Some("kept\n".to_string()));
-
-        let doc = "<!-- fno:status -->\ns\n<!-- fno:user -->\nkept\n<!-- fno:other -->\n";
-        assert_eq!(extract_user_marker(doc), Some("kept\n".to_string()));
-        assert_eq!(
-            extract_user_marker("<!-- fno:user -->\nkept to end"),
-            Some("kept to end\n".to_string())
-        );
-        assert_eq!(extract_user_marker("no marker here"), None);
-
-        assert!(is_user_placeholder(
-            "_(write here; the machine reads this every refresh and never edits it)_\n"
-        ));
-        assert!(!is_user_placeholder("a real note"));
-        assert!(!is_user_placeholder(""));
+    fn session_orders_render_before_user_notes_and_lineup() {
+        let data = Map::new();
+        let mut readings = vec![
+            Reading::took(
+                "session_orders",
+                Value::String("## Merge order and why (r1)\nship A then B\n".to_string()),
+            ),
+            Reading::took("user_notes", Value::String("the user said x\n".to_string())),
+            Reading::took(
+                "org",
+                json!({"active_nodes": 0, "total_nodes": 0, "rows": []}),
+            ),
+        ];
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        let orders = lines
+            .iter()
+            .position(|l| l == "Handoff orders (canon doc):")
+            .expect("orders header");
+        assert_eq!(lines[orders + 1], "## Merge order and why (r1)");
+        assert_eq!(lines[orders + 2], "ship A then B");
+        let notes = lines
+            .iter()
+            .position(|l| l == "User notes:")
+            .expect("notes header");
+        let levers = lines
+            .iter()
+            .position(|l| l == "lineup:")
+            .expect("lineup header");
+        assert!(orders < notes, "orders print before User notes");
+        assert!(notes < levers, "orders and notes print before the levers");
+        // An unchanged beat (Null) prints nothing.
+        readings[0] = Reading::took("session_orders", Value::Null);
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        assert!(!lines.iter().any(|l| l == "Handoff orders (canon doc):"));
+        // A failed read names itself instead of silence.
+        readings[0] = Reading::failed("session_orders", "canon doc unreadable".to_string());
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        assert!(lines
+            .iter()
+            .any(|l| l == "READER FAILED session_orders: canon doc unreadable"));
     }
 
     fn board_payload() -> Value {
@@ -4937,22 +4889,6 @@ mod tests {
     // AC4-HP: the specimen line names the dead call and offers resume.
 
     // AC4-ERR: an unreadable reading appends the reason, never a clean read.
-
-    /// The read check: a fresh word refuses (naming the doc) until --recall
-    /// names it; a wrong word refuses; the right word passes and is recorded.
-    #[test]
-    fn recall_gate_refuses_until_the_doc_word_is_named() {
-        let dir = tempfile::tempdir().unwrap();
-        let doc = dir.path().join("20261027-role-fnh-fno.md");
-        std::fs::write(&doc, "# Canon doc\n\nRecall word: 1a2b3c4d\n").unwrap();
-        let err = recall_gate(dir.path(), "fnh,fno", None).unwrap_err();
-        assert!(err.contains(&doc.display().to_string()), "{err}");
-        assert!(recall_gate(dir.path(), "fnh,fno", Some("wrong")).is_err());
-        assert!(recall_gate(dir.path(), "fnh,fno", Some("1a2b3c4d")).is_ok());
-        assert!(recall_gate(dir.path(), "fnh,fno", None).is_ok());
-        std::fs::write(&doc, "# Canon doc\n\nRecall word: 99887766\n").unwrap();
-        assert!(recall_gate(dir.path(), "fnh,fno", None).is_err());
-    }
 }
 
 #[cfg(test)]

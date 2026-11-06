@@ -144,8 +144,16 @@ fn split_scope(scope: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn graph_index_at(cwd: Option<&std::path::Path>) -> Option<HashMap<String, Value>> {
-    let rows = crate::graph_store::read_rows(&crate::backlog::settings::graph_path_at(cwd)).ok()?;
+fn graph_index_at(cwd: Option<&std::path::Path>, ids: &[String]) -> Option<HashMap<String, Value>> {
+    let path = crate::backlog::settings::graph_path_at(cwd);
+    let query = crate::backlog::RowQuery {
+        filter: crate::backlog::api::NodeFilter {
+            id_in: Some(ids.to_vec()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let rows = crate::graph_store::read_rows_where(&path, &query).ok()?;
     Some(
         rows.into_iter()
             .filter_map(|row| {
@@ -358,7 +366,12 @@ pub fn gather_team_at(cwd: Option<&std::path::Path>) -> Value {
         .iter()
         .filter(|r| !TERMINAL_ROW.contains(&status_of(r).as_str()))
         .collect();
-    let by_id = graph_index_at(cwd);
+    let epic_ids: Vec<String> = live
+        .iter()
+        .filter(|row| row.role_level == Some(2))
+        .flat_map(|row| split_scope(row.role_scope.as_deref()))
+        .collect();
+    let by_id = graph_index_at(cwd, &epic_ids);
     let mut roles: Vec<Value> = Vec::new();
     let mut held: Vec<String> = Vec::new();
     for row in &live {
@@ -809,5 +822,42 @@ mod tests {
             agreement(Some(2), Some("x-a"), Some(&by_id)).1.unwrap(),
             "'x-a' status is 'done' (terminal)"
         );
+    }
+
+    #[test]
+    fn team_read_scoped_graph_rows() {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        struct RestoreStateDir(Option<std::ffi::OsString>);
+        impl Drop for RestoreStateDir {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("FNO_STATE_DIR", value),
+                    None => std::env::remove_var("FNO_STATE_DIR"),
+                }
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let _restore = RestoreStateDir(std::env::var_os("FNO_STATE_DIR"));
+        std::env::set_var("FNO_STATE_DIR", root.path());
+        let graph = crate::backlog::settings::graph_path_at(Some(root.path()));
+        crate::graph_store::seed_rows(
+            &graph,
+            &[
+                json!({"id":"x-epic", "type":"epic", "status":"ready"}),
+                json!({"id":"x-feature", "type":"feature", "status":"ready"}),
+            ],
+        )
+        .unwrap();
+
+        let rows =
+            graph_index_at(Some(root.path()), &["x-epic".to_string()]).expect("graph is readable");
+
+        assert_eq!(rows.len(), 1);
+        assert!(rows.contains_key("x-epic"));
+        assert!(graph_index_at(Some(root.path()), &[])
+            .expect("empty scope still reads the graph")
+            .is_empty());
     }
 }

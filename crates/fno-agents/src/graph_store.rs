@@ -3101,6 +3101,52 @@ pub fn read_rows_where(
     crate::backlog::read_entries_where_defaulted(path, query, false).map_err(StoreError::Sqlite)
 }
 
+/// The graph rows whose dependency is `contract`, materialized in graph order.
+pub(crate) fn read_contract_rows(path: &Path) -> Result<Vec<Value>, StoreError> {
+    const ID_BATCH: usize = 400;
+    let connection = crate::backlog::read_connection(path).map_err(StoreError::Sqlite)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, ordinal FROM nodes
+             WHERE json_extract(extras, '$.dep') = 'contract'
+             UNION
+             SELECT id, ordinal FROM nodes_raw
+             WHERE CASE WHEN json_valid(body)
+                        THEN json_extract(body, '$.dep') END = 'contract'
+             ORDER BY ordinal, id",
+        )
+        .map_err(|error| StoreError::Sqlite(error.to_string()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| StoreError::Sqlite(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StoreError::Sqlite(error.to_string()))?;
+    drop(statement);
+    drop(connection);
+
+    let ids: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+    let mut by_id = HashMap::new();
+    for batch in ids.chunks(ID_BATCH) {
+        let query = crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(batch.to_vec()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for row in read_rows_where(path, &query)? {
+            if let Some(id) =
+                entry_id(&row).filter(|id| batch.iter().any(|candidate| candidate == id))
+            {
+                by_id.insert(id.to_string(), row);
+            }
+        }
+    }
+    Ok(ids.into_iter().filter_map(|id| by_id.remove(&id)).collect())
+}
+
 pub fn read_rows_where_strict(
     path: &Path,
     query: &crate::backlog::RowQuery,
