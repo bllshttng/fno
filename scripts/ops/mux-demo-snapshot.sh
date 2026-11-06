@@ -779,6 +779,28 @@ numbers.commit()
 numbers.close()
 PY
 
+# The cargo build marks: the state-root table folds db/build-marks under the
+# state root, so the seed writes the daemon arm's sidecar shape straight
+# into the demo root: scout compiling, archer waiting at position 2, the
+# rest idle. The server's read loop stamps the rows from these exactly as
+# it does in production.
+mkdir -p "$ROOT/.fno/db/build-marks"
+python3 - "$ROOT" "${SIDS[0]}" "${SIDS[1]}" <<'PY'
+import json, os, sys, time
+root, scout_sid, archer_sid = sys.argv[1:4]
+now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+marks = {
+    scout_sid: {"state": "compiling"},
+    archer_sid: {"state": "waiting", "position": 2},
+}
+d = f"{root}/.fno/db/build-marks"
+os.makedirs(d, exist_ok=True)
+for sid, body in marks.items():
+    with open(f"{d}/{sid.lower()}.json", "w") as f:
+        json.dump({"state": body["state"], "position": body.get("position"),
+                   "at": now, "ttl_ms": 30000}, f)
+PY
+
 # FNO_DEMO_PIN=1 pins the scout row: a keep marker on its session id, the
 # file `fno agents reap --keep` writes.
 if [ -n "${FNO_DEMO_PIN:-}" ]; then

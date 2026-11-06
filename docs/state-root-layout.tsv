@@ -132,6 +132,7 @@ attest	state/attest	dir	daemon
 backups	backups	dir	daemon
 bin	install/bin	dir	daemon
 bus	db/mail/bus	dir	daemon
+build-marks	db/build-marks	dir	daemon
 cargo-build	cargo-build	dir	daemon
 chats	db/mail/chats	dir	daemon
 claim-aux	state/claim-aux	dir	daemon

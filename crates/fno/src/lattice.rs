@@ -137,3 +137,63 @@ pub(crate) fn status_word(s: LatticeState) -> &'static str {
         LatticeState::Empty => "\u{2205}",
     }
 }
+
+/// The build throbber's frame set: the same crate's BRAILLE_SIX, the user's
+/// 2026-10-09 pick for a compiling row (one cell wide, throbber-widgets
+/// vocabulary, distinct from the BLACK_CIRCLE working spin at a glance).
+pub(crate) fn build_spin_symbols() -> &'static [&'static str] {
+    throbber_widgets_tui::symbols::throbber::BRAILLE_SIX.symbols
+}
+
+/// The compiling row's still glyph (a snapshot, a test, reduced motion, or
+/// the card line's rest shape): the set's own `full`.
+pub(crate) fn build_rest_glyph() -> char {
+    throbber_widgets_tui::symbols::throbber::BRAILLE_SIX
+        .full
+        .chars()
+        .next()
+        .unwrap_or('\u{283f}')
+}
+
+/// One frame of the build throbber at `elapsed_ms` into the spin epoch (the
+/// SAME clock the working spin turns on, so no new timer exists).
+pub(crate) fn build_frame(elapsed_ms: u64) -> char {
+    let syms = build_spin_symbols();
+    syms[(elapsed_ms / SPIN_FRAME_MS) as usize % syms.len()]
+        .chars()
+        .next()
+        .unwrap_or('\u{283f}')
+}
+
+/// The build mark's status-cell override. Only a Working row carries it: a
+/// blocked row needs a human (the accent outranks build info), an idle row
+/// runs no cargo, and the mark never fights the lattice. Compiling renders
+/// the BRAILLE_SIX frame IN PLACE OF the working spin frame - never both.
+/// Waiting renders the static hourglass with the queue position when the
+/// lane read can name it.
+pub(crate) fn build_status_cell(
+    mark: Option<crate::proto::BuildMark>,
+    s: LatticeState,
+    word: &str,
+) -> Option<String> {
+    if !matches!(s, LatticeState::Working) {
+        return None;
+    }
+    let mark = mark?;
+    match mark.stage {
+        // The frame REPLACES the working glyph; the word the mode carries
+        // stays, so only the glyph tells compiling from working.
+        crate::proto::BuildStage::Compiling => Some(match spin_epoch() {
+            Some(t0) => format!("{}{word}", build_frame(t0.elapsed().as_millis() as u64)),
+            None => format!("{}{word}", build_rest_glyph()),
+        }),
+        crate::proto::BuildStage::Waiting => Some(match mark.position {
+            Some(n) => format!("{HOURGLASS}{n}"),
+            None => HOURGLASS.to_string(),
+        }),
+    }
+}
+
+/// The waiting mark's glyph (user pick, 2026-10-09; already in the
+/// client's vocabulary for a wedged review, so the terminal renders it).
+pub(crate) const HOURGLASS: char = '\u{23f3}';

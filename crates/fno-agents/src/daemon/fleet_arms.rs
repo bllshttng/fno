@@ -32,6 +32,7 @@ pub(super) struct FleetArms {
     tool_scan_in_flight: Arc<std::sync::atomic::AtomicBool>,
     last_tool_scan: Instant,
     // The periodic arms: each module owns its cadence, gate and memory.
+    build_marks: crate::build_marks::Arm,
     machine_watch: crate::machine_watch::Arm,
     merge_close: crate::merge_close::Arm,
     symptom_recheck: crate::symptom_recheck::Arm,
@@ -143,6 +144,7 @@ impl FleetArms {
             tool_scan_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_tool_scan: Instant::now(),
             machine_watch: crate::machine_watch::Arm::default(),
+            build_marks: crate::build_marks::Arm::default(),
             merge_close: crate::merge_close::Arm::default(),
             symptom_recheck: crate::symptom_recheck::Arm::default(),
             correction_fold: crate::correction_fold::Arm::default(),
@@ -385,6 +387,9 @@ impl FleetArms {
         crate::question_judge::maybe_tick(&self.question_judge, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
+        // The cargo build marks: every 5s the doors are read once and the
+        // per-session sidecars the mux rows paint from are rewritten.
+        crate::build_marks::maybe_tick(&self.build_marks);
         // Every claimed node has a live run, a wait or a recovery task.
         crate::node_liveness::maybe_tick(&self.node_liveness, ctx.home.clone());
         // The post-push CI reader: each pushed head is read at 1, 15, 30

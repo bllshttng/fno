@@ -6382,7 +6382,7 @@ pub(crate) enum NeedsFooter {
 #[cfg(test)]
 pub(crate) use crate::lattice::LATTICE_ACCENT;
 pub(crate) use crate::lattice::{
-    lattice_glyph, lattice_style, status_glyph, status_word, LatticeState,
+    build_status_cell, lattice_glyph, lattice_style, status_glyph, status_word, LatticeState,
 };
 
 /// The lane fg for one agent row, shared by both sideline arms:

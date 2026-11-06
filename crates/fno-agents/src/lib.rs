@@ -95,6 +95,7 @@ pub mod board_render_arm;
 mod boot_revival;
 mod bounded_cmd;
 mod bounded_spawn;
+pub(crate) mod build_marks;
 pub mod burn_watch;
 mod cancel_sentinel;
 pub mod canonical_check;

@@ -89,6 +89,10 @@ pub struct RegistryAgent {
     pub held_conversation: bool,
     /// The user pinned this session; only the render-path overlay stamps it.
     pub pinned: bool,
+    /// The cargo build mark: stamped only by the render-path overlay from
+    /// the db/build-marks sidecars the daemon arm writes (never by
+    /// derive_rows, the registry doc carries no such fact); None when idle.
+    pub build: Option<BuildMark>,
     /// In-TTL inside-leg badge; `None` = liveness-only. Never a scraped guess.
     pub badge: Option<AgentBadge>,
     pub reason: Option<String>,
@@ -2109,6 +2113,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             dnd,
             held_conversation: false,
             pinned: false,
+            build: None,
             badge,
             reason,
             mux,
@@ -2451,6 +2456,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             dnd: false,
             held_conversation: false,
             pinned: false,
+            build: None,
             badge: None,
             reason: None,
             mux: None,
@@ -2547,6 +2553,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             dnd: false,
             held_conversation: false,
             pinned: false,
+            build: None,
             badge: None,
             reason: None,
             mux: None,
@@ -2740,6 +2747,13 @@ mod hold_marks;
 pub(crate) use hold_marks::overlay_hold_marks;
 #[cfg(test)]
 pub(crate) use hold_marks::overlay_hold_marks_at;
+
+// The cargo build mark lives in its own module, the hold mark's shape.
+mod build_marks;
+
+pub(crate) use build_marks::overlay_build_marks;
+#[cfg(test)]
+pub(crate) use build_marks::overlay_build_marks_at;
 
 mod keep_marks;
 pub(crate) use keep_marks::overlay_keep_marks;
@@ -4203,6 +4217,7 @@ config_dir = "~/.claude-alt"
             dnd: false,
             held_conversation: false,
             pinned: false,
+            build: None,
             badge,
             reason: None,
             mux: None,

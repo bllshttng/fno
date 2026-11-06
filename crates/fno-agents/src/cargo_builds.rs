@@ -25,31 +25,30 @@ struct Job {
     slots: Vec<String>,
     since_ms: i64,
     waiting: Option<String>,
+    marker_pid: Option<i32>,
 }
 
-pub(crate) fn run(args: &[String]) -> i32 {
-    let mut json = false;
-    for arg in args {
-        match arg.as_str() {
-            a if crate::json_output::is_flag(a) => json = true,
-            "-h" | "--help" => {
-                println!("usage: fno doctor builds [--json|-J]");
-                return 0;
-            }
-            other => {
-                eprintln!("fno doctor builds: unrecognized argument: {other}. usage: fno doctor builds [--json|-J]");
-                return 2;
-            }
-        }
-    }
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let now = crate::claims::now_ms();
-    let (cap, share, ceiling) = crate::test_run::build_slot_reading();
+/// One live waiter marker with the lane it waits in, its checkout, and the
+/// pid the marker stamps (the admitting process, which is the pid the queue
+/// ticket carries). `cargo_builds` ignores `marker_pid`; the build-mark arm
+/// reads the lane position with it.
+pub(crate) struct CargoWait {
+    pub marker_pid: i32,
+    pub wait: crate::test_run::BuildWait,
+    pub lane: String,
+    pub worktree: String,
+}
+
+/// Every cargo job the admission doors know right now, pid-ordered: the
+/// live claims over the build and run slots, folded with the live waiter
+/// markers. The doctor view and the build-mark arm both consume this, so
+/// the door read has one owner.
+pub(crate) fn collect_jobs(cwd: &Path) -> Vec<Job> {
     let mut keys: Vec<String> = crate::test_run::BUILD_SLOT_KEYS
         .iter()
         .map(|k| k.to_string())
         .collect();
-    keys.extend(crate::test_run::cargo_slot_keys(&cwd));
+    keys.extend(crate::test_run::cargo_slot_keys(cwd));
 
     let mut jobs = BTreeMap::<u32, Job>::new();
     for key in &keys {
@@ -70,24 +69,48 @@ pub(crate) fn run(args: &[String]) -> i32 {
             slots: Vec::new(),
             since_ms: rec.acquired_at,
             waiting: None,
+            marker_pid: None,
         });
         job.slots.push(key.clone());
         job.since_ms = job.since_ms.min(rec.acquired_at);
     }
-    for (wait, lane, worktree) in waiters() {
-        let job = jobs.entry(wait.cargo_pid).or_insert_with(|| Job {
-            cargo_pid: wait.cargo_pid,
+    for wait in waiters() {
+        let job = jobs.entry(wait.wait.cargo_pid).or_insert_with(|| Job {
+            cargo_pid: wait.wait.cargo_pid,
             worktree: String::new(),
             slots: Vec::new(),
-            since_ms: wait.since_ms,
+            since_ms: wait.wait.since_ms,
             waiting: None,
+            marker_pid: Some(wait.marker_pid),
         });
-        job.since_ms = wait.since_ms;
-        job.waiting = Some(lane);
+        job.since_ms = wait.wait.since_ms;
+        job.waiting = Some(wait.lane);
         if job.worktree.is_empty() {
-            job.worktree = worktree;
+            job.worktree = wait.worktree;
         }
     }
+    jobs.into_values().collect()
+}
+
+pub(crate) fn run(args: &[String]) -> i32 {
+    let mut json = false;
+    for arg in args {
+        match arg.as_str() {
+            a if crate::json_output::is_flag(a) => json = true,
+            "-h" | "--help" => {
+                println!("usage: fno doctor builds [--json|-J]");
+                return 0;
+            }
+            other => {
+                eprintln!("fno doctor builds: unrecognized argument: {other}. usage: fno doctor builds [--json|-J]");
+                return 2;
+            }
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let now = crate::claims::now_ms();
+    let (cap, share, ceiling) = crate::test_run::build_slot_reading();
+    let jobs = collect_jobs(&cwd);
 
     let commands: std::collections::HashMap<u32, String> = crate::census::process_table()
         .0
@@ -112,7 +135,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
             .unwrap_or_default();
 
     let rows: Vec<serde_json::Value> = jobs
-        .values()
+        .iter()
         .map(|job| {
             let (node, session) = manifest_ids(&job.worktree);
             let state = if job.waiting.is_some() {
@@ -200,8 +223,9 @@ fn parse_holder(holder: &str) -> Option<(String, u32)> {
     Some((worktree.to_string(), pid.parse().ok()?))
 }
 
-/// The live waiter markers, each with the lane it waits in and its checkout.
-fn waiters() -> Vec<(crate::test_run::BuildWait, String, String)> {
+/// The live waiter markers, each with the lane it waits in, its checkout,
+/// and the pid the marker stamps.
+fn waiters() -> Vec<CargoWait> {
     let Some(dir) = crate::claims::build_waiters_dir() else {
         return Vec::new();
     };
@@ -218,14 +242,19 @@ fn waiters() -> Vec<(crate::test_run::BuildWait, String, String)> {
         };
         if let Some(wait) = crate::test_run::live_waiter(&dir, Path::new(worktree)) {
             let lane = value["lane"].as_str().unwrap_or("normal").to_string();
-            out.push((wait, lane, worktree.to_string()));
+            out.push(CargoWait {
+                marker_pid: value["pid"].as_i64().unwrap_or(0) as i32,
+                wait,
+                lane,
+                worktree: worktree.to_string(),
+            });
         }
     }
     out
 }
 
 /// The node and session a checkout's target manifest names, if it has one.
-fn manifest_ids(worktree: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn manifest_ids(worktree: &str) -> (Option<String>, Option<String>) {
     if worktree.is_empty() {
         return (None, None);
     }

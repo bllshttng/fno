@@ -819,7 +819,8 @@ impl View {
                         crate::chrome::clip(
                             &format!(
                                 " {} {}",
-                                status_glyph(lat),
+                                build_status_cell(a.build, lat, "")
+                                    .unwrap_or_else(|| status_glyph(lat).to_string()),
                                 card_line::slug(a, &self.backlog)
                             ),
                             text_w,
@@ -1269,6 +1270,7 @@ impl View {
                 } else {
                     0
                 };
+                let card_word = if card { "" } else { status_word(lat) };
                 (
                     vec![
                         // Card line 1: glyph, slug, context bar and node, PR.
@@ -1277,15 +1279,22 @@ impl View {
                         // A Working row's spin glyph takes the blank lead
                         // column of the right-aligned word, so the word stays put.
                         rt_cell(
-                            match (card, lat) {
-                                // Card line 1 keeps the still lattice glyph
-                                // (the operator's 2026-10-04 mockup): no spin
-                                // frames, the state reads as a shape.
-                                (true, _) => lattice_glyph(lat).0.to_string(),
-                                (false, LatticeState::Working) => {
-                                    format!("{}{}", status_glyph(lat), status_word(lat))
-                                }
-                                (false, _) => status_word(lat).to_string(),
+                            match build_status_cell(a.build, lat, card_word) {
+                                // The build mark wins where it applies: a
+                                // compiling row renders the BRAILLE_SIX frame
+                                // in place of the working spin (never both),
+                                // a waiting row the hourglass and position.
+                                Some(text) => text,
+                                None => match (card, lat) {
+                                    // Card line 1 keeps the still lattice glyph
+                                    // (the operator's 2026-10-04 mockup): no spin
+                                    // frames, the state reads as a shape.
+                                    (true, _) => lattice_glyph(lat).0.to_string(),
+                                    (false, LatticeState::Working) => {
+                                        format!("{}{}", status_glyph(lat), status_word(lat))
+                                    }
+                                    (false, _) => status_word(lat).to_string(),
+                                },
                             },
                             cell_fg,
                             cell_flags_v,
@@ -1481,7 +1490,11 @@ impl View {
             )
         };
         // A resting card's state glyph wears the state color, as a list row's does.
-        let glyph = status_glyph(lattice);
+        // A build-marked row paints the build glyph (the override's first char),
+        // so the color finds the cell that actually carries the state.
+        let glyph = build_status_cell(agent.build, lattice, "")
+            .and_then(|text| text.chars().next())
+            .unwrap_or_else(|| status_glyph(lattice));
         if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
             if status_fg != Color::Default {
                 cell.fg = status_fg;
