@@ -46,6 +46,7 @@ fn scrub_identity_env_removes_every_identity_name_and_keeps_routing() {
     // it may keep PATH and the auth/router vars, never the caller's identity.
     let mut command = std::process::Command::new("sh");
     command.env("CODEX_THREAD_ID", "parent");
+    command.env("REX_SESSION", "user-session");
     command.env("PATH", "/usr/bin:/bin");
     scrub_identity_env(&mut command);
     let envs: Vec<(String, Option<String>)> = command
@@ -63,6 +64,13 @@ fn scrub_identity_env_removes_every_identity_name_and_keeps_routing() {
             envs.iter()
                 .any(|(key, value)| key.as_str() == *name && value.is_none()),
             "{name} was not scrubbed"
+        );
+    }
+    for key in TERMINAL_HOST_ENV_KEYS {
+        assert!(
+            envs.iter()
+                .any(|(name, value)| name.as_str() == key && value.is_none()),
+            "{key} was not scrubbed"
         );
     }
     assert_eq!(

@@ -575,6 +575,14 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env_remove("NO_COLOR");
+    // The keeper is a long-lived child of whoever started it (often a mux
+    // server booted in a terminal session), and the pane child inherits the
+    // keeper's whole base env. REX_* names that launching session: a pane
+    // carrying it reads the Rex SessionStart hook's line and opens blocks in
+    // the user's session.
+    for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+        cmd.env_remove(key);
+    }
     cmd.env("FNO_SERVER", &cfg.session);
     cmd.env("FNO_SESSION", &cfg.session);
     cmd.env("FNO_PANE", &cfg.pane_key);
@@ -1098,6 +1106,25 @@ mod tests {
         match decode(&garbage) {
             Decode::Violation(_) => {}
             other => panic!("tag 99 must read as a violation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_pane_child_never_carries_the_terminal_host_keys() {
+        // portable-pty seeds the builder from the process env, and
+        // env_remove deletes from that same map, so this is a real unset:
+        // the pane child execs without the key even when the keeper
+        // inherited it.
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.env("REX_SESSION", "user-session");
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            cmd.env_remove(key);
+        }
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            assert!(
+                cmd.get_env(key).is_none(),
+                "{key} must not reach a pane child"
+            );
         }
     }
 
