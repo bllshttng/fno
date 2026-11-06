@@ -1770,7 +1770,7 @@ mod tests {
             true,
         );
         let got = entry["matching_rows"][0]["data"]["head_sha"];
-        assert_eq!(got, "cccc");
+        assert_eq!(got.as_str(), Some("cccc"));
     }
 
     #[test]
@@ -1802,7 +1802,7 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0], old_rotation);
         let newer = serde_json::json!({"ts": "2026-11-06T12:00:00.000Z"});
-        let got = last_tail(vec![old_rotation, newer], 1, true);
+        let got = last_tail(vec![old_rotation, newer.clone()], 1, true);
         assert_eq!(got[0], newer);
     }
 }
