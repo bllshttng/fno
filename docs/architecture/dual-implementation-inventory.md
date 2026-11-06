@@ -463,7 +463,7 @@ Nothing else in the tree is a confirmed dual implementation today.
 
 The shell resolver in `scripts/lib/worktree-lifecycle.sh::_cargo_build_base` stays because worktree cleanup can run before a native fno command is available. It also accepts the old state-root base while the default migration drains.
 
-When Cargo invokes `scripts/lib/cargo-rustc-wrapper.sh` before a native fno binary is available, the wrapper sets `SCCACHE_DIR` under the same current base only when the caller has not set one.
+When Cargo runs the wrapper before a native fno binary exists, the wrapper uses the current base for `SCCACHE_DIR`. When the caller sets `SCCACHE_DIR`, the wrapper keeps that value.
 
 ## The four CI parity scripts
 

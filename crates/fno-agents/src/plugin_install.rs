@@ -1,9 +1,10 @@
 //! `fno-agents plugin-install <harness> [--force]`, surfaced as
 //! `fno config plugin install`. One local-dev install door for every
 //! plugin harness. Everything installs from the FILTERED stage
-//! (`<state-root>/plugin-stage/fno`: git-tracked + untracked-but-not-ignored
+//! (`<state-root>/install/plugin-stage/fno`: git-tracked + untracked-but-not-ignored
 //! files only, rebuilt wholesale), never from the repo root, because harness
-//! caches copy what they are pointed at.
+//! caches copy what they are pointed at. The previous root-level stage stays
+//! readable during the direct-session drain.
 //!
 //! This module owns stage build, the `--check`/`--restage` deploy commands, the
 //! claude, opencode and agy arms plus the old env-export cleanup. The codex arm
@@ -34,6 +35,16 @@ pub(crate) fn state_root() -> PathBuf {
     std::env::var_os("FNO_RECLAIM_STATE_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_home().join(".fno"))
+}
+
+pub(crate) fn stage_parent() -> PathBuf {
+    crate::state_layout::place_dir(&state_root(), "plugin-stage")
+        .unwrap_or_else(|| state_root().join("plugin-stage"))
+}
+
+fn legacy_stage_parent() -> Option<PathBuf> {
+    let legacy = state_root().join("plugin-stage");
+    (legacy != stage_parent() && legacy.is_dir()).then_some(legacy)
 }
 
 fn run_checked(cmd: &[String], cwd: Option<&Path>) -> Result<String, String> {
@@ -283,7 +294,7 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     build_stage_as(source_root, stage_parent, Profile::Full)
 }
 
-/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// `build_stage` for one profile. A pack stage lives at `install/plugin-stage/fno-pack`
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
     source_root: &Path,
@@ -1120,11 +1131,15 @@ enum RestageOutcome {
 /// up the directory marketplace has no stage and gets a no-op. Each profile
 /// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
-        .into_iter()
-        .filter(|p| stage_parent.join(p.stage_dir()).exists())
-        .collect();
-    if present.is_empty() {
+    let legacy_parent = (stage_parent == crate::plugin_install::stage_parent())
+        .then(legacy_stage_parent)
+        .flatten();
+    let new_present = present_profiles(stage_parent);
+    let legacy_present = legacy_parent
+        .as_deref()
+        .map(present_profiles)
+        .unwrap_or_default();
+    if new_present.is_empty() && legacy_present.is_empty() {
         return Ok(RestageOutcome::Absent);
     }
     let root = repo_root(source_dir)?;
@@ -1136,14 +1151,54 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         ],
         Some(&root),
     )?;
-    let mut files = 0;
-    let mut full_stage: Option<std::path::PathBuf> = None;
-    for profile in present {
-        let (stage, count) = build_stage_as(&root, stage_parent, profile)?;
-        files += count;
-        if profile == Profile::Full {
-            full_stage = Some(stage);
+    let mut files = restage_profiles(&root, stage_parent, &new_present)?;
+    let migrating = new_present.is_empty() && !legacy_present.is_empty();
+    let mut full_stage = stage_parent.join(Profile::Full.stage_dir());
+    if migrating {
+        // The first deploy flips new consumers while preserving the old tree
+        // for sessions that already loaded hooks from it.
+        files += restage_profiles(&root, stage_parent, &legacy_present)?;
+        let legacy = legacy_parent.as_ref().unwrap();
+        files += restage_profiles(&root, legacy, &legacy_present)?;
+        repoint_legacy_harnesses(legacy, &root);
+        write_legacy_flip_stamp(stage_parent)?;
+        println!(
+            "plugin stage: keeping legacy stage {}; first cutover drain started",
+            legacy.display()
+        );
+    } else if let Some(legacy) = legacy_parent.clone() {
+        files += restage_profiles(&root, &legacy, &legacy_present)?;
+        match pre_flip_harness_processes(stage_parent) {
+            Ok(blockers) if blockers.is_empty() => {
+                std::fs::remove_dir_all(&legacy).map_err(|e| {
+                    format!("remove drained legacy stage {}: {e}", legacy.display())
+                })?;
+                println!(
+                    "plugin stage: removed drained legacy stage {}",
+                    legacy.display()
+                );
+            }
+            Ok(blockers) => println!(
+                "plugin stage: keeping legacy stage {}; pre-flip harness pids {}",
+                legacy.display(),
+                blockers
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            Err(reason) => println!(
+                "plugin stage: keeping legacy stage {}; process check unknown: {reason}",
+                legacy.display()
+            ),
         }
+    }
+    if !full_stage.exists() {
+        full_stage = legacy_parent
+            .as_ref()
+            .map(|p| p.join(Profile::Full.stage_dir()))
+            .filter(|p| p.exists())
+            .unwrap_or(full_stage);
     }
     // A restage rewrites the full stage in place with no install attached, so
     // without this the pointer keeps naming whatever copy primed last and an
@@ -1152,14 +1207,127 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
     // and a worker's init resolved the stale copy). Same rule as
     // install_harness: a pack restage never moves the pointer off a full
     // stage, and a manifest-less stage writes nothing (the prime checks).
-    if let Some(stage) = full_stage {
-        prime_plugin_root_pointer(&stage);
+    if full_stage.exists() {
+        prime_plugin_root_pointer(&full_stage);
     }
     Ok(RestageOutcome::Restaged {
         files,
         root,
         head12: head.chars().take(12).collect(),
     })
+}
+
+fn present_profiles(parent: &Path) -> Vec<Profile> {
+    [Profile::Full, Profile::Pack]
+        .into_iter()
+        .filter(|profile| parent.join(profile.stage_dir()).exists())
+        .collect()
+}
+
+fn restage_profiles(root: &Path, parent: &Path, profiles: &[Profile]) -> Result<usize, String> {
+    let mut files = 0;
+    for profile in profiles {
+        files += build_stage_as(root, parent, *profile)?.1;
+    }
+    Ok(files)
+}
+
+fn write_legacy_flip_stamp(parent: &Path) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system clock before epoch: {e}"))?
+        .as_secs();
+    let stamp = parent.join(".legacy-flip.at");
+    std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    std::fs::write(&stamp, format!("{now}\n"))
+        .map_err(|e| format!("write {}: {e}", stamp.display()))
+}
+
+fn repoint_legacy_harnesses(legacy: &Path, source: &Path) {
+    let home = dirs_home();
+    let legacy_text = legacy.display().to_string();
+    let mentions = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .any(|path| std::fs::read_to_string(path).is_ok_and(|text| text.contains(&legacy_text)))
+    };
+    let link_points_at =
+        |path: PathBuf| std::fs::read_link(path).is_ok_and(|target| target.starts_with(legacy));
+    let codex = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let claude = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    let mut configured = Vec::new();
+    if mentions(&[claude.join("plugins/known_marketplaces.json")]) {
+        configured.push("claude");
+    }
+    if mentions(&[
+        codex.join("config.toml"),
+        codex.join("footnote/plugin-channel.json"),
+    ]) {
+        configured.push("codex");
+    }
+    if link_points_at(crate::grok_store::grok_home().join("plugins/fno")) {
+        configured.push("grok");
+    }
+    if mentions(&[
+        home.join(".gemini/config/hooks.json"),
+        home.join(".gemini/config/settings.json"),
+    ]) || link_points_at(home.join(".gemini/config/plugins/footnote"))
+    {
+        configured.push("agy");
+    }
+    if link_points_at(home.join(".footnote/plugins/fno")) {
+        configured.push("footnote");
+    }
+    for harness in configured {
+        match install_harness(harness, harness == "codex", source, Profile::Full) {
+            Ok(receipt) => println!("plugin stage: repointed {harness}: {receipt}"),
+            Err(error) => println!("plugin stage: repoint {harness} failed: {error}"),
+        }
+    }
+}
+
+fn pre_flip_harness_processes(parent: &Path) -> Result<Vec<u32>, String> {
+    let stamp = parent.join(".legacy-flip.at");
+    let flip = std::fs::read_to_string(&stamp)
+        .map_err(|e| format!("read {}: {e}", stamp.display()))?
+        .trim()
+        .parse::<f64>()
+        .map_err(|e| format!("parse {}: {e}", stamp.display()))?;
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,comm="])
+        .output()
+        .map_err(|e| format!("ps: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("ps exited {}", output.status.code().unwrap_or(-1)));
+    }
+    let candidates = ["claude", "opencode", "grok", "agy", "pi", "footnote"];
+    let mut blockers = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(command) = parts.next() else {
+            continue;
+        };
+        let name = Path::new(command)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or(command);
+        if !candidates.contains(&name.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        match crate::process_probe::process_started_epoch(pid) {
+            Some(started) if started <= flip => blockers.push(pid),
+            Some(_) => {}
+            None => return Err(format!("start time unavailable for candidate pid {pid}")),
+        }
+    }
+    Ok(blockers)
 }
 
 fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
@@ -1818,7 +1986,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         // this after a successful install.
         Some("--restage") => {
             let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
-            let stage_parent = state_root().join("plugin-stage");
+            let stage_parent = stage_parent();
             match restage_stage(&source_dir, &stage_parent) {
                 Ok(RestageOutcome::Absent) => {
                     println!("plugin stage: absent, skipped");
@@ -2104,7 +2272,7 @@ fn run_opencode_arm(
             let home = AgentsHome::from_env();
             let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
             let full = Profile::Full.stage_dir();
-            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
+            prime_plugin_root_pointer(&stage_parent().join(full));
             if receipt.status == "partial" {
                 3
             } else {
@@ -2441,7 +2609,7 @@ fn install_harness(
     profile: Profile,
 ) -> Result<String, String> {
     let root = repo_root(source_dir)?;
-    let parent = state_root().join("plugin-stage");
+    let parent = stage_parent();
     let (stage, _) = build_stage_as(&root, &parent, profile)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
@@ -2666,9 +2834,10 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
 /// then the filtered stage. `None` when neither carries it.
 pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
     const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
-    let stage = state_root()
-        .join("plugin-stage")
-        .join(Profile::Full.stage_dir());
+    let stage = [stage_parent(), state_root().join("plugin-stage")]
+        .into_iter()
+        .map(|parent| parent.join(Profile::Full.stage_dir()))
+        .find(|path| path.join(REL).is_file())?;
     crate::provider::plugin_root()
         .into_iter()
         .chain(std::iter::once(stage))
@@ -2742,7 +2911,7 @@ pub(crate) fn loop_install_probe(
                 Ok(root) => root,
                 Err(reason) => return Some(Err(reason)),
             };
-            let stage = match build_stage(&root, &state_root().join("plugin-stage")) {
+            let stage = match build_stage(&root, &stage_parent()) {
                 Ok(stage) => stage.0,
                 Err(reason) => return Some(Err(reason)),
             };
@@ -2914,7 +3083,11 @@ fn install_grok(stage: &Path, _force: bool) -> Result<String, String> {
     let read = grok_reachability();
     let read_is_copy = trusted_path_is_copy(&read, &home);
     match read {
-        GrokReachability::Reachable { path } if !read_is_copy => {
+        GrokReachability::Reachable { path }
+            if !read_is_copy
+                && std::fs::read_link(home.join("plugins").join(PLUGIN_LINK_NAME))
+                    .is_ok_and(|target| target == stage) =>
+        {
             Ok(format!("already installed, reachable: {path}"))
         }
         GrokReachability::Unknown { reason } => Err(format!("unknown: {reason}")),
@@ -3031,6 +3204,7 @@ fn swap_grok_symlink(plugins: &Path, link: &Path, stage: &Path) -> Result<(), St
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     // Install removes the machine-wide exports older installs wrote, and
     // nothing else: a user's own keys, comments and tables survive.
@@ -3422,6 +3596,191 @@ mod tests {
         }
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&pack_base);
+    }
+
+    #[test]
+    fn restage_flips_legacy_stage_and_keeps_it_for_the_first_cutover() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("pi-stage-flip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        let state = base.join("state");
+        let legacy = state.join("plugin-stage");
+        let new = state.join("install/plugin-stage");
+        fs::write(source.join("version.txt"), "before\n").unwrap();
+        git_in(&source, &["add", "version.txt"]);
+        git_in(&source, &["commit", "-q", "-m", "before flip"]);
+        build_stage(&source, &legacy).unwrap();
+        fs::write(source.join("version.txt"), "after\n").unwrap();
+        git_in(&source, &["add", "version.txt"]);
+        git_in(&source, &["commit", "-q", "-m", "after flip"]);
+
+        let claude_dir = base.join("claude");
+        fs::create_dir_all(claude_dir.join("plugins")).unwrap();
+        fs::write(
+            claude_dir.join("plugins/known_marketplaces.json"),
+            serde_json::to_vec(&json!({"fno": {
+                "installLocation": legacy.join("fno"),
+                "source": {"source": "directory", "path": legacy.join("fno")}
+            }}))
+            .unwrap(),
+        )
+        .unwrap();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let claude = bin.join("claude");
+        let log = base.join("claude.log");
+        fs::write(
+            &claude,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
+        let previous_home = std::env::var_os("FNO_HOME");
+        let previous_user_home = std::env::var_os("HOME");
+        let previous_claude = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let previous_path = std::env::var_os("PATH");
+        let test_home = base.join("home");
+        fs::create_dir_all(&test_home).unwrap();
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
+        std::env::set_var("FNO_HOME", &state);
+        std::env::set_var("HOME", &test_home);
+        std::env::set_var("CLAUDE_CONFIG_DIR", &claude_dir);
+        let test_path = previous_path
+            .as_ref()
+            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
+            .unwrap_or_else(|| bin.display().to_string());
+        std::env::set_var("PATH", test_path);
+
+        restage_stage(&source, &new).unwrap();
+
+        assert!(new.join("fno/.claude-plugin/plugin.json").is_file());
+        assert!(legacy.join("fno/.claude-plugin/plugin.json").is_file());
+        assert_eq!(
+            fs::read_to_string(new.join("fno/version.txt")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(
+            fs::read_to_string(legacy.join("fno/version.txt")).unwrap(),
+            "after\n"
+        );
+        assert!(new.join(".legacy-flip.at").is_file());
+        assert!(fs::read_to_string(&log)
+            .unwrap()
+            .contains(&format!("marketplace add {}", new.join("fno").display())));
+        assert_eq!(
+            fs::read_to_string(state.join("install/plugin-root"))
+                .unwrap()
+                .trim(),
+            new.join("fno").to_str().unwrap()
+        );
+        match previous_root {
+            Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
+            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
+        }
+        match previous_home {
+            Some(value) => std::env::set_var("FNO_HOME", value),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        match previous_user_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_claude {
+            Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn pre_flip_process_reader_uses_process_epoch_and_fails_closed() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("pi-process-flip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let ps = bin.join("ps");
+        fs::write(
+            &ps,
+            format!("#!/bin/sh\nprintf '{} claude\\n'\n", std::process::id()),
+        )
+        .unwrap();
+        fs::set_permissions(&ps, fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_path = std::env::var_os("PATH");
+        let test_path = previous_path
+            .as_ref()
+            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
+            .unwrap_or_else(|| bin.display().to_string());
+        std::env::set_var("PATH", test_path);
+        let flip = base.join(".legacy-flip.at");
+        let started = crate::process_probe::process_started_epoch(std::process::id()).unwrap();
+        fs::write(&flip, format!("{}\n", started.floor() as u64 + 2)).unwrap();
+        assert_eq!(
+            pre_flip_harness_processes(&base).unwrap(),
+            vec![std::process::id()]
+        );
+        fs::write(&flip, format!("{}\n", started.floor() as u64 - 1)).unwrap();
+        assert!(pre_flip_harness_processes(&base).unwrap().is_empty());
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restage_removes_legacy_stage_when_no_pre_flip_harness_process_lives() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("pi-stage-drain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        let state = base.join("state");
+        let legacy = state.join("plugin-stage");
+        let new = state.join("install/plugin-stage");
+        build_stage(&source, &legacy).unwrap();
+        build_stage(&source, &new).unwrap();
+        fs::write(new.join(".legacy-flip.at"), "0\n").unwrap();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let ps = bin.join("ps");
+        fs::write(&ps, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&ps, fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
+        let previous_path = std::env::var_os("PATH");
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
+        let test_path = previous_path
+            .as_ref()
+            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
+            .unwrap_or_else(|| bin.display().to_string());
+        std::env::set_var("PATH", test_path);
+
+        restage_stage(&source, &new).unwrap();
+
+        assert!(!legacy.exists(), "a drained legacy stage should be removed");
+        match previous_root {
+            Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
+            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
+        }
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// Regression: the --force arm once skipped `i += 1`, so the parse loop

@@ -40,7 +40,7 @@ READER FAILED drain: drain payload did not parse: EOF while parsing a value at l
 READER FAILED main_ci: gh api branches/main returned no head sha
 control plane: <FOLDED>
 READER FAILED self_hold: current session identity is unavailable
-READER FAILED state_root_drift: inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor <ROOT>/plugin-stage/fno/docs/state-root-inventory.md is a file; run `fno doctor update` to restage the plugin
+READER FAILED state_root_drift: inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor <ROOT>/install/plugin-stage/fno/docs/state-root-inventory.md is a file; run `fno doctor update` to restage the plugin
 boot_revival: none
 parked: none
 coverage: 19 of 39 readings ok
