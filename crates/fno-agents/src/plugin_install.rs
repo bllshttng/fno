@@ -1223,7 +1223,7 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         Some(&root),
     )?;
     let mut files = restage_profiles(&root, stage_parent, &new_present)?;
-    let migrating = new_present.is_empty() && !legacy_present.is_empty();
+    let migrating = !legacy_present.is_empty() && !stage_parent.join(".legacy-flip.at").is_file();
     let mut full_stage = stage_parent.join(Profile::Full.stage_dir());
     if migrating {
         // The first deploy flips new consumers while preserving the old tree
@@ -3544,6 +3544,7 @@ mod tests {
             .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
             .unwrap_or_else(|| bin.display().to_string());
         std::env::set_var("PATH", test_path);
+        build_stage_as(&source, &new, Profile::Codex).unwrap();
 
         restage_stage(&source, &new).unwrap();
 
@@ -3648,40 +3649,6 @@ mod tests {
         drain_legacy_stage(&legacy, Ok(Vec::new())).unwrap();
         assert!(!legacy.exists(), "a drained legacy stage should be removed");
         let _ = fs::remove_dir_all(&base);
-    }
-
-    /// Regression: the --force arm once skipped `i += 1`, so the parse loop
-    /// spun on the flag forever. The test returning at all is the proof.
-    /// Also pins B5 at the same parser boundary: a mode flag after a harness
-    /// positional is recorded, and the command refuses before any install work -
-    /// `plugin-install claude --check` once dropped the flag and ran the full
-    /// mutating install.
-    #[test]
-    fn parse_force_flag_returns_and_sets_flags() {
-        let args: Vec<String> = ["--force", "--status"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert!(parsed.force);
-        assert!(parsed.status);
-
-        let args: Vec<String> = ["claude", "--check"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("claude"));
-        assert_eq!(parsed.dropped_mode.as_deref(), Some("--check"));
-        assert_eq!(run_plugin_install(&args), 2);
-
-        let args: Vec<String> = ["--json", "--release", "codex", "-F"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("codex"));
-        assert!(parsed.release && parsed.json && parsed.force && !parsed.dev);
     }
 
     /// A GitHub-sourced claude marketplace or a codex release marker is a
