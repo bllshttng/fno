@@ -324,6 +324,11 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
             "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-push.sh\"",
+            "timeout": 4
           }
         ]
       }
