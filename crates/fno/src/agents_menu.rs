@@ -172,6 +172,7 @@ const DISTRESS: &[Node] = &[
 const LOOP: &[Node] = &[
     command("run", &["loop", "run"], "The unified driver loop: run --driver target."),
     command("check", &["loop-check"], "The stop-hook decision over external truth (read-only)."),
+    command("consult", &["loop", "consult"], "One bounded stronger-model question from this session's transcript."),
     command("control", &["loops"], "Every scheduled loop: the arms table, pause-all, resume-all."),
     command("finalize", &["finalize"], "The terminal-only side-effect writer."),
     command("probe", &["probe-run"], "Evaluate a plan's named probe list."),

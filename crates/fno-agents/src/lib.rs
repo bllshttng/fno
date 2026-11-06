@@ -126,6 +126,7 @@ pub mod claude_attach;
 pub mod claude_cloud;
 pub mod claude_config_tmp;
 pub mod claude_drive;
+pub mod consult;
 pub mod claude_login;
 pub mod claude_records;
 pub mod claude_resume;

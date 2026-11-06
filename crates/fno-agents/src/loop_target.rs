@@ -398,6 +398,9 @@ fn try_resume_codex_goal_on_wake(
 fn run_loop_command_inner(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
     // ── subcommand check ──────────────────────────────────────────────────────
     let subcommand = args.first().map(|s| s.as_str()).unwrap_or("");
+    if subcommand == "consult" {
+        return Ok(crate::consult::run(&args[1..]));
+    }
     if subcommand == "readiness" {
         return Ok(crate::loop_readiness::run(&args[1..]));
     }
@@ -405,8 +408,8 @@ fn run_loop_command_inner(args: &[String]) -> Result<i32, Box<dyn std::error::Er
         return Ok(crate::lead_goal::run_provider_command(&args[1..]));
     }
     if subcommand != "run" {
-        eprintln!("fno-agents loop: expected subcommand 'run', 'readiness', or 'command', got '{subcommand}'");
-        eprintln!("Usage: fno-agents loop run --driver <name> [options] | readiness [options] | command [options]");
+        eprintln!("fno-agents loop: expected subcommand 'run', 'readiness', 'command', or 'consult', got '{subcommand}'");
+        eprintln!("Usage: fno-agents loop run --driver <name> [options] | readiness [options] | command [options] | consult --question <text> | consult report");
         return Ok(2);
     }
     let args = &args[1..]; // skip "run"
