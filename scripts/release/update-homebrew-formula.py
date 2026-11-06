@@ -117,32 +117,9 @@ def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
             line = re.sub(r'sha256 "[^"]*"', f'sha256 "{sha}"', line)
             pending = None
         elif re.search(r'version "[^"]+"', line):
-            line = re.sub(r'^version "[^"]+"', f'version "{version}"', line)
+            line = re.sub(r'version "[^"]+"', f'version "{version}"', line)
         out.append(line)
     return "".join(out)
-lines = []
-A = lines.append
-A('def self_check() -> None:')
-A('    sample = (')
-A('        \'  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-x64.tar.gz"\\n\'')
-A('        \'  version "0.1.0"\\n\'')
-A('        \'  sha256 "\' + "deadbeef" * 8 + \'"\\n\'')
-A('        "  on_macos do\\n"')
-A('        "    on_arm do\\n"')
-A('        \'  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-arm64.tar.gz"\\n\'')
-A('        \'  sha256 "\' + "cafebabe" * 8 + \'"\\n\'')
-A('    )')
-A('    wheels = {X86_64: ("https://new/x64.tar.gz", "1" * 64), ARM64: ("https://new/arm.tar.gz", "2" * 64)}')
-A('    got = rewrite(sample, "0.2.1", wheels)')
-A('    assert \'version "0.2.1"\x27 in got, got')
-A('    assert \'url "https://new/x64.tar.gz"\' in got and f\'sha256 "{"1" * 64}\' in got, got')
-A('    assert \'url "https://new/arm.tar.gz"\' in got and f\'sha256 "{"2" * 64}\' in got, got')
-A('    assert "0.1.0" not in got and "deadbeef" not in got and "cafebabe" not in got, got')
-A('')
-A('    # The release-tag mapping: rc and nightly versions tag correctly.')
-A('    assert release_tag("0.4.7") == "v0.4.7"')
-A('    assert release_tag("0.4.7rc1") == "v0.4.7rc1"')
-A('    assert release_tag("0.4.7.dev.20261105") == "nightly"')
 
 
 def self_check() -> None:
@@ -166,6 +143,7 @@ def self_check() -> None:
     assert release_tag("0.4.7") == "v0.4.7"
     assert release_tag("0.4.7rc1") == "v0.4.7rc1"
     assert release_tag("0.4.7.dev.20261105") == "nightly"
+    print("self-check OK")
 
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--self-check":
