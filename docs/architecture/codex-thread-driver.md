@@ -200,7 +200,7 @@ With no response, a second `item/commandExecution/requestApproval` (server id 5)
 
 The vendor protocol declares file-change and additional-permissions approval requests in `app-server-protocol/src/protocol/common.rs:1882-1915`. Only command-execution approval was measured live. The response types are in `protocol/v2/item.rs:1684-1785` and `protocol/v2/permissions.rs:773-800`.
 
-The FNO user-path spawn was refused before launch: `fno agents spawn --name x89f1-approval-repro -H codex --as thread --cwd /tmp --permission-mode=read-only:on-request ...` returned `the codex thread lane has no carrier for --permission-mode; add --as pane`. No FNO worker hang was measured. Build node `x-461d` covers the thread approval answer path and the missing posture carrier.
+The FNO user-path spawn was refused before launch: `fno agents spawn --name x89f1-approval-repro -H codex --as thread --cwd /tmp --permission-mode=read-only:on-request ...` returned `the codex thread lane has no carrier for --permission-mode; add --as pane`. No FNO worker hang was measured. The follow-up implementation adds the thread approval path and missing posture carrier.
 
 `ActorCtx::route_frame` at `crates/fno-agents/src/codex_thread.rs:2166-2177` stores every inbound frame with an integer `id` as a response and has no server-request branch. This probe did not create an in-flight fno request with id 4. The build node's regression test must cover that collision.
 
