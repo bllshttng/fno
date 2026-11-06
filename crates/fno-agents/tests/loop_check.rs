@@ -379,6 +379,16 @@ fn transcript_with_promise() -> String {
     serde_json::to_string(&msg).unwrap() + "\n"
 }
 
+fn transcript_with_watching() -> String {
+    let msg = serde_json::json!({
+        "message": {
+            "role": "assistant",
+            "content": "<watching reason=\"ci\" timeout=\"30m\">"
+        }
+    });
+    serde_json::to_string(&msg).unwrap() + "\n"
+}
+
 fn transcript_with_aborted() -> String {
     let msg = serde_json::json!({
         "message": {
