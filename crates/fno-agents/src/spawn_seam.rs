@@ -81,10 +81,12 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         .map(|r| r.entries.into_iter().map(|e| e.name).collect())
         .unwrap_or_default();
     let typed = flag_value(&args[1..], &["--name"]).is_some();
+    // `--print` launches nothing, so it reserves nothing.
+    let print = has_flag(&args[1..], "", &["--print"]);
     let admitted = loop {
         let admitted = crate::spawn_admission::admit(&args, &here, &names);
         let name = match (&admitted.exit, flag_value(&admitted.argv[1..], &["--name"])) {
-            (None, Some(name)) if !name.is_empty() => name,
+            (None, Some(name)) if !name.is_empty() && !print => name,
             _ => break admitted,
         };
         match reserve_name(&name, None) {
@@ -170,21 +172,29 @@ pub(crate) fn reserve_name(name: &str, root: Option<&Path>) -> Result<(), String
         }
         crate::claims::AcquireOutcome::Acquired(_) => {
             if let Ok(mut held) = RESERVED_NAME.lock() {
-                *held = Some((key, holder, root.map(Path::to_path_buf)));
+                *held = Some((name.to_string(), key, holder, root.map(Path::to_path_buf)));
             }
             Ok(())
         }
     }
 }
 
-type HeldName = (String, String, Option<PathBuf>);
+type HeldName = (String, String, String, Option<PathBuf>);
 static RESERVED_NAME: std::sync::Mutex<Option<HeldName>> = std::sync::Mutex::new(None);
 
-/// Release this process's name reservation when its spawn failed, so a
-/// retry under the same `--name` is not refused for the TTL.
+/// Release this process's name reservation once the registry decides the
+/// name: the spawn failed, or its row already exists. A launch whose row
+/// is still owed keeps the claim for its TTL.
 pub fn settle_name(exit: i32) {
-    let held = RESERVED_NAME.lock().ok().and_then(|mut h| h.take());
-    if let (Some((key, holder, root)), true) = (held, exit != 0) {
+    let Some((name, key, holder, root)) = RESERVED_NAME.lock().ok().and_then(|mut h| h.take())
+    else {
+        return;
+    };
+    let row_exists = || {
+        let registry = crate::paths::AgentsHome::from_env().registry_json();
+        crate::state::load_registry(&registry).is_ok_and(|r| r.find(&name).is_some())
+    };
+    if exit != 0 || row_exists() {
         let _ = crate::claims::release(&key, &holder, root.as_deref(), root.as_deref());
     }
 }
