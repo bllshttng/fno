@@ -24,49 +24,23 @@
 # shrinks the production files. An EXISTING over-budget test file is under the
 # same rule as production code - it may not grow either.
 #
-# The Python tree under cli/src/fno is shrink-only as a TREE: Python is the
-# compatibility shell, Rust is the product. New code lands in crates/, and a
-# Python edit is a port or a deletion; plans meet that rule at blueprint time
-# in validate-plan.sh. This tally counts added lines per change against
-# blueprint.python_repair_added_lines; deletions do not offset new lines. The
-# remedy is to port the command to crates/,
-# land the feature in Rust, or refactor the growth away: per-harness DATA
-# belongs in the capability contract, long prose belongs in docs/, and
-# duplicate blocks belong behind one loop. An operator can grant a one-PR
-# exception with the file-budget-exception label; agents never apply it, and
-# it waives the tree tally alone, never a per-file grow. Two cases need no
-# label: a change whose Python tree net is negative (a port that deletes more
-# than it adds forward passes the tally), and a lead-approved blocking-bug
-# repair to existing Python, no new command, flag or feature, within the
-# thirty-added-line budget.
-#
-# A NEW .py file may only be born in an allowed home: cli/src/fno (governed by
-# the tally above), plugins/hermes (the plugin host's API is Python),
+# Rust is the product; no Python runtime remains. A NEW .py file may only be
+# born in an allowed home: tests/py (the dev-only tests of hooks, skill
+# scripts and CI scripts), plugins/hermes (the plugin host's API is Python),
 # evals/harness-fit and evals/fixtures (harbor runs and task data), and
 # scripts/release (release CI). Any other added .py path is refused. A file
 # that exists at the base keeps its home: only added paths are judged, so the
-# legacy Python scattered outside cli/ is never gated shut on a mere edit.
+# legacy Python scattered in skills/ and scripts/ is never gated shut on a
+# mere edit.
 #
 # Run: bash scripts/ci/check-file-budget.sh [--quiet]
 # Exit: 0 pass, 1 a refused grow (a grown over-budget file, a new over-budget
-#       production file, the Python tree over allowance, or a new .py outside
-#       the allowed homes), 2 misuse or an
-#       unresolvable base ref - a gate that cannot find its base never
+#       production file, or a new .py outside the allowed homes), 2 misuse or
+#       an unresolvable base ref - a gate that cannot find its base never
 #       reports a pass.
 #
 # Env (all optional):
 #   FILE_BUDGET_LINES  per-file line budget. Default 5000.
-#   PY_ADDED_BUDGET    added lines a cli/src/fno change that does not shrink
-#                      the tree may add. A change whose tree net is negative
-#                      passes the tally regardless. Resolution: this env, then
-#                      `fno config get blueprint.python_repair_added_lines`,
-#                      then 30.
-#   FILE_BUDGET_EXCEPTION_LABEL  name of the operator-applied PR label that
-#                      waives the tree allowance. Waives the tree tally alone.
-#                      Default: empty.
-#   FILE_BUDGET_LABEL_SHA  commit whose pull request carries the waiver;
-#                      when set, the gate reads the label live from GitHub
-#                      only if the tree is over the added-line allowance.
 #   PR_BASE_REF        base branch name, no remote prefix. Default: main.
 #   PR_REMOTE          remote holding the base. Default: origin.
 #   FILE_BUDGET_BASE_SHA  explicit base sha to diff instead of the merge base;
@@ -95,25 +69,6 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
 BUDGET="${FILE_BUDGET_LINES:-5000}"
-# Added-line budget for the cli/src/fno Python tree. It binds a change whose
-# tree net is zero or positive; a net-negative change passes the tally. A
-# net-zero rewrite still faces the ceiling on its ADDED lines, so a branch
-# cannot buy growth with its deletions. Resolution
-# order: the env override, then the config key on a machine with fno, then
-# the law's starting value. An env override is caller configuration, so
-# garbage there is refused loudly; only the config read falls back silently.
-PY_ADDED_BUDGET="${PY_ADDED_BUDGET:-}"
-if [[ -n "$PY_ADDED_BUDGET" ]]; then
-    case "$PY_ADDED_BUDGET" in '' | *[!0-9]*)
-        echo "check-file-budget: PY_ADDED_BUDGET must be a number, got '$PY_ADDED_BUDGET'" >&2
-        exit 2 ;;
-    esac
-else
-    if command -v fno >/dev/null 2>&1; then
-        PY_ADDED_BUDGET="$(fno config get blueprint.python_repair_added_lines 2>/dev/null | sed -n 1p || true)"
-    fi
-    [[ "$PY_ADDED_BUDGET" =~ ^[0-9]+$ ]] || PY_ADDED_BUDGET=30
-fi
 # An env override is caller configuration, so garbage there is refused loudly -
 # under set -e a non-numeric value would otherwise kill the arithmetic test with
 # no output at all.
@@ -123,20 +78,6 @@ case "$BUDGET" in '' | *[!0-9]*)
 esac
 REMOTE="${PR_REMOTE:-origin}"
 BASE_REF="${PR_BASE_REF:-main}"
-EXC_LABEL="${FILE_BUDGET_EXCEPTION_LABEL:-}"
-
-# The waiver lives on the PR, not in the event payload: a payload is a
-# snapshot, so a push run or a re-run after labeling never sees it there.
-label_live() {
-    local sha="${FILE_BUDGET_LABEL_SHA:-}" repo="${GITHUB_REPOSITORY:-}" out=""
-    [[ -n "$sha" ]] || return 1
-    if [[ -z "$repo" ]] || ! out="$(gh api "repos/$repo/commits/$sha/pulls" \
-            --jq '[.[].labels[].name] | index("file-budget-exception") != null' 2>&1)"; then
-        echo "check-file-budget: WARN could not read the file-budget-exception label for $sha (${out:-GITHUB_REPOSITORY is unset}); judging with no waiver" >&2
-        return 1
-    fi
-    [[ "$out" == "true" ]]
-}
 
 # The source types this gate measures. The diffs and the uncommitted-work check
 # read this one list, so a new type cannot reach one and miss the other.
@@ -225,8 +166,6 @@ live_count() {
 }
 
 # Paths are repo-relative, so a leading glob is what reaches a nested file.
-# `test_*.py` alone matched only a repo-root test, and every python test in
-# this repo lives under cli/, so the whole test tree counted as production.
 is_test_path() {
     case "$1" in
         *_tests.rs | */tests/* | test_*.py | */test_*.py | *_test.py) return 0 ;;
@@ -234,12 +173,11 @@ is_test_path() {
     esac
 }
 
-# Homes where a NEW .py file is legal. cli/src/fno is the shrink-only
-# compatibility shell (the tally above governs it); the rest are hosts with a
-# real reason to speak Python. The trailing slashes keep the match on whole
-# segments, so scripts/release-notes/gen.py does not ride scripts/release/.
+# Homes where a NEW .py file is legal: each has a real reason to speak
+# Python. The trailing slashes keep the match on whole segments, so
+# scripts/release-notes/gen.py does not ride scripts/release/.
 PY_ALLOWED=(
-    'cli/src/fno/'
+    'tests/py/'
     'plugins/hermes/'
     'evals/harness-fit/'
     'evals/fixtures/'
@@ -311,44 +249,8 @@ while IFS= read -r -d '' row; do
 # would silently widen to the merge base.
 done < <(git diff --numstat -z -M "$BASE"..HEAD -- "${GATED[@]}")
 
-# The tree tally is its own pass because it needs no HEAD blob: a deleted
-# module banks its lines here. Rename rows are parsed like the per-file loop
-# above, so an IN-TREE move counts as the content edit it is, never as a full
-# delete-plus-add; a module moved INTO the tree from outside still counts as
-# the growth it is, because the pathspec filters before rename pairing. NET
-# decides the tally: a net-negative change (a port that deletes more than it
-# adds forward) passes, and a change whose net is zero or positive faces the
-# added-line ceiling, so a branch cannot buy growth with its deletions.
-py_added=0
-py_deleted=0
-while IFS= read -r -d '' row; do
-    added="${row%%$'\t'*}"; rest="${row#*$'\t'}"
-    deleted="${rest%%$'\t'*}"; path="${rest#*$'\t'}"
-    if [[ -z "$path" ]]; then
-        IFS= read -r -d '' base_path
-        IFS= read -r -d '' path
-    fi
-    [[ "$added" == "-" ]] && continue
-    is_test_path "$path" && continue
-    py_added=$((py_added + added))
-    py_deleted=$((py_deleted + deleted))
-done < <(git diff --numstat -z -M "$BASE"..HEAD -- 'cli/src/fno/*.py')
-py_net=$((py_added - py_deleted))
-
-exc_waived=0
-if [[ "$py_net" -ge 0 && "$py_added" -gt "$PY_ADDED_BUDGET" ]]; then
-    if [[ -n "$EXC_LABEL" ]] || label_live; then
-        EXC_LABEL="${EXC_LABEL:-file-budget-exception}"
-        exc_waived=1
-    else
-        echo "check-file-budget: cli/src/fno added +$py_added lines (added-line budget $PY_ADDED_BUDGET, config blueprint.python_repair_added_lines). The tree did not shrink (net $(printf '%+d' "$py_net")), so the ceiling is on ADDED lines and deletions do not offset it: a rewrite cannot buy growth. A net-negative port passes without a label. Port the command you touched to crates/ or cut the added growth away in THIS PR. The one escape is an operator-applied file-budget-exception label on the PR; agents never apply it. The label is read from the PR when the check runs, so re-run the check after labeling." >> "$findings"
-        fails=1
-    fi
-fi
-
-# The location rule is its own pass over every .py row, repo-wide: the tally's
-# pathspec filters to cli/src/fno before rename pairing, so a row born outside
-# cli/ never reaches it. A path that exists at BASE keeps its home. A rename's
+# The location rule is its own pass over every .py row, repo-wide. A path
+# that exists at BASE keeps its home. A rename's
 # destination is a new path and is judged like any other addition, so a move
 # cannot relocate Python into a disallowed home.
 while IFS= read -r -d '' row; do
@@ -365,7 +267,7 @@ while IFS= read -r -d '' row; do
     {
         echo "check-file-budget: $path is a new Python file outside the allowed homes."
         echo "  A new .py is legal only under: ${PY_ALLOWED[*]}"
-        echo "  cli/src/fno is the shrink-only compatibility shell; plugins/hermes is a"
+        echo "  tests/py holds the dev-only tests; plugins/hermes is a"
         echo "  Python plugin host; evals/harness-fit and evals/fixtures hold harbor runs"
         echo "  and task data; scripts/release is release CI. Port the tool to crates/"
         echo "  (Rust is the product) or land it in a home with a reason to be Python. A"
@@ -389,8 +291,6 @@ if [[ "$fails" -eq 1 ]]; then
     exit 1
 fi
 if [[ "$QUIET" -eq 0 ]]; then
-    waived=""
-    [[ "$exc_waived" -eq 1 ]] && waived="; label $EXC_LABEL waives the tree allowance"
-    echo "check-file-budget: ok (no over-budget file grew; cli/src/fno added $(printf '%+d' "$py_added"), net $(printf '%+d' "$py_net"), budget $PY_ADDED_BUDGET$waived)"
+    echo "check-file-budget: ok (no over-budget file grew)"
 fi
 exit 0

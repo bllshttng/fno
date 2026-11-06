@@ -17,12 +17,13 @@ GATE="$(cd "${SCRIPT_DIR}/../.." && pwd)/scripts/ci/check-file-budget.sh"
 # The caller's git config (signing, hooks) must not reach the scratch repos.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset FILE_BUDGET_LINES PY_ADDED_BUDGET PR_BASE_REF PR_REMOTE FILE_BUDGET_BASE_SHA FILE_BUDGET_EXCEPTION_LABEL FILE_BUDGET_LABEL_SHA GITHUB_REPOSITORY
+unset FILE_BUDGET_LINES PR_BASE_REF PR_REMOTE FILE_BUDGET_BASE_SHA GITHUB_REPOSITORY
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 PASS=0; FAIL=0
+OK='check-file-budget: ok (no over-budget file grew)'
 
 # Distinct content per file, so rename detection pairs only what a case moves.
 lines() { seq -f "$2 %g" 1 "$1"; }
@@ -35,10 +36,7 @@ fresh() {
   git init -q "$TMP/repo"
   cd "$TMP/repo" || exit 1
   git symbolic-ref HEAD refs/heads/main
-  mkdir -p cli/src/fno/sub scripts
-  lines 50 dead > cli/src/fno/dead.py
-  lines 10 keep > cli/src/fno/keep.py
-  lines 30 old > cli/src/fno/sub/old.py
+  mkdir -p scripts
   lines 150 tool > scripts/tool.py
   lines 40 big > scripts/big.sh
   git add -A && git commit -qm base
@@ -62,80 +60,21 @@ check() {
   fi
 }
 
-# --- the Python added-line budget ---------------------------------------------
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
-check 'growth over the added-line budget is refused' 1 'added +150 lines (added-line budget 30'
-
-fresh; git rm -q cli/src/fno/dead.py; commit
-check 'a deleted module adds nothing' 0 'cli/src/fno added +0, net -50, budget 30'
-
-fresh; git rm -q cli/src/fno/dead.py; lines 120 grow >> cli/src/fno/sub/old.py; commit
-check 'a deleted module does not offset nested growth' 1 'added +120 lines (added-line budget 30'
-
-fresh; git mv scripts/tool.py cli/src/fno/tool.py; commit
-check 'a module moved into the tree counts as growth' 1 'added +150 lines (added-line budget 30'
-
-fresh; git mv cli/src/fno/keep.py cli/src/fno/renamed.py; commit
-check 'an in-tree move counts as its content edit, not full growth' 0 'cli/src/fno added +0, net +0, budget 30'
-
-fresh; git mv cli/src/fno/dead.py cli/src/fno/moved.py; lines 12 grow >> cli/src/fno/moved.py; commit
-check 'an in-tree move with edits counts only the edit' 0 'cli/src/fno added +12, net +12, budget 30'
-
-fresh; mkdir -p cli/src/fno/tests; lines 150 t > cli/src/fno/tests/test_x.py; commit
-check 'test files do not count against the tree' 0 'cli/src/fno added +0, net +0, budget 30'
-
-# The specimen that proved the hole: a port deletes far more than it adds
-# forward (80 deleted, 40 added). Net negative, so the tally passes without a
-# label even though the added lines pass the 30-line ceiling.
-fresh; git rm -q cli/src/fno/dead.py cli/src/fno/sub/old.py
-lines 40 fresh > cli/src/fno/fresh.py; commit
-check 'a net-negative port passes the tally' 0 'cli/src/fno added +40, net -40, budget 30'
-
-# The ceiling survives: a rewrite whose net is zero still faces the added-line
-# budget, so deletions cannot buy growth.
-fresh; git rm -q cli/src/fno/dead.py; lines 50 fresh > cli/src/fno/fresh.py; commit
-check 'a net-zero rewrite still faces the added-line ceiling' 1 'added +50 lines (added-line budget 30'
-
-fresh; lines 12 grow >> cli/src/fno/keep.py; commit
-check 'added lines under the budget pass' 0 'cli/src/fno added +12, net +12, budget 30'
-
-fresh; lines 12 grow >> cli/src/fno/keep.py; commit
-check 'the env override moves the budget' 1 'budget 5' PY_ADDED_BUDGET=5
-
-fresh; lines 12 grow >> cli/src/fno/keep.py; commit
-out="$(PY_ADDED_BUDGET=garbage bash "$GATE" 2>&1)"; got=$?
-if [[ "$got" -eq 2 && "$out" == *"PY_ADDED_BUDGET must be a number"* ]]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  printf 'FAIL: garbage env is refused loudly\nexit %s\n%s\n' "$got" "$out"
-fi
-
-# A config answer moves the budget when no env override is set.
-CONFIGBIN="$(mktemp -d)"
-cat > "$CONFIGBIN/fno" <<'STUB'
-#!/bin/bash
-if [[ "${1:-} ${2:-}" == "config get" && "${3:-}" == "blueprint.python_repair_added_lines" ]]; then
-    echo 5
-    exit 0
-fi
-exit 1
-STUB
-chmod +x "$CONFIGBIN/fno"
-fresh; lines 12 grow >> cli/src/fno/keep.py; commit
-check 'the config key moves the budget' 1 'budget 5' PATH="$CONFIGBIN:$PATH"
-rm -rf "$CONFIGBIN"
-
 # --- the Python location rule --------------------------------------------------
 # A NEW .py path outside the allowed homes is refused; a file that exists at
-# the base keeps its home. The homes: cli/src/fno, plugins/hermes,
+# the base keeps its home. The homes: tests/py, plugins/hermes,
 # evals/harness-fit, evals/fixtures, scripts/release.
 fresh; lines 5 t > scripts/stray.py; commit
 check 'a new .py outside the allowed homes is refused' 1 \
   'scripts/stray.py is a new Python file outside the allowed homes'
 
+fresh; mkdir -p cli/src/fno; lines 5 t > cli/src/fno/new.py; commit
+check 'the deleted runtime tree is no Python home' 1 \
+  'cli/src/fno/new.py is a new Python file outside the allowed homes'
+
 fresh
-mkdir -p plugins/hermes/promise-tag-reader evals/harness-fit/run evals/fixtures scripts/release
+mkdir -p tests/py/unit plugins/hermes/promise-tag-reader evals/harness-fit/run evals/fixtures scripts/release
+lines 5 t > tests/py/unit/test_new.py
 lines 5 t > plugins/hermes/promise-tag-reader/new.py
 lines 5 t > evals/harness-fit/run/new.py
 lines 5 t > evals/fixtures/new.py
@@ -143,115 +82,31 @@ lines 5 t > scripts/release/new.py
 commit
 # A silent setup failure would leave HEAD == BASE, and the empty diff prints
 # the same ok line: assert the files landed before the case can pass.
-for p in plugins/hermes/promise-tag-reader/new.py evals/harness-fit/run/new.py \
-         evals/fixtures/new.py scripts/release/new.py; do
+for p in tests/py/unit/test_new.py plugins/hermes/promise-tag-reader/new.py \
+         evals/harness-fit/run/new.py evals/fixtures/new.py scripts/release/new.py; do
   git cat-file -e "HEAD:$p" || { printf 'FAIL: setup lost %s\n' "$p" >&2; FAIL=$((FAIL + 1)); }
 done
-check 'each allowed home admits a new .py' 0 \
-  'cli/src/fno added +0, net +0, budget 30'
+check 'each allowed home admits a new .py' 0 "$OK"
 
 fresh; lines 5 grow >> scripts/tool.py; commit
-check 'an existing stray .py may be edited in place' 0 \
-  'cli/src/fno added +0, net +0, budget 30'
+check 'an existing stray .py may be edited in place' 0 "$OK"
 
 fresh; git mv scripts/tool.py scripts/tool2.py; commit
 check 'a rename into a disallowed home is refused' 1 \
   'scripts/tool2.py is a new Python file outside the allowed homes'
 
 fresh; mkdir -p evals/fixtures; git mv scripts/tool.py evals/fixtures/tool.py; commit
-check 'a rename into an allowed home passes' 0 \
-  'cli/src/fno added +0, net +0, budget 30'
+check 'a rename into an allowed home passes' 0 "$OK"
 
 fresh; mkdir -p scripts/release-notes; lines 5 t > scripts/release-notes/gen.py; commit
 check 'an allowlist prefix matches whole segments only' 1 \
   'scripts/release-notes/gen.py is a new Python file outside the allowed homes'
 
-# --- the operator label exception ---------------------------------------------
-# The live-read cases use a PATH stub so the selftest proves the route and the
-# no-call-on-pass contract without depending on a GitHub credential.
-GHBIN="$(mktemp -d)"
-GH_MARKER="$TMP/gh-called"
-cat > "$GHBIN/gh" <<'STUB'
-#!/usr/bin/env bash
-if [[ "${1:-}" != "api" || "${2:-}" != repos/o/r/commits/*/pulls ]]; then
-  echo "unexpected gh route" >&2
-  exit 2
-fi
-printf '%s\n' called >> "${GH_STUB_MARKER:?}"
-if [[ "${GH_STUB_RESULT:-}" == fail ]]; then
-  echo "stubbed gh failure" >&2
-  exit 1
-fi
-printf '%s\n' "${GH_STUB_RESULT:-false}"
-STUB
-chmod +x "$GHBIN/gh"
-
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
-check 'the live label waives the push-path tree allowance' 0 \
-  'label file-budget-exception waives the tree allowance' \
-  PATH="$GHBIN:$PATH" GH_STUB_RESULT=true GH_STUB_MARKER="$GH_MARKER" \
-  GITHUB_REPOSITORY=o/r FILE_BUDGET_BASE_SHA="$(git rev-parse main)" \
-  FILE_BUDGET_LABEL_SHA="$(git rev-parse HEAD)"
-
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
-check 'a live read without the label refuses' 1 \
-  'added +150 lines (added-line budget 30' \
-  PATH="$GHBIN:$PATH" GH_STUB_RESULT=false GH_STUB_MARKER="$GH_MARKER" \
-  GITHUB_REPOSITORY=o/r FILE_BUDGET_BASE_SHA="$(git rev-parse main)" \
-  FILE_BUDGET_LABEL_SHA="$(git rev-parse HEAD)"
-
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
-check 'a failed live label read refuses with a warning' 1 \
-  'could not read the file-budget-exception label' \
-  PATH="$GHBIN:$PATH" GH_STUB_RESULT=fail GH_STUB_MARKER="$GH_MARKER" \
-  GITHUB_REPOSITORY=o/r FILE_BUDGET_BASE_SHA="$(git rev-parse main)" \
-  FILE_BUDGET_LABEL_SHA="$(git rev-parse HEAD)"
-
-fresh; lines 20 grow >> cli/src/fno/keep.py; commit
-rm -f "$GH_MARKER"
-out="$(PATH="$GHBIN:$PATH" GH_STUB_RESULT=true GH_STUB_MARKER="$GH_MARKER" \
-  GITHUB_REPOSITORY=o/r FILE_BUDGET_BASE_SHA="$(git rev-parse main)" \
-  FILE_BUDGET_LABEL_SHA="$(git rev-parse HEAD)" bash "$GATE" 2>&1)"; got=$?
-if [[ "$got" -eq 0 && "$out" == *'added +20, net +20, budget 30'* && ! -e "$GH_MARKER" ]]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  printf 'FAIL: an in-budget tree must not make a live label read\nexit %s\n%s\n' "$got" "$out"
-fi
-
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
-rm -f "$GH_MARKER"
-out="$(PATH="$GHBIN:$PATH" GH_STUB_RESULT=true GH_STUB_MARKER="$GH_MARKER" \
-  GITHUB_REPOSITORY=o/r FILE_BUDGET_BASE_SHA="$(git rev-parse main)" \
-  bash "$GATE" 2>&1)"; got=$?
-if [[ "$got" -eq 1 && "$out" == *'added +150 lines (added-line budget 30'* \
-      && "$out" != *'could not read the file-budget-exception label'* \
-      && ! -e "$GH_MARKER" ]]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  printf 'FAIL: an unset label sha must preserve the existing refusal without a call\nexit %s\n%s\n' "$got" "$out"
-fi
-
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
-check 'the label waives the tree allowance and names itself' 0 \
-  'label file-budget-exception waives the tree allowance' \
-  FILE_BUDGET_EXCEPTION_LABEL=file-budget-exception
-
-fresh; lines 20 grow >> cli/src/fno/keep.py; commit
-out="$(FILE_BUDGET_EXCEPTION_LABEL=file-budget-exception bash "$GATE" 2>&1)"
-if [[ "$out" == *'added +20, net +20, budget 30'* && "$out" != *'waives'* ]]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  printf 'FAIL: a within-allowance tree must not claim the waiver\n%s\n' "$out"
-fi
-
-fresh; lines 5 grow >> scripts/big.sh; commit
-check 'the label never waives the per-file budget' 1 \
-  'grows it by +5/-0' FILE_BUDGET_LINES=20 FILE_BUDGET_EXCEPTION_LABEL=file-budget-exception
-
 # --- the per-file budget ------------------------------------------------------
+fresh; lines 5 grow >> scripts/big.sh; commit
+check 'an over-budget file may not grow' 1 \
+  'scripts/big.sh is 45 lines (budget 20) and this change grows it by +5/-0' FILE_BUDGET_LINES=20
+
 fresh; git mv scripts/big.sh scripts/huge.sh; lines 5 grow >> scripts/huge.sh; commit
 check 'a renamed over-budget file may not grow' 1 \
   'scripts/huge.sh is 45 lines (budget 20) and this change grows it by +5/-0' FILE_BUDGET_LINES=20
@@ -266,22 +121,30 @@ check 'the push alarm names the owed shrink' 1 \
   FILE_BUDGET_LINES=20 FILE_BUDGET_BASE_SHA="$(git rev-parse main)"
 
 fresh; git rm -q scripts/big.sh; commit
-check 'a deleted over-budget file passes' 0 'check-file-budget: ok (no over-budget file grew' FILE_BUDGET_LINES=20
+check 'a deleted over-budget file passes' 0 "$OK" FILE_BUDGET_LINES=20
+
+out="$(FILE_BUDGET_LINES=garbage bash "$GATE" 2>&1)"; got=$?
+if [[ "$got" -eq 2 && "$out" == *"FILE_BUDGET_LINES must be a number"* ]]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  printf 'FAIL: garbage env is refused loudly\nexit %s\n%s\n' "$got" "$out"
+fi
 
 # --- uncommitted work ---------------------------------------------------------
 # The diffs read commits, so a worker measuring mid-change would read +0 for
 # work it has not committed. The gate must name that, never print a clean zero.
-fresh; lines 150 grow >> cli/src/fno/keep.py
+fresh; lines 150 grow >> scripts/big.sh
 check 'an uncommitted edit is named, not read as no growth' 0 \
   'uncommitted changes to gated files are not counted'
 
-fresh; lines 5 new > cli/src/fno/new.py
-check 'an untracked module is named, not read as no growth' 0 \
+fresh; lines 5 new > scripts/new.sh
+check 'an untracked file is named, not read as no growth' 0 \
   'uncommitted changes to gated files are not counted'
 
-fresh; lines 150 grow >> cli/src/fno/keep.py; commit
+fresh; lines 5 grow >> scripts/big.sh; commit
 out="$(bash "$GATE" 2>&1)"
-if [[ "$out" == *'added +150'* && "$out" != *'not counted'* ]]; then
+if [[ "$out" == *"$OK"* && "$out" != *'not counted'* ]]; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))

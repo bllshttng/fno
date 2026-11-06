@@ -1,29 +1,9 @@
-# Every tracked .py file outside cli/, with its fate.
+# Every tracked .py file, with its fate.
 # Verdicts: keep | tombstone (a no-op stub for a retired hook path, deleted next release) | delete-by <effort> | port-by <effort> | delete (no live caller; goes with the named extras).
 # Columns: path, verdict, reason.
-crates/fno-agents/tests/accounts_binding_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_env_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_error_class_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_launch_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_pick_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_reconcile_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_records_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_required_bot_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_store_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_usage_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_usage_probe_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_window_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/capture/mail_reply_capture.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/capture/mail_send_capture.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/capture/target_family_capture.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/event_validate_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/coverage_gate/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/merge_command/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/post_merge/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/post_merge/cases_ritual.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/pr_watch_status/oracle.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/relay_transcript/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scoreboard/scoreboard_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/copy_for_diff/paths_slice.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/events/attest_prov.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/file_patch/fix1.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
@@ -31,12 +11,6 @@ crates/fno-agents/tests/fixtures/scratch/fno_wrap_json/bind.py	delete-by python-
 crates/fno-agents/tests/fixtures/scratch/gate_wait/wait_spawn_9fd0.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/graph/kids.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/liveness/liveness.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/skill_diff/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/tracker/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/worktree/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/paths_hub_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/review_findings_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/review_invocation_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/whoami_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_cli_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_doctor_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
@@ -105,15 +79,118 @@ scripts/lib/check-skill-frontmatter.py	delete-by python-cli-retirement	CI or bui
 scripts/lib/parse-bundle-manifest.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/mail-bus-lag.py	delete	no caller; the docs/architecture/multiplayer.md line goes with it
 scripts/metrics/completion-summary.py	delete	no caller; its test and test_smoke_registry.rs row and reachable-paths-baseline row go with it
-scripts/migrate-events-shape.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
 scripts/probes/reap-receipt-stop-probe.py	delete	no caller; the gc_sweep.rs doc comment naming it goes with it
 scripts/regen-generated-copies.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/release/draft-release-notes.py	keep	release.yml runs it in CI only; never on the user path
 scripts/release/hookagg.py	keep	hook-latency sample aggregation; its window unit test is a smoke-registry row; CI only, never on the user path
 scripts/release/test_hookagg_window.py	keep	unit tests for hookagg.py; the smoke registry runs it; CI only
 scripts/release/update-homebrew-formula.py	keep	release.yml runs it in CI only; never on the user path
+scripts/save-session.py	tombstone	the old PreCompact and SessionEnd rows name it; hooks/lib/run-python.sh, also a stub, exits 0 before it
 scripts/sync-codex-agents.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 tests/metrics/test_completion_summary_path.py	delete	covers completion-summary.py only
+tests/py/_afunix.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/_bins.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/_event_rows.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/_init_space.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/_leak_census.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/_native_door.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/_native_event_cli.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/conftest.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/events/test_ephemeral_set_parity.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/events/test_event_find.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/events/test_migration.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/events/test_rust_events_documented.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/events/test_schema_files.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/events/test_schema_manifest.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/fixtures/external_workflow_pack/evaluate.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/fixtures/graph_seed.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/_door.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/test_advance_golden.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/test_lifecycle_golden.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/test_reconcile_golden.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/test_session_golden.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/goldens/test_triage_golden.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/graph/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/graph/test_backlog_search_fts.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/hooks/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/hooks/test_codex_stop_output_contract.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/hooks/test_init_target_state_skip_flags.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/hooks/test_register_session_start.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/hooks/test_session_start_plugin_root.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_consolidation_audit.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_e2e_hook_block.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_first_run_documentation.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_law_skill_contract.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_marketplace_lint.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_no_hardcoded_paths.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_worktree_cargo_build_base.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_worktree_manager.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/journeys/test_growth_studio_faucet.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_append_lesson_candidate.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_check_parity_test_provenance.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_check_pitfalls.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_check_preamble_budget.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_codex_workflow_posture.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_command_callers.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_dsplit.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_execution_validation_wiring.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_review_skill_freshness.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/lint/test_think_skill_size.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/megawalk/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/prod_tripwire.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/test_autonomy_registry_ci.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/test_node_claim_release_authority.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/test_provider_exec_guard.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/test_short_flag_dispatch.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/_front_dev.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/plan/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/plan/test_handoff_session_ids.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/plugins/__init__.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/plugins/test_bundling.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_agy_plugin_payload.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_blueprint_batching_rule.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_cargo_job_trigger_paths.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_cli_lint.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_context_nudge_prescribed_commands.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_docs_fences.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_epic_status.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_evidence_refusal_remedy.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_exit_code_allocation.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_gate_escape_command.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_graph_worked_cli.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_hooks_json_validity.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_init_harness_space_stub.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_join_partition_hook.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_law_command_form_gate.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_leak_census.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_partition_gate.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_post_merge_inbox_idempotency.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_postcompact_reinject.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_prod_tripwire.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_product_qualification_manifest.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_prove_it.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_pytest_shard_partition.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_pytest_timeout_configured.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_registry_mint_guard.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_resolve_executor_emit.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_retired_command_gate.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_scope_growth.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_skill_bundles.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_sync_codex_agents.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_target_denominator.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_task_rows.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_term_skill_links.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_terminal_integrations.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_unknown_subcommand_exit.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_validate_plan_consolidation.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_validate_plan_decisions_acknowledged.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_validate_plan_project_warning.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_validate_plan_stub_markers.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_workflow_authority_contract.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_worktree_reap_equivalence.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/unit/test_worktree_reap_ordering.py	keep	dev-only live-contract test, run by the tests-py job
 tests/spec/test_impeccable_stages_validator.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/spec/test_product_md_check.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
-scripts/save-session.py	tombstone	the old PreCompact and SessionEnd rows name it; hooks/lib/run-python.sh, also a stub, exits 0 before it
