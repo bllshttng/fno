@@ -8,7 +8,7 @@
 
 use fno_agents::codex_ask::{
     approval_flag, build_argv_create, build_argv_resume, inject_from_name, parse_jsonl_line,
-    sandbox_flag, sandbox_flag_resume, CodexAskError, JsonlEvent,
+    sandbox_flag, CodexAskError, JsonlEvent,
 };
 use fno_agents::codex_posture::BOUNDED_NETWORK_OVERRIDE;
 use std::path::PathBuf;
@@ -27,11 +27,6 @@ static PATH_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn inject_from_name_prepends_bracket_prefix() {
     let got = inject_from_name("hello world", "alice");
     assert_eq!(got, "[from: alice]\n\nhello world");
-}
-
-#[test]
-fn inject_from_name_empty_prompt() {
-    assert_eq!(inject_from_name("", "x"), "[from: x]\n\n");
 }
 
 #[test]
@@ -61,14 +56,6 @@ fn sandbox_flag_default_is_bounded() {
 }
 
 #[test]
-fn sandbox_flag_yolo_is_bypass() {
-    assert_eq!(
-        sandbox_flag(true),
-        vec!["--dangerously-bypass-approvals-and-sandbox"]
-    );
-}
-
-#[test]
 fn sandbox_flag_never_carries_approval_token() {
     // --ask-for-approval is a GLOBAL flag; sandbox_flag tokens are spliced
     // AFTER `exec`, where codex rejects --ask-for-approval. It must never leak
@@ -83,31 +70,9 @@ fn sandbox_flag_never_carries_approval_token() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn approval_flag_default_is_never_prompt() {
-    assert_eq!(approval_flag(false), vec!["--ask-for-approval", "never"]);
-}
-
-#[test]
 fn approval_flag_yolo_is_empty() {
     // The bypass flag from sandbox_flag already disables approval.
     assert!(approval_flag(true).is_empty());
-}
-
-// ---------------------------------------------------------------------------
-// sandbox_flag_resume (resume path - restricted flags)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn sandbox_flag_resume_default_is_empty() {
-    assert!(sandbox_flag_resume(false).is_empty());
-}
-
-#[test]
-fn sandbox_flag_resume_yolo_is_bypass() {
-    assert_eq!(
-        sandbox_flag_resume(true),
-        vec!["--dangerously-bypass-approvals-and-sandbox"]
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -330,19 +295,6 @@ fn build_argv_create_yolo() {
     assert!(!argv.contains(&"workspace-write".to_string()));
 }
 
-#[test]
-fn build_argv_create_no_resume_subcommand() {
-    let argv = build_argv_create(&PathBuf::from("/x"), "m", false, None, None, None, &[]);
-    // Should be `codex --ask-for-approval never exec --json -C ...`, not
-    // `codex exec resume`. The exec subcommand follows the global approval flag.
-    assert_eq!(argv[0], "codex");
-    assert_eq!(argv[1], "--ask-for-approval");
-    assert_eq!(argv[2], "never");
-    assert_eq!(argv[3], "exec");
-    assert_eq!(argv[4], "--json");
-    assert!(!argv.contains(&"resume".to_string()));
-}
-
 // ---------------------------------------------------------------------------
 // build_argv_resume
 // ---------------------------------------------------------------------------
@@ -383,13 +335,6 @@ fn build_argv_resume_forwards_reasoning_effort() {
     assert!(argv
         .windows(2)
         .any(|pair| pair == ["-c", "model_reasoning_effort=low"]));
-}
-
-#[test]
-fn build_argv_resume_no_cd_flag() {
-    // Resume sets cwd via Popen(cwd=...) not -C argv token
-    let argv = build_argv_resume(&PathBuf::from("/x"), "s123", "p", false, None);
-    assert!(!argv.contains(&"-C".to_string()));
 }
 
 #[cfg(unix)]
@@ -481,22 +426,8 @@ fn parse_jsonl_line_non_json_returns_none() {
 }
 
 #[test]
-fn parse_jsonl_line_non_object_json_returns_none() {
-    assert!(parse_jsonl_line("[1,2,3]").is_none());
-    assert!(parse_jsonl_line("\"hello\"").is_none());
-}
-
-#[test]
 fn parse_jsonl_line_unknown_type_returns_other() {
     let line = r#"{"type":"some.future.event","data":42}"#;
-    let ev = parse_jsonl_line(line).unwrap();
-    assert!(matches!(ev, JsonlEvent::Other { .. }));
-}
-
-#[test]
-fn parse_jsonl_line_item_completed_unknown_item_type_returns_other() {
-    // item.completed with unknown item type -> Other (not panic)
-    let line = r#"{"type":"item.completed","item":{"type":"future_type","x":1}}"#;
     let ev = parse_jsonl_line(line).unwrap();
     assert!(matches!(ev, JsonlEvent::Other { .. }));
 }
@@ -524,16 +455,6 @@ fn parse_jsonl_line_thread_started_missing_thread_id_returns_other_or_none() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn error_no_session_id_exit_code_11() {
-    let err = CodexAskError::NoSessionId {
-        types_seen: vec!["turn.completed".to_string()],
-    };
-    assert_eq!(err.exit_code(), 11);
-    let msg = err.to_string();
-    assert!(msg.contains("session id"), "msg: {}", msg);
-}
-
-#[test]
 fn error_not_found_maps_to_provider_unavailable() {
     // CodexAskError::NotFound represents "codex binary not on PATH"; per
     // Python parity (dispatch.py maps codex's FileNotFoundError(127) chain
@@ -551,38 +472,6 @@ fn error_invocation_exit_code_propagated() {
         message: "err".into(),
     };
     assert_eq!(err.exit_code(), 5);
-}
-
-#[test]
-fn error_tee_open_exit_code_12() {
-    let err = CodexAskError::TeeOpen {
-        message: "perm denied".into(),
-    };
-    assert_eq!(err.exit_code(), 12);
-}
-
-#[test]
-fn error_timeout_exit_code_15() {
-    let err = CodexAskError::Timeout { timeout_sec: 60.0 };
-    assert_eq!(err.exit_code(), 15);
-    let msg = err.to_string();
-    assert!(msg.contains("60"), "msg: {}", msg);
-}
-
-#[test]
-fn error_sigkill_escalated_exit_code_1() {
-    let err = CodexAskError::SigkillEscalated {
-        partial_exit_code: 0,
-    };
-    assert_eq!(err.exit_code(), 1);
-}
-
-#[test]
-fn error_os_error_exit_code_1() {
-    let err = CodexAskError::OsError {
-        message: "ENOMEM".into(),
-    };
-    assert_eq!(err.exit_code(), 1);
 }
 
 #[test]

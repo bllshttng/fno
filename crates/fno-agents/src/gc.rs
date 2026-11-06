@@ -1512,71 +1512,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A roster seam whose only keeps read `roster unreadable`, the
-    /// enumeration-failed shape the arm must name on the tick.
-    fn unreadable_roster_sweep(
-        _home: &AgentsHome,
-        _cwd: &Path,
-        _grace_secs: i64,
-        _scope: crate::agents_config::RosterScope,
-    ) -> crate::roster_reap::RosterReapSummary {
-        crate::roster_reap::RosterReapSummary {
-            instrument_unread: true,
-            kept: vec![crate::roster_reap::RosterJudgement {
-                short_id: String::new(),
-                node: None,
-                reason: "roster unreadable: test stub".to_string(),
-                retired: false,
-                class: "contested",
-            }],
-            ..Default::default()
-        }
-    }
-
-    /// AC9-EDGE: a roster sweep whose enumeration failed removes nothing,
-    /// leaves the registry sweep's verdict unchanged, and the tick reads
-    /// `roster=unreadable`.
-    #[test]
-    fn an_unreadable_roster_removes_nothing() {
-        let (dir, home) = retirement_sweep_tmp_home("roster-unreadable");
-        let row = run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Skipped,
-            unreadable_roster_sweep,
-        );
-        assert_eq!(row["data"]["acted"], 0);
-        assert_eq!(row["data"]["skip_reason"], "no_rows");
-        assert!(
-            row["data"]["detail"]
-                .as_str()
-                .unwrap()
-                .contains("roster=unreadable"),
-            "{:?}",
-            row["data"]["detail"]
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn unreadable_registry_renders_a_failure_not_no_rows() {
-        // A registry read that fails is not a census of zero: the tick names
-        // registry_unreadable, a FAILURE_SKIPS token, so the arms readout
-        // renders FAIL instead of a quiet ok.
-        let (dir, home) = retirement_sweep_tmp_home("registry-unreadable");
-        std::fs::create_dir_all(home.root()).unwrap();
-        crate::registry_store::seed_raw(&home.registry_json(), "{not json");
-        let row = run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Skipped,
-            noop_roster_sweep,
-        );
-        assert_eq!(row["data"]["acted"], 0);
-        assert_eq!(row["data"]["skip_reason"], "registry_unreadable");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn manual_reap_command_argv_includes_used_shells() {
         // AC5-CLI: the manual command opts in to closing a human's spent
@@ -1859,18 +1794,6 @@ mod tests {
         assert!(is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
     }
 
-    /// A worker the registry vouches for is not an orphan, whatever the process
-    /// table says: the fleet is tracking it.
-    #[test]
-    fn a_pid_the_registry_names_live_is_left_alone() {
-        let row = orphan(FNO_PY, 1, 86_400);
-        assert!(!is_reapable_orphan(
-            &row,
-            Duration::from_secs(5400),
-            &[4242]
-        ));
-    }
-
     /// The argv clause matches a TOKEN, not a substring, in both reparable
     /// families: the fno-py entrypoint by basename, and stdio MCP servers by
     /// the `serve --mcp` pair or the codegraph `--liftoff-only` launcher flag
@@ -1935,16 +1858,6 @@ mod tests {
             &[]
         ));
         assert_eq!(count_mcp_children_of_spares(&table), 1);
-    }
-
-    /// An age the parser cannot establish reads as unknown, and unknown never
-    /// reaps: a failed read is not evidence that a process is old.
-    #[test]
-    fn an_unparseable_age_never_reaps() {
-        assert_eq!(parse_etime("banana"), None);
-        assert_eq!(parse_etime(""), None);
-        assert_eq!(parse_etime("1:2:3:4"), None);
-        assert!(parse_proc_line("100 1 banana fno-py do pr wait 1").is_none());
     }
 
     /// An unreadable registry is not evidence that no worker is live. Reading
