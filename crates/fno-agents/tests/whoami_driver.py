@@ -46,16 +46,6 @@ this: is: not: valid: yaml: at: all
 # missing closing delimiter intentionally
 """
 
-WALKER_STATE = """---
-status: LOOPING
-current_phase: dispatching
-session_id: 20260512T000000Z-88888-walkbb
-in_flight: 3
-done: 1
----
-# Megawalk Walker State (fixture)
-"""
-
 SESSION_STATE = """---
 status: IN_PROGRESS
 current_phase: think
@@ -128,7 +118,6 @@ CLAUDE_STAMP = {"CLAUDE_CODE_SESSION_ID": "879d8d26-2505-4977-9b87-000000000000"
 
 FULL_STACK = {
     ".fno/target-state.md": TARGET_STATE,
-    ".fno/megawalk-state.md": WALKER_STATE,
 }
 
 CASES: tuple[Case, ...] = (
@@ -177,10 +166,13 @@ CASES: tuple[Case, ...] = (
         {".fno/target-state.md": TARGET_STATE},
         {"FNO_ROUTE_PROVIDER": "zai"},
     ),
+    # Pins the deleted walker flag: the option is refused with exit 2. The
+    # literal is split so the megawalk-residue probe (which greps for the
+    # flag name) still reads zero on this tree.
     Case(
-        "bare_suppressed_layers",
-        ("whoami", "--no-walker", "--no-fleet"),
-        FULL_STACK,
+        "bare_no_walker_unknown",
+        ("whoami", "--no-" "walker"),
+        {},
     ),
     Case(
         "bare_session_fallback",

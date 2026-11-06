@@ -1,6 +1,5 @@
 {
   "detected_paths": [
-    "<FIXTURE>/project/.fno/megawalk-state.md",
     "<FIXTURE>/project/.fno/target-state.md"
   ],
   "fleet": null,
@@ -29,13 +28,6 @@
     "status": "IN_PROGRESS"
   },
   "visitor": null,
-  "walker": {
-    "done": 1,
-    "in_flight": 3,
-    "path": "<FIXTURE>/project/.fno/megawalk-state.md",
-    "phase": "dispatching",
-    "session_id": "20260512T000000Z-88888-walkbb"
-  },
   "warnings": [
     "not a git repo, using cwd"
   ]
