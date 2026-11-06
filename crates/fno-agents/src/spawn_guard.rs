@@ -412,8 +412,16 @@ pub fn reserve_and_hand_over(req: &GuardRequest) -> (Value, i32) {
     };
     // THE node claim, so the node reads worked from the moment it is
     // dispatched rather than from whenever the worker reaches its own init.
+    // The spawn client exits within seconds of the launch, so a pid here
+    // reads suspect `pid-absent` long before init re-acquires, and a fresh
+    // worker reaps its own claim. The TTL alone is this claim's liveness.
     let reason = format!("spawn handover window for {}", req.node_id);
-    match crate::claims::acquire(&node_key, handover, opts(req, HANDOVER_TTL_MS, reason)) {
+    let handover_opts = AcquireOpts {
+        pid: None,
+        pid_unavailable: true,
+        ..opts(req, HANDOVER_TTL_MS, reason)
+    };
+    match crate::claims::acquire(&node_key, handover, handover_opts) {
         AcquireOutcome::Acquired(_) => {
             out.insert("node_claim_key".into(), json!(node_key));
             out.insert("node_claim_holder".into(), json!(handover));
@@ -1358,6 +1366,12 @@ mod tests {
             holder_of(tmp.path(), "node:x-1").as_deref(),
             Some("spawn-handover:w")
         );
+        // The handover outlives the spawn client: no pid, the TTL is the
+        // liveness, so the claim reads live and never suspect pid-absent.
+        let (state, record) = crate::claims::status("node:x-1", Some(tmp.path()));
+        let record = record.unwrap();
+        assert!(record.pid_unavailable && record.pid.is_none(), "{record:?}");
+        assert_eq!(state, crate::claims::ClaimState::Live);
     }
 
     #[test]
