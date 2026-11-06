@@ -1047,7 +1047,10 @@ mod tests {
     #[test]
     fn an_agy_bare_create_identifies_by_pid() {
         let (dir, home) = home();
-        let sock = dir.path().join("mux").join("threads").join("wk-agy.sock");
+        // The socket follows the WORKER name the spawn derives, not the
+        // harness: dispatch probes <state-root>/<name>.sock, so the fake
+        // keeper must bind exactly there (the pi test binds the same shape).
+        let sock = dir.path().join("mux").join("threads").join("wk-pi.sock");
         std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
         let keeper = Arc::new(FakeKeeper::with_identify_argv(
             &sock,
