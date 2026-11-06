@@ -4,7 +4,7 @@
 //! prior round with one command instead of shipping a jq filter file.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The answer for one branch/head question.
 pub(crate) struct PriorHead {
