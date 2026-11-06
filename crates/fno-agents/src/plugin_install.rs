@@ -44,7 +44,9 @@ pub(crate) fn stage_parent() -> PathBuf {
 
 fn legacy_stage_parent() -> Option<PathBuf> {
     let legacy = state_root().join("plugin-stage");
-    (legacy != stage_parent() && legacy.is_dir()).then_some(legacy)
+    let is_real_dir = std::fs::symlink_metadata(&legacy)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+    (legacy != stage_parent() && is_real_dir).then_some(legacy)
 }
 
 fn run_checked(cmd: &[String], cwd: Option<&Path>) -> Result<String, String> {
@@ -3722,6 +3724,16 @@ mod tests {
         assert!(
             !legacy.exists(),
             "drain completes after the config repoints"
+        );
+        let symlink_state = state.join("symlink-state");
+        let external_stage = base.join("external-stage");
+        fs::create_dir_all(&symlink_state).unwrap();
+        fs::create_dir_all(&external_stage).unwrap();
+        std::os::unix::fs::symlink(&external_stage, symlink_state.join("plugin-stage")).unwrap();
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &symlink_state);
+        assert!(
+            legacy_stage_parent().is_none(),
+            "legacy symlinks are not writable roots"
         );
         match previous_root {
             Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),

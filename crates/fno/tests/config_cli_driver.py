@@ -81,26 +81,6 @@ def fixture_empty_project(root: Path) -> Path:
     return write_project(root)
 
 
-def fixture_forward_help(root: Path) -> Path:
-    project = write_project(root)
-    bin_dir = root / "fake_bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    launcher = bin_dir / "fno-py"
-    launcher.write_text(
-        "#!/bin/sh\n"
-        "case \"$*\" in\n"
-        "  'config build-dir --help'|'config active-backlog --help') ;;\n"
-        "  *) exit 64 ;;\n"
-        "esac\n"
-        "printf 'forwarded:'\n"
-        "for arg do printf ' <%s>' \"$arg\"; done\n"
-        "printf '\\n'\n",
-        encoding="utf-8",
-    )
-    launcher.chmod(0o755)
-    return project
-
-
 def fixture_scalar(root: Path) -> Path:
     project = write_project(root)
     (project / ".fno" / "config.toml").write_text(
@@ -213,7 +193,6 @@ def fixture_fake_agents(root: Path, receipt: str) -> Path:
 def build_fixture(case: Case, root: Path) -> Path:
     project = {
         "empty_project": fixture_empty_project,
-        "forward_help": fixture_forward_help,
         "scalar": fixture_scalar,
         "layering": fixture_layering,
         "providers_alias": fixture_providers_alias,
@@ -353,14 +332,6 @@ def run_case(case: Case, root: Path) -> tuple[str, str, int]:
     }
     os.environ.clear()
     os.environ.update(env)
-    if case.name in {"builddir_help", "backlog_help"}:
-        proc = subprocess.run(
-            [str(root / "fake_bin" / "fno-py"), *case.argv],
-            cwd=project,
-            capture_output=True,
-            text=True,
-        )
-        return proc.stdout, proc.stderr, proc.returncode
     load_oracle_modules()
     os.chdir(project)
     from typer.testing import CliRunner
@@ -388,7 +359,6 @@ EVENTS_PIN = {"FNO_EVENTS_PATH": "<FIXTURE>/state/events.jsonl"}
 AGENTS_PIN = {"FNO_AGENTS_HOME": "<FIXTURE>/fake_home/.fno/agents"}
 NO_BIN = {"FNO_AGENTS_BIN": "/nonexistent/fno-agents"}
 FAKE_BIN = {"FNO_AGENTS_BIN": "<FIXTURE>/fake_bin/fno-agents"}
-FAKE_PY = {"FNO_PY": "<FIXTURE>/fake_bin/fno-py"}
 
 CASES: list[Case] = [
     Case("get_scalar", ["config", "get", "review.max_rounds"], fixture="scalar"),
@@ -426,7 +396,7 @@ CASES: list[Case] = [
     ),
     Case("history_help", ["config", "history", "--help"]),
     Case("build_dir", ["config", "build-dir"], dict(STATE_PIN)),
-    Case("builddir_help", ["config", "build-dir", "--help"], dict(FAKE_PY), fixture="forward_help"),
+    Case("builddir_help", ["config", "build-dir", "--help"], fixture="empty_project"),
     Case("budget_nostamp", ["config", "assert-subagent-budget", "--width", "4"], fixture="budget"),
     Case(
         "budget_within",
@@ -474,7 +444,7 @@ CASES: list[Case] = [
         dict(FAKE_BIN),
         fixture="fake_agents_list",
     ),
-    Case("backlog_help", ["config", "active-backlog", "--help"], dict(FAKE_PY), fixture="forward_help"),
+    Case("backlog_help", ["config", "active-backlog", "--help"]),
     Case("plugin_usage", ["config", "plugin", "install"], dict(NO_BIN)),
     Case("plugin_help", ["config", "plugin", "install", "--help"]),
     Case(
