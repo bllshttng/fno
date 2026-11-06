@@ -459,9 +459,11 @@ Nothing else in the tree is a confirmed dual implementation today.
 
 **The git-protection Bash guard.** One leg, Rust (2026-11-04). The guard refuses a push to a protected branch and `--no-verify`. It refuses a raw `gh pr merge` without two-factor evidence and a `gh pr create` with no closure line. It refuses a direct GraphQL PR read and a push while an Actions run is in flight. It ran as a Python child of the Bash PreToolUse chain (`hooks/git_protection_impl.py`). It now runs in process in `crates/fno-agents/src/hook/git_protection/`. The merge vetoes stay in their owner doors: `do pr hold-check`, `pr base-lineage-check` and `pr coverage-check`. The guard starts each as a bounded child of its own binary. The push debounce shares `pr_push::PUSH_DEBOUNCE_SECS` and `default_stamps_dir`, so the window has one spelling. There was never a second leg, so no parity test was owed.
 
-**The cargo build base.** Shared-vocabulary: `fno_build_base` in `crates/fno-agents/src/cargo_build_dirs.rs` and `cargo_build_dir_value` in `crates/fno/src/config_cli/leaves.rs` read the `cargo-build` row through their local `state_layout::place_dir` copies; the Python `cli/src/fno` surface has no `cargo-build` resolver.
+**The cargo build base.** Shared-vocabulary: `fno_build_base` in `crates/fno-agents/src/cargo_build_dirs.rs` and `cargo_build_dir_value` in `crates/fno/src/config_cli/leaves.rs` read the `cargo-build` row through their local `state_layout::place_dir` copies. The Python `cli/src/fno` surface has no `cargo-build` resolver.
 
-The shell resolver in `scripts/lib/worktree-lifecycle.sh::_cargo_build_base` stays because worktree cleanup can run before a native fno command is available; it also accepts the old state-root base while the default migration drains. The separate `scripts/lib/cargo-rustc-wrapper.sh` default stays because Cargo invokes it before a native fno binary is available; it sets `SCCACHE_DIR` under the same current base only when the caller has not set one.
+The shell resolver in `scripts/lib/worktree-lifecycle.sh::_cargo_build_base` stays because worktree cleanup can run before a native fno command is available. It also accepts the old state-root base while the default migration drains.
+
+When Cargo invokes `scripts/lib/cargo-rustc-wrapper.sh` before a native fno binary is available, the wrapper sets `SCCACHE_DIR` under the same current base only when the caller has not set one.
 
 ## The four CI parity scripts
 
