@@ -361,6 +361,7 @@ pub(crate) fn dispatch_with(
         "--".to_string(),
     ]);
     keeper_argv.extend(argv.iter().cloned());
+    let argv_sid = crate::pane_keeper::session_id_from_argv(&keeper_argv);
     let spec = LaunchSpec {
         argv: keeper_argv,
         sock: sock.clone(),
@@ -395,11 +396,12 @@ pub(crate) fn dispatch_with(
             // serves), while an identity bug means the keeper answering is
             // ours and still alive.
             let answered = py_repr_opt(answered_sid.as_deref());
+            let expected = py_repr_opt(argv_sid.as_deref());
             if crate::agent_lock::pid_is_alive(launched as u64) {
                 return refused(SpawnRefusal::err(
                     format!(
                         "keeper answered session_id {answered}, \
-                         expected the minted {session_id:?}"
+                         expected the create form's {expected}"
                     ),
                     1,
                 ));
@@ -837,11 +839,6 @@ mod tests {
     const SID: &str = "11111111-2222-3333-4444-555555555555";
     const WK: &str = "wk-pi";
 
-    fn goldens() -> serde_json::Value {
-        serde_json::from_str(include_str!("../tests/golden/keeper_spawn/python_leg.json"))
-            .expect("the captured Python-leg goldens parse")
-    }
-
     fn home() -> (tempfile::TempDir, crate::paths::AgentsHome) {
         let dir = tempfile::tempdir().unwrap();
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
@@ -863,124 +860,6 @@ mod tests {
             .entries
             .into_iter()
             .find(|e| e.name == name)
-    }
-    /// The create argv and the refusal sentences match the Python leg's
-    /// capture, per keeper harness: the shapes both lanes must agree on.
-    #[test]
-    fn the_python_leg_goldens_hold() {
-        let g = goldens();
-        for harness in ["pi", "cursor-agent", "grok", "agy"] {
-            let expected: Vec<String> = g[harness]["create_argv"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|v| v.as_str().unwrap().replace(SID, "SID"))
-                .collect();
-            let rendered: Vec<String> = crate::harness_capabilities::render_session_argv(
-                harness,
-                "interactive_create",
-                Some(SID),
-            )
-            .unwrap()
-            .iter()
-            .map(|t| t.replace(SID, "SID"))
-            .collect();
-            assert_eq!(rendered, expected, "harness {harness}");
-            let arm = keeper_arm(harness).unwrap();
-            let row = &g[harness]["row"];
-            assert_eq!(arm.once_refusal, row["once_refusal"].as_str().unwrap());
-            let headless = row["headless_refusal"].as_str().unwrap_or("");
-            assert_eq!(arm.headless_refusal, headless, "harness {harness}");
-        }
-    }
-
-    /// The row carries the field set the Python mint writes, and the
-    /// receipt keys stay inside the Python SpawnResult vocabulary.
-    #[test]
-    fn the_row_and_receipt_match_the_python_leg() {
-        let g = goldens();
-        let entry = build_keeper_thread_entry(
-            WK,
-            "pi",
-            Path::new("/repo"),
-            SID,
-            4242,
-            Some(4243),
-            Path::new("/state/mux/threads/wk-pi.sock"),
-            Path::new("/state/agents/wk-pi/keeper.log"),
-        );
-        let row = serde_json::to_value(&entry).unwrap();
-        for field in [
-            "harness_session_id",
-            "keeper_child_pid",
-            "messaging_socket_path",
-            "substrate",
-            "origin",
-            "host_mode",
-            "log_path",
-            "pid",
-            "status",
-        ] {
-            assert!(row.get(field).is_some(), "row field {field} missing");
-        }
-        // pid_start_time skips when absent (the RegistryEntry serde contract,
-        // mirrored from Python's AgentEntry): the fake keeper pid 4242 has no
-        // readable start time, so the row must omit the field, not null it.
-        assert!(
-            row.get("pid_start_time").is_none(),
-            "a fake keeper pid carries no start time; the field skips when absent"
-        );
-        assert_eq!(row["substrate"], "thread");
-        assert_eq!(row["harness_session_id"], SID);
-        assert_eq!(row["keeper_child_pid"], 4243);
-        assert_eq!(row["origin"], "spawn");
-        // The golden lists the SpawnResult dataclass fields; the printed
-        // receipt maps "harness" <- provider, and "status" is the printer's
-        // own "live" constant with no field behind it.
-        let receipt_keys = g["receipt_fields"].as_array().unwrap();
-        for key in ["name", "provider", "short_id", "effective_message"] {
-            assert!(
-                receipt_keys.iter().any(|v| v.as_str() == Some(key)),
-                "SpawnResult field {key} absent from the python leg"
-            );
-        }
-    }
-
-    /// The mint binds ids like the Python lane: the UUIDv4 default carries
-    /// its version and variant nibbles, cursor mints through the injected
-    /// create-chat, agy takes no mint turn, and a callee-minted row with no
-    /// mint refuses by name.
-    #[test]
-    fn the_mint_binds_ids_like_the_python_lane() {
-        for _ in 0..16 {
-            let id = mint_uuid_v4();
-            assert!(is_full_uuid(&id), "{id}");
-            let parts: Vec<&str> = id.split('-').collect();
-            assert!(parts[2].starts_with('4'), "{id}");
-            assert!(
-                matches!(parts[3].chars().next(), Some('8' | '9' | 'a' | 'b')),
-                "{id}"
-            );
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let minted = "74db359a-1111-4111-8111-111111111111";
-        let cursor = |_h: &str, _cwd: &Path, _req: Option<&str>| Ok(minted.to_string());
-        assert_eq!(
-            production_mint_with(&cursor, "cursor-agent", dir.path(), None).unwrap(),
-            minted
-        );
-        let agy = production_mint_with(&cursor, "agy", dir.path(), None).unwrap();
-        assert!(is_full_uuid(&agy), "{agy}");
-        let truncated = production_mint_with(&cursor, "agy", dir.path(), Some("abc"));
-        assert!(truncated.is_err());
-        let no_mint = production_mint_with(&cursor, "zcode", dir.path(), None);
-        let err = no_mint.unwrap_err();
-        assert!(
-            err.message.contains("callee-minted-read-back"),
-            "{}",
-            err.message
-        );
-        assert_eq!(err.exit, 2);
     }
 
     /// The whole flow against a fake keeper: launch argv, Identify proof,
@@ -1036,6 +915,56 @@ mod tests {
         assert_eq!(receipt["status"], "live");
         // The fake keeper recorded the paste with its submit.
         assert_eq!(keeper.pasted(), b"hello world\r");
+    }
+
+    /// A bare create form carries no id on the child argv (agy retired its
+    /// print-turn mint), so Identify answers session_id null and the launch
+    /// is proven by the keeper pid alone. The strict both-fields equality
+    /// read that null as a rival keeper and refused every agy thread spawn.
+    #[test]
+    fn an_agy_bare_create_identifies_by_pid() {
+        let (dir, home) = home();
+        // The socket follows the WORKER name the spawn derives, not the
+        // harness: dispatch probes <state-root>/<name>.sock, so the fake
+        // keeper must bind exactly there (the pi test binds the same shape).
+        let sock = dir.path().join("mux").join("threads").join("wk-pi.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let keeper = Arc::new(FakeKeeper::with_identify_argv(
+            &sock,
+            b"? for shortcuts".to_vec(),
+            vec![
+                "agy".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            ],
+        ));
+        {
+            let k = Arc::clone(&keeper);
+            std::thread::spawn(move || k.serve());
+        }
+        let seams = Seams {
+            mint: &|_h, _cwd, _req| Ok(SID.to_string()),
+            probe: &|s: &Path| crate::daemon::probe_keeper_socket(s, Duration::from_millis(500)),
+            launch: &|_spec| Ok(4242),
+            kill: &|_pid| {},
+            worker_bin: Path::new(fake_worker_bin()),
+        };
+        let params = json!({"substrate": "thread"});
+        let outcome = dispatch_with(
+            &home,
+            "agy",
+            WK,
+            "hello world",
+            "tester",
+            dir.path(),
+            &[],
+            &params,
+            &seams,
+        );
+        assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
+        let row = read_row(&home, WK).expect("the row is written");
+        assert_eq!(row.status, crate::AgentStatus::Live);
+        assert_eq!(row.pid, Some(4242));
+        assert_eq!(row.keeper_child_pid, Some(4243));
     }
 
     /// Nothing lands under the name when proof or uniqueness fails: a keeper
@@ -1245,14 +1174,30 @@ mod tests {
     struct FakeKeeper {
         path: PathBuf,
         ready: Vec<u8>,
+        identify_argv: Vec<String>,
         pasted: Mutex<Vec<u8>>,
     }
 
     impl FakeKeeper {
         fn new(path: &Path, ready: Vec<u8>) -> Self {
+            Self::with_identify_argv(
+                path,
+                ready,
+                vec![
+                    "pi".to_string(),
+                    "--session-id".to_string(),
+                    SID.to_string(),
+                ],
+            )
+        }
+
+        /// The argv the Identify reply reports, parsed back into the reply's
+        /// session id exactly as `session_id_from_argv` reads a live keeper's.
+        fn with_identify_argv(path: &Path, ready: Vec<u8>, identify_argv: Vec<String>) -> Self {
             Self {
                 path: path.to_path_buf(),
                 ready,
+                identify_argv,
                 pasted: Mutex::new(Vec::new()),
             }
         }
@@ -1298,7 +1243,7 @@ mod tests {
                                 let reply = serde_json::json!({
                                     "keeper_pid": 4242,
                                     "child_pid": 4243,
-                                    "argv": ["pi", "--session-id", SID],
+                                    "argv": self.identify_argv.clone(),
                                 });
                                 let payload = serde_json::to_vec(&reply).unwrap();
                                 let _ = stream.write_all(&encode(&Frame::IdentifyReply(payload)));

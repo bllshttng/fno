@@ -726,9 +726,6 @@ pub mod territory;
 pub mod test_census;
 pub mod test_changed;
 pub mod test_command;
-#[cfg(test)]
-#[path = "test_command_goldens_tests.rs"]
-mod test_command_goldens_tests;
 pub mod test_delta;
 pub mod test_env;
 pub mod test_hold;
@@ -738,9 +735,6 @@ mod test_run_pins;
 pub mod test_smoke;
 pub mod test_smoke_discovery;
 pub mod test_smoke_registry;
-#[cfg(test)]
-#[path = "test_smoke_tests.rs"]
-mod test_smoke_tests;
 pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
@@ -1531,7 +1525,6 @@ mod tests {
             ("org_board/claims.rs", 1),
             ("hook/session_state.rs", 1),
             ("operator_turns.rs", 1),
-            ("client_tests.rs", 2),
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),

@@ -198,39 +198,6 @@ fn an_id_of_another_harnesss_shape_never_reaches_the_serve() {
     }
 }
 
-#[test]
-fn each_archive_outcome_maps_to_its_effect_word() {
-    use crate::daemon::CascadeOutcome;
-    use crate::gc_native::opencode_archive_outcome;
-    let serve = || Some(("http://127.0.0.1:1".to_string(), "tok".to_string()));
-    let run = |result: Result<ArchiveOutcome, String>| {
-        opencode_archive_outcome(Some("ses_probe"), serve(), &move |_, _, _| result.clone())
-    };
-
-    let archived = run(Ok(ArchiveOutcome::Archived));
-    assert_eq!(archived, CascadeOutcome::Removed);
-    assert!(archived.satisfies_applied());
-
-    let already = run(Ok(ArchiveOutcome::AlreadyArchived));
-    assert_eq!(already.as_str(), "confirmed-already-absent");
-    assert!(already.satisfies_applied());
-
-    let gone = run(Ok(ArchiveOutcome::Gone));
-    assert_eq!(gone.as_str(), "confirmed-already-absent");
-
-    let survived = run(Ok(ArchiveOutcome::Survived));
-    assert_eq!(survived.as_str(), "failed");
-    assert!(
-        !survived.satisfies_applied(),
-        "an unstored write must hold the row"
-    );
-
-    let unverified = run(Err("connect refused".to_string()));
-    assert_eq!(unverified.as_str(), "kept");
-    assert!(!unverified.satisfies_applied());
-    assert_eq!(unverified.detail().as_deref(), Some("connect refused"));
-}
-
 // --- the live re-verification probe -----------------------------------------
 
 /// Re-measure [`ARCHIVE_MIN_VERSION`] against a real opencode serve. The

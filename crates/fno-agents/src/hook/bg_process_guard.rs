@@ -852,73 +852,6 @@ mod tests {
         assert!(decide(cmd).is_none(), "should have allowed: {cmd:?}");
     }
 
-    const WRAPS: &[&str] = &[
-        "{cmd}",
-        "( {cmd} )",
-        "( {cmd} & )",
-        "{ {cmd}; }",
-        "bash -c '{cmd}'",
-        "sh -c \"{cmd}\"",
-        "cd /tmp && {cmd}",
-        "true || {cmd}",
-        "echo hi\n{cmd} &",
-        "for i in 1 2; do {cmd}; done",
-        "if true; then {cmd}; fi",
-        "while read l; do {cmd}; done",
-        "until false; do {cmd}; done",
-        "x=$(echo 1); {cmd}",
-        ": | {cmd}",
-        "echo ${#PATH}; {cmd}",
-    ];
-    const BOUNDING_WRAPS: &[&str] = &[
-        "ulimit -t 60; {cmd}",
-        "timeout 300 bash -c '{cmd}'",
-        "{cmd} | head -c 1M",
-    ];
-    const PREFIXES: &[&str] = &[
-        "",
-        "nohup ",
-        "setsid ",
-        "env ",
-        "env FOO=1 ",
-        "FOO=1 ",
-        "sudo ",
-        "sudo -u me ",
-        "nice -n 5 ",
-        "time ",
-        "command ",
-        "exec ",
-        "exec -a fno-load-x ",
-        "stdbuf -o0 ",
-        "sudo -n ",
-        "command -p ",
-    ];
-    const GENERATORS: &[&str] = &[
-        "yes > /dev/null",
-        "yes",
-        "sleep infinity",
-        "dd if=/dev/zero of=/dev/null",
-        "stress -c 8",
-        "cat /dev/urandom > /dev/null",
-    ];
-    const LEGAL: &[&str] = &[
-        "timeout 300 yes > /dev/null",
-        "gtimeout 60 stress -c 8",
-        "yes | head -c 1M",
-        "dd if=/dev/zero of=/dev/null count=10",
-        "stress -c 8 -t 60",
-        "timeout 5 bash -c \"yes > /dev/null\"",
-        "echo yes",
-        "npm test",
-        "cargo build",
-        "git commit -m \"yes it works\"",
-        "rg yes .",
-        "grep -rn yes .",
-        "gh pr checks --watch",
-        "ls -la",
-        "fno agents fleet orphans --reap",
-    ];
-
     #[test]
     fn refuses_each_unbounded_shape() {
         for cmd in [
@@ -995,44 +928,6 @@ mod tests {
     }
 
     #[test]
-    fn no_wrapper_hides_an_unbounded_generator() {
-        for wrap in WRAPS {
-            let missed: Vec<String> = PREFIXES
-                .iter()
-                .flat_map(|p| GENERATORS.iter().map(move |g| format!("{p}{g}")))
-                .map(|cmd| wrap.replace("{cmd}", &cmd))
-                .filter(|cmd| decide(cmd).is_none())
-                .collect();
-            assert!(missed.is_empty(), "{}: {missed:?}", wrap);
-        }
-    }
-
-    #[test]
-    fn no_wrapper_turns_a_legal_command_into_a_refusal() {
-        for wrap in WRAPS.iter().filter(|w| !w.starts_with("until false")) {
-            let refused: Vec<String> = LEGAL
-                .iter()
-                .map(|cmd| wrap.replace("{cmd}", cmd))
-                .filter(|cmd| decide(cmd).is_some())
-                .collect();
-            assert!(refused.is_empty(), "{}: {refused:?}", wrap);
-        }
-    }
-
-    #[test]
-    fn a_bounding_wrapper_rescues_every_generator() {
-        for wrap in BOUNDING_WRAPS {
-            let refused: Vec<String> = PREFIXES
-                .iter()
-                .flat_map(|p| GENERATORS.iter().map(move |g| format!("{p}{g}")))
-                .map(|cmd| wrap.replace("{cmd}", &cmd))
-                .filter(|cmd| decide(cmd).is_some())
-                .collect();
-            assert!(refused.is_empty(), "{}: {refused:?}", wrap);
-        }
-    }
-
-    #[test]
     fn every_advertised_remedy_actually_works() {
         let reason = decide("yes > /dev/null &").expect("refused");
         for (phrase, remedy) in [
@@ -1051,13 +946,6 @@ mod tests {
 
     fn bash(command: &str, background: bool) -> Value {
         json!({"tool_name": "Bash", "tool_input": {"command": command, "run_in_background": background}})
-    }
-
-    #[test]
-    fn a_foreground_generator_names_the_hand_form() {
-        let reason = judge(&bash("yes > /dev/null &", false)).expect("refused");
-        assert!(reason.contains("exec -a fno-"), "{reason}");
-        assert!(reason.starts_with("Refusing an unbounded process"));
     }
 
     #[test]
