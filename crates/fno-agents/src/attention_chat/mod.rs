@@ -22,7 +22,6 @@ use crate::attention::AttentionItem;
 use crate::attention_file::FileAnswer;
 use crate::attention_http::{
     delivery_id, record_sink_health, Deliveries, DeliveryRow, PostResult, RefusedSink,
-    RETRIES_PER_BEAT, RETRY_ATTEMPTS_CAP,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
