@@ -721,6 +721,9 @@ mod tests {
     #[test]
     fn a_go_node_resolves_its_display_number() {
         let (_dir, graph, conn) = conn();
+        // The node mint's CTE reads the nodes table for taken numbers.
+        conn.execute_batch("CREATE TABLE nodes AS SELECT 'go-9zzz' AS id")
+            .unwrap();
         let keys: Vec<String> = ["go-1a2b", "go-3c4d"]
             .iter()
             .map(|id| format!("n:{id}"))

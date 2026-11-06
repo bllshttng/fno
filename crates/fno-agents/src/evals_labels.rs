@@ -794,7 +794,7 @@ fn query(
 
 pub fn run(args: &[String]) -> i32 {
     let state = crate::evals_candidates::state_root();
-    let json = args.iter().any(|a| a == "--json");
+    let json = crate::json_output::requested(args);
     if args.iter().any(|a| a == "--calibration") {
         let judges = calibration_rows(&state);
         if json {
