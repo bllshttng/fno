@@ -227,9 +227,17 @@ fn failure_reason(f: &ExternalFailure) -> &'static str {
 
 /// `managed.principal_of_blobs`: every candidate must prove and all must
 /// name one account, else the slot is not attributable.
+///
+/// The profile endpoint rejects an expired access token, but a reader still
+/// gets served that item: claude refreshes it on launch. Nothing refreshes
+/// it while every spawn is refused, so the stale item would block the proof
+/// for good. A token string belongs to one account forever, so a proof cached
+/// for exactly that token still holds after it expires.
 pub fn principal_of_blobs(
     blobs: &[String],
     probe: &dyn SlotProbe,
+    root: &Path,
+    now: f64,
 ) -> Result<Principal, &'static str> {
     if blobs.is_empty() {
         return Err("no-slot-credential");
@@ -237,12 +245,38 @@ pub fn principal_of_blobs(
     let mut resolved: Vec<Principal> = Vec::with_capacity(blobs.len());
     for blob in blobs {
         let bearer = bearer_of(blob).ok_or("credential-rejected")?;
-        resolved.push(probe.profile(&bearer).map_err(|f| failure_reason(&f))?);
+        match probe.profile(&bearer) {
+            Ok(p) => resolved.push(p),
+            Err(ExternalFailure::Rejected) if access_expired(blob, now) => {
+                resolved.push(cached_expired_principal(root, blob).ok_or("credential-rejected")?)
+            }
+            Err(f) => return Err(failure_reason(&f)),
+        }
     }
     if resolved.iter().any(|p| *p != resolved[0]) {
         return Err("ambiguous-slot");
     }
-    Ok(resolved.swap_remove(0))
+    // A cached proof carries no email; prefer a live one for receipts.
+    let pick = resolved.iter().position(|p| p.email.is_some()).unwrap_or(0);
+    Ok(resolved.swap_remove(pick))
+}
+
+/// The blob's claude access token has passed its own `expiresAt`.
+pub(crate) fn access_expired(blob: &str, now: f64) -> bool {
+    serde_json::from_str::<Value>(blob)
+        .ok()
+        .and_then(|v| v.get("claudeAiOauth")?.get("expiresAt")?.as_f64())
+        .is_some_and(|ms| ms / 1000.0 <= now)
+}
+
+fn cached_expired_principal(root: &Path, blob: &str) -> Option<Principal> {
+    let (identity, _) = cached_slot_principal("claude", root, blob, 0.0, f64::INFINITY)?;
+    let (account, org) = identity.split_once('/')?;
+    Some(Principal {
+        account_uuid: account.to_string(),
+        organization_uuid: org.to_string(),
+        email: None,
+    })
 }
 
 /// `managed.identity_key`: account and organization, both required.
@@ -376,7 +410,7 @@ pub fn resolve(req: &BindingRequest<'_>, probe: &dyn SlotProbe) -> AccountBindin
             let Ok(blobs) = slot_blobs(None, probe) else {
                 return at(UNKNOWN, Some("credential-unreadable"), observed_at);
             };
-            if let Err(failure) = principal_of_blobs(&blobs, probe) {
+            if let Err(failure) = principal_of_blobs(&blobs, probe, req.root, req.now) {
                 let status = if failure == "ambiguous-slot" {
                     AMBIGUOUS
                 } else {
@@ -429,7 +463,7 @@ pub fn resolve(req: &BindingRequest<'_>, probe: &dyn SlotProbe) -> AccountBindin
     let observed = match observed {
         Some(identity) => identity,
         None => {
-            let principal = match principal_of_blobs(&blobs, probe) {
+            let principal = match principal_of_blobs(&blobs, probe, req.root, req.now) {
                 Ok(p) => p,
                 Err(failure) => {
                     let status = if failure == "ambiguous-slot" {

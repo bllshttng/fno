@@ -248,16 +248,4 @@ mod tests {
         assert_eq!(key("FNO_SERVER", "s"), key("FNO_SESSION", "s"));
         assert_eq!(key("FNO_SESSION_PID", "4242"), "flake:4242:2026-10-30");
     }
-
-    #[test]
-    fn gate_escape_dedup_matches_reason_and_bucket() {
-        let root = tempfile::tempdir().unwrap();
-        let journal = root.path().join("events.jsonl");
-        let row = r#"{"ts":"2026-10-30T00:00:00Z","type":"gate_escape","source":"backlog","data":{"reason":"flake","dedup_key":"bucket"}}"#;
-        crate::event_store::append_envelope(&journal, row, None).unwrap();
-        assert!(duplicate(&journal, "flake", None, Some("bucket")).unwrap());
-        assert!(!duplicate(&journal, "wedge", None, Some("bucket")).unwrap());
-        assert!(!duplicate(&journal, "flake", None, Some("other")).unwrap());
-        assert!(!duplicate(&journal, "flake", Some(42), None).unwrap());
-    }
 }

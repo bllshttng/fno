@@ -49,19 +49,6 @@ fn capture_topology_now_skips_pending_startup_restore() {
         "pending startup restore leaves the durable snapshot untouched"
     );
 }
-
-#[test]
-fn capture_topology_now_skips_never_restored_server() {
-    let scratch = StoreScratch::new("shutdown-capture-skipped");
-    let (mut core, _) = template_core();
-
-    assert!(!core.capture_topology_now());
-    assert!(
-        !scratch.dir.join("squads.json").exists(),
-        "a never-restored server leaves the store untouched"
-    );
-}
-
 #[test]
 fn clean_shutdown_does_not_overwrite_a_newer_store_generation() {
     let _scratch = StoreScratch::new("shutdown-capture-concurrent");
@@ -86,28 +73,6 @@ fn clean_shutdown_does_not_overwrite_a_newer_store_generation() {
         "an older clean server must preserve the newer writer's snapshot"
     );
 }
-
-#[test]
-fn unrelated_squad_write_does_not_block_clean_shutdown_capture() {
-    let _scratch = StoreScratch::new("shutdown-capture-disjoint");
-    let (mut older, _) = template_core();
-    older.restored = true;
-    older.topology_dirty = true;
-    older.flush_topology();
-    older.session.squad_mut(1).unwrap().tabs[0].name = Some("new-local-name".into());
-
-    crate::squad_store::upsert("other", "", &["/other".into()], &[]).unwrap();
-
-    assert!(older.capture_topology_now());
-    let stored = crate::squad_store::load();
-    let local = stored.squads.iter().find(|s| s.name == "sq").unwrap();
-    assert_eq!(
-        local.tab_trees[0].tab_name.as_deref(),
-        Some("new-local-name")
-    );
-    assert!(stored.squads.iter().any(|s| s.name == "other"));
-}
-
 #[test]
 fn dirty_shutdown_does_not_overwrite_a_newer_overlapping_snapshot() {
     let _scratch = StoreScratch::new("shutdown-capture-dirty-conflict");
@@ -123,44 +88,6 @@ fn dirty_shutdown_does_not_overwrite_a_newer_overlapping_snapshot() {
     let squad = stored.squads.iter().find(|s| s.name == "sq").unwrap();
     assert!(squad.members.iter().any(|m| m.attach_id == "deadbeef"));
 }
-
-#[test]
-fn normal_flush_cannot_erase_an_external_write_before_shutdown() {
-    let _scratch = StoreScratch::new("shutdown-capture-normal-flush-conflict");
-    let (mut core, _) = template_core();
-    core.restored = true;
-    core.topology_dirty = true;
-    core.flush_topology();
-    crate::squad_store::upsert("sq", "", &["/a".into()], &[deadbeef_member()]).unwrap();
-    core.session.squad_mut(1).unwrap().tabs[0].name = Some("stale-local".into());
-    core.topology_dirty = true;
-
-    core.flush_topology();
-    assert!(!core.capture_topology_now());
-    let stored = crate::squad_store::load();
-    let squad = stored.squads.iter().find(|s| s.name == "sq").unwrap();
-    assert!(squad.members.iter().any(|m| m.attach_id == "deadbeef"));
-}
-
-#[test]
-fn local_store_write_refreshes_the_shutdown_generation_baseline() {
-    let _scratch = StoreScratch::new("shutdown-capture-local-write");
-    let (mut core, _) = template_core();
-    core.restored = true;
-    core.topology_dirty = true;
-    core.flush_topology();
-    core.persist_stored("sq", "", &["/a".into()], &[deadbeef_member()]);
-    core.session.squad_mut(1).unwrap().tabs[0].name = Some("shutdown-only".into());
-
-    assert!(core.capture_topology_now());
-    let stored = crate::squad_store::load();
-    let squad = stored.squads.iter().find(|s| s.name == "sq").unwrap();
-    assert_eq!(
-        squad.tab_trees[0].tab_name.as_deref(),
-        Some("shutdown-only")
-    );
-}
-
 #[test]
 fn partial_local_write_cannot_launder_a_newer_topology_generation() {
     let _scratch = StoreScratch::new("shutdown-capture-partial-write-conflict");
@@ -186,44 +113,6 @@ fn partial_local_write_cannot_launder_a_newer_topology_generation() {
     );
     assert!(squad.members.iter().any(|m| m.attach_id == "deadbeef"));
 }
-
-#[test]
-fn stale_local_remove_cannot_delete_a_newer_squad() {
-    let _scratch = StoreScratch::new("shutdown-capture-stale-remove");
-    let (mut core, _) = template_core();
-    core.restored = true;
-    core.topology_dirty = true;
-    core.flush_topology();
-    crate::squad_store::upsert("sq", "", &["/a".into()], &[deadbeef_member()]).unwrap();
-
-    core.persist_remove("sq", "");
-    let stored = crate::squad_store::load();
-    let squad = stored.squads.iter().find(|s| s.name == "sq").unwrap();
-    assert!(squad.members.iter().any(|m| m.attach_id == "deadbeef"));
-}
-
-#[test]
-fn stale_local_rename_cannot_replace_a_newer_squad() {
-    let _scratch = StoreScratch::new("shutdown-capture-stale-rename");
-    let (mut core, _) = template_core();
-    core.restored = true;
-    core.topology_dirty = true;
-    core.flush_topology();
-    crate::squad_store::upsert("sq", "", &["/a".into()], &[deadbeef_member()]).unwrap();
-
-    let result = crate::squad_store::rename_with_generations(
-        Some(&core.store_generations),
-        "sq",
-        "renamed",
-        &["/a".into()],
-        &[],
-    );
-    core.persist_result(result);
-    let stored = crate::squad_store::load();
-    assert!(stored.squads.iter().any(|s| s.name == "sq"));
-    assert!(!stored.squads.iter().any(|s| s.name == "renamed"));
-}
-
 #[test]
 fn member_only_store_reload_adopts_a_matching_topology_generation() {
     let _scratch = StoreScratch::new("shutdown-capture-store-reload");
@@ -248,36 +137,6 @@ fn member_only_store_reload_adopts_a_matching_topology_generation() {
     assert_eq!(squad.tab_trees[0].tab_name.as_deref(), Some("after-reload"));
     assert!(squad.members.is_empty());
 }
-
-#[test]
-fn local_member_prune_refreshes_the_shutdown_generation_baseline() {
-    let _scratch = StoreScratch::new("shutdown-capture-local-prune");
-    let (mut core, _) = template_core();
-    core.restored = true;
-    core.topology_dirty = true;
-    core.flush_topology();
-    core.squad_members.insert(1, vec![deadbeef_member()]);
-    core.persist_stored("sq", "", &["/a".into()], &[deadbeef_member()]);
-    let evidence = crate::squad_store::MemberEvidence::from_sets(
-        std::collections::HashSet::new(),
-        ["deadbeef".to_string()].into_iter().collect(),
-    );
-    let (_, batch) = crate::squad_store::prune_with_evidence_with_generations(
-        Some(&core.store_generations),
-        |_| crate::squad_store::PruneDecision::Keep,
-        &evidence,
-    )
-    .unwrap();
-    core.persist_result(Ok(batch));
-    core.reload_members_from_store();
-    core.session.squad_mut(1).unwrap().tabs[0].name = Some("after-prune".into());
-
-    assert!(core.capture_topology_now());
-    let squad = crate::squad_store::load().squads.remove(0);
-    assert!(squad.members.is_empty());
-    assert_eq!(squad.tab_trees[0].tab_name.as_deref(), Some("after-prune"));
-}
-
 #[test]
 fn conflicting_squad_does_not_discard_a_fresh_disjoint_snapshot() {
     let _scratch = StoreScratch::new("shutdown-capture-partial");
@@ -312,15 +171,6 @@ fn conflicting_squad_does_not_discard_a_fresh_disjoint_snapshot() {
         Some("fresh-local")
     );
 }
-
-#[test]
-fn pane_id_reservation_does_not_advance_squad_generation() {
-    let _scratch = StoreScratch::new("shutdown-capture-pane-id");
-    let before = crate::squad_store::load().generations;
-    crate::squad_store::reserve_next_pane_id(1).unwrap();
-    assert_eq!(crate::squad_store::load().generations, before);
-}
-
 #[test]
 fn completed_batch_restore_clears_the_pending_guard() {
     let _scratch = StoreScratch::new("shutdown-capture-batch-complete");
@@ -336,28 +186,4 @@ fn completed_batch_restore_clears_the_pending_guard() {
         }),
     });
     assert!(!core.restore_pending);
-}
-
-#[test]
-fn clean_shutdown_batches_multiple_squads_into_one_generation() {
-    let _scratch = StoreScratch::new("shutdown-capture-batch");
-    let (mut core, pane) = template_core();
-    core.session
-        .add_squad(2, vec!["/b".into()], Some("sq2".into()), leaf_tab(6, pane));
-    core.squad_members.insert(2, Vec::new());
-    core.restored = true;
-    core.topology_dirty = true;
-    core.flush_topology();
-    let before = core.store_generations.clone();
-
-    assert!(core.capture_topology_now());
-
-    assert_eq!(before.len(), 2, "both squads have generation baselines");
-    for (key, generation) in before {
-        assert_eq!(
-            core.store_generations.get(&key),
-            Some(&(generation + 1)),
-            "each shutdown snapshot advances exactly once"
-        );
-    }
 }

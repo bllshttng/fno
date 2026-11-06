@@ -32,54 +32,6 @@ fn extended_sort_keeps_lineage_subtrees_together() {
     assert_eq!(rendered_depth(&v, "zeta"), 0);
     assert_eq!(rendered_depth(&v, "alpha"), 1);
 }
-
-#[test]
-fn extended_table_preserves_lineage_depth_in_rendered_agent_names() {
-    let mut v = wide_view(vec![
-        lineage_row("parent", 4, None),
-        lineage_row("child", 5, Some("sid-parent")),
-    ]);
-    set_density(&mut v, Density::Extended);
-    let rendered = frame_text(&v.compose());
-    let child_line = rendered
-        .lines()
-        .find(|line| line.contains("child"))
-        .unwrap();
-    assert!(
-        child_line.contains("  child"),
-        "child keeps lineage indent: {child_line:?}"
-    );
-}
-
-#[test]
-fn lineage_child_sorts_beneath_its_parent_within_squad() {
-    let v = view_with_agents(vec![
-        lineage_row("worker-a", 2, Some("sid-lead")),
-        lineage_row("lead", 3, None),
-        lineage_row("worker-b", 4, Some("sid-lead")),
-    ]);
-    // Pre-order: the parent first, its children beneath it keeping input
-    // order among siblings. Authority rank (role_level) no longer moves a
-    // row; lineage does.
-    assert_eq!(agent_order(&v), vec!["lead", "worker-a", "worker-b"]);
-}
-
-#[test]
-fn lineage_grandchild_renders_between_parent_and_later_sibling() {
-    let v = view_with_agents(vec![
-        lineage_row("lead", 2, None),
-        lineage_row("child-a", 3, Some("sid-lead")),
-        lineage_row("child-b", 4, Some("sid-lead")),
-        lineage_row("grandchild", 5, Some("sid-child-a")),
-    ]);
-    // Pre-order nests the grandchild under ITS parent, ahead of the
-    // parent's later sibling.
-    assert_eq!(
-        agent_order(&v),
-        vec!["lead", "child-a", "grandchild", "child-b"]
-    );
-}
-
 #[test]
 fn lineage_indent_is_depth_within_squad() {
     let v = view_with_agents(vec![

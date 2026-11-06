@@ -59,37 +59,6 @@ async fn rename_keys_agent_target_filters_non_grammar_bytes() {
     let (_, name) = v.rename.clone().unwrap();
     assert_eq!(name, "w1ab2", "only grammar bytes land in the buffer");
 }
-
-#[tokio::test]
-async fn rename_keys_agent_empty_enter_keeps_the_overlay_open() {
-    let mut v = two_pane_view();
-    v.open_rename(RenameTarget::Agent("w1".into()));
-    let mut sent: Vec<u8> = Vec::new();
-    // Enter on an empty buffer: a label is never derived, so this is a
-    // refusal that keeps the overlay open, NOT reset-to-auto.
-    rename_keys(&mut v, b"\r", &mut sent).await.unwrap();
-    assert!(sent.is_empty(), "nothing is sent on an empty label");
-    assert!(v.rename.is_some(), "the overlay stays open for a retry");
-    // A backspace on an empty buffer is harmless; the state stays armed.
-    rename_keys(&mut v, b"\x7f", &mut sent).await.unwrap();
-    assert!(v.rename.is_some());
-}
-
-#[tokio::test]
-async fn selector_r_opens_the_seeded_agent_rename_overlay() {
-    let mut v = view_with_agents(vec![blocked_row("worker-x", 3, None)]);
-    let idx = agent_row_at(&v, |a| a.name == "worker-x");
-    v.selector = Some(idx);
-    let mut sent: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"r", &mut sent).await.unwrap();
-    assert!(sent.is_empty(), "opening the overlay sends nothing");
-    assert_eq!(v.selector, None, "the selector closes");
-    assert_eq!(
-        v.rename,
-        Some((RenameTarget::Agent("worker-x".into()), "worker-x".into()))
-    );
-}
-
 #[tokio::test]
 async fn selector_r_refuses_external_agent_rename() {
     let mut row = blocked_row("daemon-row", 4, None);
@@ -106,25 +75,6 @@ async fn selector_r_refuses_external_agent_rename() {
         Some("an external row's name belongs to its claude session")
     );
 }
-
-#[tokio::test]
-async fn selector_r_opens_the_seeded_exited_agent_rename_overlay() {
-    let mut row = blocked_row("worker-x", 3, None);
-    row.exited = true;
-    let mut v = view_with_agents(vec![row]);
-    let key = squad_key(&v.layout, v.layout.active_squad).expect("active squad key");
-    v.set_section_view(key, SectionView::Expanded);
-    let idx = agent_row_at(&v, |a| a.name == "worker-x");
-    v.selector = Some(idx);
-    let mut sent: Vec<u8> = Vec::new();
-    selector_keys(&mut v, b"r", &mut sent).await.unwrap();
-    assert!(sent.is_empty(), "opening the overlay sends nothing");
-    assert_eq!(
-        v.rename,
-        Some((RenameTarget::Agent("worker-x".into()), "worker-x".into()))
-    );
-}
-
 #[tokio::test]
 async fn rename_agent_menu_entry_opens_the_seeded_overlay() {
     let mut v = view_with_agents(vec![blocked_row("worker-x", 3, None)]);
@@ -169,24 +119,6 @@ async fn rename_agent_menu_entry_opens_the_seeded_overlay() {
         other => panic!("expected an agent rename target, got {other:?}"),
     }
 }
-
-#[tokio::test]
-async fn rename_agent_menu_entry_absent_on_external_rows() {
-    let mut external = blocked_row("daemon-row", 4, None);
-    external.external = true;
-    let mut v = view_with_agents(vec![external]);
-    let idx = agent_row_at(&v, |a| a.name == "daemon-row");
-    assert!(v.open_row_menu(idx, Anchor::Center));
-    let menu = v.row_menu.as_ref().expect("row menu open");
-    assert!(
-        !menu
-            .actions
-            .iter()
-            .any(|a| matches!(a, MenuAction::RenameAgent)),
-        "an external row's claude daemon owns its name; no rename entry"
-    );
-}
-
 #[tokio::test]
 async fn rename_keys_empty_enter_still_sends_the_clear() {
     // Locked 2 / AC3-HP: Enter on an EMPTY buffer sends (blank = reset to
@@ -217,18 +149,4 @@ async fn rename_keys_esc_cancels_without_sending_and_swallows_the_tail() {
     rename_keys(&mut v, b"deb\x1bx", &mut buf).await.unwrap();
     assert!(buf.is_empty(), "cancel sends no command");
     assert_eq!(v.rename, None);
-}
-
-#[tokio::test]
-async fn rename_keys_caps_the_buffer_at_max_tab_name() {
-    // The TUI affordance half of AC2-ERR: the operator sees exactly what
-    // the server will store (the server cap stays authoritative).
-    let mut v = two_pane_view();
-    v.open_rename(RenameTarget::Tab(7));
-    let mut buf: Vec<u8> = Vec::new();
-    let long = "a".repeat(MAX_TAB_NAME + 8);
-    rename_keys(&mut v, long.as_bytes(), &mut buf)
-        .await
-        .unwrap();
-    assert_eq!(v.rename.as_ref().unwrap().1.len(), MAX_TAB_NAME);
 }

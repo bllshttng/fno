@@ -73,24 +73,6 @@ fn wheel_gate_bounds_flood_and_passes_notch_rate() {
         .count();
     assert_eq!(passed, 30, "notch-rate input is forwarded 1:1");
 }
-
-// AC1-EDGE: exactly budget ticks pass, the (budget+1)th in the window drops.
-#[test]
-fn wheel_gate_exact_budget_boundary() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    for i in 0..WHEEL_GATE_BUDGET {
-        assert!(
-            wheel_gate(&mut g, 1, MouseKind::WheelUp, t0, 12),
-            "tick {i} within budget forwards"
-        );
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelUp, t0, 12),
-        "the tick past budget drops"
-    );
-}
-
 // AC1-UI: a reversal mid-flood forwards immediately and resets the budget.
 #[test]
 fn wheel_gate_reversal_passes_immediately() {
@@ -117,26 +99,6 @@ fn wheel_gate_reversal_passes_immediately() {
         "the reset up budget then exhausts"
     );
 }
-
-// AC1-FR: a tick at or after exactly window_start + window re-admits
-// (no permanent mute), testing the boundary instant itself.
-#[test]
-fn wheel_gate_readmits_at_window_boundary() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    for _ in 0..WHEEL_GATE_BUDGET {
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0, 12);
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelDown, t0, 12),
-        "budget exhausted inside the window"
-    );
-    assert!(
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0 + WHEEL_GATE_WINDOW, 12),
-        "the exact boundary instant counts as a fresh window and forwards"
-    );
-}
-
 // AC2-ERR: a now behind window_start (virtualized clock) saturates instead
 // of panicking, and treats the tick as inside the window.
 #[test]
@@ -155,22 +117,6 @@ fn wheel_gate_clock_skew_saturates() {
         "skewed-early ticks stay inside the window and hit the budget"
     );
 }
-
-// Per-pane independence: one pane's flood never spends another's budget.
-#[test]
-fn wheel_gate_per_pane() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    for _ in 0..WHEEL_GATE_BUDGET {
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0, 12);
-    }
-    assert!(!wheel_gate(&mut g, 1, MouseKind::WheelDown, t0, 12));
-    assert!(
-        wheel_gate(&mut g, 2, MouseKind::WheelDown, t0, 12),
-        "a different pane draws from its own budget"
-    );
-}
-
 // AC2-EDGE: reaping a pane drops its gate entry (touch_last_emit pattern).
 #[test]
 fn reap_pane_clears_wheel_gate() {

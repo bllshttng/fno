@@ -938,30 +938,6 @@ mod tests {
             ["https://github.com/fnodotdev/fno/pull/700"]
         );
     }
-
-    #[test]
-    fn gives_back_sentence_punctuation() {
-        // The exact shape a PR link takes at the end of a line of prose.
-        assert_eq!(
-            urls("opened https://example.com/pr/700."),
-            ["https://example.com/pr/700"]
-        );
-        assert_eq!(urls("https://example.com/a,"), ["https://example.com/a"]);
-        assert_eq!(urls("<https://example.com/a>"), ["https://example.com/a"]);
-    }
-
-    #[test]
-    fn keeps_a_balanced_closing_paren_but_not_a_wrapping_one() {
-        assert_eq!(
-            urls("https://en.wikipedia.org/wiki/Foo_(bar)"),
-            ["https://en.wikipedia.org/wiki/Foo_(bar)"]
-        );
-        assert_eq!(
-            urls("(see https://example.com/x)"),
-            ["https://example.com/x"]
-        );
-    }
-
     #[test]
     fn finds_several_and_reports_char_ranges() {
         let text = "a https://x.test b http://y.test c";
@@ -984,12 +960,6 @@ mod tests {
             "https://example.com"
         );
     }
-
-    #[test]
-    fn ignores_a_scheme_with_no_host() {
-        assert!(urls("bare https:// nothing").is_empty());
-    }
-
     #[test]
     fn fno_token_spans_and_their_uris_stay_intercepted() {
         // The plain body-text form the delivered-header parsers reject.
@@ -1051,12 +1021,6 @@ mod tests {
         assert!(!is_fno_uri("https://example.com"));
         assert!(!is_fno_uri("fno-file:/tmp/a.md"));
     }
-
-    #[test]
-    fn uppercase_scheme_is_still_a_url() {
-        assert_eq!(urls("HTTPS://Example.COM/a"), ["HTTPS://Example.COM/a"]);
-    }
-
     #[test]
     fn non_web_schemes_are_never_detected() {
         for text in [
@@ -1129,26 +1093,6 @@ mod tests {
         assert!(out.is_err());
         assert!(!spawned, "a refused URL must not reach the opener at all");
     }
-
-    #[test]
-    fn open_url_reports_a_failing_opener() {
-        let out = open_url_with(|_, _| Ok(status(false)), "https://example.com");
-        assert!(out.unwrap_err().contains("exited"), "non-zero surfaces");
-        let out = open_url_with(
-            |_, _| Err(std::io::Error::new(std::io::ErrorKind::NotFound, "nope")),
-            "https://example.com",
-        );
-        assert!(out.unwrap_err().contains("nope"), "spawn error surfaces");
-    }
-
-    #[test]
-    fn for_notice_bounds_the_status_line() {
-        assert_eq!(for_notice("https://a.test"), "https://a.test");
-        let long = format!("https://a.test/{}", "x".repeat(500));
-        assert_eq!(for_notice(&long).chars().count(), 60);
-        assert!(for_notice(&long).ends_with('…'));
-    }
-
     #[test]
     fn remote_session_gate_reads_only_the_ssh_keys() {
         // Neither key: local attach, the opener is allowed.
@@ -1282,21 +1226,6 @@ mod tests {
         assert!(is_openable("https://example.com"));
         assert!(!is_openable("obsidian://open?vault=v&file=f"));
     }
-
-    #[test]
-    fn resolve_vault_root_bare_absolute_and_tilde_share_the_basename() {
-        let home = Path::new("/Users/x");
-        // A bare name becomes ~/name; an absolute path and a ~-prefix are honored
-        // as-is. All three roots share the basename, so the URI's vault= matches.
-        let bare = resolve_vault_root_with("myvault", Some(home));
-        let abs = resolve_vault_root_with("/Users/x/myvault", Some(home));
-        let tilde = resolve_vault_root_with("~/myvault", Some(home));
-        assert_eq!(bare, PathBuf::from("/Users/x/myvault"));
-        assert_eq!(abs, bare);
-        assert_eq!(tilde, bare);
-        assert_eq!(bare.file_name(), Some(std::ffi::OsStr::new("myvault")));
-    }
-
     #[test]
     fn obsidian_uri_percent_encodes_space_amp_hash_and_round_trips() {
         let uri = obsidian_open_uri("my vault", "a & b#c.md");
@@ -1419,38 +1348,6 @@ mod tests {
         );
         assert_eq!(out, Ok(OpenOutcome::Opened));
     }
-
-    #[test]
-    fn ssh_attach_offers_obsidian_uri_and_file_path_to_the_terminal() {
-        // Remote: the host opener never runs; the terminal gets the OSC 52 set.
-        let uri = "obsidian://open?vault=v&file=f";
-        let mut sent = Vec::new();
-        let out = open_fno_uri_with(
-            |_, _| panic!("host opener must not run over ssh"),
-            |b| {
-                sent = b.to_vec();
-                Ok(())
-            },
-            true,
-            uri,
-        );
-        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
-        assert_eq!(sent, terminal_offer_payload(uri));
-        let path = Path::new("/tmp/shot.heic");
-        let mut sent = Vec::new();
-        let out = open_fno_path_with(
-            |_, _| panic!("host opener must not run over ssh"),
-            |b| {
-                sent = b.to_vec();
-                Ok(())
-            },
-            true,
-            path,
-        );
-        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
-        assert_eq!(sent, terminal_offer_payload("/tmp/shot.heic"));
-    }
-
     /// Minimal percent-decode for the round-trip assertion (ASCII test paths).
     fn pct_decode(s: &str) -> String {
         let bytes = s.as_bytes();

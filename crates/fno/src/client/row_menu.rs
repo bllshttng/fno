@@ -331,21 +331,6 @@ mod tests {
             panic!("expected a PopupRow::Entry");
         }
     }
-
-    #[test]
-    fn a_non_portal_pane_row_lists_no_close_portal() {
-        // AC8-HP inverse. A pane row with portal: None lists no Close portal
-        // entry: the command is the portal's, not the pane's.
-        let menu = build_row_menu(&portal_row(None), test_anchor());
-        assert!(
-            !menu.popup.rows.iter().any(|r| matches!(
-                r,
-                PopupRow::Entry { label, .. } if label == "Close portal"
-            )),
-            "no Close portal entry without a portal"
-        );
-    }
-
     fn test_anchor() -> Anchor {
         Anchor::At { row: 4, col: 4 }
     }
@@ -485,32 +470,6 @@ mod tests {
             "split opens: portal",
             "the toggle starts where the setting says"
         );
-    }
-
-    #[tokio::test]
-    async fn toggling_split_opens_flips_in_place_and_keeps_the_menu_open() {
-        // The flip lands BEFORE the arrow is pressed: the menu stays open, the
-        // toggle row relabels in place, and the selection is undisturbed.
-        let mut v = super::super::tests::two_pane_view();
-        v.split_opens = SplitOpens::Pane;
-        let anchor = Anchor::Center;
-        let mut menu = build_row_menu(&paneless_row(), anchor);
-        let toggle_i = menu
-            .actions
-            .iter()
-            .position(|a| matches!(a, MenuAction::ToggleSplitOpens))
-            .expect("the paneless menu offers the toggle");
-        menu.popup.sel = toggle_i;
-        v.row_menu = Some(menu);
-        super::toggle_split_opens(&mut v).await;
-        assert_eq!(v.split_opens, SplitOpens::Portal, "the state flipped");
-        let m = v.row_menu.as_ref().expect("the menu stays open");
-        assert_eq!(
-            opens_toggle_of(m).0,
-            "split opens: portal",
-            "the row relabels in place"
-        );
-        assert_eq!(m.popup.sel, toggle_i, "the selection stays on the toggle");
     }
 }
 

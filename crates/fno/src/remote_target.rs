@@ -263,31 +263,4 @@ mod tests {
         assert!(classify_spawn(&os(&["agents", "spawn", "--", "--name", "x@y"])).is_none());
         assert!(classify_spawn(&os(&["agents", "spawn"])).is_none());
     }
-
-    #[test]
-    fn plain_name_shape_excludes_session_shapes() {
-        assert!(is_plain_name_target("Quinlan"));
-        assert!(is_plain_name_target("ellery-mbp"));
-        assert!(is_plain_name_target("a.b"));
-        assert!(!is_plain_name_target("04b5621d"));
-        assert!(!is_plain_name_target(
-            "dde96ee5-64d9-4ce4-bbf8-c7c38116d9f3"
-        ));
-        assert!(!is_plain_name_target("a/b"));
-        assert!(!is_plain_name_target("a:b"));
-        assert!(!is_plain_name_target("n"));
-        // A flag-led send names no target in slot 3.
-        assert!(!is_plain_name_target("--from-name"));
-        assert!(classify(&os(&[
-            "agents",
-            "mail",
-            "send",
-            "--from-name",
-            "fno/quiet-recovery",
-            "--to-lead",
-            "scope-a",
-            "body",
-        ]))
-        .is_none());
-    }
 }

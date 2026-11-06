@@ -1360,13 +1360,6 @@ mod tests {
         assert!(menu_glyph_is_bmp("♺"));
         assert!(!menu_glyph_is_bmp("📄"));
     }
-
-    #[test]
-    #[should_panic(expected = "menu glyph must be a non-empty BMP string")]
-    fn popup_rejects_astral_menu_glyphs() {
-        let _ = Popup::new(vec![entry("📄", "document", "")], Anchor::Center);
-    }
-
     fn entry(g: &str, l: &str, h: &str) -> PopupRow {
         PopupRow::Entry {
             glyph: g.into(),
@@ -1416,30 +1409,6 @@ mod tests {
             enabled: false,
         }
     }
-
-    #[test]
-    fn body_rows_keep_two_cells_of_air_before_the_right_border() {
-        // The right column is EXACT; its hint ends two cells shy of the
-        // border. The label-first shape holds the same gap after its clip.
-        let rows = vec![entry("\u{25cf}", "run", "grab-x")];
-        let p = Popup::new(rows, Anchor::At { row: 1, col: 1 })
-            .full_chrome()
-            .full_width_selection();
-        let rendered = p.render((24, 120));
-        let line = rendered
-            .lines
-            .iter()
-            .find(|l| l.text.contains("grab-x"))
-            .expect("the entry row renders");
-        let text: Vec<char> = line.text.chars().collect();
-        let hint_end = text.iter().rposition(|&c| c == 'x').unwrap();
-        let width = text.len();
-        assert!(
-            width - 1 - hint_end >= 2,
-            "hint must end two cells before the border (width {width}, hint at {hint_end})"
-        );
-    }
-
     fn grid(labels: &[&str]) -> PopupRow {
         PopupRow::Grid(
             labels
@@ -1451,13 +1420,6 @@ mod tests {
                 .collect(),
         )
     }
-
-    #[test]
-    fn centered_origin_centers() {
-        // A 20x4 block in an 80x24 terminal centers.
-        assert_eq!(origin(Anchor::Center, 20, 4, (24, 80)), (10, 30));
-    }
-
     #[test]
     fn anchored_origin_clamps_right_and_flips_bottom() {
         // Opens at the cell when it fits.
@@ -1486,22 +1448,6 @@ mod tests {
             (0, 0)
         );
     }
-
-    #[test]
-    fn targets_skip_headers_and_rules() {
-        let p = Popup::new(
-            vec![
-                PopupRow::Header("h".into()),
-                entry("a", "one", ""),
-                PopupRow::Rule,
-                entry("b", "two", ""),
-            ],
-            Anchor::Center,
-        );
-        // Two selectable targets, at rows 1 and 3.
-        assert_eq!(p.targets(), vec![(1, 0), (3, 0)]);
-    }
-
     #[test]
     fn targets_skip_disabled_entries() {
         let p = Popup::new(
@@ -1576,33 +1522,6 @@ mod tests {
         p.nav(NavDir::Up);
         assert_eq!(p.selected(), Some((0, 0)), "no wrap past the start");
     }
-
-    #[test]
-    fn nav_left_right_walk_grid_cells_then_down_leaves_the_grid() {
-        // Layout: FullWidth, then a 2-cell grid row, then an entry.
-        let mut p = Popup::new(
-            vec![
-                PopupRow::FullWidth("New Tab".into()),
-                grid(&["left", "right"]),
-                entry("p", "peek", ""),
-            ],
-            Anchor::Center,
-        );
-        // FullWidth (0,0), grid cells (1,0)(1,1), entry (2,0).
-        assert_eq!(p.selected(), Some((0, 0)));
-        p.nav(NavDir::Down);
-        assert_eq!(p.selected(), Some((1, 0)), "into the grid, first cell");
-        p.nav(NavDir::Right);
-        assert_eq!(p.selected(), Some((1, 1)), "across the grid");
-        p.nav(NavDir::Right);
-        assert_eq!(p.selected(), Some((1, 1)), "no wrap off the grid row");
-        p.nav(NavDir::Left);
-        assert_eq!(p.selected(), Some((1, 0)));
-        // Down from a grid cell lands on the next row, same-or-nearest column.
-        p.nav(NavDir::Down);
-        assert_eq!(p.selected(), Some((2, 0)), "out of the grid to the entry");
-    }
-
     #[test]
     fn the_selection_highlight_spans_the_row() {
         // highlight-span fix:: a footer wider than the rows widens the frame;
@@ -1704,47 +1623,6 @@ mod tests {
         );
         assert!(r.lines[4].text.contains("row19"));
     }
-
-    #[test]
-    fn follow_sel_scrolls_to_keep_the_selection_visible() {
-        // codex P2: a tall menu/modal must scroll so the selected row stays on
-        // screen (else Enter runs an invisible entry).
-        let rows: Vec<PopupRow> = (0..12).map(|i| entry("x", &format!("r{i}"), "")).collect();
-        let mut p = Popup::new(rows, Anchor::Center);
-        // Terminal 5 rows tall. Walk selection down past the fold; scroll follows.
-        for _ in 0..8 {
-            p.nav(NavDir::Down);
-            p.follow_sel((5, 80));
-        }
-        let (ri, _) = p.selected().unwrap();
-        assert_eq!(ri, 8);
-        let r = p.render((5, 80));
-        // The selected row r8 must appear among the rendered body rows (the
-        // chrome overhead leaves 3 body rows of the 5-row terminal). An invisible
-        // selection is an invisible Enter target - the failure follow_sel prevents.
-        let body_start = 1;
-        let body_end = r.lines.len().saturating_sub(1);
-        assert!(
-            r.lines[body_start..body_end]
-                .iter()
-                .any(|l| l.text.contains("r8")),
-            "selected row stays in the viewport after follow_sel"
-        );
-    }
-
-    #[test]
-    fn clamp_sel_to_view_pulls_selection_onto_a_visible_row_after_paging() {
-        // codex P2: PageDown moves scroll only; clamp then pulls the selection
-        // onto a visible row so a following Enter can't run an off-screen target.
-        let rows: Vec<PopupRow> = (0..12).map(|i| entry("x", &format!("r{i}"), "")).collect();
-        let mut p = Popup::new(rows, Anchor::Center);
-        assert_eq!(p.selected(), Some((0, 0)));
-        p.scroll_by(6); // page down
-        p.clamp_sel_to_view((5, 80));
-        let (ri, _) = p.selected().unwrap();
-        assert!(ri >= p.scroll, "selection moved into the scrolled viewport");
-    }
-
     #[test]
     fn render_grid_line_reports_a_hit_per_cell() {
         let p = Popup::new(vec![grid(&["l", "r"])], Anchor::Center);

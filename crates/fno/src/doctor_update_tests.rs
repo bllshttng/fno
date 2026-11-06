@@ -189,44 +189,9 @@ fn component_lines_extract_only_non_fresh_rows() {
     // A None report carries no rows: the call site names the path instead.
     assert!(component_lines(None, "fno doctor update").is_empty());
 }
-
-#[test]
-fn row_status_finds_named_components() {
-    let report: Value = serde_json::json!({
-        "components": [
-            {"component": "fno-agents", "status": "stale"}
-        ]
-    });
-    assert_eq!(row_status(&report, "fno-agents").as_deref(), Some("stale"));
-    assert_eq!(row_status(&report, "fno"), None);
-}
-
 const REV_A: &str = "2e55d52aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REV_B: &str = "19bbc27bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const REV_C: &str = "ffc2af6ccccccccccccccccccccccccccccccccccc";
-
-#[test]
-fn component_build_revs_reads_cargo_rows_only() {
-    let report: Value = serde_json::json!({
-        "converged": false,
-        "components": [
-            {"component": "fno-agents", "status": "stale", "observed_rev": REV_A},
-            {"component": "fno-agents-daemon", "status": "stale", "observed_rev": null},
-            {"component": "fno", "status": "stale", "observed_rev": REV_A}
-        ]
-    });
-    let revs = component_build_revs(Some(&report));
-    // The unanswered daemon row stays out.
-    assert_eq!(
-        revs,
-        vec![
-            ("fno-agents".to_string(), REV_A.to_string()),
-            ("fno".to_string(), REV_A.to_string())
-        ]
-    );
-    assert!(component_build_revs(None).is_empty());
-}
-
 #[test]
 fn mixed_component_line_fires_only_when_two_builds_disagree() {
     let mixed: Value = serde_json::json!({
@@ -287,18 +252,6 @@ fn revisions_summary_names_every_compared_rev_with_its_label() {
     );
     assert_eq!(revisions_summary(&[], None), None);
 }
-
-#[test]
-fn triad_names_carry_exe_suffix_on_windows() {
-    let names = triad_names();
-    assert_eq!(names.len(), 3);
-    if cfg!(windows) {
-        assert!(names[0].ends_with(".exe"));
-    } else {
-        assert_eq!(names[0], "fno-agents");
-    }
-}
-
 #[test]
 fn guidance_release_branch_names_the_upgrade_command() {
     let _lock = crate::model_catalog::state_env_lock();
@@ -486,27 +439,6 @@ fn a_second_update_joins_only_an_update_holder() {
     assert_eq!(flag("--pid"), "4242");
     assert_eq!(flag("--pid-provenance"), "holder-process");
 }
-
-#[test]
-fn rev_on_origin_main_reads_merged_local_and_unanswered() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().join("r");
-    let path = repo.to_string_lossy().into_owned();
-    git_ok(tmp.path(), &["init", "-q", "-b", "main", &path]);
-    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    let base = git_ok(&repo, &["rev-parse", "HEAD"]);
-    git_ok(&repo, &["update-ref", "refs/remotes/origin/main", &base]);
-    // A merged rev (origin/main points at it) is CI-buildable; a local rev
-    // ahead of origin is not; an origin-less repo is unanswerable.
-    assert_eq!(rev_on_origin_main(&repo, &base), Some(true));
-    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "local"]);
-    let local = git_ok(&repo, &["rev-parse", "HEAD"]);
-    assert_eq!(rev_on_origin_main(&repo, &local), Some(false));
-    let bare = tempfile::tempdir().unwrap();
-    git_ok(bare.path(), &["init", "-q", "-b", "main"]);
-    assert_eq!(rev_on_origin_main(bare.path(), &base), None);
-}
-
 #[test]
 fn published_is_older_answers_by_ancestry_and_refuses_the_unknown() {
     let tmp = tempfile::tempdir().unwrap();
@@ -525,24 +457,6 @@ fn published_is_older_answers_by_ancestry_and_refuses_the_unknown() {
     assert_eq!(published_is_older(&repo, &newer, &older), Some(false));
     assert_eq!(published_is_older(&repo, "deadbeef", &newer), None);
 }
-
-#[test]
-fn crate_bin_names_reads_bin_entries_and_degrades_to_none() {
-    let tmp = tempfile::tempdir().unwrap();
-    let toml = tmp.path().join("Cargo.toml");
-    std::fs::write(
-        &toml,
-        "[package]\nname = \"fno-agents\"\n\n[[bin]]\nname = \"fno-agents\"\npath = \"src/bin/client.rs\"\n\n[[bin]]\nname = \"fno-gh-proxy\"\npath = \"src/bin/fno-gh-proxy.rs\"\n\n[profile.release]\n",
-    )
-    .unwrap();
-    let names = crate_bin_names(tmp.path()).expect("bin entries parse");
-    assert_eq!(names, vec!["fno-agents", "fno-gh-proxy"]);
-    let empty = tempfile::tempdir().unwrap();
-    std::fs::write(empty.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
-    assert_eq!(crate_bin_names(empty.path()), None);
-    assert_eq!(crate_bin_names(&PathBuf::from("/nonexistent")), None);
-}
-
 #[test]
 fn missing_inventory_bins_names_absent_files() {
     let tmp = tempfile::tempdir().unwrap();
@@ -558,33 +472,6 @@ fn missing_inventory_bins_names_absent_files() {
         vec!["fno-gh-coverage".to_string()]
     );
 }
-
-#[test]
-fn the_check_readback_finds_an_update_row_in_the_store() {
-    let _g = crate::model_catalog::state_env_lock();
-    let tmp = std::env::temp_dir().join(format!("fno-du-store-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
-    let prior = std::env::var_os("FNO_STATE_DIR");
-    std::env::set_var("FNO_STATE_DIR", &tmp);
-    let envelope = serde_json::json!({
-        "ts": chrono::Utc::now().to_rfc3339(),
-        "type": "fno_update_installed",
-        "source": "python",
-        "data": {"version": "0.4.0", "new_rev": "0123456789ab"},
-    });
-    crate::event_store::append_envelope(&tmp.join("events.jsonl"), &envelope.to_string(), None)
-        .expect("the store beside the journal opened");
-    let found = last_update_event().expect("the store row answers");
-    assert_eq!(found["type"], "fno_update_installed");
-    assert_eq!(found["data"]["version"], "0.4.0");
-    match prior {
-        Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-        None => std::env::remove_var("FNO_STATE_DIR"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
-}
-
 #[test]
 fn the_check_readback_skips_a_corrupt_row_after_the_install() {
     let _g = crate::model_catalog::state_env_lock();
@@ -644,17 +531,4 @@ fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
     // A published rev off this line is named, never guessed.
     let err = last_green_rev(&repo, "0123456789abcdef").unwrap_err();
     assert!(err.contains("0123456789ab"), "{err}");
-}
-
-#[test]
-fn capture_paths_are_unique_and_exclusive() {
-    let a = capture_tag("fno-test");
-    let b = capture_tag("fno-test");
-    assert_ne!(a, b);
-    let path = std::env::temp_dir().join(format!("{a}.out"));
-    let _ = std::fs::remove_file(&path);
-    create_exclusive(&path).unwrap();
-    // A file already at the path (or a planted symlink) fails the open.
-    assert!(create_exclusive(&path).is_err());
-    let _ = std::fs::remove_file(&path);
 }

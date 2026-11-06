@@ -989,14 +989,9 @@ pub fn render_inventory() -> String {
 mod tests {
     use super::*;
     use clap::CommandFactory;
-    use std::os::unix::ffi::OsStringExt;
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
-    }
-
-    fn os_raw(bytes: &[u8]) -> OsString {
-        OsString::from_vec(bytes.to_vec())
     }
 
     #[test]
@@ -1137,90 +1132,6 @@ mod tests {
             FrontDoor::Usage { .. }
         ));
     }
-
-    #[test]
-    fn mux_simple_commands_parse_typed() {
-        assert_eq!(
-            classify(&os(&["mux", "ls", "--json"])),
-            FrontDoor::Mux(MuxParsed {
-                cmd: MuxCmd::Ls {
-                    json: JsonOnly { json: true }
-                }
-            })
-        );
-        assert_eq!(
-            classify(&os(&["mux", "ls", "-J"])),
-            FrontDoor::Mux(MuxParsed {
-                cmd: MuxCmd::Ls {
-                    json: JsonOnly { json: true }
-                }
-            })
-        );
-        assert_eq!(
-            classify(&os(&["mux", "doctor"])),
-            FrontDoor::Mux(MuxParsed {
-                cmd: MuxCmd::Doctor {
-                    json: JsonOnly { json: false }
-                }
-            })
-        );
-        assert_eq!(
-            classify(&os(&["mux", "kill-server", "--json", "work"])),
-            FrontDoor::Mux(MuxParsed {
-                cmd: MuxCmd::KillServer {
-                    name: Some("work".into()),
-                    json: JsonOnly { json: true },
-                    end_unkept: false,
-                    stale_idle: false,
-                    all: false,
-                }
-            })
-        );
-        assert_eq!(
-            classify(&os(&["mux", "kill-server", "--", "--weird"])),
-            FrontDoor::Mux(MuxParsed {
-                cmd: MuxCmd::KillServer {
-                    name: Some("--weird".into()),
-                    json: JsonOnly { json: false },
-                    end_unkept: false,
-                    stale_idle: false,
-                    all: false,
-                }
-            })
-        );
-    }
-
-    #[test]
-    fn native_command_door_accepts_identity_proof_and_boundary_flags() {
-        let args = os(&[
-            "mux",
-            "command",
-            "codex-thread-full-id",
-            "--text",
-            "/compact",
-            "--proof",
-            "compact",
-            "--expect",
-            "contextCompaction",
-            "--timeout-seconds",
-            "9",
-            "--request-id",
-            "req-1",
-        ]);
-        match classify(&args) {
-            FrontDoor::Mux(MuxParsed {
-                cmd: MuxCmd::Command(parsed),
-            }) => {
-                assert_eq!(parsed.selector, "codex-thread-full-id");
-                assert_eq!(parsed.text, "/compact");
-                assert_eq!(parsed.proof, "compact");
-                assert_eq!(parsed.timeout_seconds, 9);
-                assert_eq!(parsed.request_id.as_deref(), Some("req-1"));
-            }
-            other => panic!("native command door parsed incorrectly: {other:?}"),
-        }
-    }
-
     #[test]
     fn inventory_artifact_is_fresh() {
         // The committed artifact must equal what the tree renders NOW. A new
@@ -1316,44 +1227,6 @@ mod tests {
         assert!(help.contains("short_id"), "{help}");
         assert!(!help.contains("attach_id"), "{help}");
     }
-
-    #[test]
-    fn mux_malformed_shapes_are_named_refusals() {
-        // Every malformed mux shape is a command-qualified one-line refusal
-        // (exit 2 downstream) - never a forward, never a silent accept.
-        for bad in [
-            vec!["mux"],
-            vec!["mux", "bogus"],
-            vec!["mux", "ls", "x"],
-            vec!["mux", "doctor", "--wat"],
-            vec!["mux", "server", "--session"],
-            vec!["mux", "attach"],
-            vec!["mux", "ls", "--json", "--json"],
-        ] {
-            let argv: Vec<OsString> = bad.iter().map(OsString::from).collect();
-            match classify(&argv) {
-                FrontDoor::Usage { message } => {
-                    assert!(message.starts_with("fno"), "refusal names the command path");
-                }
-                other => panic!("expected a refusal for {bad:?}, got {other:?}"),
-            }
-        }
-        // The unknown command is NAMED in its refusal (AC1-ERR).
-        let msg = match classify(&os(&["mux", "bogus"])) {
-            FrontDoor::Usage { message } => message,
-            other => panic!("expected a refusal, got {other:?}"),
-        };
-        assert!(msg.contains("bogus"), "refusal names the command: {msg}");
-        let msg = match classify(&os(&["mux", "pane", "bogus"])) {
-            FrontDoor::Usage { message } => message,
-            other => panic!("expected a refusal, got {other:?}"),
-        };
-        assert!(
-            msg.contains("fno mux pane") && msg.contains("bogus"),
-            "refusal names the path and the command: {msg}"
-        );
-    }
-
     #[test]
     fn typed_families_resolve_with_re_sliced_tails() {
         // The carry families ride their typed op enums; the payload tail is

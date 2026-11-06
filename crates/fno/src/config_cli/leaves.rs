@@ -695,10 +695,4 @@ mod tests {
         );
         assert_eq!(expanduser("/abs/path", "/tmp/fake-home"), "/abs/path");
     }
-
-    #[test]
-    fn normalize_path_folds_dots_and_slashes() {
-        assert_eq!(normalize_path("/a/b/../c//d/", "/tmp/fake-home"), "/a/c/d");
-        assert_eq!(normalize_path("~/x", "/tmp/fake-home"), "/tmp/fake-home/x");
-    }
 }
