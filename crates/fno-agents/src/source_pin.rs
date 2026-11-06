@@ -1203,5 +1203,4 @@ mod tests {
         );
         root.join("cli").to_string_lossy().into_owned()
     }
-
 }

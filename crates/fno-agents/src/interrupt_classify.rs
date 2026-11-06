@@ -310,5 +310,4 @@ mod tests {
         assert!(read_transcript(&path).is_err());
         std::fs::remove_file(path).ok();
     }
-
 }

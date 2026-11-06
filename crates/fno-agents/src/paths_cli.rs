@@ -1454,5 +1454,4 @@ mod tests {
         let err = emit_paths_sh_live(&bad.root).unwrap_err();
         assert!(err.contains("invalid characters"), "error: {err}");
     }
-
 }

@@ -1509,5 +1509,4 @@ mod tests {
         assert_eq!(keys, expected, "key order must match to_json_line");
         std::fs::remove_dir_all(&f.root).ok();
     }
-
 }

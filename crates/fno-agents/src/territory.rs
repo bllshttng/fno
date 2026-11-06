@@ -1484,7 +1484,6 @@ max_concurrent = 0
         child.wait().unwrap();
         pid
     }
-
 }
 
 #[cfg(test)]
@@ -1584,5 +1583,4 @@ mod grant_tests {
             );
         }
     }
-
 }

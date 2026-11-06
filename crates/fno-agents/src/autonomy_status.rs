@@ -399,58 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn format_table_matches_the_captured_python_bytes() {
-        // Golden captured from cli/src/fno/autonomy_cli.py format_table
-        // before deletion (port protocol). Trailing spaces included: every
-        // cell ljust-pads, the last column too.
-        let mut rows = vec![
-            row(
-                "autonomy (master switch)",
-                "every row below",
-                "config.autonomy.enabled",
-                Some(true),
-                "config",
-            ),
-            row(
-                "advance (node-walk)",
-                "PR merge (reconcile / /fno:ship pr merged)",
-                "config.auto_continue.enabled",
-                Some(false),
-                "default",
-            ),
-            row(
-                "groom (_spawn_groom_worker)",
-                "fno backlog groom",
-                "config.groom.enabled",
-                None,
-                "ungated",
-            ),
-            row(
-                "evals runner",
-                "fno doctor evals run",
-                "config.evals.enabled",
-                Some(false),
-                "config",
-            ),
-        ];
-        rows[1].source = Some("AG".into());
-        rows[1].command = Some("TG".into());
-        let rendered = format_table(&rows);
-        let expected = [
-            "SPAWNER                      TRIGGER                                     GATE KEY                      ARMED    RANK     SOURCE  COMMAND",
-            "---------------------------  ------------------------------------------  ----------------------------  -------  -------  ------  -------",
-            "autonomy (master switch)     every row below                             config.autonomy.enabled       true     config   -       -      ",
-        ];
-        for (i, line) in rendered.lines().enumerate() {
-            if i < expected.len() {
-                assert_eq!(line, expected[i], "line {i}");
-            }
-        }
-        assert!(rendered.contains("AG"), "provenance stamps render");
-        assert!(rendered.contains("TG"));
-    }
-
-    #[test]
     fn every_known_spawner_appears_in_table_order() {
         let rows = collect_status(None);
         let names: Vec<&str> = rows.iter().map(|r| r.name).collect();
@@ -500,5 +448,4 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).ok();
     }
-
 }

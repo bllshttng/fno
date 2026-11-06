@@ -215,5 +215,4 @@ mod tests {
             assert!(rows[0].get(key).is_some(), "old key {key} still present");
         }
     }
-
 }

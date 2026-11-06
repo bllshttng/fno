@@ -982,5 +982,4 @@ mod tests {
         let error = fold_day(&input).unwrap_err();
         assert!(error.contains("--kind must be start or end"), "{error}");
     }
-
 }

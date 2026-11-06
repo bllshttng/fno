@@ -469,5 +469,4 @@ mod tests {
         crate::claims::release("flight:k", "single-flight:9:ab", f.root.as_deref(), None).unwrap();
         assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
     }
-
 }

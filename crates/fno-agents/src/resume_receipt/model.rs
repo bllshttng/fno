@@ -674,5 +674,4 @@ mod tests {
         let second = write_receipt(&receipt, tmp.path()).unwrap_err();
         assert!(matches!(second, ReceiptError::AlreadyExists(_)));
     }
-
 }

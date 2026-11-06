@@ -702,5 +702,4 @@ mod tests {
         assert!(!path.exists(), "kept");
         assert_eq!(fixture.last_outcome(), Some("corrupt".to_string()));
     }
-
 }

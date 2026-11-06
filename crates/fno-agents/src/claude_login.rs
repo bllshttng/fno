@@ -303,5 +303,4 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_str(&raw).ok()?;
         doc.get("probes")?.get(account).cloned()
     }
-
 }

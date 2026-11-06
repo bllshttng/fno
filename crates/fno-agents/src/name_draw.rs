@@ -801,5 +801,4 @@ mod tests {
         assert_eq!(answer["outcome"], "succeeded");
         assert!(answer.get("draw").is_none());
     }
-
 }

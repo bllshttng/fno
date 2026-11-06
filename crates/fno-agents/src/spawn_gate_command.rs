@@ -1850,5 +1850,4 @@ mod tests {
         assert_eq!(review["receipt"]["reason"], "review_session", "{review}");
         assert_eq!(think["status"], "admitted", "{think}");
     }
-
 }

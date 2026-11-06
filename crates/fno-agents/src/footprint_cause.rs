@@ -2071,5 +2071,4 @@ mod tests {
         assert!(!is_test_runner("tail -f /tmp/pytest-of-user/out"));
         assert!(!is_test_runner("git log --grep pytest"));
     }
-
 }

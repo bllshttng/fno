@@ -520,5 +520,4 @@ mod tests {
             .unwrap()
             .contains("not a known harness"));
     }
-
 }
