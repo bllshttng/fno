@@ -18,9 +18,9 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 ## Identity and routing
 
-`--harness/-H` names the CLI binary to launch. The default is the invoking harness, then claude. The declared harnesses get the full lane. Any other binary on PATH also spawns, into a pane with fno as the viewport. Pass its init flags after `--`. `-H` no longer means headless. For a one-shot use `--as headless`.
+`--harness/-H` names the CLI binary to launch. The default is the invoking harness, then claude. The declared harnesses get the full lane. Any other binary on PATH also spawns, into a pane with fno as the viewport. Pass its init flags directly. A separate `--` fence is optional. `-H` no longer means headless. For a one-shot use `--as headless`.
 
-`--provider/-P` names the model vendor the harness talks to: zai or any `model_routing.providers` name. Pair it with `--model` to name the route. It is not the CLI binary. The CLI binary is `--harness/-H`.
+`--provider/-P` is retired. Name a model vendor through `--route provider/model`. The CLI binary is `--harness/-H`.
 
 `--route provider/model` bypasses the `--role` table and wins over any configured lane. It fails closed: an unknown provider, a non-anthropic protocol, or a missing key refuses the spawn. claude only.
 
@@ -52,7 +52,7 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 ## Misc
 
-Without `--name`, an adjective-noun slug is minted. The one positional is the prompt, not the name.
+Without `--name`, an adjective-noun slug is minted. The one positional is the prompt, not the name. A prompt from `--prompt-file <path>` or `--prompt-file -` is read once before admission and naming. Do not supply an inline prompt beside a prompt file.
 
 `--sandbox-write-policy` names a JSON policy file. Its `sandbox` block composes into the worker's ONE `--settings` file, beside the hook layer's `deny_edit` list. The pane substrate refuses it, because mux_spawn reserves `--settings` for its hook server.
 

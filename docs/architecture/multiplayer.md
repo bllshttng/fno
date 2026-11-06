@@ -101,6 +101,10 @@ A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on th
 
 Each host's daemon pulls its rows on `agents.remote.pull_interval_secs`. That key lives in the global config, default 15 seconds. The pull injects each row through the receiver's own local send. Lane selection, holds, and receipts stay the local path's.
 
+The mux Messages tab reads the bus too. `fno-agents mail-threads` folds the bus rows of the last 7 days into the local projection, at most 2000 rows. Each sender and recipient shows as `<name>@<host>`, one thread per pair. A row this machine already holds stays out. That is a row with a bus label this machine held, an id its pull delivered, or an id in the local chats store.
+
+Mail between two agents on one machine never reaches the bus. The mail carrier takes it to the other machines. The table is `fleet_chat` on the primary, one row per (machine_id, msg_id). Only the machine that holds the mail writes its rows. Its daemon publishes them on the mail arm's beat. A qualifying row is pair mail of the last 7 days, with both sides local. A row pulled from the bus or sent to `<name>@<host>` stays off, because the bus fold shows it. Each row carries the sender and recipient names, the body, the subject, the host, the owner, the machine key and a signature over those fields. The writer deletes its own rows past 7 days. No machine deletes another machine's row. `mail-threads` folds the other machines' rows as `<name>@<host>` threads and marks each row `origin: carrier`. It skips three kinds of row: one from this machine, one of another person, and one whose signature fails the pinned host key. A refused host gets one stderr line. After another machine's mail or the bus moves, the beat rewrites `db/mail/carrier/stamp`. The tab's stat poll folds that file into its change signal, so a new row paints on the next poll. No session on this machine owns a carrier thread, so a reply there finds no pane and sends nothing. To answer, use `fno agents mail send <name>@<host>`.
+
 Send-to-inject lag reads off the bus itself. When a send lands, the primary stamps `created_at`. When the receiver's pull marks the row delivered, the primary stamps `delivered_at`. Both stamps use the primary's clock. Their difference carries no host clock skew. `scripts/mail-bus-lag.py` prints the per-leg percentiles from those two columns. A 2026-11-02 run read 719 delivered cross-host rows. Overall p50 read 18 s and p95 273 s. The bb16 to imac2d2 leg read p50 21 s and p95 175 s over 354 rows. The reverse leg read p50 16 s and p95 463 s over 365 rows. The median sits near one pull beat, the default 15 s. The tail is rows that waited for their host. 32 rows took over 5 minutes. The worst took 65.7 hours, still inside the 7-day TTL.
 
 The sender reads as `<person>:<host>/<session name>` in the row's `from_id`, for example `@bb16:imac2d2/nemo`. A reply still routes from a row stamped in the older `<user>@<host>/<session name>` form. The sender writes that field itself, so the field alone proves nothing. The machine key below proves the host. The raw allowlist is a second check, never a proof of identity (operator ruling, 2026-10-10). A `raw = 1` row is the pane-typing lane. The pull refuses it unless `agents.remote.raw_senders` lists the sender head. The empty default refuses every cross-host raw row. The label's name part resolves through the identity tiers: `--from-name`, the ambient session's agent name, the session's registry row, then the person. [The person beside the machine](#the-person-beside-the-machine) names its source. A registered agent session with no flags stamps its role name, so a reply can address `<name>@<host>`.
@@ -217,6 +221,8 @@ Each child gets one line:
 - [ ] <title> · @<handle> · #<PR>
 ```
 
+Each child line also ends with a hidden `<!-- fno:<id> -->` comment that names the node. A reader sees nothing. A teammate's fno reads it, as [Team mode](#team-mode) shows. A line that a `/claim` added with no node has no comment.
+
 `[x]` marks a done child. The handle is the holder of the child's live node claim. A `github:<login>` holder prints that login. Any other holder is a session on your machine, so the line names the login your `gh` is signed in as. A child with no claim has no handle. A child with no PR has no `#`. A child has no line in four cases:
 
 - its `public` field is false,
@@ -241,6 +247,24 @@ Before the pass adds a line, it compares the title with every line. The exact ma
 One login holds at most 3 open claims on an issue, the same limit as claim issues. The fourth `/claim` gets one reply and no line. `/release` on the first line of a comment frees every claim of that login on the issue. `/release <title>` frees one.
 
 A claim has a 7 day clock (`STALE_AFTER_DAYS` in `epic_issue.rs`). A claim turns stale after 7 days. If its login has an open PR with `Refs #<n>` or `Closes #<n>` on a line of its own, the claim stays live. A stale line reads `· stale`, and the pass releases its node claim. A new `/claim` on a stale line moves it to the new login. A PR from the holder adds `#<PR>` to the line and keeps the claim. The claim store caps a node claim at 24 hours, so the pass renews each live `/claim` node claim on every tick. If the heal pass is off for more than 24 hours, the node claims lapse and the lines go free. Comment `/claim` again to take one back. A child that turns done frees its claim at once. The stale rule covers `/claim` holds only. A claim from a claim issue keeps its own rules.
+
+## Team mode
+
+Team mode lets a second person work the same backlog with no shared store. Each person runs their own fno and keeps their own graph. GitHub is the one shared surface. A teammate is a person with write access to the repo who merges their own PRs. [Shared epics on GitHub](#shared-epics-on-github) and [Claim a line by comment](#claim-a-line-by-comment) describe the issue and the claim. This section adds the teammate's steps.
+
+1. The owner shares an epic. The heal pass opens the issue and keeps its checklist.
+2. The teammate comments `/claim <title>` on the issue. A title that matches an owner child takes that node. The line shows the teammate's login, and the owner's fleet stops getting the node.
+3. The teammate runs `fno backlog add requests --epic <n>` in a checkout of the repo. The command first lists the nodes it will file. Add `--apply` to write them.
+4. The teammate builds the node from the teammate's own graph.
+5. The teammate's PR carries `Fixes <id>` and `Refs #<n>`.
+
+The import in step 3 reads the checklist and keeps each line that passes three tests. The line ends with the hidden id comment. It shows the login your `gh` is signed in as, and case does not matter. It is open and not stale. Each kept line becomes a local node with the owner's id, `epic_issue: <n>` and `origin_evidence: github:<repo>#<n>`. The node has no plan, so it reads as an idea. Run `/fno:target <id>` on it, which blueprints first. The node is private. The import reads the issue and writes only your graph. It writes nothing to GitHub. It needs your login, and a `GH_TOKEN` or `GITHUB_TOKEN` variable hides that login, so unset the variable for this command.
+
+A second run files nothing. A local node that already holds the id with other evidence stays as it is, and the receipt names both evidence values. A `/claim` that matched no owner child has no node and no id comment, so the import files nothing for it. File your own node for that work.
+
+The node keeps the owner's id on purpose. One `Fixes <id>` line then names the same node on both machines, and no id map exists. `fno do pr create` reads `epic_issue` from the node before it looks at a parent, so a teammate's node gets `Refs #<n>`. It never gets `Closes`, because only the owner knows which child is last. When the last open line merges, close the issue by hand.
+
+Spawn, laws and mail do not cross between people. Spawning a worker on a teammate's machine is not supported. A worker runs against the graph of the machine that spawns it, and each person's graph is their own.
 
 ## Failure: the primary is unreachable
 

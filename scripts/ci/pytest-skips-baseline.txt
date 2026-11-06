@@ -4,7 +4,6 @@ cli/tests/conftest.py::pytest_collection_modifyitems::mark.skip  # on main befor
 cli/tests/conftest.py::pytest_collection_modifyitems::mark.skip  # the dev_build marker's hook-applied skip: the smoke pytest legs delete the dev build on purpose, so a marked test skips there (tests/test-dev-build-suites.sh runs it with the build present)
 cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # on main before this ratchet
 cli/tests/events/test_producer_equivalence.py::test_a_non_empty_findings_report_attests_fail_with_the_record::mark.skipif  # the hook classifies through the Rust front now the Python leaf retired; without a built front the producer cannot run and a silent no-event pass proves nothing
-cli/tests/events/test_producer_equivalence.py::test_codex_stop_path_reaches_the_same_attestation_producer::mark.skipif  # the hook classifies through the Rust front now the Python leaf retired; without a built front the producer cannot run and a silent no-event pass proves nothing
 cli/tests/events/test_producer_equivalence.py::test_producer_emits_review_attestation_with_no_second_call::pytest.skip  # only the code-review param drives the hook, whose classify runs through the Rust front; peer and declare emit through fno-py and still run without it
 cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # second site, added with the front pin: the drive leg needs the front, the resolver leg the door
 cli/tests/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
@@ -19,22 +18,11 @@ cli/tests/integration/test_worktree_cleanup_merged.py::<module>::mark.skipif  # 
 cli/tests/integration/test_worktree_cleanup_merged.py::test_apply_removal_emits_event_row::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch::marker.requires_gate  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_salvage_failure_keeps_tree::marker.requires_gate  # on main before this ratchet
-cli/tests/integration/test_worktree_cleanup_merged.py::test_aggressive_salvages_the_tracked_diff_to_a_ref_then_prunes::marker.requires_gate  # the sweep under test needs the fno-agents gate binary; CI builders without it skip rather than fail
-cli/tests/unit/test_ambient_surface.py::test_classify_agrees_with_the_scrub::pytest.skip  # the scrub agreement needs a binary that speaks the env door; a stale install cannot verify it and CI's fresh pinned copy proves it
-cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_batches_the_shape_pair::mark.skipif  # on main before this ratchet
-cli/tests/test_import_time_env_reads.py::test_opt_in_live_flags_survive_the_sandbox::pytest.skip  # the passthrough proof needs a binary that speaks the env door; a stale install cannot verify it and CI's fresh pinned copy proves it
 cli/tests/unit/test_keyless_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_effect_sequence::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_mutex_steal.py::test_threshold_matches_the_rust_constant::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_resolve_canonical_worktree.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_generator_fails_on_missing_source::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_rewrite_rejects_missing_required_fields::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_strip_fails_loudly_on_unterminated_frontmatter::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_worktree_reap_equivalence.py::_gate_binary::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_worktree_reap_equivalence.py::_gate_env::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_backlog_intake_door.py::_intake::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/conftest.py::run_native_create::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_capture_tombstone.py::_cap_native::pytest.skip  # native capture door: same dev-build dependency as run_native_create, same smoke-shard deletion
