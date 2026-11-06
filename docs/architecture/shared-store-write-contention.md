@@ -43,7 +43,7 @@ A second sqld defect aborts the primary at log compaction. When the wallog passe
 
 The signature on r2d2:
 
-- The log shows `performing log compaction` for the database, then the panic: `called \`Result::unwrap()\` on an \`Err\` value: failed to perform snapshot file swap iku.db/dbs/default/to_compact/<uuid> -> iku.db/dbs/default/wallog`.
+- The log shows `performing log compaction`, then a panic: `failed to perform snapshot file swap ... -> iku.db/dbs/default/wallog`.
 - Aborts were observed 2026-10-28 13:49Z, 2026-10-29 03:20Z and 2026-10-30 20:07Z, each a restart of about 1.5 seconds.
 - A soak that needs one unchanged container start cannot outlast a compaction.
 
