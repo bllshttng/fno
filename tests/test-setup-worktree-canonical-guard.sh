@@ -159,7 +159,113 @@ fi
 check_eq "T4: canonical is untouched" \
   "CODEMAP-ORIGINAL" "$(cat "$SBX4/canonical/.fno/codemap.md" 2>/dev/null)"
 
-rm -rf "$SBX1" "$SBX2" "$SBX3" "$SBX4"
+# ---------------------------------------------------------------------------
+# T5: a WORKTREE inside the canonical checkout - refuse, create nothing.
+# The 2026-10-30 litter: a run from crates/fno-agents left .agents, .codex,
+# .codex-plugin and .claude/ symlinks inside the crate, because CANONICAL
+# still resolves to the repo root from any cwd inside the checkout while the
+# destination defaulted to $(pwd). The same-root -ef guard cannot see a
+# SUBDIRECTORY of the canonical checkout; the show-toplevel guard does.
+# ---------------------------------------------------------------------------
+SBX5="$(mktemp -d)"
+make_canonical "$SBX5/canonical"
+/usr/bin/git -C "$SBX5/canonical" init -q
+printf 'LOCAL-PERMS\n' > "$SBX5/canonical/.claude/settings.local.json"
+CRATE="$SBX5/canonical/crates/fno-agents"
+mkdir -p "$CRATE"
+OUT5="$(CANONICAL="$SBX5/canonical" WORKTREE="$CRATE" bash "$SETUP" 2>&1)"
+RC5=$?
+
+check_eq "T5: exits non-zero on a destination inside the canonical checkout" "1" "$RC5"
+check_contains "T5: refusal names the destination" "$CRATE" "$OUT5"
+check_contains "T5: refusal says what it declined" "canonical checkout itself" "$OUT5"
+if [ -e "$CRATE/.claude" ]; then
+  echo "FAIL: T5: a .claude dir was created inside the crate (the litter bug)"
+  fail=$((fail+1))
+else
+  echo "PASS: T5: nothing was created inside the crate"
+  pass=$((pass+1))
+fi
+if [ -L "$CRATE/.agents" ] || [ -L "$CRATE/.codex" ] || [ -L "$CRATE/.codex-plugin" ]; then
+  echo "FAIL: T5: harness-dir symlinks landed inside the crate"
+  fail=$((fail+1))
+else
+  echo "PASS: T5: no .agents/.codex/.codex-plugin links inside the crate"
+  pass=$((pass+1))
+fi
+if [ -L "$SBX5/canonical/.claude/settings.local.json" ]; then
+  echo "FAIL: T5: canonical settings.local.json became a symlink"
+  fail=$((fail+1))
+else
+  echo "PASS: T5: canonical settings.local.json is still a real file"
+  pass=$((pass+1))
+fi
+
+# ---------------------------------------------------------------------------
+# T6: a REAL git worktree still links. The T5 guard reads show-toplevel, so
+# pin the genuine invocation: a linked worktree's toplevel is itself, never
+# the canonical root. PATH is stripped to system dirs so an optional
+# codegraph binary cannot start a background index against the sandbox.
+# ---------------------------------------------------------------------------
+SBX6="$(mktemp -d)"
+make_canonical "$SBX6/canonical"
+/usr/bin/git -C "$SBX6/canonical" init -q
+/usr/bin/git -C "$SBX6/canonical" -c user.email=test@test -c user.name=test commit -q --allow-empty -m seed
+/usr/bin/git -C "$SBX6/canonical" worktree add -q -b side "$SBX6/wt"
+printf 'LOCAL-PERMS\n' > "$SBX6/canonical/.claude/settings.local.json"
+OUT6="$(PATH="/usr/bin:/bin:/usr/sbin:/sbin" CANONICAL="$SBX6/canonical" WORKTREE="$SBX6/wt" bash "$SETUP" 2>&1)"
+RC6=$?
+
+check_eq "T6: exits 0 on a genuine git worktree" "0" "$RC6"
+if [ -L "$SBX6/wt/.claude/settings.local.json" ]; then
+  echo "PASS: T6: the shared settings link landed in the worktree"
+  pass=$((pass+1))
+else
+  echo "FAIL: T6: the shared settings link did not land: $OUT6"
+  fail=$((fail+1))
+fi
+if [ -L "$SBX6/canonical/.claude/settings.local.json" ]; then
+  echo "FAIL: T6: the guard over-fired and symlinked the canonical root"
+  fail=$((fail+1))
+else
+  echo "PASS: T6: the canonical root itself keeps its real file"
+  pass=$((pass+1))
+fi
+
+# ---------------------------------------------------------------------------
+# T7: a REAL worktree placed INSIDE the canonical tree still links. The
+# claude lane's own placement is .claude/worktrees/<name>, a real checkout
+# sitting inside the canonical directory tree. Its show-toplevel is itself,
+# so the T5 guard must not fire on it. probed live 2026-11-06: macOS answers
+# /private/tmp for a /tmp path, and -ef absorbs the spelling difference.
+# ---------------------------------------------------------------------------
+SBX7="$(mktemp -d)"
+make_canonical "$SBX7/canonical"
+/usr/bin/git -C "$SBX7/canonical" init -q
+/usr/bin/git -C "$SBX7/canonical" -c user.email=test@test -c user.name=test commit -q --allow-empty -m seed
+mkdir -p "$SBX7/canonical/.claude/worktrees"
+/usr/bin/git -C "$SBX7/canonical" worktree add -q -b w1 "$SBX7/canonical/.claude/worktrees/w1"
+printf 'LOCAL-PERMS\n' > "$SBX7/canonical/.claude/settings.local.json"
+OUT7="$(PATH="/usr/bin:/bin:/usr/sbin:/sbin" CANONICAL="$SBX7/canonical" WORKTREE="$SBX7/canonical/.claude/worktrees/w1" bash "$SETUP" 2>&1)"
+RC7=$?
+
+check_eq "T7: exits 0 on a worktree inside the canonical tree" "0" "$RC7"
+if [ -L "$SBX7/canonical/.claude/worktrees/w1/.claude/settings.local.json" ]; then
+  echo "PASS: T7: the shared settings link landed in the nested worktree"
+  pass=$((pass+1))
+else
+  echo "FAIL: T7: the nested-worktree link did not land: $OUT7"
+  fail=$((fail+1))
+fi
+if [ -L "$SBX7/canonical/.claude/settings.local.json" ]; then
+  echo "FAIL: T7: the guard over-fired and symlinked the canonical root"
+  fail=$((fail+1))
+else
+  echo "PASS: T7: the canonical root itself keeps its real file"
+  pass=$((pass+1))
+fi
+
+rm -rf "$SBX1" "$SBX2" "$SBX3" "$SBX4" "$SBX5" "$SBX6" "$SBX7"
 
 # ---------------------------------------------------------------------------
 # Summary
