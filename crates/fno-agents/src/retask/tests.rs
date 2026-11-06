@@ -37,33 +37,12 @@ impl Default for Fake {
 }
 
 impl RetaskSeams for Fake {
-    fn read_frame(&mut self) -> Result<String, TransportFailure> {
-        Ok(self.frames.pop_front().expect("frame queued"))
-    }
-    fn settle(&mut self) -> Result<(), TransportFailure> {
-        Ok(())
-    }
-    fn send(&mut self, text: &str, submit: bool) -> Result<bool, TransportFailure> {
-        self.sends.push((text.to_string(), submit));
-        Ok(true)
-    }
     fn restamp(&mut self) -> Result<Value, TransportFailure> {
         Ok(self.restamp.clone())
     }
     fn rename(&mut self, _new_name: &str) -> Option<String> {
         self.rename_calls += 1;
         self.renamed.clone()
-    }
-    fn project_tier(&mut self, model: &str, effort: &str) -> Result<(), String> {
-        self.tiers.push((model.to_string(), effort.to_string()));
-        Ok(())
-    }
-    fn ready_frame(&mut self, _frame: &str) -> Option<Value> {
-        self.ready_calls += 1;
-        self.ready.clone()
-    }
-    fn source_preflight(&mut self) -> Option<Value> {
-        self.preflight.clone()
     }
 }
 

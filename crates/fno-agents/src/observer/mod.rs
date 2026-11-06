@@ -1943,18 +1943,3 @@ fn sweep_target(cwd: &Path, since: i64, repo: Option<String>, json_out: bool) ->
     );
     0
 }
-
-/// Parity for the pure fold against the frozen oracle goldens.
-///
-/// parity-stage: characterization
-/// parity-oracle: cli/src/fno/observer/fold.py + cli.py (deleted in this
-/// change). `crates/fno-agents/tests/golden/observer/fold_golden.json` was
-/// captured from the Python leg before deletion; these tests drive the same
-/// pure functions and compare parsed values. The build_corpus and
-/// target_corpus golden sections record outputs whose fixture rows were not
-/// frozen, so they stay documentational here; the four drivable sections
-/// carry the parity claim.
-#[cfg(test)]
-mod parity_tests {
-    use super::*;
-}

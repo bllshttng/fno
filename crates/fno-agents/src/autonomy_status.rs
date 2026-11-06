@@ -363,23 +363,6 @@ pub fn run(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    /// A process-env pin with restore-on-drop: the table's env ranks read
-    /// real env vars, and a parallel test's unpinned read must not race it.
-    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-    impl EnvGuard {}
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, prior) in self.0.drain(..) {
-                match prior {
-                    Some(v) => std::env::set_var(name, v),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-
     fn row_by_name<'a>(rows: &'a [SpawnerStatus], name: &str) -> &'a SpawnerStatus {
         rows.iter()
             .find(|r| r.name == name)

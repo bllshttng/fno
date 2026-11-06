@@ -1452,8 +1452,6 @@ fn read_thresholds(cwd: &Path) -> Thresholds {
 mod tests {
     use super::*;
 
-    use serde_json::json;
-
     fn sample(cost: Option<f64>, head: Option<&str>, touched: Option<i64>) -> Sample {
         Sample {
             cost_usd: cost,
