@@ -292,7 +292,14 @@ fn raw_send(
 
     let transport_sender = crate::identity::ambient_agent_handle();
     let sender = crate::system_sender::stamp_or_unknown(None, || transport_sender.clone());
-    let raw_recipient = crate::identity::canonical_handle(&session_id);
+    // The audit row addresses the recipient by the FULL session id when one
+    // resolved, never the first-eight head: two same-window codex ids share
+    // a head, and the bus log could not tell the workers apart.
+    let raw_recipient = if session_id.is_empty() {
+        crate::identity::canonical_handle(&session_id)
+    } else {
+        session_id.clone()
+    };
     let authored_words = crate::backlog::style_check::word_count(stripped);
     let mut failure_reasons: Vec<String> = Vec::new();
     let mut invocation_id: Option<String> = None;
