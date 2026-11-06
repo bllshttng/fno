@@ -3963,21 +3963,6 @@ mod tests {
 
     // --- wait_for_reply ---
 
-    fn write_state(jobs: &Path, state: &str, updated: &str, result: Option<&str>) {
-        let res = match result {
-            Some(r) => format!(",\"output\":{{\"result\":{}}}", json_string_ascii(r)),
-            None => String::new(),
-        };
-        fs::write(
-            jobs.join("state.json"),
-            format!(
-                "{{\"state\":\"{}\",\"updatedAt\":\"{}\"{}}}",
-                state, updated, res
-            ),
-        )
-        .unwrap();
-    }
-
     // --- ask_followup (live socket + state.json) ---
 
     // --- ask-lane control.sock fallback ---
