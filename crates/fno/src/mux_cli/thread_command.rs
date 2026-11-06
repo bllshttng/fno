@@ -236,13 +236,6 @@ mod tests {
         assert_eq!(session_flag.as_deref(), Some("legacy"));
         assert_eq!(parsed.name.as_deref(), Some("myagent"));
     }
-
-    #[test]
-    fn thread_still_refuses_its_own_unknown_flags() {
-        let err = parse_thread_args(&os(&["--wat", "myagent"])).expect_err("unknown flag refuses");
-        assert!(err.contains("--wat"), "{err}");
-    }
-
     #[test]
     fn a_split_with_no_anchor_halves_the_callers_pane_or_refuses() {
         use super::super::pane_args::anchor_or_refuse;

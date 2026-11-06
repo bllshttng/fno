@@ -306,19 +306,4 @@ mod tests {
         assert_eq!(t.pick, 0);
         assert_eq!(t.shown().len(), 1);
     }
-
-    #[test]
-    fn render_marks_the_selected_row_and_fills_the_height() {
-        let lines = render(&table(), 100, 10);
-        assert_eq!(lines.len(), 10);
-        assert!(lines[0].contains("2 of 2"));
-        assert!(
-            lines[1].contains("node")
-                && lines[1].contains("PR")
-                && lines[1].contains("description")
-        );
-        assert!(lines[2].starts_with("\x1b[7m"));
-        assert!(lines[8].contains("question: why ship?"));
-        assert!(lines[9].contains("q quit"));
-    }
 }

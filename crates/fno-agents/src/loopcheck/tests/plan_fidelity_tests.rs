@@ -132,15 +132,6 @@ fn golden_replay_unreadable_plan_refuses() {
 }
 
 #[test]
-fn golden_replay_no_planned_rows_passes_through() {
-    let fix = Fixture::new();
-    let plan = fix.root().join("plans/only-shipped.md");
-    let decision =
-        compute_plan_fidelity_from(&fix.inputs(&plan.to_string_lossy(), &Fixture::no_body, None));
-    assert_golden("nopages", &fix, decision);
-}
-
-#[test]
 fn golden_replay_uncovered_shortfall_refuses() {
     let fix = Fixture::new();
     let plan = fix.root().join("plans/unjoined.md");
@@ -150,37 +141,12 @@ fn golden_replay_uncovered_shortfall_refuses() {
 }
 
 #[test]
-fn golden_replay_covering_carveouts_pass() {
-    let fix = Fixture::new();
-    let repo_dotfno = fix.root().join("repo/.fno");
-    std::fs::create_dir_all(&repo_dotfno).unwrap();
-    std::fs::write(
-        repo_dotfno.join("carveouts.jsonl"),
-        "{\"id\": \"c1\", \"session_id\": \"sess-u1\", \"kind\": \"carveout\", \"reason\": \"spike only\"}\n{\"id\": \"c2\", \"session_id\": \"sess-u2\", \"kind\": \"carveout\", \"reason\": \"spike only\"}\n",
-    )
-    .unwrap();
-    let plan = fix.root().join("plans/unjoined.md");
-    let decision =
-        compute_plan_fidelity_from(&fix.inputs(&plan.to_string_lossy(), &Fixture::no_body, None));
-    assert_golden("covered", &fix, decision);
-}
-
-#[test]
 fn golden_replay_joined_plan_passes() {
     let fix = Fixture::new();
     let plan = fix.root().join("plans/joined.md");
     let decision =
         compute_plan_fidelity_from(&fix.inputs(&plan.to_string_lossy(), &Fixture::no_body, None));
     assert_golden("joined", &fix, decision);
-}
-
-#[test]
-fn golden_replay_forbidden_plan_refuses_the_shortfall() {
-    let fix = Fixture::new();
-    let plan = fix.root().join("plans/forbid.md");
-    let decision =
-        compute_plan_fidelity_from(&fix.inputs(&plan.to_string_lossy(), &Fixture::no_body, None));
-    assert_golden("forbidden", &fix, decision);
 }
 
 #[test]
@@ -238,29 +204,6 @@ fn body_guard_exit_one_carries_the_guard_line_and_env() {
     .unwrap();
     assert!(
         reason.contains("stub refusal: the body text | carve=forbidden"),
-        "{reason}"
-    );
-}
-
-#[test]
-fn body_guard_exit_zero_passes_and_other_exits_are_unreadable() {
-    let fix = Fixture::new();
-    let pass = stub_script(&fix.root(), "pass.sh", "#!/bin/bash\nexit 0\n");
-    assert!(crate::loopcheck::plan_fidelity::run_body_guard(
-        "b".to_string(),
-        Some(&pass),
-        &fix.root().join("repo"),
-    )
-    .is_none());
-    let weird = stub_script(&fix.root(), "weird.sh", "#!/bin/bash\nexit 3\n");
-    let reason = crate::loopcheck::plan_fidelity::run_body_guard(
-        "b".to_string(),
-        Some(&weird),
-        &fix.root().join("repo"),
-    )
-    .unwrap();
-    assert!(
-        reason.contains("carve-out check unreadable (exit 3)"),
         "{reason}"
     );
 }

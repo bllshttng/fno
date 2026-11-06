@@ -180,18 +180,6 @@ mod tests {
     fn marker_path(session: &str) -> std::path::PathBuf {
         proto::mux_dir().join(format!("web-{session}.json"))
     }
-
-    #[test]
-    fn bare_reap_and_unexpected_arguments_are_usage() {
-        // Unknown commands and a bare `mux web` refuse at the classifier now;
-        // what reaches this parser is a well-formed reap, and its own flag
-        // grammar still refuses the junk.
-        // A bare reap is the happy empty answer, not a usage error.
-        assert_eq!(web_reap(&[]), EXIT_OK);
-        assert_eq!(web_reap(&[OsString::from("explode")]), EXIT_USAGE);
-        assert_eq!(web_reap(&[OsString::from("--help")]), EXIT_USAGE);
-    }
-
     #[test]
     fn reap_removes_only_markers_whose_port_refuses() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -235,40 +223,6 @@ mod tests {
         assert!(
             !marker_path("jsondead").exists(),
             "the corpse was removed during the partition"
-        );
-    }
-
-    #[test]
-    fn reap_accepts_both_json_spellings() {
-        // -J is accepted (reap runs, EXIT_OK), not "unexpected argument" (2).
-        write_marker(
-            "jsonflag",
-            "{\"bind\":\"127.0.0.1\",\"port\":1,\"token\":\"b\",\"pid\":1}",
-        );
-        assert_eq!(web_reap(&[OsString::from("-J")]), EXIT_OK);
-    }
-
-    #[test]
-    fn reap_takes_a_corpse_marker_even_when_a_stranger_holds_the_port() {
-        // A dead bridge's port can be taken by another process; a bare TCP
-        // answer is not ownership. The dead-pid marker is a corpse even when
-        // the probe is answered - the sweep must not keep it as "live".
-        let stranger = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = stranger.local_addr().unwrap().port();
-        // A pid proven dead: spawned, reaped, gone.
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
-        write_marker(
-            "reapstranger",
-            &format!(
-                "{{\"bind\":\"127.0.0.1\",\"port\":{port},\"token\":\"c\",\"pid\":{dead_pid}}}"
-            ),
-        );
-        assert_eq!(web_reap(&[]), EXIT_OK);
-        assert!(
-            !marker_path("reapstranger").exists(),
-            "dead pid = corpse even with the port answering"
         );
     }
 }

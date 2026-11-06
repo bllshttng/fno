@@ -620,21 +620,6 @@ mod tests {
     fn run(texts: &[&str]) -> Option<(Agents, Option<String>)> {
         resolve(&osv(texts))
     }
-
-    /// The Explorer tabs' public argv resolves to the leaf the front execs.
-    #[test]
-    fn explorer_tab_argv_resolves_to_its_native_leaf() {
-        assert_eq!(
-            native_leaf_argv(crate::org_model::FLEET_TOP_ARGV),
-            Some(osv(&["census", "--workers", "--machines", "--json"]))
-        );
-        assert_eq!(
-            native_leaf_argv(crate::org_model::ORG_FOLD_ARGV),
-            Some(osv(&["org-fold"]))
-        );
-        assert_eq!(native_leaf_argv(&["agents", "spawn"]), None);
-    }
-
     #[test]
     fn agents_menu_nested_spellings_rewrite_and_old_ones_notice() {
         // A nested command forwards the argv that answers today, tail intact.

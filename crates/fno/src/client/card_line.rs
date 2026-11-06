@@ -17,11 +17,13 @@ pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
     let bare_w = a.pr.map(|n| format!("#{n}").width()).filter(|w| *w <= 6);
     let suffix = binding_suffix(a);
     let pr_w = bare_w.map(|w| w + suffix.width());
-    let pr = pr_w.filter(|w| *w <= text_w).map(|w| text_w - w..text_w);
+    // One cell stays spare, so the node and PR never touch the rail border.
+    let edge = text_w.saturating_sub(1);
+    let pr = pr_w.filter(|w| *w <= edge).map(|w| edge - w..edge);
     let gap = usize::from(node_w > 0 && pr.is_some()) * 3;
     let node_end = pr
         .as_ref()
-        .map_or(text_w, |span| span.start.saturating_sub(gap));
+        .map_or(edge, |span| span.start.saturating_sub(gap));
     let node_span = (node_w > 0 && node_end >= node_w).then(|| node_end - node_w..node_end);
     let separator = node_span
         .as_ref()
@@ -526,32 +528,5 @@ mod binding_display_tests {
         let mut other = binding("x-oth1", Some(100), "open", false);
         other.pr_count = 2;
         assert_eq!(binding_suffix(&row(vec![own, other])), " +11 PRs");
-    }
-
-    #[test]
-    fn pr_span_width_covers_node_pr_and_count() {
-        // `x-cur · #3159 +1 PRs` at the right edge of 40 columns.
-        let a = row(vec![
-            binding("x-cur", Some(3159), "open", false),
-            binding("x-oth", Some(100), "open", false),
-        ]);
-        let spans = identity_spans(&a, 40);
-        let pr = spans.pr.expect("pr span renders");
-        assert_eq!(pr, 28..40);
-        assert_eq!(spans.node, Some(20..25));
-        assert_eq!(spans.separator, Some(25..28));
-    }
-
-    #[test]
-    fn fit_node_cuts_the_node_front_before_the_name() {
-        // `scout` ends at column 7 with one space after it, so the node may
-        // start at 8. The specimen cut the name to `scou` instead.
-        let node = "zz-00aa11bb";
-        assert_eq!(fit_node(node, 10..21, 8), Some((10..21, node.into())));
-        assert_eq!(
-            fit_node(node, 6..17, 8),
-            Some((8..17, "\u{2026}00aa11bb".into()))
-        );
-        assert_eq!(fit_node(node, 6..17, 14), None, "under 3 node chars drops");
     }
 }

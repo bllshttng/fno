@@ -250,7 +250,7 @@ pub(crate) fn codex_hooks_report() -> Value {
     } else {
         "ok"
     };
-    json!({
+    let mut report = json!({
         "status": status,
         "preferred_layer": "config.toml",
         "state": state,
@@ -263,7 +263,38 @@ pub(crate) fn codex_hooks_report() -> Value {
         "footnote_json_hooks": json_footnote,
         "foreign_json_hooks": json_foreign,
         "errors": errors,
-    })
+    });
+    // The plugin-hook verdict needs a daemon read, so it ships only when the
+    // fno-agents trust reader is reachable; its absence keeps the frozen
+    // doctor parity goldens (captured with no sibling binary) byte-stable.
+    if let Some(plugin_hooks) = plugin_hooks_block() {
+        report["plugin_hooks"] = plugin_hooks;
+    }
+    report
+}
+
+/// The plugin-hook trust verdict, read through the fno-agents trust reader
+/// (`plugin-install codex --trust-hooks --check --json`) so one binary owns
+/// the daemon protocol. `None` when the reader is unreachable: doctor stays
+/// read-only and the frozen goldens stay byte-stable.
+fn plugin_hooks_block() -> Option<Value> {
+    let bin = crate::doctor_update::cargo_installed_bin()?;
+    let output = std::process::Command::new(bin)
+        .args([
+            "plugin-install",
+            "codex",
+            "--trust-hooks",
+            "--check",
+            "--json",
+        ])
+        .output()
+        .ok()?;
+    let line = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .last()?
+        .to_string();
+    serde_json::from_str(&line).ok()
 }
 
 fn parse_toml_layer(

@@ -98,10 +98,7 @@ state without modifying either hook layer:
 fno doctor --codex-hooks
 ```
 
-The presence of a `[hooks.state]` `trusted_hash` is reported as
-`recorded-unverified`, not as proof that the current command is trusted. footnote does
-not currently reproduce Codex's local hash-verification contract, so the diagnostic
-stays advisory/warn and asks you to confirm approval in Codex itself.
+The presence of a `[hooks.state]` `trusted_hash` user-level layer is reported as `recorded-unverified`, not as proof that the current command is trusted. That leg reads the user-level fallback layer only. For the plugin hooks codex actually runs, the report carries a `plugin_hooks` verdict read from the codex daemon (`hooks/list`), and `fno doctor --codex-hooks --fix` refreshes plugin-hook trust by writing each fno hook's current hash back through codex's own `config/batchWrite`, the same write the Codex TUI's trust flow performs. A codex without `hooks/list`, or with the daemon down, reports the skip and the remedy; a user-disabled fno hook is never re-enabled.
 
 Codex may report `loading hooks from both ... hooks.json and ... config.toml` when the
 legacy `$CODEX_HOME/hooks.json` and preferred TOML layer both contain SessionStart hooks.

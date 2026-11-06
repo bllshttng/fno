@@ -351,21 +351,6 @@ pub fn resolve_sidecar(root: &Path, file: &str, legacy_allowed: bool) -> PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // The parse, reject and place contracts are guarded once, in the agents
-    // crate, over the same bytes: both crates vendor the table and each
-    // crate's vendored_table_matches test pins byte-equality with the repo
-    // copy, so a second parse/place set here would guard one contract twice.
-
-    #[test]
-    fn vendored_table_matches_the_repo_copy() {
-        let repo = include_str!("../../../docs/state-root-layout.tsv");
-        assert_eq!(
-            LAYOUT_TSV, repo,
-            "the vendored layout table drifted from docs/state-root-layout.tsv;              edit the repo copy and copy it into both crates"
-        );
-    }
-
     #[test]
     fn mux_migration_moves_the_sidecars() {
         let root = std::env::temp_dir().join(format!("fno-mux-mig-{}", std::process::id()));

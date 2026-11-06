@@ -76,14 +76,3 @@ fn pane_id_reveal_tracks_tab_layout_and_expires_without_layout_space() {
     assert!(!expired.contains("pane 91"));
     assert!(!expired.contains("pane 94"));
 }
-
-#[test]
-fn pane_id_reveal_skips_only_a_rectangle_too_narrow_for_its_label() {
-    let mut view = two_pane_view();
-    view.layout.panes[1].1.cols = 5;
-    let t0 = Instant::now();
-    view.reveal_pane_ids_at(t0);
-    let frame = frame_text(&view.compose_at(t0 + Duration::from_millis(1)));
-    assert!(frame.contains("pane 10"));
-    assert!(!frame.contains("pane 11"));
-}

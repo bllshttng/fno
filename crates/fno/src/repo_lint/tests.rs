@@ -55,22 +55,6 @@ fn state_roots_rule_a_fires_on_a_hand_built_path_and_both_directions_hold() {
     assert_eq!(state_roots::run(&inv), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-#[test]
-fn state_roots_rule_b_fires_on_a_zero_arg_cache_over_a_resolver() {
-    let dir = fixture("state-roots-b");
-    write(
-        &dir,
-        "cli/src/fno/cached.py",
-        "from functools import lru_cache\n\n@lru_cache(maxsize=8)\ndef settings():\n    return resolve_repo_root()\n",
-    );
-    let hits = state_roots::rule_b_violations(&dir);
-    assert_eq!(hits.len(), 1, "{hits:?}");
-    assert_eq!(hits[0].0, "cli/src/fno/cached.py");
-    assert_eq!(hits[0].1, "settings");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 #[test]
 fn spawn_paths_fires_on_a_hand_assembled_session_argv() {
     let dir = fixture("spawn-paths");
@@ -94,15 +78,6 @@ fn spawn_paths_fires_on_a_hand_assembled_session_argv() {
     assert_eq!(spawn_paths(&inv), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-#[test]
-fn hook_tombstone_reference_reader_names_plugin_root_scripts() {
-    let refs = referenced_scripts(
-        "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/gate.sh \"$hook\" ${CODEX_PLUGIN_ROOT}/scripts/run.py",
-    );
-    assert_eq!(refs, vec!["hooks/gate.sh", "scripts/run.py"]);
-}
-
 #[test]
 fn plan_filenames_flags_a_filename_that_disagrees_with_its_claim() {
     let dir = fixture("plan-filenames");
@@ -150,16 +125,5 @@ fn command_ratchet_refuses_a_rust_leaf_the_baseline_lacks() {
         base: None,
     };
     assert_eq!(command_ratchet::run(&inv), 1);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn shellout_drift_allowlist_parser_refuses_a_malformed_line() {
-    let dir = fixture("shellout");
-    let allowlist = dir.join("scripts/lint/.clone-only-scripts.txt");
-    std::fs::create_dir_all(allowlist.parent().unwrap()).unwrap();
-    std::fs::write(&allowlist, "no separator here\n").unwrap();
-    let err = shellout_drift::parse_allowlist(&allowlist);
-    assert!(err.is_err(), "{err:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

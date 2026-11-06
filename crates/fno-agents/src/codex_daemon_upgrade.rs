@@ -382,7 +382,7 @@ async fn verify_after_restart(
 
 #[cfg(test)]
 mod tests {
-    use super::{snapshot_refusal, SnapshotThread};
+    use super::{snapshot_refusal, vendor_restart_command, Path, SnapshotThread};
 
     fn thread(id: &str, status: Option<&str>) -> SnapshotThread {
         SnapshotThread {
@@ -471,6 +471,35 @@ mod tests {
             ),
         }
     }
+
+    #[test]
+    fn the_restarted_app_server_never_carries_the_terminal_host_keys() {
+        let cmd = vendor_restart_command(Path::new("/usr/bin/true"));
+        let removed: Vec<_> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            assert!(
+                removed.contains(&key.to_string()),
+                "{key} must be held out of the restarted app-server, got {removed:?}"
+            );
+        }
+    }
+}
+
+/// The vendor restart command: `codex app-server daemon restart` under the
+/// resolved CODEX_HOME, holding the launching terminal's Rex markers out.
+/// The restarted app-server hosts every codex thread, so a swap born in a
+/// Rex pane must not fossil REX_* into it. Split from `vendor_restart` so
+/// the env contract is unit-testable.
+fn vendor_restart_command(codex: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(codex);
+    cmd.args(["app-server", "daemon", "restart"]);
+    cmd.env("CODEX_HOME", codex_home());
+    crate::claims::scrub_terminal_host_env(&mut cmd);
+    cmd
 }
 
 /// Run the vendor restart command with the resolved CODEX_HOME. NEVER a hand
@@ -484,11 +513,8 @@ fn vendor_restart(codex: &Path) -> Result<(), String> {
     // worker.
     let codex = codex.to_path_buf();
     let waited = std::thread::spawn(move || {
-        std::process::Command::new(codex)
-            .args(["app-server", "daemon", "restart"])
-            .env("CODEX_HOME", codex_home())
-            .output()
-            .map_err(|e| format!("run codex: {e}"))
+        let mut cmd = vendor_restart_command(&codex);
+        cmd.output().map_err(|e| format!("run codex: {e}"))
     });
     let output = waited
         .join()

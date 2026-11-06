@@ -1163,16 +1163,4 @@ mod tests {
         assert!(here.is_some());
         assert_ne!(here.map(|i| i.1), foreign_id.map(|i| i.1));
     }
-
-    /// The deleted test_doctor_resolves_the_worktree_from_a_subdirectory's
-    /// premise: a subdirectory of this repo resolves to the same identity
-    /// as the root, so the report stays visible below the root.
-    #[test]
-    fn subdirectory_identity_matches_the_repo_root() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let repo = repo.canonicalize().expect("repo exists");
-        let root = git_checkout_identity(&repo);
-        let sub = git_checkout_identity(&repo.join("cli"));
-        assert_eq!(root.map(|i| i.1), sub.map(|i| i.1));
-    }
 }

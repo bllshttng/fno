@@ -344,6 +344,7 @@ impl SlotProbe for Probe {
                 organization_uuid: "org-1".to_string(),
                 email: Some("makers@x".to_string()),
             }),
+            "t-old" => Err(ExternalFailure::Rejected),
             _ => Err(ExternalFailure::Unavailable),
         }
     }
@@ -383,6 +384,10 @@ impl Host for BusyHost {
     }
 }
 
+/// The scoped item claude launches read, expired while no claude ran.
+const MAKERS_EXPIRED: &str =
+    r#"{"claudeAiOauth": {"accessToken": "t-old", "refreshToken": "r-old", "expiresAt": 1}}"#;
+
 #[test]
 fn reconcile_proves_the_slot_while_twenty_writers_are_alive() {
     let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -405,7 +410,10 @@ fn reconcile_proves_the_slot_while_twenty_writers_are_alive() {
     let scoped = binding::keychain_service(&lab.home.join(".claude")).unwrap();
     let slot: Map<String, Value> = [
         ("unscoped".to_string(), Value::String(MAKERS.to_string())),
-        ("scoped:slot".to_string(), Value::String(MAKERS.to_string())),
+        (
+            "scoped:slot".to_string(),
+            Value::String(MAKERS_EXPIRED.to_string()),
+        ),
     ]
     .into_iter()
     .collect();
@@ -437,15 +445,22 @@ fn reconcile_proves_the_slot_while_twenty_writers_are_alive() {
             extra: Map::new(),
         })
         .collect();
-    let got = reconcile::reconcile_slot(
-        "claude",
-        &records,
-        &lab.store,
-        &probe,
-        &BusyHost { pids },
-        Duration::from_millis(200),
-        1_800_000_000.0,
-    );
+    let run = || {
+        reconcile::reconcile_slot(
+            "claude",
+            &records,
+            &lab.store,
+            &probe,
+            &BusyHost { pids: pids.clone() },
+            Duration::from_millis(200),
+            1_800_000_000.0,
+        )
+    };
+    // The endpoint rejects the expired item, and nothing ever proved it.
+    assert_eq!(run().outcome, "credential-rejected");
+    // A proof cached for exactly that token still names its account.
+    binding::note_slot_principal("claude", &lab.store, "acc-makers/org-1", "t-old", 1.0);
+    let got = run();
     assert_eq!(got.outcome, "matched");
     assert_eq!(lab.stamp(), "makers");
     assert!(!lab.store.join(".active-claude.tainted").exists());
