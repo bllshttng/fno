@@ -283,7 +283,64 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     build_stage_as(source_root, stage_parent, Profile::Full)
 }
 
-/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// The trees the codex dev stage drops: no codex hook, skill or command
+/// reads them at run time (measured by sweep 2026-11-06), and they are 9,394
+/// of the dev stage's 11,676 entries. codex fingerprints the whole stage
+/// inside each hook's own timeout, so every entry is paid on every hook call.
+fn codex_dropped_tree(rel: &str) -> bool {
+    const DROPPED: [&str; 4] = ["crates", "cli", "tests", "evals"];
+    DROPPED
+        .iter()
+        .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
+}
+
+/// Refuse a codex stage whose hooks, skills, agents or commands name a
+/// dropped tree at run time: the guard turns a future runtime read into a
+/// build refusal naming the file and the path (AC8), not a broken hook at
+/// runtime.
+fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
+    let pattern =
+        regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)(?![-\w])"#)
+            .expect("valid tree-read pattern");
+    for dir in ["hooks", "skills", "agents", "commands"] {
+        let root = source_root.join(dir);
+        if !root.is_dir() {
+            continue;
+        }
+        // Depth ≤ 2: skills nest one level (skills/<name>/references/);
+        // deeper nesting is docs, not runtime reads.
+        let mut stack: Vec<std::path::PathBuf> = vec![root];
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if let Some(hit) = pattern.find(&text) {
+                let rel = path.strip_prefix(source_root).unwrap_or(path);
+                return Err(format!(
+                    "codex stage: {} names dropped tree path {:?} at run time; \
+                     widen the keep set or fix the reference",
+                    rel.display(),
+                    hit.as_str()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
     source_root: &Path,
@@ -291,8 +348,11 @@ fn build_stage_as(
     profile: Profile,
 ) -> Result<(PathBuf, usize), String> {
     require_fno_source(source_root)?;
+    if matches!(profile, Profile::Codex) {
+        codex_runtime_read_guard(source_root)?;
+    }
     let mux = match profile {
-        Profile::Full => None,
+        Profile::Full | Profile::Codex => None,
         Profile::Pack => Some(MuxPaths::load(source_root)?),
     };
     let listed = run_checked(
@@ -318,6 +378,9 @@ fn build_stage_as(
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
             if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
+            if matches!(profile, Profile::Codex) && codex_dropped_tree(rel) {
                 continue;
             }
             let src = source_root.join(rel);
@@ -363,7 +426,11 @@ fn build_stage_as(
         let stamp = json!({
             "source_head": head,
             "built_at": chrono::Utc::now().to_rfc3339(),
-            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+            "profile": match profile {
+                Profile::Pack => "pack",
+                Profile::Codex => "codex",
+                Profile::Full => "full",
+            },
         });
         let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
     }
@@ -1120,7 +1187,7 @@ enum RestageOutcome {
 /// up the directory marketplace has no stage and gets a no-op. Each profile
 /// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
+    let present: Vec<Profile> = [Profile::Full, Profile::Pack, Profile::Codex]
         .into_iter()
         .filter(|p| stage_parent.join(p.stage_dir()).exists())
         .collect();
@@ -1603,6 +1670,10 @@ struct PluginInstallArgs {
     dry_run: bool,
     /// Consent to replace a release-channel plugin with the local checkout.
     dev: bool,
+    /// Read or refresh codex plugin-hook trust rows (`codex --trust-hooks`).
+    trust_hooks: bool,
+    /// `--trust-hooks --check`: read-only verdict, no writes.
+    trust_hooks_check: bool,
     /// Converge codex onto the release channel (setup's wiring).
     release: bool,
     /// Install the pack profile: no mux skills, no mux hooks.
@@ -1634,6 +1705,8 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         yes: false,
         dry_run: false,
         dev: false,
+        trust_hooks: false,
+        trust_hooks_check: false,
         release: false,
         pack: false,
         dropped_mode: None,
@@ -1682,6 +1755,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dev = true;
                 i += 1;
             }
+            "--trust-hooks" => {
+                parsed.trust_hooks = true;
+                i += 1;
+            }
             "--release" => {
                 parsed.release = true;
                 i += 1;
@@ -1719,7 +1796,9 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             "--check" | "--restage" => {
-                if parsed.mode.is_none() {
+                if parsed.trust_hooks {
+                    parsed.trust_hooks_check = true;
+                } else if parsed.mode.is_none() {
                     parsed.mode = Some(args[i].clone());
                 } else {
                     parsed.dropped_mode = Some(args[i].clone());
@@ -1760,6 +1839,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         yes,
         dry_run,
         dev,
+        trust_hooks,
+        trust_hooks_check,
         release,
         pack,
         dropped_mode,
@@ -1851,6 +1932,9 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             }
             if harness == "codex" && status {
                 return crate::codex_converge::run_status();
+            }
+            if harness == "codex" && trust_hooks {
+                return crate::codex_hook_trust::run_cli(trust_hooks_check, json);
             }
             if harness == "codex" && release {
                 return crate::codex_converge::run_release(json);
@@ -2440,6 +2524,14 @@ fn install_harness(
     source_dir: &Path,
     profile: Profile,
 ) -> Result<String, String> {
+    // The codex dev install gets the slim profile unless --pack asked for
+    // the mux-free pack; the shared full stage stays for every other
+    // harness.
+    let profile = if harness == "codex" && profile == Profile::Full {
+        Profile::Codex
+    } else {
+        profile
+    };
     let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
     let (stage, _) = build_stage_as(&root, &parent, profile)?;
