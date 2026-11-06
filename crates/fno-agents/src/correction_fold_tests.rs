@@ -45,20 +45,36 @@ fn fixture(lines: &[String]) -> Fx {
 }
 
 fn pass(fx: &Fx, row_cap: usize, now: u64) -> FoldReceipt {
-    fold_once(FoldInputs {
-        cache: fx.cache.clone(),
-        journal: fx.journal.clone(),
-        sources: vec![Box::new(ClaudeSource {
-            projects_dir: fx.projects.clone(),
-            roots: None,
-        })],
-        bus: BusIndex::empty(),
-        witness: SubmitIndex::load(&fx.journal),
-        detect: DetectFacts::default(),
-        now_epoch: now,
-        budget: TICK_READ_BUDGET,
-        row_cap,
-    })
+    fn inputs(fx: &Fx, row_cap: usize, now: u64) -> FoldInputs {
+        FoldInputs {
+            cache: fx.cache.clone(),
+            journal: fx.journal.clone(),
+            sources: vec![Box::new(ClaudeSource {
+                projects_dir: fx.projects.clone(),
+                roots: None,
+            })],
+            bus: BusIndex::empty(),
+            witness: SubmitIndex::load(&fx.journal),
+            detect: DetectFacts::default(),
+            now_epoch: now,
+            budget: TICK_READ_BUDGET,
+            row_cap,
+        }
+    }
+    let mut receipt = fold_once(inputs(fx, row_cap, now));
+    // A CI runner can serve a listing that misses the fixture written
+    // milliseconds earlier, and the fold's fail-open rule reads that as a
+    // clean zero-file tick. The fixture is a precondition here, so re-run
+    // the pass until the listing sees it. A skipped pass never listed
+    // anything and is final; a failed append already names itself on the
+    // receipt.
+    let mut tries = 0;
+    while !receipt.skipped && receipt.listed_files == 0 && tries < 3 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        receipt = fold_once(inputs(fx, row_cap, now));
+        tries += 1;
+    }
+    receipt
 }
 
 fn rows(fx: &Fx) -> Vec<Value> {
