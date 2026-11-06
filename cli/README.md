@@ -238,12 +238,7 @@ They detect layers independently and report on those present:
 
 ### Invariants
 
-Both commands are read-only. No state is mutated, no events are emitted,
-no side effects. Tests assert this via repeated-invocation paired md5
-hashing across `target-state.md`, `events.jsonl`,
-and the fleet `00-INDEX.md`. `--json` emits isoformat strings for any
-datetime parsed out of the manifest frontmatter, so it never crashes on
-a real manifest.
+Both commands are read-only. No state is mutated, no events are emitted, no side effects. Tests assert this via repeated-invocation paired md5 hashing across `target-state.md`, `events.jsonl`, and the fleet `00-INDEX.md`. `--json` emits isoformat strings for any datetime parsed out of the manifest frontmatter, so it never crashes on a real manifest.
 
 ### See also
 
