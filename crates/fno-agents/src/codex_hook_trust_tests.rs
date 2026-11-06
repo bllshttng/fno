@@ -8,6 +8,7 @@
 use futures_util::{SinkExt, StreamExt};
 use std::path::Path;
 use tokio::net::UnixListener;
+use tokio::net::UnixStream;
 use tokio_tungstenite::{accept_async, WebSocketStream};
 
 use super::*;
