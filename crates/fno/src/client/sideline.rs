@@ -100,9 +100,9 @@ fn card_head_caption(grouped: bool, column: AgentSortColumn, arrow: &str, room: 
     let sort = format!("sort: {name} {arrow}");
     let tiers = if grouped {
         vec![
-            format!("grouped: lead \u{b7} {sort}"),
+            format!("group: lead \u{b7} {sort}"),
             format!("by lead \u{b7} {sort}"),
-            format!("lead \u{b7} {sort}"),
+            format!("by lead \u{b7} {name} {arrow}"),
         ]
     } else {
         vec![format!("{sort} \u{b7} node \u{b7} PR"), sort]
@@ -1239,7 +1239,8 @@ impl View {
                 }
                 let prefix_width = prefix.width();
                 let suffix_width = suffix.width();
-                let base_width = name_w.saturating_sub(prefix_width);
+                // A card keeps one spare cell so the label never touches the border.
+                let base_width = name_w.saturating_sub(prefix_width + usize::from(card));
                 // Row 1 carries the role vocabulary: a lead's people title
                 // after its slug (`sorrel · lead of mux`), a worker's lead
                 // after its thread slug (`t-x0eee · sorrel`).
@@ -1454,8 +1455,15 @@ impl View {
                     // The dashed rule rides between adjacent cards (the
                     // operator's 2026-10-04 spacing mockup): no rule before a
                     // header, a blank, or the section's end.
+                    // Grouped by lead, a blank row ends each lead's group
+                    // instead, so the cards need no indent to show where one stops.
                     if matches!(rows_iter.peek(), Some(DisplayRow::Agent(_))) {
-                        out_rows.push(DisplayRow::CardRule);
+                        let next_leads = self.group_by_lead && depths_peek.peek() == Some(&0);
+                        out_rows.push(if next_leads {
+                            DisplayRow::Blank
+                        } else {
+                            DisplayRow::CardRule
+                        });
                         out_depths.push(0);
                     }
                 }
