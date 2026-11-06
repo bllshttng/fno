@@ -4,7 +4,7 @@
 # Usage: extract.sh <transcript.jsonl> [OLD=NEW ...] > events.jsonl
 #
 # Each output line is {"t": seconds_since_start, "kind": "...", "text": "..."}.
-# Kinds: prompt, say, tool. Only the first line of each message is kept.
+# Kinds: prompt, tool, and one final say. Only the first line of each message is kept.
 # Each OLD=NEW pair replaces text, so a name or host never reaches the GIF.
 # Home paths (/Users/<name>) always become ~.
 set -euo pipefail
@@ -21,9 +21,15 @@ jq -R -n -c --argjson max "$max_events" '
     capture("^(?<b>[^.Z]+)(?<f>\\.[0-9]+)?Z$") as $m
     | ($m.b + "Z" | fromdateiso8601) + ("0" + ($m.f // "") | tonumber);
   def trim: gsub("^\\s+|\\s+$"; "");
+  # The first line, cut to fit: at a sentence end when one fits, else at a word.
   def line1($n):
     (trim | split("\n")[0] // "") as $l
-    | if ($l | length) > $n then $l[0:$n - 3] + "..." else $l end;
+    | if ($l | length) <= $n then $l
+      else $l[0:$n - 3] as $cut
+        | ([$cut | indices(". ")[] | select(. > 20)] | last) as $dot
+        | if $dot then $l[0:$dot + 1]
+          else ($cut | sub("\\s+\\S*$"; "")) + "..." end
+      end;
   # What the user typed, or "" for injected text (hook context, skill bodies).
   def prompt_text:
     if test("<command-name>") then
@@ -36,9 +42,12 @@ jq -R -n -c --argjson max "$max_events" '
   # A reply that is only a control tag (<watching>, <help>, <promise>) is loop
   # plumbing, not something the agent said.
   def say_text: if (trim | startswith("<")) then "" else . end;
+  # Background-task reads and tool lookups are plumbing, not actions.
   def tool_label:
     .name as $n | (.input // {}) as $i
     | if $n == "Bash" then ($i.description // ($i.command // "" | line1(80)))
+      elif ($n == "Read" and (($i.file_path // "") | endswith(".output")))
+        or ($n | test("^(ToolSearch|TaskStop|TaskOutput|Monitor)$")) then ""
       elif $n == "Edit" or $n == "Write" or $n == "Read" then "\($n) \(($i.file_path // "") | split("/") | last)"
       elif $n == "Skill" then "skill \($i.skill // "")"
       else $n end;
@@ -66,6 +75,10 @@ jq -R -n -c --argjson max "$max_events" '
             else empty end
           | .text |= redact
           | select(.text != "") ]
+      # The agent narrates in its own working terms. Show its actions, and keep
+      # only the final reply, which states the result.
+      | ([.[] | select(.kind == "say")] | last) as $end
+      | [.[] | select(.kind != "say")] + (if $end then [$end] else [] end)
       | thin($max)[]
     end
 ' --args -- "$@" < "$src"
