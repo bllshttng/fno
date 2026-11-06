@@ -54,7 +54,7 @@ Reading them from `$HOME` would make them differ between the two lanes below, an
 
 ### The channel an env fixture cannot close
 
-`_carveout_ledger_root` resolves from the caller's **CWD** via `git worktree list`. No environment variable bounds that. The pytest tree closes the carve-out channel at the reader (`_hermetic_promise_carveout_gate` in `tests/py/conftest.py`). A shell test closes it by running from a non-worktree directory. This is a real limit of the env-level cure, stated here rather than papered over.
+`_carveout_ledger_root` resolves from the caller's **CWD** via `git worktree list`. No environment variable bounds that. A test closes the carve-out channel by running from a non-worktree directory. The pytest reader gate went with the old `cli/tests/conftest.py`, and `tests/py/conftest.py` carries no replacement. This is a real limit of the env-level cure, stated here rather than papered over.
 
 ### The channel a pin cannot reach: a hand-built path
 
