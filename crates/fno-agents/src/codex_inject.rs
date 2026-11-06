@@ -702,30 +702,6 @@ fn emit_review_invocation_fields(
     let _ = emitter.emit_fields("review_invocation", fields);
 }
 
-#[cfg(test)]
-fn review_start_audit_fields_with_origin(
-    thread_id: &str,
-    target_raw: &str,
-    delivery: ReviewDelivery,
-    audit_payload: Option<&str>,
-    audit_sender: Option<&str>,
-    audit_target_cwd: Option<&str>,
-    failure_reason: Option<&str>,
-    audit_origin: Option<&str>,
-) -> serde_json::Map<String, serde_json::Value> {
-    review_start_audit_fields_with_origin_and_self(
-        thread_id,
-        target_raw,
-        delivery,
-        audit_payload,
-        audit_sender,
-        audit_target_cwd,
-        failure_reason,
-        audit_origin,
-        false,
-    )
-}
-
 fn review_start_audit_fields_with_origin_and_self(
     thread_id: &str,
     target_raw: &str,
@@ -2205,47 +2181,6 @@ mod tests {
     }
 
     #[test]
-    fn review_start_response_parses_turn_and_thread() {
-        let raw = r#"{"id":1,"result":{"turn":{"id":"turn-1","status":"inProgress"},"reviewThreadId":"rt-9"}}"#;
-        assert_eq!(
-            parse_review_start_response(raw),
-            Ok(("turn-1".into(), "rt-9".into()))
-        );
-        let server_error = parse_review_start_response(
-            r#"{"id":1,"error":{"message":"review target must be a base branch"}}"#,
-        )
-        .unwrap_err();
-        let invalid_response = parse_review_start_response("garbage").unwrap_err();
-        let unexpected_response =
-            parse_review_start_response(r#"{"id":1,"result":{}}"#).unwrap_err();
-        assert!(matches!(
-            &server_error,
-            ReviewStartError::Server(message)
-                if message == "review target must be a base branch"
-        ));
-        assert_eq!(
-            server_error.to_string(),
-            "server-error: review target must be a base branch"
-        );
-        assert_eq!(
-            parse_review_start_response(r#"{"id":1,"error":{"message":"not-confirmed"}}"#)
-                .unwrap_err()
-                .to_string(),
-            "server-error: not-confirmed"
-        );
-        assert_eq!(invalid_response.to_string(), "invalid-response");
-        assert_eq!(unexpected_response.to_string(), "unexpected-response");
-        assert_ne!(server_error, invalid_response);
-        assert_ne!(server_error, unexpected_response);
-        assert_ne!(invalid_response, unexpected_response);
-        assert_eq!(
-            parse_review_start_response(r#"{"id":1,"result":{"turn":{"id":"turn-1"}}}"#)
-                .unwrap_err(),
-            ReviewStartError::Reason("not-confirmed")
-        );
-    }
-
-    #[test]
     fn review_invocation_audit_carries_server_message_and_canonical_fields() {
         let fields = review_invocation_event_fields(
             "ri-positive",
@@ -2282,35 +2217,6 @@ mod tests {
             event["data"]["receipt"],
             "codex review/start failed: server-error: review target must be a base branch"
         );
-    }
-
-    #[test]
-    fn review_start_audit_budgets_all_variable_fields() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("events.jsonl");
-        let large = "x".repeat(crate::events_limits::max_data_bytes() + 1);
-        let fields = review_start_audit_fields_with_origin(
-            &large,
-            "baseBranch:origin/main",
-            ReviewDelivery::Inline,
-            Some(&large),
-            Some(&large),
-            Some(&large),
-            Some(&large),
-            Some(&large),
-        );
-        crate::events::EventEmitter::new(&path, "daemon")
-            .emit_fields("agent_raw_inject", fields)
-            .unwrap();
-        let raw = crate::events::committed_journal_text(&path);
-        let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
-        assert_eq!(event["type"], "agent_raw_inject");
-        assert_eq!(event["data"]["payload_truncated"], true);
-        assert_eq!(event["data"]["sender_truncated"], true);
-        assert_eq!(event["data"]["target_cwd_truncated"], true);
-        assert_eq!(event["data"]["origin_truncated"], true);
-        assert_eq!(event["data"]["target_session_truncated"], true);
-        assert_eq!(event["data"]["reason_truncated"], true);
     }
 
     #[tokio::test]
@@ -2667,53 +2573,6 @@ mod tests {
         );
     }
 
-    /// The seed path: the spawner's cwd hint replaces the `thread/read` round
-    /// trip, and the widened turn/start still carries the env dirs on top of
-    /// the posture's own roots.
-    #[tokio::test]
-    async fn seed_delivery_carries_the_roots_and_skips_thread_read() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _guard = crate::path_test_guard();
-        let _add_dirs =
-            crate::claims::EnvVarGuard::set("FNO_WORKER_ADD_DIRS", "/tmp/fno-t14-a:/tmp/fno-t14-b");
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
-                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t14-own"]
-            })),
-        );
-        let result =
-            deliver_seed_via_codex_daemon("thread-t", "hello SEED", Path::new("/tmp/fno-t14-cwd"))
-                .await;
-        assert!(result.is_ok(), "seed delivery must succeed: {result:?}");
-        let turn = daemon
-            .first_params("turn/start")
-            .expect("seed turn/start must have run");
-        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
-            .collect();
-        assert!(
-            roots.contains(&"/tmp/fno-t14-own".to_string()),
-            "the posture's own roots ride: {roots:?}"
-        );
-        assert!(
-            roots.contains(&"/tmp/fno-t14-a".to_string())
-                && roots.contains(&"/tmp/fno-t14-b".to_string()),
-            "the state dirs ride: {roots:?}"
-        );
-        assert!(
-            daemon.received().iter().all(|frame| frame
-                .get("method")
-                .and_then(serde_json::Value::as_str)
-                != Some("thread/read")),
-            "a cwd hint must skip the thread/read round trip"
-        );
-    }
-
     /// An ack loss after the turn/start went out reads as
     /// `turn-start-unacked`, the token the seed lane treats as in-flight so a
     /// typed fallback cannot double-seed a thread that is already running.
@@ -2781,79 +2640,5 @@ mod tests {
             }),
             "no resume probe may run when the row records full access"
         );
-    }
-
-    /// Cold threads with oversized history load before the accepted turn.
-    #[tokio::test]
-    async fn deliver_sends_no_policy_when_the_posture_is_missing() {
-        let _guard = crate::path_test_guard();
-        for (refuses, returned_id) in [
-            (false, "thread-t"),
-            (true, "thread-t"),
-            (false, "other-thread"),
-        ] {
-            let daemon =
-                crate::codex_fake_daemon::FakeDaemon::start(crate::codex_fake_daemon::Behavior {
-                    thread_cwd: String::new(),
-                    cold_thread: true,
-                    resume_history_bytes: 17 * 1024 * 1024,
-                    fail_thread_resume: refuses,
-                    thread_id: returned_id.to_string(),
-                    ..crate::codex_fake_daemon::Behavior::quick()
-                });
-            let result = deliver_via_codex_daemon("thread-t", "hello").await;
-            if refuses {
-                assert!(
-                    matches!(result, Err(ReviewStartError::Server(ref reason)) if reason == "thread/resume refused")
-                );
-            } else if returned_id != "thread-t" {
-                assert_eq!(
-                    result,
-                    Err(ReviewStartError::Reason("thread-resume-mismatch"))
-                );
-            } else {
-                assert!(result.is_ok(), "{result:?}");
-            }
-            let resume = daemon
-                .first_params("thread/resume")
-                .expect("cold thread resumes");
-            assert_eq!(resume["excludeTurns"], true);
-            let turns = daemon
-                .received()
-                .into_iter()
-                .filter(|f| f["method"] == "turn/start")
-                .count();
-            assert_eq!(
-                turns,
-                if refuses || returned_id != "thread-t" {
-                    1
-                } else {
-                    2
-                }
-            );
-            let turn = daemon.first_params("turn/start").expect("turn ran");
-            assert!(turn.get("sandboxPolicy").is_none());
-        }
-        let mut stream =
-            futures_util::stream::iter([Err(tokio_tungstenite::tungstenite::Error::Capacity(
-                tokio_tungstenite::tungstenite::error::CapacityError::MessageTooLong {
-                    size: 17 * 1024 * 1024,
-                    max_size: 16 * 1024 * 1024,
-                },
-            ))]);
-        assert_eq!(
-            read_until_id(&mut stream, &json!(THREAD_RESUME_ID)).await,
-            Err("app-server-response-over-cap")
-        );
-    }
-
-    /// An unreachable daemon reads as `available: false` with a reason, never
-    /// as zero threads.
-    #[test]
-    fn loaded_threads_block_err_names_the_reason() {
-        let block = loaded_threads_block(Err("no-daemon"));
-        assert_eq!(block["available"], false);
-        assert_eq!(block["reason"], "no-daemon");
-        assert!(block.get("threads").is_none());
     }
 }

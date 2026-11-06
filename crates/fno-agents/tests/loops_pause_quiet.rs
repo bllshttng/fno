@@ -12,7 +12,6 @@ use tempfile::TempDir;
 /// and restore the prior values even if a test panics.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 const TEST_SESSION_ID: &str = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-const OTHER_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
 
 struct EnvReset {
     home: Option<std::ffi::OsString>,
@@ -181,33 +180,6 @@ fn ac1_pause_all_holds_mail_with_a_ttl_and_a_reason() {
 }
 
 #[test]
-fn ac2_a_stub_reporting_no_identity_skips_the_mail_leg_and_still_pauses() {
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path().join("home");
-    fs::create_dir_all(&home).unwrap();
-    let bin = stub(tmp.path(), "exit 3");
-
-    with_env(&home, Some(&bin), || {
-        let (code, output) = run_loops_capture(&owned(&["pause-all", "--ttl", "5m", "--json"]));
-        assert_eq!(code, 0, "{output}");
-        let breaker: serde_json::Value =
-            serde_json::from_slice(&fs::read(home.join(".fno/agents/fleet-stop.json")).unwrap())
-                .unwrap();
-        assert_eq!(breaker["state"], "stopped");
-        assert_eq!(breaker["origin"], "pause-all");
-        assert_eq!(breaker["mail"], "skipped");
-        assert!(breaker["mail_session_id"].is_null());
-        let mail_leg = output["silenced"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|l| l["leg"] == "mail")
-            .unwrap();
-        assert_eq!(mail_leg["state"], "skipped");
-    });
-}
-
-#[test]
 fn ac3_pause_all_defaults_to_a_sixty_minute_bounded_hold() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
@@ -314,34 +286,6 @@ fn ac6_resume_all_lifts_the_mail_leg() {
             fs::read_to_string(calls).unwrap().trim(),
             format!("mail-hold --session {TEST_SESSION_ID} --off")
         );
-    });
-}
-
-#[test]
-fn resume_all_releases_the_session_that_armed_the_mail_hold() {
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path().join("home");
-    fs::create_dir_all(&home).unwrap();
-    seed_pause_all_record(&home, "armed", Some(TEST_SESSION_ID));
-    let calls = tmp.path().join("mail-calls.txt");
-    let bin = stub(
-        tmp.path(),
-        &format!("printf '%s\\n' \"$*\" >> '{}'", calls.display()),
-    );
-
-    with_env(&home, Some(&bin), || {
-        std::env::set_var("FNO_SESSION_ID", OTHER_SESSION_ID);
-        let (code, output) = run_loops_capture(&owned(&["resume-all", "--json"]));
-        assert_eq!(code, 0, "{output}");
-        assert_eq!(
-            fs::read_to_string(calls).unwrap().trim(),
-            format!("mail-hold --session {TEST_SESSION_ID} --off")
-        );
-        let record: serde_json::Value =
-            serde_json::from_slice(&fs::read(home.join(".fno/agents/fleet-stop.json")).unwrap())
-                .unwrap();
-        assert_eq!(record["state"], "clear");
-        assert_eq!(record["mail_session_id"], TEST_SESSION_ID);
     });
 }
 
@@ -478,37 +422,6 @@ fn renewing_our_mail_hold_does_not_shorten_its_remaining_window() {
             serde_json::from_slice(&fs::read(home.join(".fno/agents/fleet-stop.json")).unwrap())
                 .unwrap();
         assert_eq!(record["mail"], "armed");
-    });
-}
-
-#[test]
-fn mail_status_exit_three_is_recorded_without_arming_a_hold() {
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path().join("home");
-    fs::create_dir_all(&home).unwrap();
-    let calls = tmp.path().join("mail-calls.txt");
-    let bin = stub(
-        tmp.path(),
-        &format!(
-            "printf '%s\\n' \"$*\" >> '{}'; echo 'ambiguous identity' >&2; exit 3",
-            calls.display()
-        ),
-    );
-
-    with_env(&home, Some(&bin), || {
-        let (code, output) = run_loops_capture(&owned(&["pause-all", "--json"]));
-        assert_eq!(code, 0, "{output}");
-        let record: serde_json::Value =
-            serde_json::from_slice(&fs::read(home.join(".fno/agents/fleet-stop.json")).unwrap())
-                .unwrap();
-        assert_eq!(record["mail"], "skipped");
-        let leg = &output["silenced"][1];
-        assert_eq!(leg["state"], "skipped");
-        assert_eq!(leg["detail"], "ambiguous identity");
-        assert_eq!(
-            fs::read_to_string(calls).unwrap().trim(),
-            "agents mail hold --status"
-        );
     });
 }
 

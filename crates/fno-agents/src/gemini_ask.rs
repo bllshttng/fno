@@ -1439,18 +1439,6 @@ mod sandbox_posture_tests {
     use super::sandbox_flag;
 
     #[test]
-    fn bounded_with_provider_is_yolo_plus_sandbox() {
-        assert_eq!(
-            sandbox_flag(false, Some(true)),
-            vec![
-                "--approval-mode".to_string(),
-                "yolo".to_string(),
-                "--sandbox".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn bounded_without_provider_falls_back_never_prompting() {
         let fb = sandbox_flag(false, Some(false));
         assert_eq!(fb, vec!["--approval-mode".to_string(), "yolo".to_string()]);

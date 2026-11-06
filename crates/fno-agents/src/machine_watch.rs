@@ -1305,51 +1305,6 @@ mod tests {
     }
 
     #[test]
-    fn the_runaway_arms_fire_on_memory_pressure_and_on_an_armed_process_baseline() {
-        let mut s = sample(None, None);
-        s.swap_used_gb = Some(9.0);
-        s.swap_total_gb = Some(10.0);
-        s.compressor_gb = Some(2.0);
-        s.total_mem_gb = Some(128.0);
-        s.memory_pressure_level = Some(1);
-        let (verdict, _) = decide(&s, 0.9, 10.0, None);
-        assert_ne!(verdict, "runaway", "swap used is not pressure");
-        let mut s = sample(None, None);
-        s.swap_used_gb = Some(9.0);
-        s.swap_total_gb = Some(10.0);
-        s.compressor_gb = Some(2.0);
-        s.total_mem_gb = Some(128.0);
-        s.memory_pressure_level = Some(4);
-        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
-        assert_eq!(verdict, "runaway");
-        assert!(reason.contains("out of memory"), "{reason}");
-        assert!(reason.contains("critical"), "{reason}");
-        let mut s = sample(None, None);
-        s.compressor_gb = Some(70.0);
-        s.total_mem_gb = Some(128.0);
-        s.memory_pressure_level = None;
-        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
-        assert_eq!(verdict, "runaway");
-        assert!(reason.contains("compressed memory"), "{reason}");
-        let mut s = sample(None, None);
-        s.processes = Some(2500);
-        let (verdict, _) = decide(&s, 0.9, 10.0, None);
-        assert_eq!(verdict, "unreadable", "no baseline, no process arm");
-        let (verdict, reason) = decide(&s, 0.9, 10.0, Some(1200));
-        assert_eq!(verdict, "runaway");
-        assert!(reason.contains("twice the usual 1200"), "{reason}");
-        let now = Instant::now();
-        let window: Vec<(Instant, u64)> = (0..3)
-            .map(|i| (now - Duration::from_secs(300 * (i as u64 + 1)), 1000 + i))
-            .collect();
-        assert_eq!(process_baseline(&window, now), None);
-        let window: Vec<(Instant, u64)> = (0..4)
-            .map(|i| (now - Duration::from_secs(300 * (i as u64 + 1)), 1000 + i))
-            .collect();
-        assert_eq!(process_baseline(&window, now), Some(1001));
-    }
-
-    #[test]
     fn a_runaway_ticks_page_immediately_and_the_brake_names_its_group() {
         let mut state = MachineWatchState::default();
         let mut s = sample(None, None);

@@ -50,12 +50,12 @@ The path rule classes each `*.py` and `crates/*.rs` file with a declaration. A f
 
 `cli/src/fno/paths_testing.py` holds one declaration and stays unmapped as `-`.
 
-| Key | Scope | Collected at 7ed2466c8c | Target | Declarations | Ledger |
-|---|---|---:|---:|---:|---|
-| G1 | graph, backlog, claims and the Python remainder | 1,845 | 922 | 1,838 | [g1-campaign.md](g1-campaign.md) |
-| G2 | spawn, harness adapters, providers, hooks and the rest of fno-agents | 2,704 | 1,352 | 2,752 | g2-campaign.md |
-| G3 | loopcheck, finalize, daemon, lead, PR, review, merge, mail, events, plan and target | 2,511 | 1,255 | 2,499 | g3-campaign.md |
-| G4 | the fno mux crate | 2,733 | 1,366 | 2,744 | g4-campaign.md |
+| Key | Scope | Collected at 7ed2466c8c | Target | Declarations | Round-two decls at `fa4eb5d2189` | Ledger |
+|---|---|---:|---:|---:|---:|---|
+| G1 | graph, backlog, claims and the Python remainder | 1,845 | 922 | 1,838 | pending | [g1-campaign.md](g1-campaign.md) |
+| G2 | spawn, harness adapters, providers, hooks and the rest of fno-agents | 2,704 | 1,352 | 2,752 | 2,020 | g2-campaign.md |
+| G3 | loopcheck, finalize, daemon, lead, PR, review, merge, mail, events, plan and target | 2,511 | 1,255 | 2,499 | pending | g3-campaign.md |
+| G4 | the fno mux crate | 2,733 | 1,366 | 2,744 | pending | g4-campaign.md |
 
 The K1 to K10 campaigns of 2026-09-28 are retired. K1, K2, K8 and K9 kept their ledgers in this folder.
 

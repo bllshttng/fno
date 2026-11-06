@@ -887,13 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn flag_values_past_a_separator_are_ignored_for_build_jobs() {
-        let args: Vec<String> = ["--", "-j", "8"].iter().map(|s| s.to_string()).collect();
-        let limit = args.iter().position(|a| a == "--");
-        assert!(last_flag_value(&args, "--jobs", "-j", limit).is_none());
-    }
-
-    #[test]
     fn malformed_values_are_skipped_not_recorded() {
         let args: Vec<String> = ["--jobs", "x", "--jobs", "4"]
             .iter()

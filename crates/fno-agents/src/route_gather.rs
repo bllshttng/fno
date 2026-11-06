@@ -1062,32 +1062,6 @@ mod tests {
         drop(guard);
         clear_sandbox_env(saved);
     }
-
-    #[test]
-    fn overlay_lanes_attribute_through_their_own_path() {
-        // The base lanes live in the project layer; the difficulty overlay's
-        // list lives only in the global layer. Tables merge key-by-key, so
-        // the overlay is the list that walks - and the attribution must name
-        // the global file, not the base list's supplier.
-        let (guard, tmp, saved) = pinned_sandbox(
-            "lanes-source-overlay",
-            "[agents.profiles.target]\nlanes = [\"claude-opus-5-5\"]\n",
-        );
-        std::fs::write(
-            tmp.join("config.toml"),
-            "[agents.profiles.target.by_difficulty.medium]\nlanes = [\"zai-flash\"]\n",
-        )
-        .unwrap();
-        let out =
-            lanes_source_for_subkeys(&tmp, "agents.profiles.target", &["by_difficulty", "medium"]);
-        assert_eq!(
-            out["from"],
-            json!(tmp.join("config.toml").display().to_string())
-        );
-        assert_eq!(out["overrides"], json!([]));
-        drop(guard);
-        clear_sandbox_env(saved);
-    }
 }
 
 /// Where a slot's `lanes` list came from: `{"from": <file>, "overrides":

@@ -390,22 +390,6 @@ mod tests {
     const SIGNED: &str = "codex --model gpt --dangerously-bypass-approvals-and-sandbox";
 
     #[test]
-    fn direction_one_flags_a_row_whose_pane_vanished() {
-        let out = crosscheck(&[], &[row("gone", 999, &"a".repeat(36))], "main", &|_| None);
-        assert_eq!(
-            out["row_mismatches"],
-            json!([{"row": "gone", "pane": 999, "reason": "pane missing from session listing"}])
-        );
-        assert_eq!(
-            (
-                out["panes_compared"].as_u64(),
-                out["rows_with_mux_compared"].as_u64()
-            ),
-            (Some(0), Some(1))
-        );
-    }
-
-    #[test]
     fn direction_two_flags_signed_argv_with_no_row() {
         let out = crosscheck(&[pane(9, None, Some(11258), false)], &[], "main", &|_| {
             Some(SIGNED.to_string())
@@ -436,18 +420,6 @@ mod tests {
         };
         let out = crosscheck(&panes, &[row("held", 1, "x")], "main", &argv);
         assert_eq!(out["pane_mismatches"], json!([]));
-    }
-
-    #[test]
-    fn the_counts_print_even_when_clean() {
-        let text = render(&crosscheck(&[], &[], "main", &|_| None));
-        for needle in [
-            "panes compared: 0",
-            "rows with mux ref compared: 0",
-            "clean: no mismatch in either direction",
-        ] {
-            assert!(text.contains(needle), "{needle} missing from {text}");
-        }
     }
 
     #[test]

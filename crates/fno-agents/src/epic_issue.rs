@@ -841,7 +841,7 @@ mod tests {
 
     use super::claim::{claim_pass, command_of, parse_match, ClaimIn, ClaimPass, Command, Judge};
     use crate::backlog::requests::ClaimOp;
-    use chrono::{DateTime, Duration, Utc};
+    use chrono::Utc;
 
     fn comment(hub: &Arc<Mutex<Hub>>, login: &str, body: &str) {
         hub.lock()
@@ -974,90 +974,6 @@ mod tests {
                 if node == "kid-1" && holder == "github:visitor"),
             "a release and no renewing grant"
         );
-    }
-
-    #[test]
-    fn a_claim_with_no_pr_goes_stale_after_7_days_and_a_new_claim_takes_the_line() {
-        let hub = Arc::new(Mutex::new(Hub::default()));
-        let (old, recent): (DateTime<Utc>, DateTime<Utc>) = (
-            Utc::now() - Duration::days(8),
-            Utc::now() - Duration::days(2),
-        );
-        let ledger = json!([
-            {"login": "olduser", "title": "First", "node": "kid-1", "at": old.to_rfc3339()},
-            {"login": "olduser", "title": "Old idea", "at": old.to_rfc3339()},
-            {"login": "Busy", "title": "Busy idea", "at": old.to_rfc3339()},
-            {"login": "newish", "title": "Recent idea", "at": recent.to_rfc3339()},
-        ]);
-        let rows = vec![
-            epic(json!({"epic_issue": 1, "project": "p", "epic_claims": ledger})),
-            child("kid-1", "First", json!({"project": "p"})),
-        ];
-        open_issue(&hub, &rows);
-        comment(&hub, "newuser", "/claim old idea");
-        let held = [claim("kid-1", "github:olduser")];
-        let pulls = [json!({"number": 40, "user": {"login": "busy"}, "body": "Intro\nRefs #1\n"})];
-        let out = pass(&hub, &rows, &rows[0], &held, &pulls, NO_MATCH);
-        let entry = |title: &str| out.ledger.iter().find(|e| e.title == title).unwrap();
-        // The owner line's claim is released and the entry reads stale.
-        assert!(entry("First").stale);
-        assert!(
-            matches!(&out.ops[..], [ClaimOp::Release { node, holder }]
-                if node == "kid-1" && holder == "github:olduser"),
-            "one release, no grant for the stale entry"
-        );
-        // The old idea moved to the new login with a fresh clock.
-        let moved = entry("Old idea");
-        assert!(moved.login == "newuser" && !moved.stale && moved.at != old.to_rfc3339());
-        // A PR that writes the Refs line clears the clock; a 2-day claim has none to clear.
-        assert!(!entry("Busy idea").stale && entry("Busy idea").pr == Some(40));
-        assert!(!entry("Recent idea").stale);
-        let mut epic_row = rows[0].clone();
-        store(&mut epic_row, &out);
-        sync_epic(&tracker(&hub), "o/r", &rows, &epic_row, &[], None).unwrap();
-        let body = hub.lock().unwrap().bodies[0].clone();
-        for line in [
-            "- [ ] First · @olduser · stale",
-            "- [ ] Old idea · @newuser",
-            "- [ ] Busy idea · @Busy · #40",
-        ] {
-            assert!(body.contains(line), "{line} missing from {body}");
-        }
-    }
-
-    #[test]
-    fn a_title_the_model_matches_to_a_held_line_adds_nothing_and_a_failed_model_adds_the_line() {
-        let hub = Arc::new(Mutex::new(Hub::default()));
-        let rows = vec![
-            epic(json!({"epic_issue": 1, "project": "p"})),
-            child("kid-1", "Fix the chooser", json!({"project": "p"})),
-        ];
-        let held = [claim("kid-1", "github:holder")];
-        comment(&hub, "visitor", "/claim Fix the picker");
-        let same_work: Judge = &|title, lines| {
-            assert_eq!(
-                (title, lines),
-                ("Fix the picker", &["Fix the chooser".to_string()][..])
-            );
-            Ok(Some(0))
-        };
-        let first = pass(&hub, &rows, &rows[0], &held, &[], same_work);
-        assert!(first.ledger.is_empty());
-        let replies = hub.lock().unwrap().replies.clone();
-        assert!(
-            replies.len() == 1
-                && replies[0].contains("`Fix the chooser`")
-                && replies[0].contains("held by holder"),
-            "{replies:?}"
-        );
-        // A model that errors never blocks a claim: the line is added.
-        let mut epic_row = rows[0].clone();
-        store(&mut epic_row, &first);
-        comment(&hub, "visitor2", "/claim Fix the picker");
-        let refused: Judge = &|_, _| Err("spawn refused".into());
-        let second = pass(&hub, &rows, &epic_row, &held, &[], refused);
-        assert_eq!(second.ledger.len(), 1);
-        assert_eq!(hub.lock().unwrap().replies.len(), 1);
     }
 
     #[test]

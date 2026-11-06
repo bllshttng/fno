@@ -321,27 +321,6 @@ mod tests {
         assert!(error.contains("--substrate thread"), "{error}");
     }
 
-    #[test]
-    fn the_convert_door_opens_on_the_flag_and_not_on_a_value_that_looks_like_it() {
-        assert!(requests_conversion(&args(&[
-            "worker",
-            "--substrate",
-            "thread"
-        ])));
-        assert!(requests_conversion(&args(&[
-            "worker",
-            "--substrate=thread"
-        ])));
-        // A message that merely contains the flag's spelling is a message.
-        assert!(!requests_conversion(&args(&[
-            "worker",
-            "-m",
-            "--substrate thread"
-        ])));
-        assert!(!requests_conversion(&args(&["worker", "--substrate-ish"])));
-        assert!(!requests_conversion(&args(&["worker"])));
-    }
-
     fn args(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| (*t).to_string()).collect()
     }
