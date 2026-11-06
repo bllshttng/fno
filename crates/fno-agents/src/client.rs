@@ -1460,7 +1460,6 @@ mod status_error_tests {
                 };
                 let resp = Response::err(1, ErrorCode::InvalidParams, message);
                 let _ = write_response(&mut stream, &resp).await;
-                let _ = stream.shutdown().await;
             }
         })
     }
