@@ -828,10 +828,11 @@ pub(crate) fn ledger_file_rows(ledger_path: &Path) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Sum cost_usd for entries matching session_id. Tolerate missing/malformed as 0.
-pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> f64 {
+/// Sum numeric cost_usd values for entries matching either session identity.
+pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> Option<f64> {
     let entries = ledger_file_rows(ledger_path);
     let mut total = 0.0_f64;
+    let mut found = false;
     for entry in &entries {
         // Either key: new rows carry fno_id, pre-rename rows only session_id.
         let matches = entry.get("fno_id").and_then(|v| v.as_str()) == Some(session_id)
@@ -839,10 +840,11 @@ pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> 
         if matches {
             if let Some(c) = entry.get("cost_usd").and_then(|v| v.as_f64()) {
                 total += c;
+                found = true;
             }
         }
     }
-    total
+    found.then_some(total)
 }
 
 // ── transcript parsing ────────────────────────────────────────────────────────

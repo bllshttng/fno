@@ -112,8 +112,15 @@ pub(super) fn check_budget(
             })
         }
         ResolvedCap::Valid(cap) => {
-            if let Some(session_id) = &manifest.session_id {
-                let cost = session_cost_from_ledger(ledger_path, session_id);
+            let meter = crate::team_spend::session_meter(
+                &crate::paths::AgentsHome::from_env()
+                    .otel_dir()
+                    .join("otel.db"),
+                ledger_path,
+                manifest.session_id.as_deref(),
+                manifest.harness_session_id.as_deref(),
+            );
+            if let Some(cost) = meter.usd() {
                 if cost >= cap {
                     return Some(BudgetTrip::Cost {
                         cap_usd: Some(cap),

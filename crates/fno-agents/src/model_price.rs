@@ -802,6 +802,15 @@ mod tests {
             None,
             "2026-10-02T00:00:00Z",
         );
+        assert!(matches!(
+            crate::team_spend::session_meter(
+                &dir.join("absent-otel.db"),
+                &dir.join("absent-ledger.json"),
+                None,
+                Some("sess-cost-1")
+            ),
+            crate::team_spend::SessionMeter::Estimated(usd) if usd > 0.0
+        ));
         let mut e = RegistryEntry::default();
         e.harness_session_id = Some("sess-cost-1".into());
         e.context_used_pct = Some(48);
