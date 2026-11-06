@@ -627,9 +627,8 @@ fn run_helper(
     if args.no_merge {
         cmd.env("TARGET_NO_MERGE", "1");
     }
-    if args.advisory {
-        cmd.env("TARGET_ADVISORY", "1");
-    }
+    // Advisory removes a PR obligation, so only the explicit flag grants it.
+    cmd.env("TARGET_ADVISORY", if args.advisory { "1" } else { "" });
     // The real --steps flag: the stop gate's steps mode, stamped for the
     // helper process. No environment variable ahead of it.
     if args.steps {
@@ -1227,24 +1226,38 @@ mod advisory_flag_tests {
         std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
         std::fs::write(
             &helper,
-            "#!/bin/bash\nprintf '%s' \"${TARGET_ADVISORY:-unset}\" > \"$(dirname \"$0\")/advisory.txt\"\n",
+            "#!/bin/bash\nprintf '%s' \"${TARGET_ADVISORY-unset}\" > \"$(dirname \"$0\")/advisory.txt\"\n",
         )
         .unwrap();
         let previous_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
+        let previous_advisory = std::env::var_os("TARGET_ADVISORY");
         std::env::set_var("CLAUDE_PLUGIN_ROOT", dir.path());
-        let result = run_helper(&args, None, None, false, None);
+        std::env::set_var("TARGET_ADVISORY", "0");
+        let explicit_result = run_helper(&args, None, None, false, None);
+        let explicit_value =
+            std::fs::read_to_string(dir.path().join("hooks/helpers/advisory.txt")).unwrap();
+        std::env::set_var("TARGET_ADVISORY", "1");
+        let default_result = run_helper(&default_args, None, None, false, None);
+        let default_value =
+            std::fs::read_to_string(dir.path().join("hooks/helpers/advisory.txt")).unwrap();
         match previous_root {
             Some(root) => std::env::set_var("CLAUDE_PLUGIN_ROOT", root),
             None => std::env::remove_var("CLAUDE_PLUGIN_ROOT"),
         }
+        match previous_advisory {
+            Some(value) => std::env::set_var("TARGET_ADVISORY", value),
+            None => std::env::remove_var("TARGET_ADVISORY"),
+        }
         assert_eq!(
-            result.unwrap_or_else(|error| panic!("{}", error.message)),
+            explicit_result.unwrap_or_else(|error| panic!("{}", error.message)),
             0
         );
+        assert_eq!(explicit_value, "1");
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("hooks/helpers/advisory.txt")).unwrap(),
-            "1"
+            default_result.unwrap_or_else(|error| panic!("{}", error.message)),
+            0
         );
+        assert_eq!(default_value, "");
     }
 }
 
