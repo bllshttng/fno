@@ -2495,9 +2495,9 @@ mod tests {
 
     #[test]
     fn native_fno_agents_handoff_replaces_front_pid() {
-        const TEST_PID_PATH: &str = "FNO_TEST_FRONT_HANDOFF_PID_PATH";
+        const TEST_PID_PATH: &str = "TEST_FRONT_HANDOFF_PID_PATH";
         if std::env::var_os(TEST_PID_PATH).is_some() {
-            let script = "printf '%s' \"$$\" > \"$FNO_TEST_FRONT_HANDOFF_PID_PATH\" && exit 19";
+            let script = "printf '%s' \"$$\" > \"$TEST_FRONT_HANDOFF_PID_PATH\" && exit 19";
             let rest = [OsString::from(script)];
             std::process::exit(fno_agents_exec_bin(
                 "test native handoff",
