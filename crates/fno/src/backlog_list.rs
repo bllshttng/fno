@@ -599,7 +599,8 @@ mod tests {
             stale: None,
         };
         assert_eq!(numbered.json_row()["number"], json!("x-5555"));
-        let cols: Vec<&str> = numbered.tsv_row().split('\t').collect();
+        let tsv = numbered.tsv_row();
+        let cols: Vec<&str> = tsv.split('\t').collect();
         assert_eq!(cols[1], "x-5555");
         let bare = Hit {
             card: clone_card(),
