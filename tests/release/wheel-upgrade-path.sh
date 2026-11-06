@@ -62,8 +62,7 @@ export PATH="$HOME/.local/bin:$PATH"
 export UV_PRERELEASE=allow
 fno update
 # The first ordinary call after the update performs the move and execs the
-# binary front door. FNO_PY unset: the moved install keeps the tool only when
-# a forwarded command still needs fno-py (the candidate wheel ships it).
+# binary front door. The candidate wheel ships only the binaries.
 "$HOME/.local/bin/fno" --version
 VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
 [[ "$VER" == "$CANDIDATE" ]] || { echo "leg A: fno --version printed $VER, want $CANDIDATE"; exit 1; }

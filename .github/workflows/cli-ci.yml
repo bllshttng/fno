@@ -412,9 +412,11 @@ jobs:
   # holds the per-test timeout, and
   # tests/py/unit/test_pytest_timeout_configured.py keeps it and every
   # timeout marker at or under one fifth of the 12-minute step cap.
+  # tests/py drives the built binaries, so a crates-only PR (the seam lane)
+  # runs it too.
   tests-py:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.python_full == 'true' }}
+    if: ${{ !cancelled() && (needs.pr-affected.outputs.python_full == 'true' || needs.pr-affected.outputs.python_seam == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -530,7 +532,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-seam "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Build fno-agents debug binary*,Build the fno front door*,Scoped @requires_rust*,Keyless*,registry-miss heal*'
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Build fno-agents debug binary*,Build the fno front door*,registry-miss heal*'
 
   # Keeps the required check named `smoke`. Branch protection and the review
   # gate key on that exact name, so publishing only `tests-py` and

@@ -24,9 +24,7 @@ fi
 
 # `context` claims natively now: the front door owns both spellings
 # (classify_context) and execs fno-agents context-run, so reach it through
-# `fno` and exit unreadable when no binary exists. The old `fno-py` first
-# preference died with the Python leg: a wheel without the command answers
-# nothing, and a python registration would sit behind the native intercept.
+# `fno` and exit unreadable when no binary exists.
 if command -v fno >/dev/null 2>&1; then
   _ctx_door=fno
 else

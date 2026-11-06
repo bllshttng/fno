@@ -669,7 +669,9 @@ fn unclaimed(args: &[OsString]) -> FrontDoor {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     let message = match words.as_slice() {
-        [root, rest, ..] if !root.starts_with('-') => {
+        // Only a live root is a group worth pointing at; an unknown first
+        // word would send the caller to `fno <typo> --help`, which refuses too.
+        [root, rest, ..] if crate::command_names::live_roots().contains(&root.as_str()) => {
             format!("fno {root}: no command `{rest}`. Run fno {root} --help.")
         }
         [] => "fno: no command given. Run fno --help.".to_string(),
@@ -1058,6 +1060,10 @@ mod tests {
         assert_eq!(
             usage(&["config", "frob"]),
             "fno config: no command `frob`. Run fno config --help."
+        );
+        assert_eq!(
+            usage(&["serach", "anything"]),
+            "fno: no command `serach`. Run fno --help."
         );
         // A non-UTF-8 payload refuses by its lossy spelling, never a panic.
         let mut raw = os(&["config"]);
