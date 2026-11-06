@@ -2099,6 +2099,24 @@ pub fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
     crate::release_install::floor_refusal(args)
 }
 
+/// The install channel comes from the receipt (the running exe beside its uv
+/// receipt), never from the cwd. A wheel or binary install run inside any
+/// footnote checkout follows the release path even when the pin resolved that
+/// checkout: the 2026-11-06 repro saw such a run fast-forward the checkout
+/// the shell sat in, replace the wheel's links, and leave fno-agents missing.
+/// Deliberate input (`--source`, `$FNO_SOURCE`) and a source-channel exe keep
+/// the source path, so only the cwd-derived pin origin yields.
+pub(crate) fn receipt_channel_wins(
+    channel: &crate::release_install::InstallChannel,
+    pin_origin: Option<&str>,
+) -> bool {
+    matches!(
+        channel,
+        crate::release_install::InstallChannel::Wheel { .. }
+            | crate::release_install::InstallChannel::Binary
+    ) && pin_origin == Some("checkout")
+}
+
 /// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
@@ -2155,13 +2173,17 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             return 1;
         }
     };
+    let channel = crate::release_install::current_channel();
+    if receipt_channel_wins(&channel, pin.get("origin").and_then(Value::as_str)) {
+        return crate::release_install::update(&channel, flags.dry_run);
+    }
     if is_release_install(&pin, read_marker(&installed_rev_file()).as_deref()) {
-        return match crate::release_install::current_channel() {
+        return match &channel {
             crate::release_install::InstallChannel::Other => {
                 eprintln!("fno update: FAILED: this fno is neither a release install nor a source checkout. Install the release with: curl -fsSL fno.sh | sh");
                 1
             }
-            channel => crate::release_install::update(&channel, flags.dry_run),
+            _ => crate::release_install::update(&channel, flags.dry_run),
         };
     }
     if pin.get("decision").and_then(Value::as_str) == Some("refuse") {
