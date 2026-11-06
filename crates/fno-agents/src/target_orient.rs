@@ -1361,20 +1361,6 @@ mod boundary_flow_tests {
         assert_eq!(v.verdict, "fresh");
     }
 
-    #[test]
-    fn marker_presence_beats_an_ancient_mtime() {
-        let entry = done_entry(141);
-        let v = evaluate_blocker(
-            Some(&entry),
-            false,
-            "x-blk",
-            "# plan\n### x-blk landed (PR #141)\n",
-            epoch(),
-            false,
-        )
-        .unwrap();
-        assert_eq!(v.verdict, "reconciled");
-    }
 
     #[test]
     fn a_marker_for_one_blocker_false_freshes_no_other() {

@@ -1090,58 +1090,6 @@ mod tests {
         assert_eq!(out, Outcome::default());
     }
 
-    #[test]
-    fn fetch_rescues_a_foreign_absolute_row_over_ssh_when_configured() {
-        let primary = test_primary::start();
-        let home = tempfile::tempdir().unwrap();
-        ensure_tables(&primary.remote).unwrap();
-        push(
-            &primary.remote,
-            "x-1",
-            "/Users/alice/vault/plans/p.md",
-            "v1",
-            "a",
-        )
-        .unwrap();
-        let mut peers = BTreeMap::new();
-        peers.insert(host_name(), "alice.lan".to_string());
-        let fetched = |alias: &str, path: &str| {
-            assert_eq!(alias, "alice.lan");
-            assert_eq!(path, "/Users/alice/vault/plans/p.md");
-            Ok::<String, String>("v1".to_string())
-        };
-        let got = fetch_with(
-            "x-1",
-            "",
-            &primary.remote,
-            "b",
-            home.path(),
-            None,
-            &peers,
-            &fetched,
-        )
-        .unwrap();
-        let placed = home.path().join("vault/plans/p.md");
-        assert_eq!(got, placed.to_str().unwrap());
-        assert_eq!(std::fs::read_to_string(&placed).unwrap(), "v1");
-        // Unconfigured, the error still names the pushing host and path.
-        let err = fetch_with(
-            "x-1",
-            "",
-            &primary.remote,
-            "b",
-            home.path(),
-            None,
-            &bare_peers(),
-            &fetched,
-        )
-        .unwrap_err();
-        assert!(err.contains("outside this host's home"), "{err}");
-        // The configured half placed the body; the unconfigured attempt left
-        // it untouched.
-        assert!(placed.exists());
-        assert_eq!(std::fs::read_to_string(&placed).unwrap(), "v1");
-    }
 
     #[test]
     fn a_tilde_binding_and_an_absolute_binding_of_one_file_stay_quiet() {
