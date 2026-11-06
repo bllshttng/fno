@@ -30,7 +30,7 @@
 #   message=<final message to pass verbatim to the spawn/host command>
 #
 # Locked decisions honored:
-#   4. provider = explicit -> config.accounts (resolve_dispatch_target) -> claude
+#   4. provider = explicit -> DISPATCH_PROVIDER_RESOLVER -> claude
 #   8. the message is one unit; the SKILL builds `fno agents spawn <name> "<msg>"`
 #      with name POSITIONAL.
 
@@ -463,10 +463,9 @@ fi
 # Resolver is test-injectable via PROJECT_ROOT_RESOLVER (mirrors the provider and
 # slug resolvers): a command taking the project name and printing ONE line in the
 # protocol `ok\t<canonical>\t<abspath>` | `notfound\t<csv of known names>` |
-# `error\t<message>`. Default = the shipped fno python driving the native
-# resolver (the project-family port: `spawn-overlay project resolve` folds short_name ->
-# canonical; `project_root_from_settings` maps canonical -> abs path and stays
-# in Python with the graph).
+# `error\t<message>`. Default = fno-agents itself: `spawn-overlay project resolve`
+# folds short_name -> canonical, and `backlog project-root` maps canonical -> abs
+# path.
 PROJECT_CANON=""
 RESOLVED_CWD=""
 
@@ -476,64 +475,34 @@ resolve_project() {
     "$PROJECT_ROOT_RESOLVER" "$_proj" 2>/dev/null
     return 0
   fi
-  local py_entry shebang _uv_dir
-  # The shipped `fno` may be the Rust mux binary (no python shebang), in which
-  # case it cannot import the fno package. The Python CLI is the `fno-py` console
-  # script, which a cargo-only install does NOT put on PATH (only ~/.cargo/bin/fno
-  # is) - the mux resolves it at <uv tool dir>/fno/bin/fno-py
-  # (crates/fno/src/bootstrap.rs), so mirror that rather than requiring fno-py on
-  # PATH. Then fall back to `fno` itself when it is a python entrypoint (older
-  # single-binary installs). WAVE 2.
-  py_entry=""
-  if command -v fno-py >/dev/null 2>&1; then
-    py_entry="$(command -v fno-py)"
-  elif command -v uv >/dev/null 2>&1; then
-    _uv_dir="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null || true)"
-    _uv_dir="${_uv_dir%$'\r'}"
-    [[ -n "$_uv_dir" && -x "$_uv_dir/fno/bin/fno-py" ]] && py_entry="$_uv_dir/fno/bin/fno-py"
+  local bin out err errf rc canon path known
+  bin="${FNO_AGENTS_BIN:-}"
+  [[ -n "$bin" && -x "$bin" ]] || bin="$(command -v fno-agents 2>/dev/null || true)"
+  [[ -n "$bin" ]] || { printf 'error\tfno-agents binary not found; cannot resolve project\n'; return 0; }
+  errf="$(mktemp "${TMPDIR:-/tmp}/normalize-project-XXXXXX")" || { printf 'error\tproject resolver crashed\n'; return 0; }
+  out="$("$bin" spawn-overlay project resolve "$_proj" 2>"$errf")"
+  rc=$?
+  err="$(cat "$errf" 2>/dev/null)"
+  command -p rm -f "$errf"
+  err="${err#"${err%%[![:space:]]*}"}"
+  err="${err%"${err##*[![:space:]]}"}"
+  if [[ "$rc" -ne 0 ]]; then
+    if [[ "$err" == *"known canonical names"* && "$err" == *"["*"]"* ]]; then
+      known="${err##*\[}"
+      known="${known%]*}"
+      known="${known//\'/}"
+      printf 'notfound\t%s\n' "${known// /}"
+    else
+      printf 'error\t%s\n' "${err:-resolve exited $rc}"
+    fi
+    return 0
   fi
-  if [[ -z "$py_entry" ]] && command -v fno >/dev/null 2>&1; then
-    py_entry="$(command -v fno)"
-  fi
-  [[ -n "$py_entry" ]] || { printf 'error\tfno not on PATH (cannot resolve --project %s)\n' "$_proj"; return 0; }
-  # Strip a trailing CR: a CRLF-lined entrypoint (WSL / git autocrlf) would
-  # leave \r on the shebang and break the interpreter exec.
-  shebang="$(head -1 "$py_entry" 2>/dev/null | sed 's/^#![[:space:]]*//' | tr -d '\r')"
-  # Same interpreter guard as resolve_from_config: only a python entrypoint can
-  # import the fno package. A shell-wrapper / non-python entrypoint means the
-  # resolver is unreachable.
-  [[ -n "$shebang" && "$shebang" == *python* ]] || { printf 'error\tproject resolver unavailable (%s is not a python entrypoint)\n' "$py_entry"; return 0; }
-  local py_cmd=()
-  read -r -a py_cmd <<< "$shebang"
-  { [[ -x "${py_cmd[0]}" ]] || command -v "${py_cmd[0]}" >/dev/null 2>&1; } || { printf 'error\tproject resolver interpreter not executable\n'; return 0; }
-  "${py_cmd[@]}" -c 'import sys, subprocess
-proj = sys.argv[1]
-try:
-    from fno.rust_binary import resolve_binary
-except Exception as e:
-    print("error\tproject resolver import failed: %s" % e); sys.exit(0)
-binary = resolve_binary()
-if binary is None:
-    print("error\tfno-agents binary not found; cannot resolve project"); sys.exit(0)
-proc = subprocess.run([str(binary), "spawn-overlay", "project", "resolve", proj],
-                      capture_output=True, text=True)
-if proc.returncode != 0:
-    err = proc.stderr.strip()
-    if "known canonical names" in err:
-        known = err.rsplit("[", 1)[1].rsplit("]", 1)[0].replace("'\''", "").replace(" ", "")
-        print("notfound\t" + known)
-    else:
-        print("error\t%s" % (err or "resolve exited %d" % proc.returncode))
-    sys.exit(0)
-canon = proc.stdout.strip()
-try:
-    from fno.graph._intake import project_root_from_settings
-except Exception as e:
-    print("error\tproject root resolver import failed: %s" % e); sys.exit(0)
-path = project_root_from_settings(canon)
-if not path:
-    print("error\tproject %r resolved to no path in settings" % canon); sys.exit(0)
-print("ok\t%s\t%s" % (canon, path))' "$_proj" 2>/dev/null || { printf 'error\tproject resolver crashed\n'; return 0; }
+  canon="$(printf '%s' "$out" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  path="$("$bin" backlog project-root "$canon" 2>/dev/null)" || path=""
+  path="${path#"${path%%[![:space:]]*}"}"
+  path="${path%"${path##*[![:space:]]}"}"
+  [[ -n "$path" ]] || { printf "error\tproject '%s' resolved to no path in settings\n" "$canon"; return 0; }
+  printf 'ok\t%s\t%s\n' "$canon" "$path"
 }
 
 # -C/--project was passed but its value is empty (a bare trailing `-C`, or an
@@ -645,9 +614,7 @@ elif [[ -n "$NODE" ]]; then
   # assembling a fourth copy of the policy here. The owner budgets the ASSEMBLED
   # name against the runtime's 64-char limit and spends that budget on the slug,
   # which a local `cut -c1-64` cannot do.
-  # FNO_AGENTS_RUNTIME=python pins the Python dispatch: an ambient `=rust` routes
-  # EVERY `fno agents` command to the binary, which has no `name` port. Exit 3 (not
-  # 2) is the naming refusal - Click spends 2 on usage errors including "no such
+  # Exit 3 (not 2) is the naming refusal - Click spends 2 on usage errors including "no such
   # command", so an `fno` too old to know this command would otherwise read as
   # "unrepresentable" and refuse every node.
   # Streams are merged so a refusal's cause survives; the exit code says which
@@ -655,7 +622,7 @@ elif [[ -n "$NODE" ]]; then
   # so a name is adopted only when the WHOLE capture matches the runtime contract
   # - `grep -q` would not do: it matches per line, so a warning followed by a
   # valid name would pass the guard and then be adopted in full.
-  _name_out="$(FNO_AGENTS_RUNTIME=python fno agents registry name "$command" "$NODE" --slug "$_node_slug" 2>&1)"
+  _name_out="$(fno agents registry name "$command" "$NODE" --slug "$_node_slug" 2>&1)"
   _name_rc=$?
   agent_name=""
   [[ "$_name_rc" -eq 0 && "$_name_out" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && agent_name="$_name_out"
@@ -702,57 +669,19 @@ else
 fi
 
 # ---- 4. provider resolution (defer to config; never reinvent routing) --------
-# explicit --provider (validated) wins; else defer to the shipped
-# resolve_dispatch_target via fno's own interpreter; else default claude. A
-# combo (rotation list) does NOT map to a single --provider, so we only adopt a
-# concrete provider_id and otherwise fall back - combo/per-task routing is a
-# documented deferred fast-follow that belongs in the provider layer.
+# explicit --provider (validated) wins; else the injected resolver; else
+# default claude.
 is_valid_provider() {
   case " $VALID_PROVIDERS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
 resolve_from_config() {
   # Test-injectable: DISPATCH_PROVIDER_RESOLVER is a command taking the agent
-  # name and printing a provider (or empty). Default = the real resolver.
+  # name and printing a provider (or empty). With none set this prints nothing.
   if [[ -n "${DISPATCH_PROVIDER_RESOLVER:-}" ]]; then
     "$DISPATCH_PROVIDER_RESOLVER" "$1" 2>/dev/null || true
     return 0
   fi
-  local fno_bin shebang
-  fno_bin="$(command -v fno 2>/dev/null)" || return 0
-  shebang="$(head -1 "$fno_bin" 2>/dev/null | sed 's/^#![[:space:]]*//')"
-  # Only a python interpreter can import the fno package. A shell-wrapper
-  # fno (e.g. shebang "/bin/bash") or an empty shebang means the resolver is
-  # unreachable from here - fall back to claude rather than running the Python
-  # under the wrong interpreter.
-  [[ -n "$shebang" && "$shebang" == *python* ]] || return 0
-  # Split the shebang into an argv array so "/usr/bin/env python3" (interpreter
-  # + arg) runs correctly; a bare quoted "$shebang" would be treated as one path
-  # and both -x and exec would fail. read -r -a is bash 3.2 safe.
-  local py_cmd=()
-  read -r -a py_cmd <<< "$shebang"
-  { [[ -x "${py_cmd[0]}" ]] || command -v "${py_cmd[0]}" >/dev/null 2>&1; } || return 0
-  # resolve_dispatch_target returns an account RECORD id (e.g. "claude-anthropic"),
-  # not a harness name; the harness lives at ProviderRecord.harness. Map
-  # id -> .harness so a configured non-claude account resolves correctly instead
-  # of silently defaulting to claude. A combo / unresolved target prints nothing
-  # (-> claude).
-  #
-  # The `or getattr(rec, "cli", "")` fallback is NOT dead: this file is bundled
-  # into skills and can run against an older deployed `fno` whose records still
-  # expose `.cli`. Without it the read yields "" and this silently routes every
-  # configured codex/gemini account back to claude - the exact failure the line
-  # above exists to prevent, and one no test would have caught.
-  "${py_cmd[@]}" -c 'import sys
-try:
-    from fno.agents.dispatch_target import resolve_dispatch_target as r
-    from fno.adapters.providers.loader import load_providers
-    pid = getattr(r(sys.argv[1]), "provider_id", None)
-    if pid:
-        rec = load_providers().by_id.get(pid)
-        print(getattr(rec, "harness", "") or getattr(rec, "cli", "") or "")
-except Exception:
-    pass' "$1" 2>/dev/null || true
 }
 
 if [[ "$HANDOFF_MODE" -eq 1 ]]; then

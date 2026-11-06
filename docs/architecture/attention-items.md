@@ -26,7 +26,7 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 ## The ten context fields and the readiness gate
 
-The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
+The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the user the asking machine's certificate proves, else its `fleet.owner`, else its login name. On a question row it is display only, and no gate reads it.
 
 ## Who asks: the ladder, by default
 
@@ -137,6 +137,8 @@ When its subject resolves, an open question closes by itself. Three rules, first
 - `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
 - `node-closed` / `moot`: a node the question points at reads done or superseded. A user-only `why_user` closes `moot`, every other question closes `node-closed`. The reason reads `node-closed: N done` or `moot: N done`.
 
+The node-closed rule waits on any PR the question names, in its subject or its text. A node can close under a different feature while its PR stays open, and that PR still needs the answer. The closing doors read each such PR through the asker's cwd. A PR that reads merged or closed lets the rule close. A PR that reads open holds the question. The sweep then moves it to the node's lead once, with a wake and an `open-pr` hop in `via`. A user-only `why_user` keeps it on the user's board instead. A PR the sweep cannot read also holds the question, with no move. The attention read makes no PR reads, so a held row never shows `settled`.
+
 A head-scoped subject names one commit. Its last token, after the last space or `@`, is 7 to 40 lowercase hex characters with at least one digit. `visual approval PR 7 at 05ea5bcc` and `merge-grant:footnote#3354@d2ad514d` are the two shipped spellings.
 
 The derived close claims no authority. The row keeps the answer empty and puts the outcome in `reason`, so the page reads `closed`, not `answered`. No decision row, no grant, no answer mail. The machine close never answers for the user. It never touches a question whose subject has not resolved. A taste ask about rules on a live node stays open.
@@ -160,6 +162,22 @@ The body holds the title and the question body. `## Options` carries one `- [ ] 
 ## The arm
 
 The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/state/attention/questions.json`. The projection cache at `~/.fno/state/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
+
+## The judge
+
+A verdict closes nothing. The judge runs in shadow: it writes verdicts to `~/.fno/state/judge/verdicts.jsonl`, and it never writes to a question store, a page or the mail.
+
+A one-shot reader with no tools reads a batch of open questions beside the record: the live law rows and the answered pages under `done/`. A chat ruling reaches it only through a law row whose `rationale` quotes the user. It gives each question one of three outcomes.
+
+- `decided`: the record answers it. The verdict names one law or answered page and quotes it. The check finds that quote in the source, or the verdict reads `held` with `citation_failed`.
+- `sent_back`: the question goes back to its filer. A row that is not ready needs no model and names what is missing.
+- `held`: the user answers it. The reason names why: `deny_class:<class>`, `irreversible`, `law_conflict`, `citation_failed`, `unclassified`, `no_answer`, `bad_outcome` or `no_record`.
+
+A deny class never reads `decided`, whatever the reader says. A question with no class goes to the reader, which must name one. Most open questions carry no class, so holding them would leave nothing to measure. A decided verdict on the reader's class counts under `decided_on_read_class`, because that class has no filer behind it.
+
+Turn it on with `fno config set -g questions.judge.enabled=true`. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
+
+Read it with `fno inbox outstanding judge --report --since 24h`. `agreement` compares each decided verdict with the answer the row later got, and each miss goes into the next prompt as a correction. `board_writes` counts closes by a judge run and must read 0.
 
 ## Config keys
 
@@ -186,6 +204,16 @@ What a file answer can do: close the question, reach the asker, unblock the node
 Every path requires a bearer token that matches a configured sink's `token_env` value. The token identifies the sink, never a person. A refused request lands no row. The statuses are `401` for a bad token, `404` for an unknown id, and `409` for a closed item. `422` covers a bad shape, an out-of-range option, `done` on a question, and more than one choice.
 
 An accepted answer appends the same `attention_answer` row the arm writes. The authority stays `sink`. The idempotency key and any Tailscale Serve identity header ride the row as provenance. The endpoint then runs the same `fno inbox outstanding clear` the mux overlay runs. First answer wins. A retry under the same `idempotency_key` replays the receipt and lands no second row. A different key lands a superseded marker that changes nothing. When a clear fails, the row stays durable. The question then needs a terminal close, and the arm retries its own lane.
+
+## The HQ page answer
+
+The question drawer on `/hq` answers in place. `POST /hq/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
+
+The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `machine_id`. An invite has no name beyond the login, so `person` is the login. The reply ladder reads every unsuperseded row whatever its sink, so the arm clears the question and delivers on its next beat.
+
+The refusals come in this order, and none starts a process. A bridge not bound to loopback gets 403. A bad token gets 401. An Origin that differs from Host gets 403. A bad body gets 400, an unknown question 404, and a failed invite check 403. The door refuses the rest with exit 2, and the route returns that line with 409. A second click on an answered question gets that 409, because the question is no longer open. It lands no second row.
+
+Identity comes from `Tailscale-User-Login` and counts only on a loopback bind behind `tailscale serve`. On a wide bind any client can send the header, so the bridge treats a wide bind as having no identity. `[[web.invites]]` rows in config.toml (`email`, `scope`, `role`) name who can do what. Roles rank viewer, commenter, editor, owner. Answering needs editor. A scope is `*` or a node id, and a node id covers that node and every node under it. When the list is set, a layer on the router checks every route for at least viewer. With no list, reads keep the token rule, the user on the local machine still answers, and a tailnet answer gets 403 naming `web.invites`.
 
 ## The ntfy and webhook sinks
 

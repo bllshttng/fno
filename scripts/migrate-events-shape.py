@@ -3,7 +3,7 @@
 
 Rewrites every row of every events.jsonl in the repo from
 ``{timestamp, source, type, data}`` (legacy) to
-``{ts, type, source, data}`` (canonical, per cli/src/fno/events/schema.yaml).
+``{ts, type, source, data}`` (canonical, per crates/fno-agents/src/event_store/schema.yaml).
 
 Walks:
   - <root>/.fno/events.jsonl
@@ -18,7 +18,7 @@ Properties:
   - Corrupt rows: preserved verbatim, logged to ``<file>.corrupt``,
     migration continues processing subsequent rows.
   - Lock-shared: acquires the same mkdir-based mutex (``<file>.lock.d``) that
-    ``fno.events.append_event`` and ``crates/fno-agents/src/claims.rs`` use, so
+    ``fno.events.store_client.append_event`` and ``crates/fno-agents/src/claims.rs`` use, so
     a live target session and a migration run cross-serialize.
   - Symlink-safe: resolves a shared worktree journal before deriving sidecars
     or replacing bytes, so migration preserves the worktree symlink.

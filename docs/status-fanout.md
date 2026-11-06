@@ -43,8 +43,7 @@ retries = 2
 Prefer `url_env` over an inline `url`.
 An inline `url` lands the webhook in `config.toml`, which typically syncs; `url_env` keeps the secret out of it.
 
-`url_env` resolves from the process environment first, then from `~/.fno/.env`.
-This ordering matters for the daemon: it ticks with its own environment and never saw your `export FNO_STATUS_DISCORD=...`, so an exported-only secret is invisible to it and every daemon tick short-circuits on `url_env ... unset`.
+`url_env` resolves from the process environment first, then from `~/.fno/.env`. The daemon ticks with its own environment, so an exported-only secret is invisible to it. The sink skips every daemon tick until the value lands in `~/.fno/.env`.
 Put the value in `~/.fno/.env` (`FNO_STATUS_DISCORD=https://...`) for unattended delivery; an exported process-env value still wins when present.
 
 ## Delivery semantics
@@ -52,6 +51,7 @@ Put the value in `~/.fno/.env` (`FNO_STATUS_DISCORD=https://...`) for unattended
 - **Fresh sink starts at EOF.** A new sink sees only events appended after its first tick. It never replays history. To test a sink, tick once to prime the cursor. Then emit an event (`fno doctor event emit --type blocked --source test --data '{"reason":"test"}'`) and tick again.
 - **At-least-once with retry.** A connect-class failure or a 5xx/429/401/403/408 holds the cursor and retries next tick (bounded by `retries`); a permanent 4xx drops the event and advances.
   Drops and short-circuits are logged to `.fno/status-sinks/<name>.errors.jsonl` (the var name, never its value).
+- **Mixed sink sets skip per sink.** An enabled webhook whose `url_env` stays unresolved sits out the tick. The other sinks keep delivering. The tick neither parks it nor holds the shared scan cursor for it. It resumes near-live once the url resolves. The piled-up events are not backfilled on a store-backed journal. A store-less journal re-reads its files whole and does backfill. When every enabled sink is unresolved, the tick skips the journal read entirely. A hand-run tick names the skipped sinks on stdout in every mode.
 - **Discord User-Agent.** Every webhook POST sends an explicit `User-Agent`; Discord 403s the stdlib default `Python-urllib`, so without it a Discord sink would never deliver.
 
 ## Reaching a remote operator (`operator_notice`)
@@ -74,7 +74,7 @@ The arm notices ride this sink too. `arm_watch`, the `notify_watch` board and ma
 
 The `notify_watch` lanes are opt-in. `[notify] signals` names the ones the arm samples every 300 s, for example `signals = ["main_ci", "release_run"]`. The board lanes are `operator_question`, `mergeable_pr`, `undriven_pr`, and `failed_verdict`. The CI lanes are `main_ci` and `release_run`. With the list empty, the arm does nothing. `release_run` reads the newest finished `release.yml` run of each repo. A failed run pages once and mails the live level-0 lead with the run's first `::error::` line. With no such lead, it files a `release-watch` fleet task instead. A cancelled run is not a verdict, and a passing run clears the signal. The page comes from this machine because a hosted runner cannot reach a private ntfy server.
 
-In the Rust callers `--pointer` leads the argv: `fno inbox notify --pointer P TITLE BODY`. The Python group callback refuses an option after its positionals, so the trailing form exits 2 and writes no row. `arm_watch` counts a notice sent only on exit 0. A notice that died at the gate leaves the dedupe token unwritten, so the next tick retries.
+The Python caller (`rust_binary.notify_operator`) keeps `--pointer` leading the argv: `fno inbox notify --pointer P TITLE BODY`. The Python group callback refuses an option after its positionals, so the trailing form exits 2 and writes no row. The Rust daemon hands the pointer to the dispatch owner as a value, so the argv rule is the Python door's alone. `arm_watch` counts a notice sent only on exit 0. A notice that died at the gate leaves the dedupe token unwritten, so the next tick retries.
 
 ### The ntfy recipe (self-hosted over Tailscale)
 

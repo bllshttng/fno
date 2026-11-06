@@ -4,7 +4,7 @@
 # Cross-language event schema parity check (W7).
 #
 # 1. Validates events-v3.json + status-v1.json parse as JSON.
-# 2. Runs `python -m fno.events --emit-schema` (30s timeout).
+# 2. Runs the native schema projection (30s timeout).
 # 3. Runs `fno-agents --emit-schema` if the binary is found (30s timeout);
 #    WARN + continue (exit 0) if absent (the Rust CI job is the real gate).
 # 4. Diffs each emitter's self-described envelope against the on-disk schema.
@@ -171,21 +171,42 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Step 2: Python emit-schema
+# Step 2: native schema projection
 # ---------------------------------------------------------------------------
-echo "check-event-schema-parity: running python -m fno.events --emit-schema..."
+echo "check-event-schema-parity: running the native schema projection..."
 
 if [[ -n "$TEST_PYTHON_SCHEMA" ]]; then
     PYTHON_SCHEMA_JSON="$TEST_PYTHON_SCHEMA"
 else
+    # The projection is a binary read now: the Python entry point that exec'd
+    # it deleted with the events package residue. It ran the FNO binary's
+    # `doctor event schema-projection`, so resolve the same way the deleted
+    # store_client.resolve_native_bin did: FNO_BIN first, then this
+    # checkout's own build, then PATH.
+    PROJECTION_BIN="${FNO_BIN:-}"
+    if [[ -z "$PROJECTION_BIN" ]]; then
+        for profile in debug release; do
+            candidate="$REPO_ROOT/crates/fno/target/$profile/fno"
+            if [[ -x "$candidate" ]]; then
+                PROJECTION_BIN="$candidate"
+                break
+            fi
+        done
+    fi
+    if [[ -z "$PROJECTION_BIN" ]] && command -v fno &>/dev/null; then
+        PROJECTION_BIN="$(command -v fno)"
+    fi
+    if [[ -z "$PROJECTION_BIN" ]]; then
+        echo "ERROR: no fno binary; the native schema projection cannot run" >&2
+        exit 1
+    fi
     PYTHON_STDERR_TMP="$(mktemp)"
     if ! PYTHON_SCHEMA_JSON="$(
-        cd "$REPO_ROOT"
-        with_timeout 30 "$PYTHON3" -m fno.events --emit-schema 2>"$PYTHON_STDERR_TMP"
+        with_timeout 30 "$PROJECTION_BIN" doctor event schema-projection 2>"$PYTHON_STDERR_TMP"
     )"; then
         # An empty stderr here usually means the 30s bound fired rather than the
         # emitter erroring: a SIGKILLed process writes nothing on its way out.
-        echo "ERROR: python -m fno.events --emit-schema failed (or exceeded its 30s bound)" >&2
+        echo "ERROR: the native schema projection failed (or exceeded its 30s bound)" >&2
         echo "  stderr: $(head -5 "$PYTHON_STDERR_TMP")" >&2
         rm -f "$PYTHON_STDERR_TMP"
         exit 1
@@ -193,11 +214,11 @@ else
     rm -f "$PYTHON_STDERR_TMP"
 
     if ! "$PYTHON3" -c "import json,sys; json.loads(sys.argv[1])" "$PYTHON_SCHEMA_JSON" 2>/dev/null; then
-        echo "ERROR: python emit-schema output is not valid JSON" >&2
+        echo "ERROR: schema projection output is not valid JSON" >&2
         exit 1
     fi
 fi
-echo "  python emit-schema: OK"
+echo "  native schema projection: OK"
 
 # Extract python envelope and event_types
 PYTHON_ENVELOPE="$("$PYTHON3" -c "import json,sys; d=json.loads(sys.argv[1]); print(json.dumps(d['envelope']))" "$PYTHON_SCHEMA_JSON")"
@@ -383,6 +404,15 @@ dual_owner_kinds = {
     # that field also feeds the tracked events_schema.json projection,
     # which only a cargo build can regenerate.
     "session_pane_rebound",
+    # The lineage trio: the Python session-report emitters are deleted and
+    # session_report.rs is the sole emitter (the transition classification,
+    # the worker's cwd heal, and its failure notice). schema.yaml still
+    # names the legacy python/agents sources because that field feeds the
+    # tracked events_schema.json projection, which only a cargo build can
+    # regenerate.
+    "session_transition_classified",
+    "session_cwd_healed",
+    "session_cwd_heal_failed",
     # session_id_restamped: the Python SessionStart restamp
     # (register_session.py) and the org init --rebind-from repair
     # (lead_rebind.rs) write the same row shape: one row's harness session
@@ -393,9 +423,8 @@ dual_owner_kinds = {
     # the backlog source, until the Python leg deletes with the closing
     # ship.
     "triage_applied",
-    # Evals demand: the pr-watch tick's evals leg (Python) is the only
-    # emitter; the rows ride the daemon's journal, so the Rust known-kind
-    # table carries them for acceptance without emitting.
+    # Evals demand: the pr-watch tick's evals leg (Rust) is the only emitter;
+    # the Python side carries them in schema.yaml for the validator.
     "evals_scheduled_run",
     "evals_stale",
     # Scratch-shape sweep: the mirror image of the evals pair - the Rust
@@ -418,9 +447,8 @@ dual_owner_kinds = {
     "team_succession_retro_unmeasured",
     "team_succession_taken_over",
     "team_succession_take_over_mail_failed",
-    # merge_cleanup_skipped: the merge mint (Python) is the only emitter; the
-    # Rust known-kind table carries it so the daemon accepts the row, the way
-    # the evals pair above does.
+    # merge_cleanup_skipped: the tick's merge mint (Rust) is the only emitter;
+    # the Python side carries it in schema.yaml for the validator.
     "merge_cleanup_skipped",
     # lead_checkin: the Rust emit_row is the one writer (the command's beat plus
     # the lead stop hook's missed-beat row); the Python hand leg
@@ -441,6 +469,19 @@ dual_owner_kinds = {
     # carries it in schema.yaml for the validator and `doctor event find`,
     # the way pr_watch_unparked above does.
     "pr_watch_draft_flip",
+    # The pr-watch tick family: the Rust tick (pr_watch/) is the one emitter;
+    # the Python side carries them in schema.yaml for the validator and
+    # `doctor event find`, the way pr_watch_unparked above does.
+    "pr_watch_tick_attempt",
+    "pr_watch_tick_end",
+    "pr_watch_tick",
+    "pr_watch_sweep_chunk",
+    "pr_watch_skipped",
+    "pr_watch_parked",
+    "pr_watch_dispatched",
+    "pr_watch_dispatch_failed",
+    "pr_watch_cleanup_failed",
+    "merge_grant_execution",
     # graph_archive_swept: the native archive sweep is the one emitter; the
     # Python side carries it in schema.yaml for the validator and
     # `doctor event find`, the way pr_watch_unparked above does.
@@ -520,6 +561,12 @@ dual_owner_kinds = {
     "lead_spawned_successor",
     "lead_wake_refused",
     "lead_woken",
+    # backlog_refused_trimmed + page_relief_done: the daemon's share-repair
+    # and freed-page arms are the one writers; schema.yaml carries them for
+    # the validator and `doctor event find`, the way session_registered
+    # above does.
+    "backlog_refused_trimmed",
+    "page_relief_done",
 }
 collisions -= dual_owner_kinds
 if collisions:
@@ -549,7 +596,7 @@ fi
 # synthetic emit-schemas but not a schema.yaml).
 if [[ "$RUST_AVAILABLE" == "true" && -z "$TEST_RUST_SCHEMA" ]]; then
     echo "check-event-schema-parity: checking registry completeness (KNOWN_EVENT_KINDS subset of schema.yaml)..."
-    SCHEMA_YAML="$REPO_ROOT/cli/src/fno/events/schema.yaml"
+    SCHEMA_YAML="$REPO_ROOT/crates/fno-agents/src/event_store/schema.yaml"
     _REGISTRY_STATUS=0
     RUST_SCHEMA_JSON="$RUST_SCHEMA_JSON" SCHEMA_YAML="$SCHEMA_YAML" "$PYTHON3" - <<'PYEOF' || _REGISTRY_STATUS=$?
 import json, os, sys

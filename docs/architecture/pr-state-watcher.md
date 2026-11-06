@@ -12,15 +12,15 @@ It is the **sole** post-merge detector. `fno backlog reconcile` no longer dispat
 
 One LaunchAgent (`~/Library/LaunchAgents/sh.fno.pr-watcher.plist`) runs `fno do pr watch tick` on a `StartInterval` (default 600s). Global rather than per-repo because the PR record it iterates - the backlog graph at `~/.fno/graph.json` - is itself global and spans every repo.
 
-The implementation is a Python package (`cli/src/fno/pr_watch/`) split along a pure/impure seam so the decision logic is exhaustively unit-testable:
+The implementation is the `crates/fno-agents/src/pr_watch/` module. Its outside effects sit behind one trait, so the decision logic tests without gh:
 
 | Module | Responsibility |
 |---|---|
-| `__init__.py` | `decide()` - the pure decision core over `(observation, watermark, reviewers, merge_ready)` |
-| `_discover.py` | `discover_open_prs()` (open backlog nodes carrying a PR). `read_pr_state()` does per-PR `gh` reads. `read_tracked_pr_states()` is the batched read that sweeps every tracked record each tick. |
-| `_state.py` | `WatermarkStore` - the atomic per-PR watermark at `~/.fno/pr-watcher-state.json`. Keys normalize to `owner/repo#number` on load. |
-| `_dispatch.py` | `fire_skill()` (headless `claude --print` for the **review** poll only) + `tick()` (the impure orchestrator). Merge dispatch delegates to `post_merge_route.dispatch_post_merge_ritual`. Terminal-PR delivery retries live in the sidecar at `~/.fno/pr-watcher-state-delivery.json`. They never enter the observed-state cache. |
-| `_install.py` + `cli.py` | the `fno do pr watch {tick,install,uninstall,status}` commands + the gated plist installer |
+| `discover.rs` | `discover_open_prs()`, `read_pr_state()`, the batched `read_tracked_states()`, and `decide()`, the pure verdict |
+| `state.rs` | `Store`, the atomic per-PR watermark at `~/.fno/state/pr-watcher-state.json`, plus the branch-provenance cache. Keys normalize to `owner/repo#number` on load. Every write replays this tick's changes over the file under the pr-park flock. |
+| `dispatch.rs` | The sweep, the durable-grant merge queue and the `Seams` trait. Terminal-PR delivery retries live in the `-delivery` sidecar. They never enter the observed-state cache. |
+| `tick.rs` + `clock.rs` | The `tick` command, its phases and the phase clock. The door bounds every child by the phase deadline and kills its group on a cut. |
+| `install.rs`, `refresh.rs`, `heal.rs`, `status.rs` | The `fno do pr watch {install,uninstall,refresh,heal,status}` commands |
 
 ### One poll cycle (a tick)
 
@@ -53,6 +53,10 @@ The coupling is enforced on both ends: arming `auto_merge.grant = dispatch` thro
 The review poll fires `claude --print --output-format json --dangerously-skip-permissions "/fno:ship pr check <n>"`, run with `cwd` set to the PR's repo, default model Haiku. The plist carries `PATH` (captured at install time) + `HOME` in `EnvironmentVariables`. Authentication rides the macOS keychain OAuth, so no API key is injected, and `--bare` is never used.
 
 A merge is not a headless claude fire. When the origin session is live, the mechanical `fno do pr ritual <n> --autonomous` command is warm-injected there. Otherwise it runs as a bounded `fno-py` subprocess from the repo's canonical root. The command owns the ritual's mechanical legs and its own conditional headless judgment one-shot. The watcher never wraps the ritual in a `/fno:ship pr merged` LLM session, and it never spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting. That receipt is attribution and correlation only, and route selection never reads it.
+
+## The park sweep
+
+`fno-agents pr-park sweep` runs on the daemon's 10-minute floor (`daemon/sweeps.rs`) over every registry repo root, and it is the automatic lifter for parked PRs. When the cause clears, the PR head moves, or the park's own `parked_at` stamp passes 24 hours, the sweep lifts an open park. Before the head arms run, the sweep re-checks the cause. A `checks-red` park lifts on a green checks probe (the status door's coalescing cache bounds the GitHub cost). A `worktree_head_mismatch` or `worktree_dirty` park lifts on a clean worktree with nothing in flight at the current PR head. A clean worktree whose HEAD is an ancestor of the PR head reads clear, because the merge lands what the branch already contains. A probe error lifts nothing. Every sweep lift names its arm in the `cause` field of its `pr_watch_unparked` event (`head-moved`, `max-age`, `checks-cleared`, `worktree-cleared`). A manual `fno-agents pr-park unpark` names no cause. A row parked before the `parked_at` stamp shipped falls back to the `last_polled_at` poll stamp. Any unpark clears the stamp alongside `parked`.
 
 ## Install is reviewed and gated
 

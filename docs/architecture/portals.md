@@ -14,7 +14,7 @@ Only an explicit gesture creates or closes a portal. A default never creates one
 |---|---|
 | Any command, explicit flag | `fno mux thread <key> --portal new` opens the next free index. `--portal N` opens N if N is not open, and tunes if it is. A `--split DIR` halves the caller's own pane; `--from portal N\|worker\|current` names another cell (split right from portal 0 gives the next index, and a 2x2 comes from splitting down from each of those). A spawn carries the same flags and opens the portal right after its receipt names the new index. Human or agent, the rule is the same: the flag is the ask. |
 | Any command, no flag | Tune. The reach focuses the row's open portal. With none open, the door's own portal 0 serves it. A bare `fno agents spawn` is a paneless thread and opens nothing. |
-| Sideline | Enter on a paneless live row reaches it. `P` opens the portal picker. The `+` row opens the next free index (shift+HJKL as a split beside the focused pane). |
+| Sideline | Enter on a paneless live row reaches it. `P` opens the portal picker. The `+` row opens the next free index (shift+HJKL as a split beside the focused pane). A row from another machine takes the same gestures, and its seat runs the link. See [remote sessions](mux-remote-sessions.md#open-a-row). |
 | Composer | The new-agent popup carries the placement in its launch request. The portal opens server-side on the launch receipt, through the requesting client's own reach. |
 | A side effect | Never creates. Retask, `fno mux command` and every other machine call tune an existing portal or open a transient view that is not a portal at all. |
 
@@ -58,7 +58,7 @@ A claude viewer can switch sessions inside its own TUI, and fno is never told. T
 
 ## Wire
 
-`PanePlacement.portal: Option<u8>` and `PanePlacement.portal_new: bool` arrived in proto v64. `AgentRow.portal` arrived the same generation. `PanePlacement.view` and `PanePlacement.from` arrived in v93. All are additive and `#[serde(default)]`, so the compatibility floor did not move. A v63 client still attaches.
+`PanePlacement.portal: Option<u8>` and `PanePlacement.portal_new: bool` arrived in proto v64. `AgentRow.portal` arrived the same generation. `PanePlacement.view` and `PanePlacement.from` arrived in v93. `Command::ReachRemote` arrived in v121: the same placement for a row on another machine. All are additive and `#[serde(default)]`, so the compatibility floor did not move. A v63 client still attaches.
 
 `portal` names an index. `portal_new` asks for the next free one and names none, because the caller must not choose it. Two clients computing "next free" from the rows they last rendered pick the same number, and the second reach repoints the first one's new portal. The server handles reaches one at a time, so it allocates. An explicit index wins over `portal_new`.
 

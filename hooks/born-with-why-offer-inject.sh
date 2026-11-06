@@ -91,6 +91,7 @@ printf '%s' "$CURSOR_LOCK_TOKEN" > "$CURSOR_LOCK/owner" 2>/dev/null || {
     exit 0
 }
 cleanup_cursor_lock() {
+    [[ -n "${SLICE_FILE:-}" ]] && command -p rm -f "$SLICE_FILE" 2>/dev/null
     [[ -r "$CURSOR_LOCK/owner" ]] || return
     [[ "$(< "$CURSOR_LOCK/owner")" == "$CURSOR_LOCK_TOKEN" ]] || return
     command -p rm -f "$CURSOR_LOCK/owner" 2>/dev/null || true
@@ -98,44 +99,27 @@ cleanup_cursor_lock() {
 }
 trap cleanup_cursor_lock EXIT
 
-# Both tools are required before the cursor can move. A GC rewrite publishes a
+# jq is required before the cursor can move. A GC rewrite once published a
 # recoverable inode-pinned cursor mapping before replacing the journal; finish
-# that mapping here if GC died in the narrow replace-to-cursor window.
-command -v jq >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || exit 0
+# that mapping here if an old GC died in the narrow replace-to-cursor window.
+command -v jq >/dev/null 2>&1 || exit 0
 CURSOR_PENDING="${CURSOR}.gc-pending"
 if [[ -f "$CURSOR_PENDING" ]]; then
-    python3 - "$EVENTS" "$CURSOR" "$CURSOR_PENDING" <<'PY' 2>/dev/null || exit 0
-import json
-import os
-import sys
-
-events, cursor, pending = sys.argv[1:]
-temp = None
-try:
-    payload = json.loads(open(pending, encoding="ascii").read())
-    stat = os.stat(events)
-    value = payload["cursor"]
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError("invalid cursor")
-    if payload.get("device") != stat.st_dev or payload.get("inode") != stat.st_ino:
-        raise SystemExit(0)
-    temp = f"{cursor}.recover.{os.getpid()}"
-    with open(temp, "x", encoding="ascii") as handle:
-        handle.write(str(value))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp, cursor)
-    os.unlink(pending)
-except SystemExit:
-    raise
-except Exception:
-    if temp is not None:
-        try:
-            os.unlink(temp)
-        except OSError:
-            pass
-    raise SystemExit(1)
-PY
+    pending=$(jq -er '
+        if (.cursor | type) == "number" and .cursor == (.cursor | floor) and .cursor >= 0
+        then "\(.device) \(.inode) \(.cursor)" else error("invalid cursor") end' \
+        "$CURSOR_PENDING" 2>/dev/null) || exit 0
+    read -r p_dev p_ino p_cursor <<<"$pending"
+    events_id=$(stat -c '%d %i' "$EVENTS" 2>/dev/null || stat -f '%d %i' "$EVENTS" 2>/dev/null) || exit 0
+    if [[ "$events_id" == "$p_dev $p_ino" ]]; then
+        recover="${CURSOR}.recover.$$"
+        if ! (set -o noclobber; printf '%s' "$p_cursor" > "$recover") 2>/dev/null \
+            || ! mv -f "$recover" "$CURSOR" 2>/dev/null; then
+            command -p rm -f "$recover" 2>/dev/null
+            exit 0
+        fi
+        command -p rm -f "$CURSOR_PENDING" 2>/dev/null || exit 0
+    fi
 fi
 
 size=$(wc -c < "$EVENTS" 2>/dev/null | tr -d ' ')
@@ -163,70 +147,50 @@ offset=0
 # the slice ride along as bare ids. \x1f-separated, not tab: tab is
 # IFS-whitespace, so `read` would collapse an empty offer_line and shift the
 # ride-along list into it (same trap the enrichment parse below documents).
-parsed=$(tail -c +"$((offset + 1))" "$EVENTS" 2>/dev/null | head -c "$((size - offset))" 2>/dev/null | python3 -c '
-import sys, json, re
-# Read the slice as BYTES and require exactly the count the caller measured.
-# A completion sentinel alone proves the parser ran, not that it was fed: a
-# failing `tail`/`head` hands it empty stdin, it finds no offers, and the caller
-# advances over a live offer. A short read exits without the sentinel instead,
-# so the cursor stays put and the next turn re-scans (verified: a `tail` that
-# exits 1 used to consume the slice and emit nothing).
-expected = int(sys.argv[1])
-raw = sys.stdin.buffer.read()
-if len(raw) != expected:
-    sys.exit(1)
-# Decode with replacement, never raising: .fno/events.jsonl has non-Python
-# appenders (the stop hooks printf shell-interpolated lines) and `head -c` cuts
-# on a byte boundary, so a truncated multi-byte char is reachable. Decoding at a
-# bare `for line in sys.stdin` would raise OUTSIDE the per-line try below and
-# take every offer in the slice down with it. A mangled line instead fails
-# json.loads inside the try and is skipped, as the file header already claims.
-# The reminder wrapper is hook-owned; offer_line is free text (the birth hook
-# interpolates a filesystem path into it), so it gets the same defang the
-# enrichment parse applies to title/details or it could close the wrapper early.
-_TAG = re.compile(r"<\s*(/?)\s*system-reminder\s*>", re.IGNORECASE)
-nid = ""
-offer = ""
-older = []
-for line in raw.decode("utf-8", "replace").splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    # Every field access stays INSIDE the try, and both carried values are
-    # type-checked: a valid-JSON non-object line, a non-dict "data", or a
-    # non-string node_id/offer_line must skip that line, never kill the parse.
-    # The old code tolerated a bad id by overwriting it; accumulating older ids
-    # would instead carry it to the join, and a dead parse here means the cursor
-    # advances over the whole slice and destroys every offer in it.
-    try:
-        ev = json.loads(line)
-        if ev.get("type") != "think_offered":
-            continue
-        data = ev.get("data") or {}
-        x = data.get("node_id")
-        o = data.get("offer_line")
-    except Exception:
-        continue
-    if isinstance(x, str) and x:
-        if nid:
-            older.append(nid)
-        nid = _TAG.sub(r"[\1system-reminder]", x)
-        offer = _TAG.sub(r"[\1system-reminder]", o) if isinstance(o, str) else ""
-# Cap the ride-along list. Not defensive padding: on a COLD START there is no
-# cursor, so offset is 0 and the entire history is one slice - measured at 418
-# ids and 3472 chars against the events.jsonl in this repo. Bursts are small (4 is
-# the observed max), which is why an earlier cut of this deleted the cap as
-# speculative; that reasoning missed the offset==0 case entirely.
-MAX = 5
-if len(older) > MAX:
-    older = older[-MAX:] + ["+%d more" % (len(older) - MAX)]
-# Trailing \x04 is a completion sentinel: `command -v python3` proves presence,
-# not success, and a present-but-broken interpreter (dead pyenv shim, broken
-# venv) would emit nothing while the cursor advanced anyway. The caller refuses
-# to advance without this byte, so a failed parse re-scans instead of eating the
-# slice. A clean scan that found no offer still prints it, and still advances.
-sys.stdout.write("\x1f".join([nid, offer, ", ".join(older)]) + "\x04")
-' "$((size - offset))" 2>/dev/null)
+# The slice lands in a file first and must hold exactly the byte count
+# measured above. A completion sentinel alone proves the parser ran, not that
+# it was fed: a failing `tail`/`head` hands it an empty slice, it finds no
+# offers, and the cursor advances over a live offer. A short read leaves the
+# sentinel off instead, so the cursor stays put and the next turn re-scans.
+# jq -R decodes with replacement, never raising: .fno/events.jsonl has
+# non-JSON-aware appenders and `head -c` cuts on a byte boundary, so a
+# truncated multi-byte char is reachable; a mangled line fails fromjson and is
+# skipped. offer_line is free text, so it gets the same reminder-tag defang
+# the enrichment parse applies to title/details.
+SLICE_FILE=$(mktemp "${TMPDIR:-/tmp}/born-with-why-slice-XXXXXX") || exit 0
+tail -c +"$((offset + 1))" "$EVENTS" 2>/dev/null | head -c "$((size - offset))" > "$SLICE_FILE" 2>/dev/null
+slice_bytes=$(wc -c < "$SLICE_FILE" 2>/dev/null | tr -d ' ')
+parsed=""
+if [[ "$slice_bytes" == "$((size - offset))" ]]; then
+    # Trailing \x04 is the completion sentinel: the caller refuses to advance
+    # without it, so a failed parse re-scans instead of eating the slice. A
+    # clean scan that found no offer still carries it, and still advances.
+    parsed=$(jq -Rsj '
+        def defang: gsub("<\\s*(?<s>/?)\\s*system-reminder\\s*>"; "[\(.s)system-reminder]"; "i");
+        def falsy: . == null or . == false or . == 0 or . == "" or . == [] or . == {};
+        reduce (split("\n")[]
+            | try fromjson catch null
+            | select(type == "object" and .type == "think_offered")
+            | (.data | if falsy then {} else . end)
+            | select(type == "object")
+            | {x: .node_id, o: .offer_line}
+            | select((.x | type) == "string" and .x != "")) as $e
+          ({nid: "", offer: "", older: []};
+           (if .nid != "" then .older += [.nid] else . end)
+           | .nid = ($e.x | defang)
+           | .offer = (if ($e.o | type) == "string" then ($e.o | defang) else "" end))
+        # Cap the ride-along list. Not defensive padding: on a COLD START there is no
+        # cursor, so offset is 0 and the entire history is one slice - measured at 418
+        # ids and 3472 chars against the events.jsonl in this repo. Bursts are small (4
+        # is the observed max), which is why an earlier cut of this deleted the cap as
+        # speculative; that reasoning missed the offset==0 case entirely.
+        | .older as $o
+        | .older = (if ($o | length) > 5 then $o[-5:] + ["+\(($o | length) - 5) more"] else $o end)
+        | [.nid, .offer, (.older | join(", "))] | join("\u001f")
+    ' < "$SLICE_FILE" 2>/dev/null) && parsed+=$'\x04'
+fi
+command -p rm -f "$SLICE_FILE" 2>/dev/null
+SLICE_FILE=""
 
 # No completion sentinel -> the parse died rather than finding nothing. Leave the
 # cursor where it is so the next turn re-scans; burning the slice on a broken
@@ -283,20 +247,11 @@ if command -v fno >/dev/null 2>&1; then
     if [[ "$_get_rc" -eq 0 ]]; then
         # Resolved. Suppress only if the node is already underway; a parse
         # failure or unknown shape exits 1 -> surface (fail safe).
-        if printf '%s' "$node_json" | python3 -c '
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    # isinstance guard: fno backlog get emits an object, but a null / list body
-    # would make d.get raise AttributeError outside the try. Keep the whole
-    # access inside the try so any unexpected shape exits 1 -> surface (gemini).
-    underway = isinstance(d, dict) and (
-        bool(d.get("pr_number")) or d.get("status") in {"in_progress", "claimed", "next", "done", "superseded"}
-    )
-    sys.exit(0 if underway else 1)
-except Exception:
-    sys.exit(1)  # unparseable or unexpected shape -> do NOT suppress (surface)
-' 2>/dev/null; then
+        if printf '%s' "$node_json" | jq -e '
+            type == "object" and (
+                (.pr_number | . != null and . != false and . != 0 and . != "" and . != [] and . != {})
+                or (.status | IN("in_progress", "claimed", "next", "done", "superseded")))
+        ' >/dev/null 2>&1; then
             emit_older_only
         fi
     elif [[ "$_get_rc" -eq 1 ]]; then
@@ -306,7 +261,7 @@ except Exception:
     # Any OTHER nonzero degrades to surfacing, because the cursor already
     # advanced and suppressing would discard a possibly-real offer for good.
     # Only rc 1 means "graph read cleanly, node absent": `fno backlog get` exits
-    # 3 on an unreadable graph (GRAPH_UNREADABLE_EXIT, cli/src/fno/graph/cli.py),
+    # 3 on an unreadable graph (GRAPH_UNREADABLE_EXIT, crates/fno-agents/src/backlog/get_cli.rs),
     # 2 on a click usage error, 124 when with_timeout kills a wedged call, and 99
     # when the `cd` above failed. Every one of those is transient or our own
     # fault, never evidence the node does not exist.
@@ -334,36 +289,28 @@ reminder="$v1_reminder"
 # node_json unset; empty or non-dict body; titleless node) leaves $reminder as
 # the v1 fallback.
 if [[ -n "${node_json:-}" ]]; then
-    enrich=$(printf '%s' "$node_json" | python3 -c '
-import sys, json, re
-# Node title/details are free text (organic capture from transcripts), embedded
-# inside the hook-owned <system-reminder> wrapper. jq --arg keeps the JSON valid
-# but does NOT neutralize a literal </system-reminder> in that text, so a node
-# could break out of the reminder and inject context into the next prompt. Defang
-# the reminder delimiter (open/close, case- and whitespace-insensitive) before it
-# is embedded; the real wrapper is added in bash, after this.
-_TAG = re.compile(r"<\s*(/?)\s*system-reminder\s*>", re.IGNORECASE)
-def defang(s):
-    return _TAG.sub(r"[\1system-reminder]", s)
-try:
-    d = json.load(sys.stdin)
-    if not isinstance(d, dict):
-        sys.exit(1)
-    title = defang(" ".join((d.get("title") or "").split()))
-    if not title:
-        sys.exit(1)
-    why = defang(" ".join((d.get("details") or "").split()))
-    if len(why) > 200:
-        cut = why[:200].rsplit(" ", 1)[0].rstrip()
-        why = (cut or why[:200]) + "…"
-    domain = (d.get("domain") or "").strip()
-    # Unit separator (non-whitespace): tab is IFS-whitespace, so bash read would
-    # collapse an empty why field and shift domain into it. \x1f never appears in
-    # a node title, so an empty middle field survives intact.
-    sys.stdout.write("\x1f".join([title, why, domain]))
-except Exception:
-    sys.exit(1)
-' 2>/dev/null) || enrich=""
+    # Node title/details are free text embedded inside the hook-owned
+    # <system-reminder> wrapper. jq --arg keeps the JSON valid but does NOT
+    # neutralize a literal </system-reminder> in that text, so the reminder
+    # delimiter is defanged first; the real wrapper is added in bash. Unit
+    # separator between fields: tab is IFS-whitespace, so bash read would
+    # collapse an empty why field and shift domain into it.
+    enrich=$(printf '%s' "$node_json" | jq -j '
+        def defang: gsub("<\\s*(?<s>/?)\\s*system-reminder\\s*>"; "[\(.s)system-reminder]"; "i");
+        def falsy: . == null or . == false or . == 0 or . == "" or . == [] or . == {};
+        def words: if falsy then "" elif type == "string" then [splits("\\s+") | select(. != "")] | join(" ") else error("not text") end;
+        if type != "object" then error("not a node") else . end
+        | (.title | words | defang) as $title
+        | if $title == "" then error("no title") else . end
+        | (.details | words | defang) as $why0
+        | (if ($why0 | length) > 200 then
+             ($why0[0:200]) as $head
+             | ($head | if test(" ") then sub(" [^ ]*$"; "") else . end | sub("\\s+$"; "")) as $cut
+             | (if $cut == "" then $head else $cut end) + "…"
+           else $why0 end) as $why
+        | (.domain | if falsy then "" elif type == "string" then sub("^\\s+"; "") | sub("\\s+$"; "") else error("not text") end) as $domain
+        | [$title, $why, $domain] | join("\u001f")
+    ' 2>/dev/null) || enrich=""
 
     if [[ -n "$enrich" ]]; then
         IFS=$'\x1f' read -r e_title e_why e_domain <<<"$enrich"
@@ -378,47 +325,28 @@ except Exception:
         cand_id=""
         cand_title=""
         if command -v fno >/dev/null 2>&1; then
-            cand_id=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog ready 2>/dev/null | python3 -c '
-import sys, json
-offered, domain = sys.argv[1], sys.argv[2]
-try:
-    rows = json.load(sys.stdin)
-    if isinstance(rows, list):
-        for r in rows:
-            if not isinstance(r, dict) or r.get("id") == offered:
-                continue
-            if domain and r.get("domain") != domain:
-                continue
-            print(r.get("id") or "")
-            break
-except Exception:
-    pass
-' "$node_id" "$e_domain" 2>/dev/null ) || cand_id=""
+            cand_id=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog ready 2>/dev/null \
+                | jq -r --arg offered "$node_id" --arg domain "$e_domain" '
+                    if type == "array" then
+                        first(.[] | select(type == "object" and .id != $offered)
+                            | select($domain == "" or .domain == $domain)
+                            | (.id | if . == null or . == false or . == "" then "" else tostring end))
+                    else empty end' 2>/dev/null ) || cand_id=""
 
             if [[ -z "$cand_id" ]]; then
-                cand_id=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog next 2>/dev/null | python3 -c '
-import sys, json
-offered = sys.argv[1]
-try:
-    d = json.load(sys.stdin)
-    if isinstance(d, dict) and d.get("id") and d.get("id") != offered:
-        print(d["id"])
-except Exception:
-    pass
-' "$node_id" 2>/dev/null ) || cand_id=""
+                cand_id=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog next 2>/dev/null \
+                    | jq -r --arg offered "$node_id" '
+                        if type == "object" and (.id | . != null and . != false and . != "") and .id != $offered
+                        then .id | tostring else empty end' 2>/dev/null ) || cand_id=""
             fi
 
             if [[ -n "$cand_id" ]]; then
-                cand_title=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog get "$cand_id" 2>/dev/null | python3 -c '
-import sys, json, re
-_TAG = re.compile(r"<\s*(/?)\s*system-reminder\s*>", re.IGNORECASE)
-try:
-    d = json.load(sys.stdin)
-    t = " ".join((d.get("title") or "").split()) if isinstance(d, dict) else ""
-    print(_TAG.sub(r"[\1system-reminder]", t))
-except Exception:
-    pass
-' 2>/dev/null ) || cand_title=""
+                cand_title=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog get "$cand_id" 2>/dev/null \
+                    | jq -r '
+                        def defang: gsub("<\\s*(?<s>/?)\\s*system-reminder\\s*>"; "[\(.s)system-reminder]"; "i");
+                        if type == "object" then
+                            (.title | if . == null or . == false or . == "" then "" else [splits("\\s+") | select(. != "")] | join(" ") end)
+                        else "" end | defang' 2>/dev/null ) || cand_title=""
                 # No title -> drop the candidate (the "Also on deck" shape needs one).
                 [[ -n "$cand_title" ]] || cand_id=""
             fi

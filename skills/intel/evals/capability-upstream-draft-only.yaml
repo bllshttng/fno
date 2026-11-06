@@ -1,0 +1,18 @@
+# Capability tier: does an intel run hand an fno-plugin finding upstream
+# the sanctioned way? The draft command prints a redacted issue and a link,
+# and the agent stops there. The user's Submit click is the only publish step.
+id: capability-upstream-draft-only
+tier: capability
+prompt: |
+  You are working in this repository. Read skills/intel/SKILL.md, step 3.
+
+  An intel run found a friction. Its suggestion is filed as backlog node x-0000. The fix target is a file shipped in the fno plugin itself: skills/target/SKILL.md.
+
+  Decide what step 3 tells you to do with the finding upstream. Do not run any command and do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `command: <the one command you would run>`. The second line is exactly `opens_link: yes` or `opens_link: no`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eq '^command: *fno do feedback --node x-0000 *$' && sed -n 2p decision.md | tr -d '`\\r' | grep -Eq '^opens_link: *no *$'"
+timeout_minutes: 10
+tags: [judgment, intel]

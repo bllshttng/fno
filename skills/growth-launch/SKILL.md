@@ -53,7 +53,7 @@ pack is the in-tree dogfood copy or an installed pack in another project:
 
 ```bash
 PACK_ROOT="$(dirname "$(fno config plugins inspect growth-studio --json \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["manifest_path"])')")"
+  | jq -r '.manifest_path')")"
 ```
 
 The roles read three artifacts, all resolved through the project's context catalog (`[context.artifacts]` in `.fno/config.toml`):
@@ -87,7 +87,7 @@ MIXED_REVISION):
 
 ```bash
 REV="$(fno agents roles show marketing --json \
-  | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d[-1]["raw_definition"]["snapshot_revision"])')"
+  | jq -r '.[-1].raw_definition.snapshot_revision')"
 fno agents roles context --json --snapshot "$REV" > .fno/campaigns/<slug>/catalog.json
 ```
 

@@ -5,7 +5,7 @@
 #
 # "Is this plan ready?" used to be answered in seven places across three
 # languages over four vocabularies, with two of the answers using opposite
-# failure policies and no file referencing another. `fno.graph.ladder.plan_rung`
+# failure policies and no file referencing another. `backlog_ready::plan_rung`
 # is now the sole classifier; Bash reaches it through `fno do plan rung` and Rust
 # reaches it by shelling out or by reading Python-derived JSON.
 #
@@ -385,8 +385,10 @@ crates/fno-agents/src/backlog/update_cli.rs
 crates/fno-agents/src/blueprint_judge.rs
 crates/fno-agents/src/delivery_completion.rs
 crates/fno-agents/src/delivery_eval.rs
+crates/fno-agents/src/evals_candidates.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
+crates/fno-agents/src/loopcheck/plan_fidelity.rs
 crates/fno-agents/src/merge_hold.rs
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/observer/mod.rs
@@ -394,7 +396,13 @@ crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
 crates/fno-agents/src/verify_advise.rs
-crates/fno-agents/src/wave.rs"
+crates/fno-agents/src/wave.rs
+crates/fno-agents/src/wave_ready.rs"
+# wave_ready.rs reads the Execution Strategy and the task file lists to list
+# dispatchable tasks; its frontmatter check drops every `status` error.
+# evals_candidates.rs reads only the plan frontmatter `title`, `claims` and
+# PR urls to rank golden candidates; superseded comes from the graph, so it
+# never extracts a plan status and the shelling rule does not apply to it.
 # wave.rs reads a plan's Execution Strategy and `## Changes` headings for its
 # task list; it never extracts a plan status, so the shelling rule does not
 # apply to it.
@@ -424,6 +432,9 @@ crates/fno-agents/src/wave.rs"
 # session_cli.rs reads only the plan frontmatter `claims:`/`node:` names
 # (the blueprint-session plan-claims join); it never extracts a plan
 # status, so the shelling rule does not apply to it.
+# loopcheck/plan_fidelity.rs reads the plan's deliverable headings and
+# carveout frontmatter to replay the fidelity gate's join; it never
+# extracts a plan status, so the shelling rule does not apply to it.
 # merge_hold.rs reads only the dispatch_hold block (the hold the merge gate
 # refuses on); it never extracts a plan status, so the shelling rule does not
 # apply to it.
@@ -594,12 +605,33 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
+    if [ "$reader" = "crates/fno-agents/src/loopcheck/plan_fidelity.rs" ]; then
+        # plan_fidelity's "status" literal is the LEDGER row's delivery
+        # status in the fold join (the unjoined rows), the plan_join
+        # row-vocabulary precedent; its plan read walks deliverable
+        # headings and carveout frontmatter, never a `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\.get\("status"\)' \
+                || true
+        )"
+    fi
     if [ "$reader" = "crates/fno-agents/src/wave.rs" ]; then
         # wave's "status" literals are `git status --porcelain` argv for the
         # wave worktree checks; its plan read is the task list, never `status:`.
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '\["status", "--porcelain"' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/wave_ready.rs" ]; then
+        # wave_ready's "status" literals: the schema-error field it DROPS from
+        # the frontmatter report, the `agents claim status` argv, and the
+        # graph task row's status. None reads the plan's `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '!= Some\("status"\)|"claim", "status"|row\.get\("status"\)' \
                 || true
         )"
     fi
@@ -619,32 +651,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Python keeps one rung table.
+# 3. Python keeps no rung table.
 # ---------------------------------------------------------------------------
-echo "--- Python: one rung table ---"
+echo "--- Python: no rung table ---"
 tables=$(
     git ls-files -z -- 'cli/src/**/*.py' 2>/dev/null \
         | xargs -0 grep -l '_STATUS_TO_RUNG' 2>/dev/null | LC_ALL=C sort || true
 )
-if [ "$tables" != "cli/src/fno/graph/ladder.py" ]; then
-    violation "the rung table must live only in cli/src/fno/graph/ladder.py" \
-        "found in: ${tables:-(nowhere - was plan_rung deleted?)}"
+if [ -n "$tables" ]; then
+    violation "the rung table lives only in crates/fno-agents/src/backlog_ready.rs" \
+        "found in: $tables"
 else
-    note "OK: the rung table lives only in ladder.py"
-fi
-
-# Dispatch policy stays explicit for both plan-bearing and plan-less nodes.
-# Autonomous selection reads plan_rung directly through selection_guards; a
-# second is_selectable predicate would be decorative because no selector calls it.
-if grep -q 'def is_selectable' cli/src/fno/graph/ladder.py 2>/dev/null; then
-    violation "is_selectable must not return as a decorative policy" \
-        "Autonomous selectors read plan_rung through selection_guards."
-elif ! grep -q 'def is_dispatchable' cli/src/fno/graph/ladder.py 2>/dev/null \
-    || ! grep -q 'def is_cold_dispatchable' cli/src/fno/graph/ladder.py 2>/dev/null; then
-    violation "both real dispatch policies must exist in ladder.py" \
-        "Expected is_dispatchable and is_cold_dispatchable."
-else
-    note "OK: real dispatch policies are present and is_selectable is absent"
+    note "OK: Python holds no rung table"
 fi
 
 echo ""

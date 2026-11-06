@@ -79,7 +79,7 @@ The `scope: cross-project` parallel-worktree pipeline has been removed;
 (from its `project:` field / node) against the workspace map and, when a wave
 belongs to a project OTHER than the session's:
 
-- **Foreign node unblocked (ready):** first deterministically isolate the worker into a dedicated worktree, minting the name through the bridge (`WORKER_NAME="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source ex --command t <foreign-node>)"`, which yields `ex-t-<foreign-node>`): `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`. On success, link shared state into it best-effort: `[[ -f <foreign-root>/scripts/setup/setup-worktree.sh ]] && CANONICAL=<foreign-root> WORKTREE=$wt bash <foreign-root>/scripts/setup/setup-worktree.sh` (the command is package code and cannot run this repo-root script itself; the caller does). Then `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` (the `${wt:-...}` fallback launches in the foreign main checkout when `ensure` fails for any reason, so the dispatch is never blocked). Mark the wave delegated, print a `spawned $WORKER_NAME --cwd ${wt:-<foreign-root>}` receipt, and continue this session's own waves. A refused mint refuses the spawn (AC1-EDGE): do not hand-assemble a name.
+- **Foreign node unblocked (ready):** first deterministically isolate the worker into a dedicated worktree, minting the name through the bridge (`WORKER_NAME="$(fno agents registry name --source ex --command t <foreign-node>)"`, which yields `ex-t-<foreign-node>`): `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`. On success, link shared state into it best-effort: `[[ -f <foreign-root>/scripts/setup/setup-worktree.sh ]] && CANONICAL=<foreign-root> WORKTREE=$wt bash <foreign-root>/scripts/setup/setup-worktree.sh` (the command is package code and cannot run this repo-root script itself; the caller does). Then `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` (the `${wt:-...}` fallback launches in the foreign main checkout when `ensure` fails for any reason, so the dispatch is never blocked). Mark the wave delegated, print a `spawned $WORKER_NAME --cwd ${wt:-<foreign-root>}` receipt, and continue this session's own waves. A refused mint refuses the spawn (AC1-EDGE): do not hand-assemble a name.
 - **Foreign node still blocked** (e.g. `blocked_by` the current, not-yet-merged node): do NOT spawn (the worker would refuse). Record a `fno backlog carveout add --kind deferred` entry, print a `deferred <node> to <project>; dispatch on <blocker> merge` line, and rely on `fno backlog advance` to dispatch it after merge.
 - **Foreign node blocked but `dep=contract`** (the optimistic stub pass, G3): dispatch it **NOW** instead of deferring. The node carries `dep: contract` + `stub_against: <ref>` + `contract_version: N` (set by `fno backlog decompose`, G2). Isolate the worker the same way first (mint `WORKER_NAME` through the bridge exactly as the ready bullet; `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`, then the same best-effort `setup-worktree.sh` link as the ready bullet), then spawn `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` and print a `stubbed <node> vs contract v<N>` receipt. The spawned first pass MUST: build against the pinned `## Interface Contract`, **stub** the surface that needs the blocker landed, open its PR as **draft** (`gh pr create --draft` - it must not merge with mocks), emit its manifest via `fno do pr stub-manifest write --node <node> --contract-version <N> --contract-ref <ref> --contract-test '<cmd>' --stubs-json '[{stub_id,file,symbol,contract_ref,kind}, ...]'`, then **END**. Reconciliation is a later merge-triggered pass (G4); the first pass never waits for the blocker. **`--contract-test` is REQUIRED**: it is the executable command the G4 reconcile pass runs against the now-landed schema to authorize de-stubbing (the blocker ships this suite as part of its `## Interface Contract`; Locked Decision 5). A manifest without it makes G4 refuse auto-de-stub (fail-closed), so the draft PR strands - never omit it. For a non-typed contract, a thin schema-snapshot or type-check command is the minimum viable gate.
 - **Never** `cd` into the foreign repo and execute locally.
@@ -196,7 +196,7 @@ For each DISPATCH ROUND, drive off the ready set, not wave order:
 # reads): cross-session done/in_progress task rows then join this session's
 # STATE.md [x] as completions and claims. A failed node read degrades to
 # STATE.md only - proceed, never stall on the richer read.
-READY_ARGS=(--ready --state .fno/STATE.md)
+READY_ARGS=(--state .fno/STATE.md)
 if [[ -n "${NODE_ID:-}" ]]; then
     READY_ARGS+=(--node "$NODE_ID")
 fi
@@ -209,8 +209,7 @@ fi
 # row and stays unfiltered.
 WORKER_BAND="${FNO_WORKER_BAND:-}"
 if [[ -z "$WORKER_BAND" && -n "$NODE_ID" && -f ".fno/join-briefs/${NODE_ID}.md" ]]; then
-    WORKER=$(fno agents whoami 2>/dev/null | python3 -c \
-        "import json,sys; print(json.load(sys.stdin).get('name') or '')" 2>/dev/null || true)
+    WORKER=$(fno agents registry whoami 2>/dev/null | jq -r '.name // ""' 2>/dev/null || true)
     if [[ -n "$WORKER" ]]; then
         WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
             '{cell = tolower($2); gsub(/ /, "", cell); want = tolower(w); gsub(/ /, "", want); if (cell == want && cell != "") {gsub(/ /, "", $3); print $3; exit}}' \
@@ -220,7 +219,7 @@ fi
 if [[ -n "$WORKER_BAND" ]]; then
     READY_ARGS+=(--band "$WORKER_BAND")
 fi
-READY_JSON=$(python3 skills/execute/orchestrator.py "$PLAN_PATH" "${READY_ARGS[@]}")
+READY_JSON=$(fno-agents wave ready "$PLAN_PATH" "${READY_ARGS[@]}")
 ```
 
 A task appears under `ready` when its effective blockers are all complete and no peer holds it. A declared `blocked_by` list wins, including an explicit empty list. A task without that key derives every task in the previous wave. Inside a parallel wave, `collision.partition` adds derived edges: tasks sharing a file (or a hidden shared output root) serialize in wave order, and a task with no parseable file list waits for every evaluated sibling. Live foreign task claims appear under `claimed`. Stale or self-owned claims are re-offered. Tasks held back by unfinished blockers appear under `blocked_on` with those blockers and re-enter `ready` on a later round, so they need no action now. Unknown task-row statuses appear under `blocked` and never dispatch. Dispatch every entry under `ready` before running the query again:
@@ -290,21 +289,15 @@ and failure modes.
 Before dispatching `frontend-executor` for any task whose resolved executor is
 `impeccable`, re-check PRODUCT.md presence and freshness at dispatch time:
 
-```python
-from orchestrator import check_product_md_for_dispatch
-
-gate_passed = check_product_md_for_dispatch(
-    repo_root=Path(repo_root),
-    plan_path=plan_path,
-    stages=task_stages,  # e.g. ["craft", "critique", "harden"]
-)
-if not gate_passed:
-    # <help> has already been emitted to stdout.
-    # Return early - do NOT dispatch frontend-executor.
-    return
+```bash
+# --stages is the task's impeccable stages, comma-separated.
+if ! fno-agents wave product-gate --repo "$REPO_ROOT" --plan "$PLAN_PATH" --stages craft,critique,harden; then
+    # The <help> is already on stdout. Do NOT dispatch frontend-executor.
+    exit 0
+fi
 ```
 
-The function searches in order: `${REPO_ROOT}/PRODUCT.md`,
+The gate searches in order: `${REPO_ROOT}/PRODUCT.md`,
 `${REPO_ROOT}/.agents/context/PRODUCT.md`, `${REPO_ROOT}/docs/PRODUCT.md`.
 It treats the file as stale if it is shorter than 200 chars or if `[TODO]`
 markers make up more than 25% of its content (mirrors /impeccable's loader
@@ -464,10 +457,10 @@ already fired from `resolve-executor.sh` at dispatch; `run_summary` fires from
 
 ```bash
 # task_done with the parsed outcome (SUCCESS | DONE_WITH_CONCERNS | FAILED):
-python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary task_done \
+fno-agents wave emit-boundary task_done \
   --task "{N.M}" --outcome "{status}" --data '{"commit":"{sha}","concerns":{k}}'
 # blocked on a RESULT: BLOCKED return (or a <help> distress emission):
-python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary blocked \
+fno-agents wave emit-boundary blocked \
   --task "{N.M}" --data '{"reason":"{why}"}'
 ```
 

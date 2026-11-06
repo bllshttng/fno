@@ -72,22 +72,13 @@ refuse() {
   exit "$1"
 }
 
-# run_fno <args...>: run the fno CLI from the best available substrate.
-# FNO_BIN (the same override scripts/lib/events.sh honors) wins, so a
-# hermetic run or a test can point the visibility legs at a stub; then the
-# checkout venv, then fno-py / fno on PATH. Returns 127 when none exists,
-# which every caller treats as skip.
+# run_fno <args...>: run the fno CLI. FNO_BIN (the same override
+# scripts/lib/events.sh honors) wins, so a hermetic run or a test can point
+# the visibility legs at a stub; then fno on PATH. Returns 127 when neither
+# exists, which every caller treats as skip.
 run_fno() {
   if [[ -n "${FNO_BIN:-}" ]]; then
     "$FNO_BIN" "$@"
-    return
-  fi
-  if [[ -x "$REPO_ROOT/cli/.venv/bin/python" ]]; then
-    PYTHONPATH="$REPO_ROOT/cli/src" "$REPO_ROOT/cli/.venv/bin/python" -m fno.cli "$@"
-    return
-  fi
-  if command -v fno-py >/dev/null 2>&1; then
-    fno-py "$@"
     return
   fi
   command -v fno >/dev/null 2>&1 || return 127
@@ -266,49 +257,30 @@ write_start_receipt
 # file. The previous version counted occurrences globally, which was
 # fragile to rule files whose contents happened to include a YAML-shaped
 # `full_text:` line (e.g. a rule documenting the packet format itself).
-# Walk the YAML structurally with python's parser instead.
-PACKET_PATH="$PACKET_TMP" python3 - <<'PY' >&2 || { REASON="rule text not provided for all implicated files"; exit 2; }
-import os, sys, re
-
-with open(os.environ["PACKET_PATH"]) as f:
-    text = f.read()
-
-# Find the implicated_rules: block start and read until the next
-# top-level key (no leading indent). Inside the block, each entry begins
-# with "  - file:" at two-space indent and SHOULD be followed by a
-# "    full_text:" at four-space indent within the same entry.
-m = re.search(r"^implicated_rules:\s*$(.*?)(^\S|\Z)", text, re.MULTILINE | re.DOTALL)
-if not m:
-    # No implicated_rules block at all - nothing to validate.
-    sys.exit(0)
-
-block = m.group(1)
-# Empty list literal "[]" on the same line as the heading is rendered by
-# pack.sh when there are no entries; tolerate that.
-if block.strip() == "[]":
-    sys.exit(0)
-
-# Split into entries by the "  - file:" marker.
-entries = re.split(r"^  - file:\s*", block, flags=re.MULTILINE)[1:]
-missing = []
-for entry in entries:
-    # Path is the first line of the entry (until newline).
-    path = entry.split("\n", 1)[0].strip()
-    # Look for a "    full_text:" line within the entry's indent block,
-    # before the next "  - file:" marker (already partitioned by split).
-    has_text = re.search(r"^    full_text:", entry, re.MULTILINE)
-    if not has_text:
-        missing.append(path)
-
-if missing:
-    print(
-        "autocorrect-review: rule text not provided for all implicated files; "
-        "reviewer would be operating blind", file=sys.stderr,
-    )
-    for p in missing:
-        print(f"  - missing full_text: {p}", file=sys.stderr)
-    sys.exit(2)
-PY
+# Walk the block structurally instead: the first `implicated_rules:` heading
+# opens it, the next top-level key (no leading indent) closes it, each entry
+# starts at a two-space `  - file:` line and SHOULD carry a four-space
+# `    full_text:` line before the next entry. An inline `[]` list has no
+# entries and passes.
+awk '
+  function trim(v) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", v); return v }
+  function close_entry() { if (open_entry && !has_text) missing[++n] = path; open_entry = 0 }
+  !seen && /^implicated_rules:[[:space:]]*$/ { seen = 1; inblock = 1; next }
+  inblock && /^[^[:space:]]/ { inblock = 0 }
+  inblock && /^  - file:/ {
+    close_entry()
+    path = $0; sub(/^  - file:[[:space:]]*/, "", path); path = trim(path)
+    open_entry = 1; has_text = 0; next
+  }
+  inblock && open_entry && /^    full_text:/ { has_text = 1 }
+  END {
+    close_entry()
+    if (n) {
+      print "autocorrect-review: rule text not provided for all implicated files; reviewer would be operating blind" > "/dev/stderr"
+      for (i = 1; i <= n; i++) print "  - missing full_text: " missing[i] > "/dev/stderr"
+      exit 2
+    }
+  }' "$PACKET_TMP" >&2 || { REASON="rule text not provided for all implicated files"; exit 2; }
 
 # Extract prompt body between markers.
 PROMPT_BODY="$TMPDIR_R/prompt.txt"
@@ -317,17 +289,11 @@ if [[ ! -s "$PROMPT_BODY" ]]; then
   refuse 2 "failed to extract prompt body from $PROMPT_FILE"
 fi
 
-# Substitute {PACKET} with the packet contents. Use a sentinel + python so
-# pipe characters / special chars in the packet don't break sed.
+# Substitute {PACKET} with the packet contents. jq reads both files raw, so
+# pipe characters / special chars in the packet don't break the substitution.
 FILLED_PROMPT="$TMPDIR_R/filled.txt"
-PACKET_PATH="$PACKET_TMP" PROMPT_PATH="$PROMPT_BODY" python3 - <<'PY' > "$FILLED_PROMPT"
-import os
-with open(os.environ["PROMPT_PATH"]) as f:
-    prompt = f.read()
-with open(os.environ["PACKET_PATH"]) as f:
-    packet = f.read()
-print(prompt.replace("{PACKET}", packet))
-PY
+jq -nj --rawfile prompt "$PROMPT_BODY" --rawfile packet "$PACKET_TMP" \
+  '($prompt | split("{PACKET}") | join($packet)) + "\n"' > "$FILLED_PROMPT"
 
 # Compute review_id (matches packet builder's scheme if possible).
 REVIEW_ID=$(grep -E '^review_id: ' "$PACKET_TMP" | head -1 | sed 's/^review_id: //' || true)

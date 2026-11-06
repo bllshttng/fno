@@ -3,7 +3,7 @@
 
 The COMPLETE roster of harnesses footnote supports lives in
 Rust, as ``KNOWN_HARNESSES`` in ``crates/fno-agents/src/provider.rs`` (the
-Python tuple copy is gone; ``fno.harness_names`` proxies the binary). This
+Python copy is gone). This
 gate parses that same const out of the Rust SOURCE - stdlib only, no package
 install, no Rust build, no network - and holds every shipped evidence
 surface as a SUBSET of it, every one-sided difference NAMED, never counted:
@@ -20,7 +20,7 @@ drift the gate refuses. A roster entry nobody names is invisible here by
 design - see the format/subset pins in the Rust unit tests.
 
 The gate also pins the ``HERMES_SESSION_ID`` invariant independently of roster
-parity: the variable must sit in ``_EXTRA_IDENTITY_NAMES`` (the scrub set) and
+parity: the variable must sit in ``AMBIENT_IDENTITY_FAMILIES`` (the scrub set) and
 be absent from ``HARNESS_SESSION_MARKERS`` and
 ``LEGACY_HARNESS_SESSION_MARKERS``. Promoting it to a resolver marker would
 turn the Hermes in-session spawn refusal into a permitted spawn, so that move
@@ -51,7 +51,7 @@ from typing import IO, Any, Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PROVIDER_RS = "crates/fno-agents/src/provider.rs"
-IDENTITY_PY = "cli/src/fno/harness_identity.py"
+CLAIMS_RS = "crates/fno-agents/src/claims.rs"
 SETUP_GLOB = "SETUP-*.md"
 
 ROSTER_CONST_RE = re.compile(
@@ -61,7 +61,7 @@ ROSTER_CONST_RE = re.compile(
 MARKER_VARS = (
     "HARNESS_SESSION_MARKERS",
     "LEGACY_HARNESS_SESSION_MARKERS",
-    "_EXTRA_IDENTITY_NAMES",
+    "AMBIENT_IDENTITY_FAMILIES",
 )
 
 
@@ -149,43 +149,19 @@ def extract_provider_arms(text: str) -> tuple[str, ...]:
 
 
 def extract_marker_tables(text: str) -> dict[str, tuple[str, ...]]:
-    try:
-        tree = ast.parse(text)
-    except SyntaxError as exc:
-        raise GateError(f"{IDENTITY_PY}: unparseable ({exc})") from exc
-    return {var: _string_tuple(tree, var, IDENTITY_PY) for var in MARKER_VARS}
-
-
-def _string_tuple(tree: ast.Module, var: str, rel: str) -> tuple[str, ...]:
-    """First-elements of ``var``'s tuple-of-pairs assignment, literal-only."""
-    for node in ast.walk(tree):
-        targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-        elif isinstance(node, (ast.AnnAssign,)) and node.target:
-            targets = [node.target]
-        if not any(isinstance(t, ast.Name) and t.id == var for t in targets):
-            continue
-        value = getattr(node, "value", None)
-        if not isinstance(value, ast.Tuple):
-            raise GateError(f"{rel}: {var} is not a tuple literal")
-        names: list[str] = []
-        for elt in value.elts:
-            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                names.append(elt.value)  # a bare string element
-            elif (
-                isinstance(elt, ast.Tuple)
-                and len(elt.elts) == 2
-                and isinstance(elt.elts[0], ast.Constant)
-                and isinstance(elt.elts[0].value, str)
-            ):
-                names.append(elt.elts[0].value)  # a pair tuple (marker tables)
-            else:
-                raise GateError(f"{rel}: {var} holds a non-literal element")
-        if not names:
-            raise GateError(f"{rel}: {var} is empty")
-        return tuple(names)
-    raise GateError(f"{rel}: no assignment to {var} found")
+    """First elements of each claims.rs const pair table."""
+    out: dict[str, tuple[str, ...]] = {}
+    for var in MARKER_VARS:
+        match = re.search(
+            rf"const {var}: &\[\(&str, &str\)\] =\s*&\[(.*?)\];", text, re.DOTALL
+        )
+        if not match:
+            raise GateError(f"{CLAIMS_RS}: no const {var} table found")
+        pairs = re.findall(r'\(\s*"([^"]+)"\s*,\s*"[^"]*"\s*\)', match.group(1))
+        if not pairs:
+            raise GateError(f"{CLAIMS_RS}: const {var} holds no pairs")
+        out[var] = tuple(pairs)
+    return out
 
 
 def collect(root: Path) -> dict[str, Any]:
@@ -195,7 +171,7 @@ def collect(root: Path) -> dict[str, Any]:
         "roster": extract_roster(provider_text),
         "setup docs": extract_setup_harnesses(root),
         "provider dispatch": extract_provider_arms(provider_text),
-        "markers": extract_marker_tables(_read(root, IDENTITY_PY)),
+        "markers": extract_marker_tables(_read(root, CLAIMS_RS)),
     }
 
 
@@ -226,13 +202,13 @@ def check(facts: dict[str, Any]) -> list[str]:
     if in_markers:
         problems.append(
             "HERMES_SESSION_ID sits in "
-            f"{', '.join(in_markers)}; it must stay in _EXTRA_IDENTITY_NAMES "
+            f"{', '.join(in_markers)}; it must stay in AMBIENT_IDENTITY_FAMILIES "
             "(scrubbed, non-resolving) so the in-session shell-spawn refusal "
             "stays armed"
         )
-    if "HERMES_SESSION_ID" not in markers["_EXTRA_IDENTITY_NAMES"]:
+    if "HERMES_SESSION_ID" not in markers["AMBIENT_IDENTITY_FAMILIES"]:
         problems.append(
-            "HERMES_SESSION_ID is absent from _EXTRA_IDENTITY_NAMES; the scrub "
+            "HERMES_SESSION_ID is absent from AMBIENT_IDENTITY_FAMILIES; the scrub "
             "set must keep scrubbing it"
         )
     return problems
@@ -312,19 +288,19 @@ def _provider_rs(roster: tuple[str, ...], arms: tuple[str, ...]) -> str:
     )
 
 
-def _identity_py(
+def _claims_rs(
     markers: tuple[str, ...],
     legacy: tuple[str, ...],
     extra: tuple[str, ...],
 ) -> str:
     def table(var: str, values: tuple[str, ...]) -> str:
         rows = "".join(f'    ("{v}", "x"),\n' for v in values)
-        return f"{var}: tuple[tuple[str, str], ...] = (\n{rows})\n"
+        return f"pub(crate) const {var}: &[(&str, &str)] = &[\n{rows}];\n"
 
     return (
         table("HARNESS_SESSION_MARKERS", markers)
         + table("LEGACY_HARNESS_SESSION_MARKERS", legacy)
-        + table("_EXTRA_IDENTITY_NAMES", extra)
+        + table("AMBIENT_IDENTITY_FAMILIES", extra)
     )
 
 
@@ -341,7 +317,6 @@ def _write_tree(
     skip_roster_const: bool = False,
 ) -> None:
     (root / "docs").mkdir(parents=True, exist_ok=True)
-    (root / "cli/src/fno/agents").mkdir(parents=True, exist_ok=True)
     (root / "crates/fno-agents/src").mkdir(parents=True, exist_ok=True)
     (root / PROVIDER_RS).write_text(
         provider_text
@@ -351,8 +326,8 @@ def _write_tree(
         ),
         encoding="utf-8",
     )
-    (root / IDENTITY_PY).write_text(
-        _identity_py(markers, legacy, extra), encoding="utf-8"
+    (root / CLAIMS_RS).write_text(
+        _claims_rs(markers, legacy, extra), encoding="utf-8"
     )
     for name in setup_docs:
         # Verbatim, not uppercased: a setup doc named SETUP-.md (empty harness
@@ -422,7 +397,7 @@ def run_selftest() -> int:
         _case(
             "HERMES_SESSION_ID dropped from the scrub set fails",
             1,
-            ("absent from _EXTRA_IDENTITY_NAMES"),
+            ("absent from AMBIENT_IDENTITY_FAMILIES"),
             extra=("CLAUDECODE_SESSION_ID",),
         ),
         _case(

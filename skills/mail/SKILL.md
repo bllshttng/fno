@@ -47,7 +47,7 @@ happens when that misses, and it is recovery, not delivery.**
 - `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's own turn record holds the envelope id. It does not prove the recipient acted on it.
 - `msg-<id> parked` or `injected` - the bytes reached the recipient, but no turn took them yet. Peek before you resend: a resend reaches it twice.
 - `msg-<id> queued (durable)` - live delivery was not confirmed. This is durable fallback, not delivery.
-- the receipt ends `landed (...)` or a `NOT LANDED` block - the send command re-checked the recipient after a settle window, and NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
+- the send command re-checks the recipient after a settle window. The receipt then ends `landed (...)`, `queued, not landed yet`, or a `NOT LANDED` block. `queued, not landed yet` means a live recipient drains it at its next turn boundary. That send exits 0, so do not re-send. NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
 
 The recipient's own `unread` / `ack` / `drain-self` commands exist to consume that
 fallback queue, which is why they read like a mailbox. They are the recovery
@@ -82,7 +82,7 @@ the matching section. Messaging is free, so **nothing here confirms** (contrast
 | Command | Routes to | Needs normalize | Cost |
 |------|-----------|-----------------|------|
 | `send <name> "<body>"` | `fno agents mail send <name> "<body>"` | yes (refuse empty) | free |
-| `send project <X> "<body>"` | `fno agents mail send --to-project <X> "<body>"` | yes (broadcast) | free |
+| `send project <X> "<body>"` | `fno agents mail send --to-project <X> "<body>"` | yes (one live peer) | free |
 | `reply <msg-id> "<body>"` | `fno agents mail reply --to <msg-id> --body "<body>"` | yes (refuse empty) | free |
 | `unread [name]` | `fno agents mail unread [-n <name>]` | no (read) | free |
 | `ack <msg-id> [name]` | `fno agents mail ack <msg-id> [-n <name>]` | no | free |
@@ -222,28 +222,23 @@ idempotent (re-acking the same id is a safe no-op), so a retry never double-skip
 
 ---
 
-## Cross-project `--kind` notes: the three axes
+## Addressing a project, and the retired `--kind` lane
 
-A send has three orthogonal axes; keep them separate or a note lands in an inbox
-nothing drains.
+A send has two axes. Keep them apart.
 
 - **Addressee** - WHO. A live session handle (`send <name>`) or a project
-  (`--to-project <X>`). A session handle is a moving target; a project inbox is
-  a durable mailbox its members read.
+  (`--to-project <X>`). A project send resolves to the one live peer working on
+  that project. No live peer means the send exits 16 and writes nothing, because
+  no drain reads a queued project note. Many live peers exit 17 unless you pass
+  `--any`.
 - **Lane** - HOW it travels. Live-inject first, durable bus as the fallback. You
   do not choose this; the delivery model does. A durable receipt names WHY it is
-  durable (`[live-miss]`, `[self-send]`, `[param-forced: --kind ...]`).
+  durable (`[live-miss]`, `[self-send]`).
 - **`[agent-lock-timeout]`** - the odd durable reason. Another command on the same agent held the per-agent lock. `send`, `ask`, `spawn`, `stop` and `rm` all take it. No live attempt ran. The token says nothing about the recipient in either direction. Do not resurrect it on that evidence. Do not read it as healthy either. `peek` first, then withdraw before you re-send.
-- **Kind** - a label on the durable row, set with `--kind`: `heads-up`,
-  `question` or `fyi`. A `question` also escalates to a human. Reply to any of
-  them with `--reply-to <msg-id>` (the reply joins its thread).
 
-`--kind` is a **project-inbox flag**, so it needs `--to-project`. A bare
-`--kind question`/`--kind fyi` to a session handle is refused (a handle has no
-drain that reads those kinds) - the error names the two real intents: drop
-`--kind` to inject live, or add `--to-project` to file a durable note.
-`--kind heads-up` to a handle stays accepted (the production notification
-pattern).
+`--kind` (`heads-up`, `question`, `fyi`) and `--persist` are retired. The flag exits 2
+and names the two real intents: drop `--kind` to send to a session by name, or run
+`fno inbox outstanding ask` to put a question to a human.
 
 ### Cross-host targets: `<name>@<host>`
 

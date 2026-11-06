@@ -208,18 +208,12 @@ for id in "${NODES[@]}"; do
   # dispatch:<id>; no reservation is taken on this shell rung.
   # Fail CLOSED: a stale `fno` without the command (or any non-clean/unparseable
   # verdict) leaves the node `ready` and launches nothing.
-  # spawn-guard is a Python-only command (no Rust client impl). Pin the call to the
-  # Python runtime so an operator with FNO_AGENTS_RUNTIME=rust exported does not
-  # route it to the Rust binary (which lacks it -> 127 -> the guard fails closed
-  # and bg-dispatch breaks). The inline override is scoped to this command; the
-  # real `fno agents spawn` below routes normally. The default (unset) runtime
-  # already keeps spawn-guard Python.
   res_key="dispatch:$id"; res_holder="dispatch-node:$$"
   node_guard_cwd="$(printf '%s' "$node_json" | jq -r '._resolved_cwd // .cwd // empty' 2>/dev/null)"
   guard_cwd_args=()
   [[ -n "$node_guard_cwd" ]] && guard_cwd_args=("--cwd" "$node_guard_cwd")
   if [[ "$DRY_RUN" -eq 1 || "$status" == "claimed" ]]; then
-    guard_out="$(FNO_AGENTS_RUNTIME=python fno agents admit guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+    guard_out="$(fno agents admit guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   else
     guard_out='{"verdict":"dispatchable"}'; guard_rc=0
   fi
@@ -334,9 +328,7 @@ for id in "${NODES[@]}"; do
   # minted through the canonical owner, which sanitizes the slug AND
   # budgets the assembled name against the runtime's 64-char limit. No --command:
   # the seed (and so the command) is rendered by the spawn door from the node.
-  # FNO_AGENTS_RUNTIME=python pins the Python dispatch: an ambient `=rust` routes
-  # EVERY `fno agents` command to the binary, which has no `name` port. Exit 3 (not
-  # 2) is the naming refusal - Click spends 2 on usage errors including "no such
+  # Exit 3 (not 2) is the naming refusal - Click spends 2 on usage errors including "no such
   # command", so an `fno` too old to know this command would otherwise read as
   # "unrepresentable" and refuse the whole fleet.
   # Streams are merged so a refusal's cause survives; the name is read as the
@@ -351,9 +343,9 @@ for id in "${NODES[@]}"; do
   #; an env var, not a flag - the flag registry refuses Python flag
   # growth.
   name_args=("$id" --command t --slug "$node_slug")
-  name_env=(FNO_AGENTS_RUNTIME=python)
+  name_env=()
   [[ -n "$ROUTE" ]] && name_env+=(FNO_AGENTS_NAME_MODEL="${ROUTE##*/}")
-  name_out="$(env "${name_env[@]}" fno agents registry name "${name_args[@]}" 2>&1)"
+  name_out="$(env ${name_env[@]+"${name_env[@]}"} fno agents registry name "${name_args[@]}" 2>&1)"
   name_rc=$?
   name_last="${name_out##*$'\n'}"
   agent_name=""

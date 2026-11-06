@@ -26,7 +26,7 @@ It is advisory by default, can satisfy an identity-free local peer gate with `--
   - PR number -> review `gh pr diff <N>`.
   - branch name -> review that branch's diff vs base.
   - nothing -> review the current branch vs base (`origin/main` unless overridden).
-- **provider** (optional, trailing word): `codex` (default) or `gemini`. A bare peer whose provider **matches the invoking harness** is rejected. It is the author's own model, so it cannot be a cross-model second opinion (see Hard rules). The invoking harness is read from the ambient markers in precedence order `$CODEX_THREAD_ID` > `$CLAUDE_CODE_SESSION_ID` > `$CODEX_SESSION_ID` > `$GEMINI_SESSION_ID`. The shared order lives in `harness_identity.py` / `claims.rs`. A claude session rejects a bare `claude`, a codex session a bare `codex`, a gemini session a bare `gemini`.
+- **provider** (optional, trailing word): `codex` (default) or `gemini`. A bare peer whose provider **matches the invoking harness** is rejected. It is the author's own model, so it cannot be a cross-model second opinion (see Hard rules). The invoking harness is read from the ambient markers in precedence order `$CODEX_THREAD_ID` > `$CLAUDE_CODE_SESSION_ID` > `$CODEX_SESSION_ID` > `$GEMINI_SESSION_ID`. The shared order lives in `crates/fno-agents/src/claims.rs` (`HARNESS_SESSION_MARKERS`). A claude session rejects a bare `claude`, a codex session a bare `codex`, a gemini session a bare `gemini`.
 
   A **routed** peer IS allowed. A `config.review.peers` entry of the form `{provider: claude, model: "zai,glm-5.3"}` runs the claude CLI as transport over a genuinely different model (GLM via z.ai). That satisfies the distinct-model trust invariant (see step 3b).
 - **base** (optional): override the diff base (default `origin/main`).
@@ -216,58 +216,24 @@ fno agents spawn --once -t 300 --name "peer-$TARGET" "$(cat "$BRIEF")"
 - `-t 300` bounds the model run. Give the Bash call itself a generous timeout (e.g. 360000 ms), so the review is not cut off early.
 - `--name peer-$TARGET` is a throwaway handle (`--once` tears the agent down). Derive it from the target, e.g. `peer-pr657` or `peer-fix-ratios`.
 
-### 3b. GENERATE (routed claude -> GLM) - claude CLI as transport
+### 3b. GENERATE (routed claude -> GLM) - the Rust spawn door on the zai route
 
-For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), do NOT `fno agents spawn`. The claude CLI is only the transport. The review model is the routed one (GLM via z.ai).
-
-Run `claude -p` with the routed `ANTHROPIC_*` env built by the SAME model-routing layer the spawn path uses (`resolve_explicit_route`). The z.ai env-var contract then lives in one place and is never hand-rolled here.
-
-Clear the parent Anthropic credential first (exactly as `harnesses/claude.py` does) or a lingering key sends the run back to Anthropic:
+For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), the review runs through `fno agents spawn --once` on the explicit route - the same door every routed worker uses. The route's env is resolved by `crates/fno-agents/src/provider_route.rs` from the machine's own accounts. The credential scrub is `crates/fno-agents/src/model_env_scrub.rs` (the retired `harnesses/claude.py` twin). Nothing is hand-rolled here.
 
 ```bash
 # $BRIEF = the review prompt (step 2); "zai,glm-5.3" = the peers entry's `model`.
-# PY must run on the interpreter that has `fno` importable. A bare system python3
-# lacks fno's deps (ModuleNotFoundError: pydantic), so do NOT default to it: probe
-# for a working interpreter and FAIL LOUD if none is found. Override with
-# FNO_PYTHON (e.g. the fno tool venv python, or `uv run --project <fno-src> python`
-# in the footnote source tree).
-PYBIN=""
-for c in "$FNO_PYTHON" "$HOME/.local/share/uv/tools/fno/bin/python3" python3; do
-  [ -n "$c" ] || continue
-  if "$c" -c "import fno.agents.model_routing" 2>/dev/null; then PYBIN="$c"; break; fi
-done
-if [ -z "$PYBIN" ]; then
-  echo "no interpreter with fno importable - set FNO_PYTHON to the fno tool venv python (or run under 'uv run --project <fno-src>')" >&2
-  # abstain like any failed peer; do NOT fall back to a same-model review.
-else
-GLM_REVIEW="$("$PYBIN" - "$BRIEF" "zai,glm-5.3" <<'PY'
-import sys, os, subprocess
-from fno.agents.model_routing import resolve_explicit_route
-brief = open(sys.argv[1]).read()
-rprov, _, rmodel = sys.argv[2].partition(",")
-route = resolve_explicit_route(rprov, rmodel, notice=lambda m: print(m, file=sys.stderr))
-if not route:                      # z.ai key unset / provider misconfigured
-    print("z.ai key unset - GLM peer skipped", file=sys.stderr)
-    sys.exit(3)                    # fail-safe: NO silent Anthropic-billed fallback
-env = dict(os.environ)
-env.pop("ANTHROPIC_API_KEY", None)
-env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-env.update(route)
-r = subprocess.run(["claude", "-p", brief], env=env,
-                   capture_output=True, text=True, timeout=300)
-sys.stdout.write(r.stdout)
-sys.stderr.write(r.stderr)          # surface claude's failure reason, don't drop it
-sys.exit(r.returncode)
-PY
-)"
+# --once is a synchronous headless one-shot: the review text comes back on the
+# spawn command's own stdout, so stdout IS the review, exactly like step 4 reads.
+GLM_PEER_ERR="${TMPDIR:-/tmp}/glm-peer-$$.err"
+GLM_REVIEW="$(fno agents spawn --once -H claude --route "zai,glm-5.3" \
+  --name "peer-$TARGET" --cwd "$PWD" --timeout 300 \
+  "$(cat "$BRIEF")" 2>"$GLM_PEER_ERR")"
 GLM_RC=$?
-fi
 ```
 
-Then relay `$GLM_REVIEW` through step 4 exactly like a codex/gemini result: a
-non-zero `$GLM_RC` (including exit 3, key unset) is a FAILED/abstained peer - say
-so plainly ("z.ai key unset - GLM peer skipped") and leave the gate as-is. NEVER
-invent findings to stand in for the GLM review you did not actually get.
+The fail-safe is the door's own route refusal: with no z.ai key (or a misnamed provider), the spawn prints `--route "zai,glm-5.3" refused (provider unknown, non-anthropic, or keyless); no worker launched` and exits nonzero. The peer abstains and NOTHING falls back to an Anthropic-billed run - the refusal is the abstention, not an error to retry around.
+
+Then relay `$GLM_REVIEW` through step 4 exactly like a codex/gemini result: a non-zero `$GLM_RC` (including the route refusal) is a FAILED/abstained peer - say so plainly ("z.ai key unset - GLM peer skipped") and leave the gate as-is. NEVER invent findings to stand in for the GLM review you did not actually get.
 
 ### 4. RELAY honestly (the cardinal guard)
 

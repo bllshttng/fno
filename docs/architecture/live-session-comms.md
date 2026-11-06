@@ -35,15 +35,12 @@ Decision 8).
     next scan that still sees a live session; a fully-empty scan never rewrites
     the map (so a transient probe miss cannot wipe hand-edited aliases).
 
-The real `fno agents session list` auto-routes to the Rust client (`os.execv`), which
-owns the rendered surface. The Rust `list` render therefore shells out
-fail-open to an internal Python helper, `fno agents internal discovered-json`
-(`FNO_AGENTS_RUNTIME=python` pins it so it cannot recurse), and folds the lane
-into both `render_list_json` (additive `discovered_sessions` /
-`discovered_count` keys, `schema_version` 2) and a distinct
-`render_list_table` section. Discovery lives in Python because it needs
-`psutil`'s cross-platform process create-time; the Rust-native liveness
-degrades to existence-only on macOS. `--no-discovered` skips the scan.
+The real `fno agents session list` runs in the Rust client, which owns the
+rendered surface. The list render reads the lane from
+`crates/fno-agents/src/discovered_sessions.rs` and folds it into both
+`render_list_json` (additive `discovered_sessions` / `discovered_count` keys,
+`schema_version` 2) and a distinct `render_list_table` section.
+`--no-discovered` skips the scan.
 
 ### US2: send by handle
 

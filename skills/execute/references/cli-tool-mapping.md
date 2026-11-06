@@ -5,10 +5,10 @@ When this skill references Claude Code tools, use the equivalent on your platfor
 
 ## Skill Invocation
 
-| Action | Claude Code | Gemini CLI | Codex CLI |
-|--------|------------|------------|-----------|
-| Load a skill | `Skill` tool with `skill: "fno:plan"` | `activate_skill` tool with skill name | Skills auto-loaded; reference with `$skill-name` |
-| Run a slash command | `/fno:plan` | `/fno:plan` (if command exists) or `activate_skill` | `$footnote-plan` |
+| Action | Claude Code | opencode | Codex CLI |
+|--------|------------|----------|-----------|
+| Load a skill | `Skill` tool with `skill: "fno:fix"` | `skill` tool with `skill({ name: "fix" })` | Open the skill's `SKILL.md` from the skills list |
+| Run a slash command | `/fno:fix` | `/fno:fix` | `$fno:fix` (single-quote it on a shell line) |
 
 ## Subagent Dispatch
 
@@ -34,9 +34,6 @@ When this skill references Claude Code tools, use the equivalent on your platfor
 | Action | Claude Code | Gemini CLI | Codex CLI |
 |--------|------------|------------|-----------|
 | Backlog task management | `fno backlog ...` | `fno backlog ...` | `fno backlog ...` |
-| Discovery brief generation | `python3 scripts/discovery-brief.py ...` | `python3 scripts/discovery-brief.py ...` | `python3 scripts/discovery-brief.py ...` |
-| Roadmap validation | `bash scripts/validate-roadmap.sh` | `bash scripts/validate-roadmap.sh` | `bash scripts/validate-roadmap.sh` |
-| Scope coordination | `python3 scripts/scope-coordinator.py ...` (when present) | `python3 scripts/scope-coordinator.py ...` (when present) | `python3 scripts/scope-coordinator.py ...` (when present) |
 
 ## Session Loop (Stop Hook)
 

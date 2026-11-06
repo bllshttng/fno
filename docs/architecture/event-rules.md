@@ -84,6 +84,8 @@ Two modes on the same door write and report. `{"mode":"rules-import","file":"<pa
 
 `{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
 
+`{"mode":"rules-explain","event":{"kind":"pre-tool","tool":"Edit","paths":["cli/src/a.py"]}}` reads every live rule against that event. The event takes the `Event` fields. An event with no `project` takes the cwd's project. Each row carries a `status` and its `clauses`. The status is `applies`, `out-of-scope`, `expired`, `stop-engine`, `unmatched`, `retrieval` (tier 1, ranked only at a prompt or skill event) or `unevaluated` (tier 2). Each clause names one filter the rule sets, whether it held, and the event value it saw. The clauses are the ones `matches` uses, so a tier-0 `applies` row is exactly a rule `decide` fires. `rules-report` is the firing log: fires, blocks and warns per rule, and `never_fired` for the rest.
+
 ## Events
 
 `stop` is the Stop payload: session id, last assistant text, transcript path. Journal events are `journal:<type>` (`journal:operator_question`) or `decision_span:<kind>` (`decision_span:route`), read from the project events journal for rows written since this session's previous engine fire. The engine keeps a per-session cursor (seq + ts) under the journal's `event-rules/` folder. The spans a fire writes are the dedupe ledger. A lost cursor costs a re-read, never a re-fire.

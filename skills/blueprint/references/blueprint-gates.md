@@ -4,7 +4,7 @@ Read a gate only when its trigger fires. The dispatch table in SKILL.md ("## Gat
 
 ## Plan-level dispatch hold
 
-Trigger: named evidence must exist before this plan dispatches or merges. The Gates table in SKILL.md routes here. This gate carried a body and no table row until 2026-09-02. Nothing routed to it and no plan ever set the key. Meanwhile `finalize.rs`, `ladder.py`, `target_cli.py`, `git-protection.py` and `validate-plan.sh` all read it. A gate body with no trigger row is unreachable, whatever it says.
+Trigger: named evidence must exist before this plan dispatches or merges. The Gates table in SKILL.md routes here. This gate carried a body and no table row until 2026-09-02. Nothing routed to it and no plan ever set the key. Meanwhile `finalize.rs`, `ladder.py`, `target_cli.py`, `git_protection/merge_gate.rs` and `validate-plan.sh` all read it. A gate body with no trigger row is unreachable, whatever it says.
 
 When named evidence must exist before work starts or merges, author one `dispatch_hold` mapping in frontmatter. Add non-blank `reason`, `release_when`, and `set_by` strings. Add an ISO `review_on` date. The mapping's presence is the hold. The review date prompts review and never releases work. Every dispatcher and merger reads the same declaration. If the declaration is malformed or unreadable, the action fails closed. After the plan is written, the authorized-merge `hold-set` op authors the same block receipted (pipe the JSON payload to `fno-agents authorized-merge`). After an authorized ruling confirms `release_when`, the `hold-release` op with `evidence` lifts the hold. Never copy the hold into graph status or a private dispatcher file.
 
@@ -17,7 +17,7 @@ node ID. `parse-claims-arg.sh` recognizes the config-agnostic node-id shape
 A node id never collides with file paths or raw descriptions, so this check is
 cheap and goes first.
 
-When the argument matches, the rendered plan MUST declare `claims: <node-id>` in its frontmatter so `fno backlog intake` updates the existing node in place, in any state, rather than creating a duplicate (see `cli/src/fno/graph/_intake.py::_resolve_claim`). Without the claim, every adopted spec compounds the dangling-idea-node cleanup debt.
+When the argument matches, the rendered plan MUST declare `claims: <node-id>` in its frontmatter so `fno backlog intake` updates the existing node in place, in any state, rather than creating a duplicate (see `crates/fno-agents/src/backlog/intake.rs`). Without the claim, every adopted spec compounds the dangling-idea-node cleanup debt.
 
 **Classify and resolve.** Run this BEFORE the failure-mode path classifier
 below so an ab-id never falls through to "design-doc path":
@@ -639,33 +639,22 @@ The `no-collision-check` positional modifier (and `--no-collision-check` flag) s
 
 After the plan file is written and any collision check has resolved, but BEFORE auto-intake, scan the plan's Files-to-Modify table for paths that match a peer-owned surface. Mechanical resolution, not LLM judgment. Skip the whole step silently when no `peers` block exists (opt-in by design).
 
-```python
-import json, subprocess
-maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
-                                 capture_output=True, text=True, check=True).stdout)
-peers = maps["peers"]                  # {peer: [surface_name, ...]}
-patterns = maps["surface_patterns"]    # {surface_name: [glob, ...]}
+```bash
+MAPS="$(fno inbox peers --json)"
+# {peer: [surface_name, ...]}; an empty object means no peers block, so skip the step.
+printf '%s' "$MAPS" | jq -c '.peers'
+# {surface_name: [glob, ...]}
+printf '%s' "$MAPS" | jq -c '.surface_patterns'
 ```
 
-For each peer, union the glob patterns of every surface that peer owns,
-then test the plan's Files-to-Modify rows against that union. The
-patterns intentionally use `**` for recursive matches (e.g. `src/api/**`),
-so use a matcher that supports recursive globs across the project's
-target Python (3.11+). `fnmatch.fnmatch` does NOT recurse on `**`, and
-`pathlib.PurePath.match` only treats `**` as recursive starting in 3.13.
-The portable choice is to translate the glob to a regex and match:
+For each peer, union the glob patterns of every surface that peer owns, then test the plan's Files-to-Modify rows against that union. The patterns use `**` for recursive matches (for example `src/api/**`). Translate each glob to an anchored regex: `**` becomes `.*` (it crosses segments), `*` becomes `[^/]*` (one segment), and `?` becomes `.`. Then match the whole path, for example with jq:
 
-```python
-import re, fnmatch
-def match_recursive(file_path: str, pat: str) -> bool:
-    # Translate `**` to `.*` (cross-segment) and `*` to `[^/]*` (single segment).
-    regex = (
-        re.escape(pat)
-        .replace(r"\*\*", ".*")
-        .replace(r"\*", "[^/]*")
-        .replace(r"\?", ".")
-    )
-    return re.fullmatch(regex, file_path) is not None
+```bash
+printf '%s\n' "$FILE_PATH" | jq -Rr --arg pat "$PAT" '
+  ($pat | gsub("(?<c>[.+^$()|\\[\\]{}])"; "\\\(.c)")
+        | gsub("\\*\\*"; "\u0000") | gsub("\\*"; "[^/]*")
+        | gsub("\u0000"; ".*") | gsub("\\?"; ".")) as $re
+  | select(test("^" + $re + "$"))'
 ```
 
 For each peer with at least one match, check the rc on send and update
@@ -673,7 +662,7 @@ the dedup list:
 
 ```bash
 if [[ "<peer>" not in messaged_peers ]]; then
-  if fno agents mail send --to-project <peer> --kind heads-up \
+  if fno agents mail send --to-project <peer> \
        --body "spec'd: <PLAN-TITLE>; touches surface <SURFACE-NAME>; ETA: <PLAN-TIMESTAMP>; plan: <PLAN-PATH>"; then
     append_peer_to_messaged_peers "<peer>"  # in plan frontmatter
   else

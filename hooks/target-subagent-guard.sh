@@ -43,28 +43,23 @@ append_subagent_event() {
 
 INPUT=$(cat)
 
-EVENT=$(echo "$INPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data.get('hook_event_name', ''))
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
+# agent_name, else description, else unknown; a non-string name reads unknown.
+agent_name_of() {
+    printf '%s' "$1" | jq -er '
+        (if has("agent_name") then .agent_name
+         elif has("description") then .description
+         else "unknown" end)
+        | if type == "string" then .[0:40] else error("not a name") end' 2>/dev/null \
+        || echo "unknown"
+}
+
+EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null || echo "")
 
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 case "$EVENT" in
     SubagentStart)
-        AGENT_NAME=$(echo "$INPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    name = data.get('agent_name', data.get('description', 'unknown'))
-    print(name[:40])
-except Exception:
-    print('unknown')
-" 2>/dev/null || echo "unknown")
+        AGENT_NAME=$(agent_name_of "$INPUT")
 
         # Only create checkpoint if there are uncommitted changes
         if git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; then
@@ -83,15 +78,7 @@ except Exception:
         ;;
 
     SubagentStop)
-        AGENT_NAME=$(echo "$INPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    name = data.get('agent_name', data.get('description', 'unknown'))
-    print(name[:40])
-except Exception:
-    print('unknown')
-" 2>/dev/null || echo "unknown")
+        AGENT_NAME=$(agent_name_of "$INPUT")
 
         append_subagent_event "{\"ts\":\"$TS\",\"type\":\"subagent_done\",\"agent\":\"$AGENT_NAME\"}"
 

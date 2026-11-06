@@ -184,7 +184,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 ## Lifecycle
 
-`fno backlog ready` accepts `--created-before`, `--created-after`, `--touched-before`, and `--touched-after` with values such as `30d` or an ISO date, plus `--sort created|touched` (oldest first); touched uses `touched_at`, falling back to `created_at`. Preview the 60-day stale-idea sweep with `fno backlog ready --ideas --touched-before 60d --sort touched --json`.
+`fno backlog ready` accepts `--created-before`, `--created-after`, `--touched-before`, and `--touched-after`. Their values are forms such as `30d` or an ISO date. `--sort created|touched` lists the oldest first. Touched uses `touched_at`, then `created_at`. Preview the 60-day stale-idea sweep with `fno backlog ready --ideas --touched-before 60d --sort touched --json`. The sweep skips p0 and p1 rows, so ignore those in the preview.
 
 `intake -> triage -> ready/next -> done`, with two reversible side states:
 
@@ -250,7 +250,7 @@ Two hidden commands serve the migration and the operator:
 
 ### Epic child cap
 
-`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads it from the config.toml beside graph.json, which is the global config on a default install. Unset means no cap.
+`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads the global config first, then a config.toml beside the store. Unset means no cap.
 
 A child is open: not done, not superseded, not deferred. Children are direct. A sub-epic counts as one child of its parent and carries its own cap.
 
@@ -263,6 +263,8 @@ The same count reads before any write, on the `epics:` line of `fno agents org c
 ### Unplanned idea cap
 
 Machine-filed, unplanned idea rows use `backlog.max_open_ideas` in each nearest-epic scope. Rows without an epic use `project:<project>`. The default is 25. Every measured epic scope held nine or fewer ideas. A fresh install can accept a readable first batch. `0` turns the cap off. Rows with a plan, epic type, decompose group, or `source_kind = operator_request` are not capped. A refusal reports the count, cap, oldest rows, and fold path (`--wave-of`). It suggests an epic parent or closing stale ideas. Setting this key prints the Python loader's unknown-key warning until the config model carries it. Rust still reads the key at the publication seams.
+
+A wave note (`fno backlog idea --wave-of <node>`) folds a finding onto a live node and mints no id. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
 
 ## Finding work by meaning: find --fts
 
@@ -290,7 +292,7 @@ Four edges connect nodes, and only the first two gate anything.
 |------|----------|---------|--------|
 | `blocked_by` | `--blocked-by` / `--add-blocker` / `--remove-blocker` | this cannot start until that lands | yes: derives `_status: blocked` |
 | `parent` | `--parent` | this was decomposed into that epic | yes: rollup, epic depth |
-| `contained_in` | `fno backlog contain <owner> <id>...` | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge |
+| `contained_in` | `fno backlog contain <owner> <id>...` (lift out: `contain --release <id>...`) | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge |
 | `source_node_id` | `--source-node`, or captured ambiently | this came *out of* working on that | no |
 | `related` | `--related` | affinity: two sides of the same coin, or work that co-delivers | no |
 
@@ -492,6 +494,8 @@ fno backlog maintain --apply       # recurring sweep: re-scope, prune, pr_url ba
 fno backlog reconcile              # close nodes whose PR merged outside the gate
 ```
 
+`reconcile` also moves a node off `in_review` when every PR on it closed without a merge. The closed PR stays on the node as an additional PR stamped `closed`, so a later reopen and merge still closes the node. The node returns to the queue, its thread gets the recovery command, and the sweep sends one notice. A live worker claim holds the node until the claim ends. To stop the work, defer the node.
+
 ### Abandoned do rows
 
 An open do row wedges its node `in_progress`. The in-progress status hides the row from the Rust settle's done+merged gate. A session that died mid-do strands its node forever. `fno backlog maintain` carries the leg that watches this population. Read mode reports every candidate with its verdict (`gone` or `held`) and the reason. `--apply` reaps a `gone` row. The row's own idle clock decides, never the liveness of its session. A live session proves only that it lives, and a dead session's row goes idle too. Idle counts from the row's `started_at` or the newest progress note its own session wrote. A row idle past `config.backlog.maintain.abandoned_do_row_hours` (default 24) is `gone`. A live claim holds the row. A reachable roster worker on the node holds the row at any age. An unread roster reaps nothing. `fno backlog requeue` asks the same question for a session that still reads reachable. A held row can still be reaped by hand. Run `fno backlog session reap-open` after you have proven the session dead yourself.
@@ -505,6 +509,8 @@ An open do row wedges its node `in_progress`. The in-progress status hides the r
    A leg is `ok` only on exit 0; exit 4 is recorded as `partial` (in this CLI it always means a degraded result, such as PR queries `reconcile` could not resolve, never "nothing to do").
    If any leg comes back other than `ok` the receipt status is `degraded` and the command exits non-zero, and the worker names the leg in its report - a scheduler log nobody reads is not a signal.
 2. One Sonnet worker for the judgment calls, working from a fixed allowlist of reversible levers, finishing by mailing a one-screen report that leads with the mechanical outcomes.
+
+The maintain pass carries a repo-rename sweep. An open node's PR url recorded under the repo's former name rewrites in place, primary or additional. The alias comes from config `[repo_aliases]` or GitHub's own redirect answer, cached in gh-facts. Closed rows keep their history.
 
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
 That makes the cadence boring to install:
@@ -619,15 +625,17 @@ Cards whose titles carry a home path or session id are withheld with one warning
 
 ## Take requests from the public board
 
-With `--requests`, `fno backlog publish` renders two links: a header link to a prefilled issue form and an Upvote link on each open card. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+With `--requests`, `fno backlog publish` renders three links. A header link opens a prefilled issue form. Each open card gets an Upvote link. Each open card that nobody holds also gets a Claim link. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
 
-The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo. fno never writes it for you. The form applies the request label to every visitor issue.
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo, named for the label (`fno-request.yml` by default). fno never writes it for you. Publish warns when the file is missing. The form applies the request label to every visitor issue.
 
 Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported. Only a maintainer with triage rights can apply a label by hand, so the label is the trust signal. Name yours differently and the import reads it with `--approved-label`.
 
 Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
 
-The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph, the claim store and GitHub. It writes only to the graph and, for takes, the claim store. It never writes to GitHub: no comment, no label, no close.
+
+The same command has a second mode for a teammate. `--epic <n>` reads a shared epic issue and files the nodes you claimed on it, as [Team mode](architecture/multiplayer.md#team-mode) describes. That mode ignores the labels and limits on this page.
 
 Four limits hold on every run:
 
@@ -641,3 +649,19 @@ An imported row is born `idea`, priority `p3`, marked private, tagged `external-
 One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
 
 An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.
+
+### Claim a card
+
+A contributor can claim a card. The Claim link in the detail panel of an open card that nobody holds opens an issue titled `Claim <id>`. The title carries the card id and nothing else.
+
+The import treats a claim like a request. It needs the request label and your approval label. On `--apply` an approved claim issue becomes a node claim, held by `github:<login>` for 24 hours. Every dispatcher skips a node under a live claim, so the fleet leaves the card alone. The board marks the card claimed.
+
+Each import run renews the claim while the issue stays open and keeps both labels. Run the import on a schedule, at least once a day, to keep claims alive. A run that no longer sees the issue releases the claim. A run that reads a full page of `--limit` issues releases nothing, because it cannot see the issues past the page.
+
+A claim ends in one of three ways:
+
+- The issue closes, or you remove a label. The next import run releases the claim.
+- The contributor opens a pull request that closes the Claim issue. The steward tags the node `claim-delivered`, releases the claim and adds a note with the credit trailer. The fleet builds the node from its own plan. The import never grants a node that carries the tag.
+- No import run renews the claim for 24 hours. The claim goes stale and the node is free.
+
+One login holds at most `--max-per-author` claims (3). The import refuses a claim on a node that another holder already holds, and the receipt names the holder.

@@ -2,6 +2,8 @@
 
 > **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agents send` were the messaging commands. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agents mail admin rebuild-render`) and messaging is one namespace, `fno agents mail` (`fno inbox` and `fno agents send` are retired). The command names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
 
+The wire contract (envelope, versions, threads, addresses, delivery states, the log and the lanes) is `crates/fno-agents/src/mail/SPEC.md`. Where this page and that spec differ, the spec wins.
+
 This document describes the canonical message-bus substrate shipped in Group 3 of the cross-agent message bus epic: the global JSONL log, per-agent cursors, the markdown render, `--to-project` anycast resolution, and the `fno inbox` alias. The full design (command taxonomy, delivery tiers, liveness model) lives in the maintainers' vault; this doc is the shipped-substrate reference.
 
 ## Problem
@@ -20,7 +22,7 @@ One global append-only log is the system of record. The per-recipient markdown t
 | Cursors (this work) | `<bus_dir>/cursors/<name>.json` | Per-consumer read position, keyed by last-seen message-id. |
 | Markdown render (demoted) | `<recipient>/inbox/*.md` | Obsidian-visible render of the log; no authority. |
 
-`bus_dir` resolves via `fno.paths.bus_dir()`: `FNO_BUS_DIR` env override, else `<FNO_INBOX_ROOT>/.bus` when the inbox store is test-isolated (so every existing inbox test/smoke co-isolates the bus), else `config.paths.bus_dir`, else `state_dir()/bus` (default `~/.fno/bus/`).
+`bus_dir` resolves via `fno.paths.bus_dir()`: `FNO_BUS_DIR` env override, else `config.paths.bus_dir`, else the bus folder the state-root table names under `state_dir()` (default `~/.fno/db/mail/bus/`).
 
 ### The envelope (versioned)
 
@@ -203,7 +205,6 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | Reader: rows, unread scan, control sets, cursors (`chats bus-read`) | `crates/fno-agents/src/chats.rs`, `crates/fno-agents/src/mail_control_drain.rs` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
 | `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir`, `crates/fno-agents/src/intel.rs` |
-| Store bus write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` commands | `cli/src/fno/agents/cli.py` |
 | peer-project hint reader | `crates/fno-agents/src/inbox_peers.rs` |

@@ -962,13 +962,14 @@ TMPHOME="$(mktemp -d)"
 # the case where Python cannot run at all;
 # cli/tests/smoke/test_preflight_hermetic.sh executes this derivation and checks
 # the literal against the same constant, which is what keeps both honest.
-if HARNESS_MARKERS="$(PYTHONPATH="$PREFLIGHT_WT/cli/src" python3 -c \
-    'from fno.harness_identity import AMBIENT_IDENTITY_ENV; print(" ".join(AMBIENT_IDENTITY_ENV))' 2>/dev/null)" \
+if HARNESS_MARKERS="$(python3 -c \
+    'import tomllib,sys; print(" ".join(tomllib.load(open(sys.argv[1],"rb"))["identity_markers"]))' \
+    "$PREFLIGHT_WT/crates/fno-agents/src/ambient_vocab.toml" 2>/dev/null)" \
    && [[ -n "$HARNESS_MARKERS" ]]; then
     :
 else
     echo "preflight: WARN harness-marker fetch failed; using hardcoded fallback list" >&2
-    HARNESS_MARKERS="FNO_HARNESS_NAME FNO_HARNESS_SESSION_ID CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID CLAUDE_SESSION_ID CLAUDECODE CLAUDECODE_SESSION_ID HERMES_SESSION_ID TARGET_SESSION_ID CODEX_CI CODEX_INTERNAL_ORIGINATOR_OVERRIDE CODEX_SHELL CODEX_COMPANION_SESSION_ID CODEX_COMPANION_TRANSCRIPT_PATH FNO_AGENT_SUBSTRATE FNO_NODE_REASON"
+    HARNESS_MARKERS="FNO_HARNESS_NAME FNO_HARNESS_SESSION_ID CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID PI_SESSION_ID CLAUDE_SESSION_ID CLAUDECODE CLAUDECODE_SESSION_ID HERMES_SESSION_ID TARGET_SESSION_ID CODEX_CI CODEX_INTERNAL_ORIGINATOR_OVERRIDE CODEX_SHELL CODEX_COMPANION_SESSION_ID CODEX_COMPANION_TRANSCRIPT_PATH PI_SESSION_FILE FNO_AGENT_SUBSTRATE FNO_NODE_REASON"
 fi
 
 run_hermetic() {
@@ -1176,18 +1177,16 @@ fi
 # with its self-test, and the graph-consumer census (commands + reads) with its
 # self-test, on the hermetic candidate tree.
 if retry_run_leg tracker-gates:fno; then
-    echo "preflight: === tracker gates (partition + consumer census) ==="
+    echo "preflight: === tracker gates (partition) ==="
     tg0="$SECONDS"
     run_hermetic bash scripts/ci/check-tracker-partition.sh --self-test
     tgp=$?
     run_hermetic bash scripts/ci/check-tracker-partition.sh
     tgp2=$?
     [[ $tgp2 -gt $tgp ]] && tgp=$tgp2
-    run_hermetic bash scripts/ci/check-tracker-consumers.sh
-    tgc=$?
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
     TG_INCLUDED=1
-    if [[ $tgp -eq 0 && $tgc -eq 0 ]]; then
+    if [[ $tgp -eq 0 ]]; then
         record_leg tracker-gates:fno "tracker gates (fno)" pass $(( SECONDS - tg0 ))
     else
         record_leg tracker-gates:fno "tracker gates (fno)" fail $(( SECONDS - tg0 ))

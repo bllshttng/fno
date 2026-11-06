@@ -7,7 +7,7 @@ If a key is absent, the default is used. No hardcoding in skills.
 # project block (top-level, NOT under config)
 project:
   id: fno                                # short stable identifier for worktree path
-                                         # prefixes (~/.fno/worktrees/{id}-{slug}/).
+                                         # prefixes (~/.fno/spaces/worktrees/{id}-{slug}/).
                                          # Resolved via:
                                          #   1. project.id in this file
                                          #   2. basename of `git remote get-url origin`
@@ -66,8 +66,8 @@ work:
 
   # Worktree defaults
   worktree:
-    base: ~/.fno/worktrees         # canonical flat layout; full path is
-                                         # ~/.fno/worktrees/{project.id}-{slug}/
+    base: ~/.fno/spaces/worktrees  # canonical flat layout; full path is
+                                         # ~/.fno/spaces/worktrees/{project.id}-{slug}/
                                          # (Plan). Old projects may still
                                          # carry base: .claude/worktrees for the
                                          # transition window.

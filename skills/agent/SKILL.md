@@ -613,25 +613,21 @@ The accepted forms are explicit and positional:
 
 ```bash
 fno agents mail send "<agent>" "<body>"
-fno agents mail send "<agent>" --kind heads-up "<body>"
-fno agents mail send --to-project "<project>" --kind "<kind>" "<body>"
+fno agents mail send --to-project "<project>" "<body>"
 ```
 
-`<kind>` is one of `heads-up`, `question`, or `fyi`.
-Only an explicit `--kind` token selects a kind.
-A final body word such as `question`, `heads-up`, or `fyi` remains body text.
+The `--kind` flag is retired. The CLI exits 2 on it. A body word such as `question`, `heads-up`, or `fyi` remains body text.
 
-1. Parse `send project <project> --kind <kind> "<body>"` as project mode and parse `send <agent> [--kind <kind>] "<body>"` as agent mode.
-2. Refuse an empty recipient, project, kind value, or body before running anything, but do not interpret any body token as grammar.
-3. Map project mode to `fno agents mail send --to-project "<project>" --kind "<kind>" "<body>"` and agent mode to `fno agents mail send "<agent>" "<body>"`, inserting `--kind "<kind>"` only where the user explicitly supplied it.
-4. Pass every syntactically valid explicit kind to the genuine CLI, including `question` or `fyi` with an agent recipient.
-5. Let the CLI remain the single kind/addressee authority: it resolves an agent-scoped `heads-up` to the recipient's canonical session handle before the durable write, accepts all three project kinds, and refuses agent-scoped `question` or `fyi` before any durable write.
-6. On a CLI refusal, relay its stderr unchanged so the user sees the live-agent and project-note alternatives instead of a skill-layer paraphrase.
-7. On success, relay the real message id and routing receipt exactly as printed.
+1. Parse `send project <project> "<body>"` as project mode and parse `send <agent> "<body>"` as agent mode.
+2. Refuse an empty recipient, project, or body before running anything, but do not interpret any body token as grammar.
+3. Map project mode to `fno agents mail send --to-project "<project>" "<body>"` and agent mode to `fno agents mail send "<agent>" "<body>"`.
+4. Let the CLI remain the single addressee authority: a project send reaches the one live peer on that project, and exits 16 with nothing written when none is live.
+5. On a CLI refusal, relay its stderr unchanged so the user sees the alternatives instead of a skill-layer paraphrase.
+6. On success, relay the real message id and routing receipt exactly as printed.
 
 `accepted-new-turn` and `accepted-steer` confirm the recipient's own turn record holds the message. `parked` and `injected` mean the bytes reached it and no turn took them yet. None of them proves the recipient acted on it. `queued (durable)` is not delivered. It is durable fallback awaiting the recipient's next active boundary or recovery. Use `fno agents mail admin sent` to check whether the message `landed` in the recipient's transcript.
 Never upgrade queued mail to delivered, and never invent a receipt when the CLI printed none.
-An unknown agent heads-up exits 16 and writes nothing, so report that exact failure without guessing another recipient.
+An unknown agent exits 16 and writes nothing, so report that exact failure without guessing another recipient.
 `send` is free and never confirms because it is not a billed launch.
 
 ---

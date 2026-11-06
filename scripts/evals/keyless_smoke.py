@@ -39,7 +39,7 @@ def _journal_text(path: Path) -> str:
 
     The store commit is the write boundary, so each sibling is read through
     the native rows command (raw fallback built in); the raw bytes only serve a
-    box with no binary at all."""
+    machine with no binary at all."""
     from fno.paths import journal_and_ephemeral_sibling
 
     try:
@@ -103,7 +103,7 @@ def _fail(effect: str, detail: str) -> int:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
-    # Resolve before the dispatch runs: on a box without the binary the run
+    # Resolve before the dispatch runs: on a machine without the binary the run
     # must fail here with the build guidance, not after dispatch has spent
     # its whole budget.
     agents_bin = _fno_agents_bin()
@@ -168,10 +168,6 @@ esac
                 "FNO_AGENTS_HOME": str(agents_home),
                 "FNO_CLAIMS_ROOT": str(claims_root),
                 "FNO_EVENTS_PATH": str(project / ".fno" / "events.jsonl"),
-                "FNO_AGENTS_RUNTIME": "python",
-                # The invoking-harness marker is how a spawn names its harness
-                # since the axis flags retired: the child infers codex from
-                # this marker, the way a real codex-hosted session would.
                 "CODEX_THREAD_ID": "keyless-smoke-thread",
                 "KEYLESS_ARGV_FILE": str(fake_argv),
                 "KEYLESS_SESSION_ID": session_id,
@@ -182,8 +178,7 @@ esac
 
         dispatch = subprocess.run(
             [
-                "uv", "run", "--project", str(repo_root / "cli"), "fno-py",
-                "agents", "spawn", "--name", "keyless-smoke",
+                agents_bin, "spawn", "keyless-smoke", "-H", "codex",
                 "--once",
                 "--cwd", str(project), "--timeout", "10", "--", "keyless seed",
             ],

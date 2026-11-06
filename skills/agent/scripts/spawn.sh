@@ -198,12 +198,7 @@ is_code_payload() {
 if [[ -n "$NODE" ]]; then
   guard_cwd_args=()
   [[ -n "$CWD" ]] && guard_cwd_args=("--cwd" "$CWD")
-  # Pin to the Python runtime: spawn-guard is a Python-only command, so an operator
-  # with FNO_AGENTS_RUNTIME=rust exported would otherwise route it to the Rust
-  # binary (which lacks it -> 127 -> fail-closed, breaking node dispatch). The
-  # inline override is scoped to this call only; the real spawn below routes
-  # normally (codex P2 parity with dispatch-node.sh).
-  guard_out="$(FNO_AGENTS_RUNTIME=python fno agents admit guard "$NODE" --holder "dispatch-skill-probe:$$" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+  guard_out="$(fno agents admit guard "$NODE" --holder "dispatch-skill-probe:$$" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   guard_json="$(printf '%s\n' "$guard_out" | grep -F '"verdict"' | head -1)"
   verdict="$(printf '%s' "$guard_json" | jq -r '.verdict // empty' 2>/dev/null)"
   # An untried wedge is DISPATCHABLE as far as this script is concerned. The
@@ -612,7 +607,7 @@ else
             pane_identity_ok=1
           # Check that short_id is a genuine 8-hex handle derived from THIS
           # session id, without restating which 8 characters. The producer reads
-          # canonical_handle (fno.harness_identity), the one source for that
+          # canonical_handle (crates/fno-agents/src/identity.rs), the one source for that
           # string; pinning the offset here would silently reject a correct
           # receipt the day that function changes which slice it returns.
           elif [[ "$receipt_status" == "live" \

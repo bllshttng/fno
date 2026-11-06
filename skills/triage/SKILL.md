@@ -24,20 +24,11 @@ duplicate detection.
 - **Cycles are dropped automatically.** If a proposed dependency would
   create a cycle (A blocks B, B blocks A), validation drops the offending
   edge and logs the conflict.
-- **Project-scoped by default.** Triage filters to the current repo's
-  project (matched by canonical repo root, stable across worktrees).
-  Pass `all` to triage across every project or `--project <name>` to
-  target a specific one. Matches the scoping of `roadmap-tasks.py
-  next`/`ready`.
+- **Project-scoped by default.** Triage filters to the current repo's project, matched by canonical repo root and stable across worktrees. Pass `all` to triage every project, or `--project <name>` for one. It matches the scoping of `fno backlog next` and `fno backlog ready`.
 
 ## Setup
 
-Project scoping requires at least one node registered to the current repo.
-The first `/blueprint` with auto-intake (or a manual `roadmap-tasks.py intake`)
-stores the canonical repo root as the node's `cwd` and derives a project
-name from the repo directory basename. Subsequent triage runs from the
-same repo — including from any git worktree of it — auto-detect that
-project.
+Project scoping requires at least one node registered to the current repo. The first `/blueprint` with auto-intake, or a manual `fno backlog intake`, stores the canonical repo root as the node's `cwd`. It derives a project name from the repo directory basename. Later triage runs from the same repo, or from any git worktree of it, detect that project.
 
 If no project is detected (no adopted node yet for this repo), triage
 falls through to `all projects` and prints a hint in the scope line so
@@ -61,18 +52,7 @@ Value-carriers (flags with arguments): `--project NAME`, `--roadmap-id ID`.
 
 ### Invocation surface (CLI-source-agnostic)
 
-The skill issues triage commands through whichever implementation is
-available. Preference order:
-
-1. `fno backlog triage <command> <flags>` - the v2 CLI (canonical)
-2. `python3 scripts/triage.py <command> <flags>` - the shim, which itself
-   forwards to v2 when `fno` is on PATH or falls back to the in-repo
-   module via `cli/src`
-
-Both satisfy the same JSON protocol - callers see identical
-input/output. Every `scripts/triage.py …` command in the steps below is
-equivalent to `fno backlog triage …`; prefer the latter when `fno` is
-on PATH so the call path is one process shorter.
+The skill issues every triage command as `fno backlog triage <command> <flags>`.
 
 ### Translating positional modifiers to the underlying command
 
@@ -108,9 +88,7 @@ translate positional words into the equivalent flag:
    modifiers as the matching flags (e.g. `deep` -> `--deep`):
 
    ```bash
-   # v2 preferred; shim used when `fno` is not on PATH
-   (fno backlog triage context [--deep] [--all] [--project NAME] [--roadmap-id ID] 2>/dev/null \
-      || python3 scripts/triage.py context [--deep] [--all] [--project NAME] [--roadmap-id ID]) \
+   fno backlog triage context [--deep] [--all] [--project NAME] [--roadmap-id ID] \
      > /tmp/triage-ctx.json
    ```
 
@@ -232,8 +210,7 @@ translate positional words into the equivalent flag:
 3. **Validate.** Run:
 
    ```bash
-   (fno backlog triage validate /tmp/triage-proposal.json 2>/dev/null \
-      || python3 scripts/triage.py validate /tmp/triage-proposal.json) \
+   fno backlog triage validate /tmp/triage-proposal.json \
      > /tmp/triage-cleaned.json
    ```
 
@@ -252,8 +229,7 @@ translate positional words into the equivalent flag:
 5. **Apply.** On approve or pick:
 
    ```bash
-   fno backlog triage apply /tmp/triage-cleaned.json [--pick id1,id2] \
-     || python3 scripts/triage.py apply /tmp/triage-cleaned.json [--pick id1,id2]
+   fno backlog triage apply /tmp/triage-cleaned.json [--pick id1,id2]
    ```
 
    Apply runs inside a single `locked_mutate_graph()` so `graph.md`
@@ -273,8 +249,7 @@ impossible to propose cross-project dependency edges or flag
 cross-project duplicates - the reasoner simply never sees the other
 project's candidates.
 
-1. **Enumerate.** Call `fno backlog triage projects` (or
-   `python3 scripts/triage.py projects` if `fno` is not on PATH) to get
+1. **Enumerate.** Call `fno backlog triage projects` to get
    the list of projects with at least one pending node.
 
 2. **Guard.** If the list is empty, print `"no pending nodes in any
@@ -373,9 +348,7 @@ A row with `source_kind: external_request` holds visitor text from the public bo
 
 - `fno backlog triage` (canonical) — the v2 CLI sub-app; source in
   the native `fno backlog triage` door
-- `scripts/triage.py` — compatibility shim that forwards to the v2 CLI
-  (or falls back to the in-repo module when `fno` is not on PATH)
-- `cli/src/fno/graph/store.py` — `locked_mutate_graph()` entry point
+- `crates/fno-agents/src/graph_store.rs` - `mutate_rows` entry point
 - `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
 - `crates/fno-agents/src/backlog/triage_health.rs` — threshold evaluation,
   notification dispatch, history append/read, trend summary

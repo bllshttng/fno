@@ -39,7 +39,6 @@ We chose the three process-backed binaries in `stress-rust-e2e-concurrency.sh` f
 | `daemon_on_sandbox_home_starts_no_active_backlog_supervisor` | R | Keeper preserves sandbox scope and no active-backlog arm, plus terminal-row idle exit, dead PID, clean exit, and `reason=idle`. |
 | `daemon_stays_resident_while_a_worker_socket_is_live` | R | A reachable worker socket keeps a real daemon alive beyond its idle window. |
 | `rm_reaps_registry_claude_and_mux_surfaces_in_one_call` | R | Keeper removes registry, Claude, and mux surfaces and records the audit event. |
-| `pinned_daemon_sheds_runtime_pin_before_spawning_an_rm_child` | R | Child observes `FNO_AGENTS_RUNTIME=python` is shed before the `rm` subprocess. |
 | `stop_keeps_non_pane_noop_receipt` | C | Folded into the pane-refusal keeper; preserve the Codex no-op receipt with `no_op=true` and `stopped=true`. |
 | `stop_refuses_a_pane_row_and_names_the_row_ref` | R | Keeper refuses stopping a pane row, names the session/pane and clearing command, leaves the row live, and preserves the non-pane `no_op=true` and `stopped=true` receipt. |
 | `restart_when_down_starts_fresh` | R | Restart with no incumbent creates a live successor and reports `old_pid=None`. |

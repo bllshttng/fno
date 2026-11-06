@@ -21,7 +21,7 @@ Nothing beyond the Gemini extension and hooks. There is no opt-in step.
 
 ## Behavior rules
 
-- The runtime never assumes Gemini subagent support; parallel waves downgrade to sequential main-thread dispatch (`SEQUENTIAL_FALLBACK_PROVIDERS` in `skills/execute/orchestrator.py`).
+- The runtime never assumes Gemini subagent support. Gemini is retired, so no parallel wave dispatches to it.
 - Hooks improve lifecycle continuity, but hooks alone do not enable agent-backed orchestration.
 
 ## Migration

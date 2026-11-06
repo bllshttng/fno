@@ -132,7 +132,7 @@ CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
 # shape that turns a correct sweep into a wrong deletion. Each floor below is a
 # command whose argv is built as a list literal in cli/src, verified by hand:
 #   agents spawn  cli/src/fno/evals/runner.py, crates/fno-agents/src/observer/mod.rs
-#   backlog done  cli/src/fno/graph/cli.py
+#   backlog done  crates/fno-agents/src/backlog/workflows.rs
 # `agents mail send` now sits behind the argument-dispatched `agents` action,
 # so the collapsed inventory deliberately credits that call to `agents`; it can
 # no longer prove the leaf-specific AST walk. The two independent controls
@@ -470,7 +470,7 @@ def _credit_longest(combo: tuple[str, ...], leaves: set[str], counts: Counter) -
 #
 # The separation is free, and it is worth stating why rather than trusting it:
 # a DEFINITION names only the leaf's own last token (``@capture_cli.command(
-# "promote")``), while a CALL must spell the whole path (``[*fno_py_cmd(),
+# "promote")``), while a CALL must spell the whole path (``[*fno_cmd(),
 # "backlog", "capture", "promote"]``). Matching only on multi-token paths that
 # resolve against the baseline therefore cannot see a definition at all. The
 # probe is one-directional and that is deliberate.
@@ -484,7 +484,7 @@ def _leading_consts(elts) -> list[str]:
     """The run of leading string constants in a list literal.
 
     A leading non-constant is SKIPPED rather than terminating the scan, because
-    the canonical self-shellout is ``[*fno_py_cmd(), "backlog", "get", node]``:
+    the canonical self-shellout is ``[*fno_cmd(), "backlog", "get", node]``:
     the binary arrives as a starred call and the command path follows it. Once a
     constant run has begun, a non-constant ends it (that is an argument, not
     more command path).
@@ -516,7 +516,7 @@ def _leading_consts(elts) -> list[str]:
 def _dynamic_after_binary(elts) -> bool:
     """True when a binary-prefixed argv reaches a non-constant in command position.
 
-    ``[*fno_py_cmd(), group, "get"]`` can invoke ANY command under ``group``, so the
+    ``[*fno_cmd(), group, "get"]`` can invoke ANY command under ``group``, so the
     site cannot be resolved statically and must not be read as evidence that the
     commands it could reach are dead. These sites are reported, never silently
     dropped: an unresolvable call site is the one thing that can turn a correct
@@ -546,10 +546,10 @@ def _dynamic_after_binary(elts) -> bool:
 
 # Helpers whose return value IS an fno argv prefix, so `[*helper(), "pr", ...]`
 # is an invocation. Found by searching cli/src for functions returning a bare
-# binary list; ``fno_py_cmd`` is the only one today, and a new one that is not
+# binary list; ``fno_cmd`` is the only one today, and a new one that is not
 # listed here degrades to "not flagged as dynamic", never to a wrong deletion
 # (the AST and text sweeps still credit its constant command tokens).
-ARGV_PREFIX_HELPERS = {"fno_py_cmd"}
+ARGV_PREFIX_HELPERS = {"fno_cmd"}
 
 
 def _is_argv_prefix_call(node) -> bool:
@@ -567,7 +567,7 @@ def sweep_internal(root: Path, leaves: set[str]) -> tuple[Counter, Counter, list
     never be pushed INTO the dead set by a miss here):
 
       1. AST: a list/tuple literal whose leading string constants resolve to a
-         leaf path. Catches ``subprocess.run([*fno_py_cmd(), "pr", "merge", n])``
+         leaf path. Catches ``subprocess.run([*fno_cmd(), "pr", "merge", n])``
          and its bare-``"fno"`` variants.
       2. Text: the same ``fno <leaf>`` token sweep the external corpus gets,
          which catches a shellout written as one string, a help line, or an
@@ -736,6 +736,67 @@ def sweep_buckets(root: Path, leaves: set[str], extra_prefixes=()) -> dict[str, 
     return out
 
 
+def _local_leaves():
+    """(path, cmd) for every fno-py leaf, visible and hidden.
+
+    The ratchet module's live walk, carried by its only remaining consumer
+    after the module deleted. Same rules: eager commands resolved to real
+    Click commands, Typer alias groups deduped by import target, and the
+    native-served leaves claimed as flagless pairs.
+    """
+    import importlib
+
+    import click
+    import typer
+    import typer.main
+
+    from fno._lazy_group import (
+        NATIVE_SERVED_LEAVES,
+        iter_group_leaves,
+        typer_group_shape,
+    )
+    from fno.cli import LAZY_SUBCOMMANDS, _EAGER_COMMAND_HELP, app as _root_app
+
+    for n in _EAGER_COMMAND_HELP:
+        root_cmd = typer.main.get_command(_root_app)
+        yield n, root_cmd.get_command(click.Context(root_cmd), n)
+
+    seen = set()
+    for name, entry in LAZY_SUBCOMMANDS.items():
+        import_path = entry[0]
+        module_path, _, attr = import_path.rpartition(":")
+        try:
+            module = importlib.import_module(module_path)
+        except Exception:
+            continue
+        obj = getattr(module, attr, None)
+        if obj is None:
+            continue
+        if isinstance(obj, typer.Typer):
+            if import_path in seen:
+                continue
+            seen.add(import_path)
+            cmd = typer_group_shape(obj)
+            if hasattr(cmd, "list_commands"):
+                ctx = click.Context(cmd, info_name=name)
+                yielded = False
+                for path, sub in iter_group_leaves(cmd, ctx, name):
+                    yield path, sub
+                    yielded = True
+                if not yielded:
+                    yield name, cmd
+            else:
+                yield name, cmd
+        elif isinstance(obj, click.Command):
+            yield name, obj
+        else:
+            sub = typer.Typer(add_completion=False)
+            sub.command(name=name)(obj)
+            yield name, typer.main.get_command(sub)
+    for native in sorted(NATIVE_SERVED_LEAVES):
+        yield native, None
+
+
 def load_enrichment(root: Path) -> dict[str, tuple[str, str]]:
     """Best-effort ``{leaf: (file:line, help)}`` from the live registry.
 
@@ -745,7 +806,7 @@ def load_enrichment(root: Path) -> dict[str, tuple[str, str]]:
     try:
         import inspect
 
-        from fno.lint_command_ratchet import CommandRatchetError, iter_python_leaves
+        from fno._lazy_group import NATIVE_SERVED_LEAVES
     except Exception:
         return {}
     table: dict[str, tuple[str, str]] = {}
@@ -760,7 +821,7 @@ def load_enrichment(root: Path) -> dict[str, tuple[str, str]]:
     # that whole traversal twice.
     try:
         rel_root = root.resolve()
-        for path, cmd in iter_python_leaves():
+        for path, cmd in _local_leaves():
             file_line = ""
             help_line = ""
             cb = getattr(cmd, "callback", None) if cmd else None
@@ -1030,15 +1091,17 @@ def main(argv: list[str] | None = None) -> int:
         # the Rust dispatchers and the live binary are read separately and must
         # agree.
         try:
-            from fno.lint_command_ratchet import enumerate_all_leaves
-            registry = {
-                leaf.split(' !')[0].strip() for leaf in enumerate_all_leaves()
-            }
-            baseline_set = set(leaves_list)
-            print(f"baseline freshness (file vs its own generator, NOT an "
-                  f"independent check): baseline={len(baseline_set)} "
-                  f"registry={len(registry)} current={baseline_set == registry}")
-            ok = ok and (baseline_set == registry)
+            import subprocess as _sp
+
+            done = _sp.run(
+                ["fno", "doctor", "lint", "command-ratchet"],
+                capture_output=True, text=True,
+            )
+            current = done.returncode == 0
+            print(f"baseline freshness: native ratchet exit {done.returncode} "
+                  f"({'current' if current else 'DRIFTED'}); "
+                  f"the live enumerator moved to `fno doctor lint command-ratchet`")
+            ok = ok and current
         except Exception as e:
             print(f"baseline freshness: SKIPPED ({e})")
         # Corpus coverage: skills/target/ is a real skill bundle, not a build

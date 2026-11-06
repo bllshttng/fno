@@ -451,7 +451,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --command t \
+_CHILD_NAME_OUT="$(fno agents registry name --source sh --command t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then
@@ -974,72 +974,57 @@ else
 fi
 
 # 8d. Best-effort: append session_id to plan frontmatter session_ids (either form)
-python3 - "$PLAN_PATH" "$SESSION_ID" 2>/dev/null <<'PYEOF'
-import sys, re
-
-plan_path = sys.argv[1]
-sid = sys.argv[2]
-
-try:
-    with open(plan_path, 'r') as f:
-        content = f.read()
-
-    # Find frontmatter block (between first two ---)
-    fm_match = re.match(r'^(---\n)(.*?)(---\n)', content, re.DOTALL)
-    if not fm_match:
-        sys.exit(0)
-
-    fm = fm_match.group(2)
-    rest = content[fm_match.end():]
-
-    # Check if session_ids field exists
-    sids_match = re.search(r'^session_ids:(.*)$', fm, re.MULTILINE)
-    if sids_match:
-        current = sids_match.group(1).strip()
-        # Parse inline list: [a, b] or just append
-        if current == '':
-            # Block form: a bare `session_ids:` header with indented `- id`
-            # children. Rewriting the header as an inline list would strand
-            # those children underneath it, which is malformed YAML AND drops
-            # every id already recorded. Append a sibling child instead; with
-            # no children this still produces a valid one-item block list.
-            fm_lines = fm.splitlines(True)
-            idx = fm[:sids_match.start()].count('\n')
-            end = idx + 1
-            while end < len(fm_lines) and (
-                fm_lines[end].startswith((' ', '\t')) or not fm_lines[end].strip()
-            ):
-                end += 1
-            while end > idx + 1 and not fm_lines[end - 1].strip():
-                end -= 1
-            fm_lines.insert(end, '  - ' + sid + '\n')
-            new_fm = ''.join(fm_lines)
-            new_content = '---\n' + new_fm + '---\n' + rest
-            with open(plan_path, 'w') as f:
-                f.write(new_content)
-            sys.exit(0)
-        if current.startswith('[') and current.endswith(']'):
-            inner = current[1:-1].strip()
-            if inner:
-                new_val = '[' + inner + ', ' + sid + ']'
-            else:
-                new_val = '[' + sid + ']'
-        else:
-            # scalar or unknown: wrap both
-            new_val = '[' + current.strip() + ', ' + sid + ']'
-        new_fm = re.sub(r'^session_ids:.*$', 'session_ids: ' + new_val, fm, flags=re.MULTILINE)
-    else:
-        # Append new field
-        new_fm = fm + 'session_ids: [' + sid + ']\n'
-
-    new_content = '---\n' + new_fm + '---\n' + rest
-    with open(plan_path, 'w') as f:
-        f.write(new_content)
-except Exception as e:
-    print('handoff: warn: failed to update session_ids in plan: ' + str(e), file=sys.stderr)
-    sys.exit(0)
-PYEOF
-true  # python3 best-effort; rc ignored
+_append_plan_session_id() {
+  local plan="$1" sid="$2" tmp
+  [ -f "$plan" ] || return 0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/handoff-sids-XXXXXX")" || return 0
+  # Block form (a bare `session_ids:` header over indented `- id` children)
+  # gets a sibling child: rewriting the header as an inline list would strand
+  # the children under it, which is malformed YAML AND drops every id already
+  # recorded. An inline list gains the id; a scalar wraps into a list with it;
+  # no field appends one. No frontmatter changes nothing (exit 3).
+  if awk -v sid="$sid" '
+    { line[NR] = $0 }
+    function trim(s) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", s); return s }
+    END {
+      if (line[1] != "---") exit 3
+      close_at = 0
+      for (i = 2; i <= NR; i++) if (line[i] == "---") { close_at = i; break }
+      if (!close_at) exit 3
+      hdr = 0
+      for (i = 2; i < close_at; i++) if (line[i] ~ /^session_ids:/) { hdr = i; break }
+      insert_at = 0; new_val = ""
+      if (!hdr) {
+        insert_at = close_at; insert_line = "session_ids: [" sid "]"
+      } else {
+        cur = trim(substr(line[hdr], length("session_ids:") + 1))
+        if (cur == "") {
+          end_at = hdr + 1
+          while (end_at < close_at && (line[end_at] ~ /^[ \t]/ || line[end_at] ~ /^[[:space:]]*$/)) end_at++
+          while (end_at > hdr + 1 && line[end_at - 1] ~ /^[[:space:]]*$/) end_at--
+          insert_at = end_at; insert_line = "  - " sid
+        } else if (cur ~ /^\[/ && cur ~ /\]$/) {
+          inner = trim(substr(cur, 2, length(cur) - 2))
+          new_val = (inner != "") ? "[" inner ", " sid "]" : "[" sid "]"
+        } else {
+          new_val = "[" cur ", " sid "]"
+        }
+      }
+      for (i = 1; i <= NR; i++) {
+        if (i == insert_at) print insert_line
+        if (new_val != "" && i < close_at && line[i] ~ /^session_ids:/) print "session_ids: " new_val
+        else print line[i]
+      }
+    }' "$plan" > "$tmp"; then
+    # Write through the path, never rename over it: a plan path can be a link
+    # into the vault, and a rename would replace the link with a copy.
+    cat "$tmp" > "$plan" \
+      || echo "handoff: warn: failed to update session_ids in plan: write failed" >&2
+  fi
+  command -p rm -f "$tmp"
+  return 0
+}
+_append_plan_session_id "$PLAN_PATH" "$SESSION_ID" 2>/dev/null || true
 
 # 8e. Touch per-session sentinel; clear any PreCompact arming marker (guard c).
 touch "$SENTINEL"

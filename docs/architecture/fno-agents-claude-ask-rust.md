@@ -23,7 +23,7 @@ Byte-parity with Python on observable behavior (stdout, exit code, the BG8 envel
 
 ## Scope boundary
 
-This node delivers the **capability** (exercisable under `FNO_AGENTS_RUNTIME=rust` force-mode), not the auto-route flip.
+This node delivered the capability, not the auto-route flip.
 
 Auto-routing landed in a follow-up ("Finish ask auto-routing"): provider-conditional, claude+codex by default, gemini stays Python. See [`fno-agents-ask-auto-route.md`](./fno-agents-ask-auto-route.md) for the resolution logic, the `RUST_CLIENT_ASK_PROVIDERS` set, and the `FNO_AGENTS_DEBUG_ROUTING` observability env var. The same node also added the codex `ask` Rust client port (`codex_ask.rs`).
 

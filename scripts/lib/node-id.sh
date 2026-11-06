@@ -33,7 +33,7 @@
 # A footnote node id: a lowercase prefix plus 4-8 hex suffix, or compact legacy
 # x plus 4-8 hex. New ids remain hyphenated; this classifier keeps old graph rows
 # resolvable.
-# The Python authority is fno.graph._constants.is_wellformed_node_id; this regex
+# The Python authority is backlog::node_ref::is_wellformed_node_id; this regex
 # must stay aligned with it, pinned by test_node_id_sh.py. The shell copy exists
 # because the resolvers have a legacy fallback for environments where the fno
 # Python package is unavailable.

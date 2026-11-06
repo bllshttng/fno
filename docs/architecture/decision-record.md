@@ -1,5 +1,7 @@
 # The decision record
 
+Every door that takes a decision id also takes its short number: `D142`, `d142` or `d-142`. A question takes `Q87` the same way. See [Short numbers](multiplayer.md#short-numbers).
+
 A ruling stated in chat dies with the context. Weeks later, the operator asks, "there was this thing we discussed, what happened with that?" This page explains recording, storage, and current-law queries.
 
 ## The command
@@ -16,6 +18,8 @@ fno backlog decide-reindex                 # backfill records written before the
 ```
 
 The old `fno decide` spelling remains as a one-release compatibility shim. It prints the new `fno inbox decide` spelling to stderr and is removed next release.
+
+A question judge verdict is no decision. It carries no authority and no index row. See [the judge](attention-items.md#the-judge).
 
 ## Two producers, both explicit
 
@@ -41,13 +45,15 @@ The closed set is NOT in `schema.yaml`. The index already holds those invented s
 
 ## Which field a reader can trust
 
-A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Three fields, and only one of them is a fact about who ran the command.
+A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Five fields. `decided_by` is the one fact about who ran the command, and `user_sig` is the one fact about which user key stands behind the row.
 
 | Field | Who writes it | What it means |
 |---|---|---|
 | `decided_by` | stamped from the ambient session, always, when one resolves | who recorded the ruling. This is the field to trust. It cannot be typed. |
 | `attested_by` | only a caller with no session identity AND a terminal on stdin | a name a person stood behind, rather than a handle a process stamped |
 | `relayed_by` | filled from `--decided-by` when the caller is not the decider | a name the caller supplied for someone else. A claim, not a stamp. |
+| `user_cert` | the law, retract and restore doors, on a machine with a user certificate | the certificate: a user name and user key bound to this machine's key, signed by that user key |
+| `user_sig` | the same doors, beside `user_cert` | the machine key's signature over the row except `subject`. A certified reader binds a wide row only when it verifies under its own user key. |
 
 Three caller states decide which of those get written, and the third fails closed.
 
@@ -59,7 +65,7 @@ Law is defaulted in state 2 only, and only for the person at the terminal. A `--
 
 State 3 exists because state 2 used to be everything that was not state 1. That made attendance an ABSENCE, and `env -u CLAUDE_CODE_SESSION_ID fno backlog decide --authority operator` was enough to forge an attested row in the law lane.
 
-Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this box. So the terminal raises the cost of forging law and does not prevent it. Forging law through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox law set`. It does not happen by accident.
+Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this machine. So the terminal raises the cost of forging law and does not prevent it. Forging law through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox law set`. It does not happen by accident.
 
 ### Chat-origin probe
 
@@ -102,6 +108,8 @@ One `fno backlog decide` call writes the journal, then the index, then the proje
 It does NOT ask for a retry. The durable event has already landed by then, so a second run records one ruling twice under two ids. Both producers say so and name `fno backlog decide-reindex` as the recovery.
 
 A failed PROJECTION does not fail the command at all. Both durable stores already hold the decision by then, so the ruling is recorded and recoverable. Only the node view is missing, and the command says which decision id it is.
+
+The graph write gets a retry. A peer machine reads only the graph decisions table, so a refused row there never reaches it. A machine that shares its backlog runs a store beat. Once a minute, the beat replays each index row the table lacks, at most 50 per pass. The row keeps its own id and ts, and the next flush ships it to the primary. `fno backlog decide-reindex` runs the same replay at once and prints `graph_replayed` and `graph_refused`. A row the store refuses again stays in the index for the next pass.
 
 ## A ruling an agent makes about another node
 
@@ -185,13 +193,25 @@ The standing query is law-only and lifecycle-filtered: `fno backlog decisions <t
 
 ## Law carries a scope
 
-Law is recorded where it is made, and scope names who it governs. The vocabulary has two values: `global` and `project:<slug>`. The slug is the settings project name, the same vocabulary a graph node's `project` field uses. A law and the nodes it governs answer one resolver.
+Law is recorded where it is made, and scope names who it governs. The vocabulary has four values: `global`, `project:<slug>`, `machine:<id>` and `user:<name>` (older rows read `person:<name>`). The slug is the settings project name, the same vocabulary a graph node's `project` field uses. A law and the nodes it governs answer one resolver. The machine id is the claim store's id, and the user is the `identity.rs` resolver that [multiplayer.md](multiplayer.md#the-person-beside-the-machine) describes.
 
-The law door (`fno inbox law set`) stamps the recording session's project by default. Widening to `global` is explicit on the door itself: the `--global` flag carries it, because law is never inherited by silence. A repo outside the work map makes the door refuse and name the path it failed to place. The door fails closed so a guessed stamp never lands, while every reader fails open.
+The law door (`fno inbox law set`) stamps the recording session's project by default. Widening is explicit on the door itself, because law is never inherited by silence. `--global` widens to every session. `--machine` and `--user` bind this machine or this user, and `--machine=<id>` or `--user=<name>` names another one. One law takes one of the three flags. A global law, or one that names another machine or user, needs a user certificate on this machine first ([multiplayer.md](multiplayer.md#the-user-certificate)). With none installed, the door refuses, names the two key commands and records nothing. A stated `fleet.owner` does not open the gate, because a name is not proof. A certified machine signs every row it records.
 
-Every law reader filters. Global law reaches every session. A project law reaches only that project's sessions. A row with no scope reaches only fno sessions, because all 82 pre-scope rows were recorded in fno. The general ones get promoted by an explicit re-record widened with `--global`.
+A law also takes filters beside its scope. `--filter <key>=<value>` limits the law to sessions where the fact matches, and `--not <key>=<value>` excludes them. A value is one choice or a comma-separated list, and a `branch` choice ending in `*` matches by prefix. The keys are `node`, `epic`, `project`, `priority`, `size`, `difficulty`, `domain`, `harness`, `provider`, `model`, `branch`, `role` and `lead`. The session answers each one. `FNO_NODE` gives the node. The node's graph row gives the epic, project, priority, size, difficulty and domain. `FNO_AGENT_HARNESS`, `FNO_ROUTE_PROVIDER` and `FNO_ROUTE_MODEL` give the harness, provider and model. The checked-out branch gives the branch. A session that holds a live team has the role `lead`. Any other agent session has the role `worker`. A rule can also name one session by its handle. The lead is the holder of the live team whose territory covers the session's node, by name or by session handle. Every filter must match before the law applies. A session that cannot name a fact passes that filter. The keys `lane`, `pr_label` and `pr_over_lines` have no session fact yet, so the door refuses them. A repo outside the work map makes the door refuse and name the path it failed to place. The door fails closed so a guessed stamp never lands, while every reader fails open.
+
+A law also takes a guard, the end condition, beside its filters. `--until` sets it: `date:<when>`, `for:<30m|2h|1d>`, `event:<node>` (the node closes) or `set:<node>,<node>` (a set frozen at record time that drains as its nodes close). A `--read` command runs at record time, and its output is kept as an `expiry_ref` of kind `reading`. `fno inbox law recheck` re-runs each reading and reports a moved one as stale. With `--apply` it retracts a law whose guard fired, and the retraction is the receipt. A date guard retires in the index read itself. The lead check-in runs the recheck on every beat.
+
+Every law reader filters. Global law reaches every session. A project law reaches only that project's sessions. A machine or person law reaches only the sessions that resolve that id or name, with or without a resolved project. A session that reads no machine id fails open and sees a machine law. The retract, restore and history doors still reach every machine and person law, so the owner can undo one from any machine. A restore re-records the law, so restoring a wide law meets the same certificate gate as recording one. No event carries an identity, so the rule set judges these two scopes at build time. A row with no scope reaches only fno sessions, because all 82 pre-scope rows were recorded in fno. The general ones get promoted by an explicit re-record widened with `--global`.
+
+A machine that holds a user certificate also proves what it reads. `decision_index::read_store_rows` is the one store read, so every law reader inherits the check. There, a wide row (global, machine or user) recorded since 2026-11-03 needs a signature from the machine's own user key to bind. A retraction or supersession of a proven wide row needs the same signature. A project row and an older row bind as before. `fno backlog decisions` prints the withheld count on stderr. `fno backlog decide-reindex` reads the store with no check, so a withheld row is never re-appended.
 
 Readers return the count they withheld, and the report's JSON carries the note. The stage block lists a law's scope on its line. A workspace tier (`workspace:<name>`) is a rung nobody has reached. The field is a free string, so adding it later needs a reader branch and no migration.
+
+## Start, state and window
+
+A law can carry a start, a state and a window beside its scope. `--from date:<when>` or `--from event:<node>` keeps the law off until that time or until the node closes. `--while <cmd>` keeps it on only while the command exits 0, and a law takes the flag more than once. `--between HH:MM-HH:MM` keeps it on inside a daily window in the machine's local time, and the window can wrap midnight. All of them must pass. The row stores them under `when`. `--until YYYY-MM-DD` names the last day the law binds, and the rule fires a heads-up in that last day. `fno inbox law renew <subject-or-id> --until YYYY-MM-DD` moves the end by recording a copy that supersedes the old row.
+
+The rule set build never shells out, so it reads a cache at `law-when.json` in the state root. The record, match and stage doors refresh the cache, and a state reading younger than a minute is not re-run. A reading that cannot run keeps the last answer. With no answer at all, the law stays on, as it does for every law reader that cannot decide. The retract, restore and history doors ignore `when`, so the owner can undo a law that is off.
 
 ## Where law reaches a session
 
@@ -220,6 +240,12 @@ Known limits: a forked review skill may not see main-thread hook context. Verifi
 `fno backlog decisions --review-list` is a non-mutating operator report. It groups canonical subjects with more than one unrelated live decision after alias resolution, supersession, retraction, and coord expiry have been applied. It names every candidate id, lane, timestamp, and decision, and never chooses a winner or writes the index. Its conflict membership uses the same combined projection as the direct standing query. Legacy subjectless rows remain visible under `(unscoped)` and are counted as data-quality findings. New answers to subjectless outstanding questions use `question:<question-id>` as their recovery subject.
 
 `--output PATH` writes the complete requested report, ignoring the display limit. `.json`, `.md`, and `.markdown` infer the format. `--format json|markdown` is explicit, and conflicting or unknown formats are refused. The command prints a positive receipt with the exact path and byte count only after the file is written.
+
+## The Decisions table
+
+`fno inbox decisions --table` shows every recorded decision in one screen. Press prefix+m in the mux to open it full screen. The retract and overrule keys open it in a pane, because the law door needs your terminal. The notifications panel also has a Decisions tab, and each row links to its question. Each row carries state, lane, date, who decided, a quote flag, subject, and text. The keys `l`, `s`, and `a` cycle the lane, state, and author filters. `u` shows the audit queue: unattributed rows and rows with no authority, minus the rows marked reviewed.
+
+`r` retracts the selected row. `o` overrules it with new text. `v` marks it reviewed in `mux/decisions-reviewed.json`. The table runs in a pane so the law door sees a real terminal, which is the operator proof it reads. Law rows go through `fno inbox law retract` and `law set --supersedes`. Other rows go through `fno backlog decide-retract` and `fno inbox decide --supersedes`, both with `--authority operator`.
 
 The upstream provenance seam owns mail-origin classification, stamped carriage, and the law chokepoint. The law command owns law recording and coord-to-law promotion. It owns no human-origin proof. No harness exposes a discriminator. So recording is one user-invoked step. The row says `chat_attested` rather than claiming an origin it cannot show. See `skills/law/LIMITATIONS.md`. This lifecycle feature consumes those seams and owns expiry, retraction, review, export, and law-only reads. It does not add another origin classifier, law command, promotion path, or decision store.
 

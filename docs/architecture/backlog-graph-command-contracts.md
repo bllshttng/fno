@@ -19,9 +19,9 @@ Excludes every not-done node that carries a pr_number, regardless of merge_statu
 
 Ids of nodes that are some other node's ``parent`` - i.e. epics/containers.
 
-A container is never directly buildable: its work lives in its decomposed children, and it carries no PR of its own. So every work-SELECTION surface drops it from the candidate pool - `next`/`ready`/`--all-ready` build the leaves, never the box . Shared by `next` (_pick_ready) and `ready` (cmd_ready) so the two surfaces cannot drift; advance_dependents applies the same rule on the merge edge-following path.
+A container is never directly buildable: its work lives in its decomposed children, and it carries no PR of its own. So every work-SELECTION surface drops it from the candidate pool - `next`/`ready`/`--all-ready` build the leaves, never the container . Shared by `next` (_pick_ready) and `ready` (cmd_ready) so the two surfaces cannot drift. Advance_dependents applies the same rule on the merge edge-following path.
 
-A child whose ``contained_in`` is the parent ships INSIDE the parent's PR, so the parent is the delivery unit, not a box: an owner whose only children are its own contained subtasks still drains. Free children make the parent a box exactly as before.
+A child whose ``contained_in`` is the parent ships INSIDE the parent's PR. So the parent is the delivery unit, not a container: an owner whose only children are its own contained subtasks still drains. Free children make the parent a container exactly as before.
 
 No "keep the all-done epic selectable" exception is needed: an epic closes automatically via ``_cascade_close_parents`` on the merge that finishes its last child (uniform across projects), so it is already ``done`` - never a lingering ``ready`` container that selection would have to surface for closure. That replaces the old "walker closes the epic via next" path, which conflicted with never building a container.
 
@@ -167,7 +167,7 @@ Close ancestor epics whose children are now all complete .
 
 Called inside the close mutator right after a node's completion fields are set. An epic is a container with no PR of its own - its work IS its decomposed children - so it is "done" exactly when all of them are. Walking UP the ``parent`` chain, each ancestor that passes ``children_all_closed`` is closed too (and tagged with a completion_note so the PR-less close is self-explaining), continuing to the grandparent. ``children_all_closed`` asks three things: every child terminal (``is_terminal_entry``: done, superseded, or freshly stamped ``completed_at``), no child superseded BY the parent itself, and at least one child that really shipped. A child superseded by its own parent is one the parent absorbed, so the parent's own work is still open and the parent stays up; a parent whose every child was replaced elsewhere stays up too, so nothing closes as done with nothing built.
 
-This is the closure path that lets epics be excluded from build-SELECTION everywhere (`next`/`ready`/advance_dependents never dispatch the box): the box closes itself off the merge event that finishes its last child. It fires on every close path (done + reconcile) since each calls this after ``_apply_completion_fields``, and it is uniform across projects because it follows the parent EDGE, not a project filter - so a cross-project parent closes on the same merge that completes its last child.
+This is the closure path that lets epics be excluded from build-SELECTION everywhere (`next`/`ready`/advance_dependents never dispatch the container). The container closes itself off the merge event that finishes its last child. It fires on every close path (done + reconcile) since each calls this after ``_apply_completion_fields``. It is uniform across projects because it follows the parent EDGE, not a project filter. So a cross-project parent closes on the same merge that completes its last child.
 
 Idempotent: an already-done or missing ancestor stops that branch. The walk is depth-capped against a malformed parent cycle.
 
@@ -219,13 +219,13 @@ The completion path (``done``/``reconcile``) closes a node because its PR landed
 
 Returns True when a stamp/graduate actually ran successfully (the relevant command exited 0); False when the run failed. Non-fatal: every failure warns and returns False, never raising, so a node close is never aborted by a stamp problem.
 
-Shared by ``done`` and ``reconcile``. The stamper is the in-package ``fno.plan._stamp`` module, run under the same interpreter as fno, so it resolves whether the package runs from the repo (editable install) or a uv-installed venv.
+Shared by ``done`` and ``reconcile``. The stamper is the native plan-doc writer (``crates/fno-agents/src/plan_doc/stamp.rs``).
 
 ## _set_expected_count
 
 Authoritatively write expected_url_count=count onto a plan's frontmatter.
 
-Used by ``decompose`` so a shared epic-decomposition doc graduates only after all N group PRs ship, not after the first. Runs the in-package ``fno.plan._stamp`` ``set-expected`` command (the same sys.executable pattern as ``_graduate_plan``) to keep plan-frontmatter I/O in its single owner and this graph CLI graph-agnostic about frontmatter format.
+Used by ``decompose`` so a shared epic-decomposition doc graduates only after all N group PRs ship, not after the first. Runs the plan-doc writer's ``set-expected`` command (``fno do plan set-expected``) to keep plan-frontmatter I/O in its single owner and this graph CLI graph-agnostic about frontmatter format.
 
 Returns ``(status, detail)`` where status is a ``SetExpectedStatus``:
 
@@ -414,7 +414,7 @@ Decide whether a node's plan promised work that has not all shipped.
          is why a deferred item can merge away unnoticed. Checked first and independent of the plan so a close is held
          even when the plan is absent or unreadable. Scoped to the closing
          node's OWN rows via the ``node`` field stamped at capture time
-         (``find_held_node`` proven ownership): a row filed by another node's
+         (``find_held_node_at`` proven ownership): a row filed by another node's
          session must not hold this close open (one unrelated
          carve-out was blocking every close in the repo). Unattributed rows
          (legacy, ambient shell, harness without a session id) block nothing
@@ -680,7 +680,7 @@ Select up to ``max_lanes`` ready nodes, each collision-clean to dispatch.
 
 ## cmd_ready (the selection, served natively)
 
-Which backlog nodes may be dispatched right now, and in what order. The decision lives in `crates/fno-agents/src/backlog_ready.rs` (`backlog_ready::select`), served by the keeper's `ready` command; `fno backlog ready` and `fno backlog next` are clients. The command accepts the filter flags (`project`, `all`, `roadmap_id`, `parent`, `mission`, `include_ideas`, `include_deferred`, `repo_root`), an optional `staleness_days` override, and an optional `entries` array - rows ride IN, the one decision answers both backends (the external-tracker branch feeds `_joined_open_candidates` through it). Without the override the keeper reads `config.backlog.staleness_days` from the `config.toml` beside the graph, falling back to the 21-day default. With no `claimed` array the command resolves live claims itself and FAILS CLOSED: an unreadable claims root refuses the whole selection (the same contract `live_claimed_node_ids(strict=True)` gave the Python leg), never an empty set read as "nothing is claimed". The reply carries survivors plus per-node drops, first-filter attribution, with guard drops naming `dead-ancestor:<id>`, `design-stage`, `idea-stage`, `stale-quarantine`, `contained:<id>`, `no-difficulty`, or the hold verdict's guard reason; `advance --explain` renders from them (AC4). A missing `--parent` node refuses (exit 1, `ReadyParentMissingError` client-side). An unreachable keeper refuses selection: `fno backlog ready` exits non-zero naming the keeper, never a locally recomputed fallback (AC6). The `next` observer merge (`_with_observer`) still re-verifies observer rows through the Python `selection_guards`: a divergence detector over the reply, not a second selection leg. Under `next --claim`, the lock fields land on the graph entry the winner id resolves to - the selection rows are serialized summaries, not references into the commit snapshot. The reply is a JSON array on stdout. Parse it as JSON, and see json-output-contract.md.
+Which backlog nodes can be dispatched right now, and in what order. The decision lives in `crates/fno-agents/src/backlog_ready.rs` (`backlog_ready::select`). The keeper's `ready` command serves it. `fno backlog ready` and `fno backlog next` are clients. The command accepts the filter flags: `project`, `all`, `roadmap_id`, `parent`, `mission`, `include_ideas`, `include_deferred`, `repo_root`. It also accepts an optional `staleness_days` override and an optional `entries` array. Rows ride IN, and the one decision answers both backends. The external-tracker branch feeds `_joined_open_candidates` through it. Without the override, `config.backlog.staleness_days` comes from the global config, then the `config.toml` beside the graph, then the 21-day default. With no `claimed` array the command resolves live claims itself and FAILS CLOSED. An unreadable claims root refuses the whole selection, never an empty set read as "nothing is claimed". `live_claimed_node_ids(strict=True)` gave the Python leg the same contract. The reply carries survivors plus per-node drops and first-filter attribution. Guard drops name `dead-ancestor:<id>`, `design-stage`, `idea-stage`, `stale-quarantine`, `contained:<id>`, `no-difficulty`, or the hold verdict's guard reason. `advance --explain` renders from them (AC4). A missing `--parent` node refuses (exit 1, `ReadyParentMissingError` client-side). An unreachable keeper refuses selection: `fno backlog ready` exits non-zero naming the keeper, never a locally recomputed fallback (AC6). The `next` observer merge (`_with_observer`) still re-verifies observer rows through the Python `selection_guards`: a divergence detector over the reply, not a second selection leg. Under `next --claim`, the lock fields land on the graph entry the winner id resolves to. The selection rows are serialized summaries, not references into the commit snapshot. The reply is a JSON array on stdout. Parse it as JSON, and see json-output-contract.md.
 
 A node an open operator question names in `blocks` drops with reason `held:<qid>`, the same word the drain receipt uses. The caller resolves the map from the question journals (`needs::held_map`), so the Rust admission leg and the Python guard read one fold.
 
@@ -992,11 +992,7 @@ migrated.
 Ready PARENTLESS (loose) nodes of one project, in board order.
 
 The rung-1 territory's selection surface, widened to parentless rows: the shipped
-``fno backlog ready -p <project>`` read (claim-filtered, PR-filtered,
-rank-sorted like the epic selection) filtered to rows with no parent and no
-epic box. A loose node is exactly what an epic-territory drain can never
-see, which is why the project territory exists. Raises on a garbled
-response so the caller skips rather than guessing.
+``fno backlog ready -p <project>`` read (claim-filtered, PR-filtered, rank-sorted like the epic selection) filtered to rows with no parent and no epic container. A loose node is exactly what an epic-territory drain can never see, which is why the project territory exists. Raises on a garbled response so the caller skips rather than guessing.
 
 ## advance_project_loose
 

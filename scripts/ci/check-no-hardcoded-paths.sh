@@ -13,11 +13,9 @@
 # Allowlist rationale
 # -------------------
 # Python (entire-file exclusions):
-#   - fno/paths.py, paths_cli.py - canonical accessor defs
+#   - fno/paths.py - canonical accessor defs
 #   - fno/config/__init__.py    - bootstrap fallback (load before paths available)
 #   - fno/update.py             - has try/except fallback for source-path cache
-#   - fno/adapters/providers/dispatch.py - has try/except fallback for providers
-#   - fno/adapters/providers/staging.py  - has try/except fallback for providers
 #   - graph/_constants.py             - uses _state_dir() helper with try/except
 #   - doctor.py - the orphan-file report deliberately checks the DEFAULT
 #       (unconfigured) ~/.fno, not a configured override: it is an advisory
@@ -26,8 +24,6 @@
 #       subprocess call on every `fno doctor` invocation.
 #   - test_*.py                       - sandboxed tests
 #   - scripts/metrics/*.py            - standalone analysis scripts (not in CLI)
-#   - scripts/discovery-brief.py      - standalone script with docstring reference
-#   - scripts/orchestrator.py / operator/ - standalone scripts
 #
 # Bash (entire-file or pattern exclusions):
 #   - scripts/lib/paths.sh            - the generated stub
@@ -76,12 +72,10 @@ add_violation() {
 # Python: Path.home() / ".fno" in CLI source files
 #
 # Files excluded (known legitimate fallbacks or bootstrap paths):
-#   paths.py, paths_cli.py, config/__init__.py,
+#   paths.py, config/__init__.py,
 #   config_io.py (bootstrap: _global_settings_path defines where ~/.fno is,
 #     so it predates and cannot route through fno.paths),
 #   update.py (try/except),
-#   adapters/providers/dispatch.py (try/except), adapters/providers/staging.py (try/except),
-#   adapters/providers/loader.py (bootstrap: settings loader self-reference)
 #   agents/registry.py (guard identifies the shared HOME registry despite config overrides)
 #   graph/_constants.py (uses _state_dir() helper), test_*.py
 # ---------------------------------------------------------------------------
@@ -91,16 +85,12 @@ PY_HITS=$(
         "$REPO_ROOT/cli/src/fno/" \
         --include='*.py' \
         --exclude='paths.py' \
-        --exclude='paths_cli.py' \
         --exclude='test_*.py' \
         2>/dev/null \
     | grep -v 'config/__init__\.py' \
     | grep -v 'config_io\.py' \
     | grep -v 'graph/_constants\.py' \
     | grep -v 'update\.py' \
-    | grep -v 'adapters/providers/dispatch\.py' \
-    | grep -v 'adapters/providers/staging\.py' \
-    | grep -v 'adapters/providers/loader\.py' \
     | grep -v 'agents/dispatch_target\.py' \
     | grep -v 'agents/registry\.py' \
     | grep -v 'doctor\.py' \

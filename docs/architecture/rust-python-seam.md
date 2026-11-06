@@ -16,13 +16,13 @@ The consequence, and it is arithmetic, not preference. A subprocess has no cheap
 
 ## The measurement
 
-Reproduce every number below on a clean checkout with `cd cli && uv run fno-py doctor lint seam-crossings`. It prints, for each baselined set, the measured count beside the baseline count.
+Reproduce every number below on a clean checkout with `crates/fno/target/debug/fno doctor lint seam-crossings` (build the front door first). It prints, for each baselined set, the measured count beside the baseline count.
 
-Rust reaches the `fno` porcelain through **104 baselined crossing sites in both crates**. The lint also ratchets **25 resolver functions**, every function whose body resolves the porcelain path. The Python direction runs through one door. `cli/src/fno/rust_binary.py` is the only production Python file allowed to exec the literal `fno-agents` binary. 15 production files import it.
+Rust reaches the `fno` porcelain through **126 baselined crossing sites in both crates**. The lint also ratchets **32 resolver functions**, every function whose body resolves the porcelain path. The Python direction runs through one door. `cli/src/fno/rust_binary.py` is the only production Python file allowed to exec the literal `fno-agents` binary. 15 production files import it.
 
 The counting rule, in words, so a reader can audit it without reading the lint. A crossing site is a production Rust line that launches `Command::new("fno")` or calls a baselined resolver helper name. A resolver function is a production Rust function with a line reading the `FNO_BIN` or `FNO_LOOPCHECK_FNO_BIN` env key, or constructing the porcelain path with `join("fno")`. Inline test modules, `crates/*/tests/`, and comment lines are out of scope. The baseline keys on `(rule, path, line content)` as a multiset, never on the line number. A moved line does not churn it. A removed site still fails.
 
-A resolver is detected by shape, never by name. Four helpers carry obvious spellings: `fno_bin` in `crates/fno/src/server.rs:2247`, `fno_bin` in `crates/fno/src/yard_overlay.rs:49`, `fno_bin` in `crates/fno-agents/src/scrape.rs:174`, and `loopcheck_fno_bin` in `crates/fno-agents/src/loopcheck.rs:3091`. Twenty-three more functions resolve the porcelain inline, among them `fno_cmd` in `loop_dispatch.rs:136`, `durable_session_pid` in `claims.rs:2670`, and `best_effort_notify` in `loopcheck.rs:3109`. A historical first count that grepped one literal and four helper names reported 29 sites across 10 files. The full scan then found 56 across 18. That 48 percent shortfall shows why the resolver rule matches the env-key shape instead of a name list.
+A resolver is detected by shape, never by name. Three helpers carry obvious spellings: `fno_bin` in `crates/fno/src/server.rs:2247`, `fno_bin` in `crates/fno-agents/src/scrape.rs:174`, and `loopcheck_fno_bin` in `crates/fno-agents/src/loopcheck.rs:3091`. Twenty-three more functions resolve the porcelain inline, among them `fno_cmd` in `loop_dispatch.rs:136`, `durable_session_pid` in `claims.rs:2670`, and `best_effort_notify` in `loopcheck.rs:3109`. A historical first count that grepped one literal and four helper names reported 29 sites across 10 files. The full scan then found 56 across 18. That 48 percent shortfall shows why the resolver rule matches the env-key shape instead of a name list.
 
 The write path is the asymmetry that matters, and the store port moved where it lives. The durable store `graph.db` has one writer: the store publish pipeline in `crates/fno-agents/src/graph_store.rs`. The pipeline runs inside the keeper process and serializes every publish under the store's bounded lock. It writes the backup file together with the bytes. The Python porcelain commands stay the only mutation surface on the CLI side. They reach the pipeline over the keeper socket (`cli/src/fno/graph/store.py` is the client). The mux used to shell the porcelain for its reorder commands and read the verdict. Now the native store client (`crates/fno/src/store_client.rs`) speaks the same socket protocol, and the write itself adds no seam crossing. The one crossing a native write pays is the detached `fno backlog render-views` replay: graph.md is still Python-owned, so the write crosses back once for it. The board pages crossed the other way (2026-09-30): the Python HTML renderer is deleted, and the board render is native (`fno board-render` writes the served page with the rows embedded), so the Python replay resolves the configured targets and hands them to the front binary. Reads keep one deliberately duplicated leg. `crates/fno/src/backlog_view.rs` parses the file itself for its read-only snapshots. The direction law forbids linking the store, and a socket round-trip per snapshot read costs more than the duplicate. The seam is no longer duplicated reads on both sides with writes held by Python. It is one store, two socket clients, and one native read mirror.
 
@@ -82,6 +82,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `scrape.rs:276` | conforming | pane title sweep read through the pane owner |
 | `spawn_gate.rs:378` | conforming | gate-escape telemetry through the event emit path |
 | `backlog_view.rs:69` | conforming | snapshot read through the only writer, schema owned by the source |
+| `team_alarm.rs read_org_payload` | retired | the team read runs in process (`team_read::team_nodes_payload_at`); the front-binary spawn for the `--nodes` payload is gone, and the ledger arm's inner crossing retired with it |
 | `client.rs:2470` | conforming | update probe through the update policy owner, bounded |
 | `client.rs:2649` | conforming | workspace prune through the front door, counts owned by the command; an applied run sends `SquadReload` to every live server so the file and memory agree; an orphaned worker tab (its stored member judged Dead) closes by default, used shells stay opt-in |
 | `client.rs:14413` | conforming | config write through the CLI, the same monopoly as the graph |
@@ -91,6 +92,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `needs_overlay.rs:144` | conforming | mine list read through the same store |
 | `needs_overlay.rs:209` | conforming | mine mutations written through the single writer |
 | `needs_overlay.rs:257` | conforming | answer recorded through the same writer, errors surfaced |
+| `notify_dispatch.rs mux_clients` (daemon copy) | conforming | the notice crosses to the mux server that owns attached clients, as the narrow `fno mux notify` one-shot; the decision table itself runs in-process beside its owner, and the two operator-notice spawn sites plus one drained loopcheck crossing retired with the port |
 | `server.rs:2843` | infrastructure | the resolver helper itself |
 | `server.rs:2884` | conforming | config read bounded through the config owner |
 | `server.rs:2954` | conforming | spawn dispatched through the surface that owns provider resolution |
@@ -100,11 +102,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `server.rs:3202` | conforming | transcript peek read through the transcript reader owner |
 | `server.rs:10818` | conforming | touch telemetry through the event emit path |
 | `server.rs:10912` | conforming | pane counters through the same emit path |
-| `yard_overlay.rs:49` | infrastructure | the delegation helper definition |
-| `yard_overlay.rs:50` | infrastructure | the delegation body line, one resolver per crate enforced here |
-| `yard_overlay.rs:57` | conforming | yard fold read through the command owner, fail-open |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
-| `doctor/report/collectors.rs deployed_config_keys` | conforming | installed-wheel config keys read through `fno-py`, the wheel's own interpreter; the wheel owns the fact and no native import exists |
 | `doctor/report/collectors.rs installed_pkg_dir` | conforming | installed package dir resolved by the interpreter that owns it, so source-vs-deployed comparison never guesses a site-packages layout |
 | `doctor/report/ops.rs run_session_cost` | conforming | session cost computed by the cost module's own `python3 -m` entry point; the billing arithmetic stays single-implementation in Python |
 | `doctor/mod.rs context_audit_run` | conforming | the context census runs as `python -m fno.context_audit` on the wheel's interpreter, all its inputs in one JSON argument; the census stays Python until its family ports |
@@ -212,7 +210,6 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 64 | worktree_status (ported to Rust and deleted 2026-10, gone on next regen) | 165 | 2 | 5/- | 0 | 3 |
 | 65 | relay | 1862 | 2 | 5/- | 810 | 9 |
 | 66 | runtime | 415 | 2 | 6/- | 439 | 5 |
-| 67 | branch_provenance_cache | 84 | 2 | 8/- | 0 | 4 |
 | 68 | config_readback | 280 | 2 | 8/- | 0 | 5 |
 | 69 | worktree (ported to Rust and deleted 2026-10, gone on next regen) | 596 | 2 | 9/- | 791 | 6 |
 | 70 | doctor_graph | 86 | 2 | 14/1 | 0 | 4 |

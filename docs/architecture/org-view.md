@@ -1,10 +1,10 @@
 # Org view
 
-Press prefix+G to open the org view, and press it again to return to the agents list. Prefix+V still cycles Agents, Backlog and Org. The view is the fleet's command center. It shows every machine on the fleet map, the leads on each machine and the live sessions that report to them.
+Press prefix+G to open the org view, and press it again to return to the agents list. Prefix+V still cycles Agents, Backlog and Org. The view is HQ. It shows every machine on the fleet map, the leads on each machine and the live sessions that report to them.
 
 ## Shape
 
-The explorer fills the left 34 columns. It lists the fleet, then each machine, then the leads on each machine. A lead is the seat a session reports to, such as the mux lead or the fleet lead. The open lead lists its seats, one per live session, with a status glyph: `●` writing, `◐` parked, `○` quiet and `◌` unknown. Feed and System close the list.
+The explorer fills the left 34 columns. It lists the fleet, then each machine, then the leads on each machine. A lead is the seat a session reports to, such as the mux lead or the fleet lead. The open lead lists its seats, one per live session, with a status glyph: `⊘` blocked, `●` writing, `◐` parked, `○` quiet and `◌` unknown. Feed and System close the list.
 
 The right pane follows the selection. On the fleet, a machine or a lead it shows one of five tabs over that scope:
 

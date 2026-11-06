@@ -91,7 +91,7 @@ When splitting a previously-monolithic plan into per-wave nodes, point each sibl
 
 | File | Role |
 |------|------|
-| [`../scripts/mutate_doc.py`](../scripts/mutate_doc.py) | Appends the authoritative `## Execution Strategy` YAML to the single plan doc |
+| `fno-agents plan-cli mutate` (`crates/fno-agents/src/plan_doc/mutate.rs`) | Appends the authoritative `## Execution Strategy` YAML to the single plan doc |
 | [`../scripts/validate-plan.sh`](../scripts/validate-plan.sh) | Routes semantic plans to `fno do plan validate --execution` and preserves legacy heading checks |
 | This file | Reference doc — slug rules, examples, backlog usage |
 

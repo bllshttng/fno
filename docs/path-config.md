@@ -62,11 +62,11 @@ plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/p
 # Per-resource overrides. TOML has no null: OMIT a key to derive it from
 # state_dir. Each line below names the default an omitted key resolves to.
 [paths]
-# ledger_json     = ...   # default: <state_dir>/ledger.json
+# ledger_json     = ...   # default: <state_dir>/db/history/ledger.json
 # briefs_dir      = ...   # default: <state_dir>/briefs/
-# fleet_dir       = ...   # default: <state_dir>/fleet/
+# fleet_dir       = ...   # no reader; the megatron fleet dir it named is retired
 # postmortems_dir = ...   # default: <state_dir>/postmortems/
-# worktrees_base  = ...   # default: <state_dir>/worktrees/
+# worktrees_base  = ...   # default: <state_dir>/spaces/worktrees/ (older checkouts under <state_dir>/worktrees/ stay readable)
 # memory_dir      = ...   # default: <state_dir>/memory/
 # hook_logs_dir   = ...   # default: <state_dir>/hook-logs/
 # handoffs_dir    = ...   # default: <vault>/internal/{project}/handoffs/ when
@@ -230,12 +230,12 @@ The pin is the whole config world. The Rust legs resolve their global-scope read
 
 ## Settings cache key
 
-`fno.config._loader._settings_key` is what `load_settings()` caches on, and it has two halves.
+`fno.paths._settings_key` is what the settings-read door caller caches on, and it has two halves.
 
 The declaration half: the four `FNO_` env overrides, `HOME`, and the resolved repo root (itself keyed on cwd and `FNO_REPO_ROOT`). Two calls whose declaration agrees read the same settings by construction, which is what retires any per-test cache-clearing registry.
 
-The fingerprint half: a `(path, mtime_ns, size)` stat of every candidate file, the same triple `config_io._global_merged_config` keys on. The declaration alone never covered the file contents, and a long-lived process filled that gap with a stale parse: `fno config get` (a fresh process) always looked right while a worker or daemon kept serving the pre-edit model. An edit now changes the key and reparses on its own, with no invalidation protocol for writers to remember. Creating a candidate later also changes the key; a missing or unreadable candidate contributes nothing.
+The fingerprint half: a `(path, mtime_ns, size)` stat of every candidate file, the same triple the global merged-config read keyed on. The declaration alone never covered the file contents. A long-lived process filled that gap with a stale parse. A fresh `fno config get` always looked right while a worker kept serving the pre-edit model. An edit now changes the key and reparses on its own, with no invalidation protocol for writers to remember. Creating a candidate later also changes the key. A missing or unreadable candidate contributes nothing.
 
-Two rules the implementation must keep: the key computation stats candidate locations directly and never calls `_candidate_paths()` (that walk runs the one-shot yaml-to-toml migration, and the key runs on every settings read), and it never shells out - the canonical candidate is read off the repo root's `.git` pointer file by plain IO, not from a fresh `git worktree list`.
+Two rules the implementation must keep. The key computation stats candidate locations directly, and the key runs on every settings read. It never shells out. The canonical candidate is read off the repo root's `.git` pointer file by plain IO, not from a fresh worktree listing.
 
-Cost: keys vary with file mtimes, so `_load_settings_at`'s `maxsize=8` holds up to eight recent parses; an evicted declaration is simply re-collected on demand.
+Cost: keys vary with file mtimes. The receipt cache holds one entry per declaration the process used. An evicted declaration is simply re-collected on demand.

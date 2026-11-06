@@ -63,10 +63,15 @@ corrections.log	logs/corrections.log	append	daemon
 corrections.log.wm	logs/corrections.log.wm	overwrite	daemon
 merge-gate-overrides.log	logs/merge-gate-overrides.log	append	daemon
 health-alerts.log	logs/health-alerts.log	append	daemon
-# history/ - append-only jsonl journals.
-health-history.jsonl	history/health-history.jsonl	append	daemon
-evals-history.jsonl	history/evals-history.jsonl	append	daemon
-lesson-candidates.jsonl	history/lesson-candidates.jsonl	append	daemon
+# db/history/ - append-only jsonl journals, plus the durable ledger (one JSON
+# doc rewritten per append under /tmp/fno-ledger.lock, so the newer copy wins
+# a both-exist merge and the loser parks). The question and decision journals
+# stay at the root: the routed store keys their family there, the same anchor
+# rule the retired events journal keeps.
+health-history.jsonl	db/history/health-history.jsonl	append	daemon
+evals-history.jsonl	db/history/evals-history.jsonl	append	daemon
+lesson-candidates.jsonl	db/history/lesson-candidates.jsonl	append	daemon
+ledger.json	db/history/ledger.json	overwrite	daemon
 # install/ - install markers; new wins.
 installed-rev	install/installed-rev	marker	daemon
 source-path	install/source-path	marker	daemon
@@ -107,6 +112,7 @@ watchdog-sweep.json	state/watchdog-sweep.json	overwrite	daemon
 # mux/ - the mux server owns these; it moves them at its own start.
 mux-view.json	mux/mux-view.json	overwrite	mux
 mux-view.json.lock	mux/mux-view.json.lock	lock	mux
+decisions-reviewed.json	mux/decisions-reviewed.json	overwrite	mux
 squads.json	mux/squads.json	overwrite	mux
 squads.json.lock	mux/squads.json.lock	lock	mux
 session-names.json	mux/session-names.json	overwrite	mux
@@ -115,7 +121,8 @@ session-names.json.lock	mux/session-names.json.lock	lock	mux
 # each to itself until its group slice retargets the destination. The mover
 # folds a retargeted dir row per child; a self-mapped row declares the
 # folder and moves nothing. `worktrees` has no row on purpose: the ruled
-# relocation changes the allocation default only, live checkouts never move
+# relocation changes the allocation default only (new external worktrees
+# land under spaces/worktrees/<repo>/<name>), live checkouts never move
 # (lead ruling, 2026-10-16). `sessions` has no row either: the footnote
 # harness writes it live (footnote_harness/transcript.rs), so it is a
 # folder with a home still to be ruled, never a park entry.
@@ -123,35 +130,44 @@ announce-cursors	state/announce-cursors	dir	daemon
 attention	state/attention	dir	daemon
 attest	state/attest	dir	daemon
 backups	backups	dir	daemon
-bin	bin	dir	daemon
-bus	bus	dir	daemon
+bin	install/bin	dir	daemon
+bus	db/mail/bus	dir	daemon
 cargo-build	cargo-build	dir	daemon
-chats	chats	dir	daemon
+chats	db/mail/chats	dir	daemon
 claim-aux	state/claim-aux	dir	daemon
 context-cache	cache/context	dir	daemon
+corrections	cache/corrections	dir	daemon
 fleet	cache/fleet	dir	daemon
 flight	state/flight	dir	daemon
-handoffs	handoffs	dir	daemon
-history	history	dir	daemon
-inbox	inbox	dir	daemon
-latches	latches	dir	daemon
+handoffs	db/handoffs	dir	daemon
+history	db/history	dir	daemon
+inbox	-	park	daemon
+latches	state/latches	dir	daemon
 locks	state/locks	dir	daemon
-mail-escalations	mail-escalations	dir	daemon
-mail-hold	mail-hold	dir	daemon
-migrations	migrations	dir	daemon
+mail-escalations	db/mail/mail-escalations	dir	daemon
+mail-hold	db/mail/mail-hold	dir	daemon
+migrations	install/migrations	dir	daemon
 notice-route	state/notice-route	dir	daemon
-operator-capture	operator-capture	dir	daemon
+operator-capture	db/operator-capture	dir	daemon
 pages	cache/pages	dir	daemon
 plugin-stage	plugin-stage	dir	daemon
-postmortems	postmortems	dir	daemon
+postmortems	db/postmortems	dir	daemon
 push-stamps	state/push-stamps	dir	daemon
 reclaim	state/reclaim	dir	daemon
 retro-pending	state/retro-pending	dir	daemon
 review-invocations	state/review-invocations	dir	daemon
 route-settings	state/route-settings	dir	daemon
-saved-sessions	saved-sessions	dir	daemon
-validity-decks	validity-decks	dir	daemon
+saved-sessions	db/saved-sessions	dir	daemon
+validity-decks	db/validity-decks	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
+ledger.md	-	park	daemon
+ledger.json.tmp	-	park	daemon
+decisions.jsonl.compact	-	park	daemon
+graph.json.lock.q	-	park	daemon
+questions.jsonl.lock	-	park	daemon
+questions.jsonl.lock.d	-	park	daemon
+decisions.jsonl.lock	-	park	daemon
+decisions.jsonl.lock.d	-	park	daemon
 MOVED-TO	-	park	daemon
 .reconcile-*	-	park	daemon
 .shown	-	park	daemon
@@ -178,3 +194,6 @@ jobs-tmp	-	park	daemon
 hooks	-	park	daemon
 signals	-	park	daemon
 squads.json.tmp.*	-	park	mux
+# Recovery copy rides beside the ledger it recovers (marker: new wins,
+# the legacy root copy parks).
+ledger.json.bak	db/history/ledger.json.bak	marker	daemon

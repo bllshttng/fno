@@ -12,7 +12,7 @@ The placement rule fires as context. The project rule `worktree-first` (`.fno-ru
 
 **The worktree root is config-driven via `config.paths.worktrees_base`. Set nothing and the defaults work.**
 
-- **Unset (OSS-neutral default):** harness-native `<repo>/.claude/worktrees/<name>` (gitignored, search-clean). No config needed.
+- **Unset (OSS-neutral default):** harness-native `<repo>/.claude/worktrees/<name>` (gitignored, search-clean). No config needed. Where the external allocator is the default (a harness with no native transition), worktrees land at `<state_dir>/spaces/worktrees/<repo>/<name>`. Checkouts already under the older `<state_dir>/worktrees` base stay listed, allowed and reaped. Nothing moves them.
 - **`config.paths.worktrees_base: <dir>`:** worktrees land at `<dir>/<repo>/<name>` (`<repo>` = the checkout's base name).
 - **`worktree.use_conductor_canonical: true` is DEPRECATED:** acts as `worktrees_base = ~/conductor/workspaces`. Prefer `worktrees_base`.
 - Cargo output lives in TWO places per checkout. Final binaries sit in `crates/*/target`. Intermediates land in the fno build base (`paths.cargo_targets_base`, default `~/.fno/cargo-build`). With the env unset: `~/.cargo/build`. Lane `cargo_build_dirs` sweeps both hourly for every repo on the base, by `CACHEDIR.TAG`, base and member fingerprint, never by name. Never name-match target dirs: `cli/src/fno/target`, `skills/target`, and `tests/target` are source dirs. A 2026-09-02 name-based sweep deleted 66 across 26 worktrees.
@@ -32,7 +32,7 @@ Setup links shared state from canonical: vault symlink, gitignored `.claude/` su
 Per-project policy precedence: per-project `work.workspaces.<slug>.projects[].worktree` > global `config.worktree.policy` > built-in `harness-native`.
 
 - **`never`** - launch in place on the canonical checkout (for projects whose tree IS the product, e.g. an Obsidian vault). ensure prints the repo root and exits 0. Callers skip `setup-worktree.sh`. The location gate treats the protected branch as `ok`.
-- **`harness-native`** (both keys unset) - the harness's own location: claude lands at `<repo>/.claude/worktrees/<name>`. Codex Desktop uses `/worktree` or **Hand off -> Worktree**. A harness with no native transition degrades to `~/.fno/worktrees`. Ensure needs `--harness` and never guesses. An explicit `paths.worktrees_base` degrades `harness-native` to `external`: the key alone relocates.
+- **`harness-native`** (both keys unset) - the harness's own location: claude lands at `<repo>/.claude/worktrees/<name>`. Codex Desktop uses `/worktree` or **Hand off -> Worktree**. A harness with no native transition degrades to `~/.fno/spaces/worktrees`. Ensure needs `--harness` and never guesses. An explicit `paths.worktrees_base` degrades `harness-native` to `external`: the key alone relocates.
 - **`external`** - fno-managed at `<worktrees_base>/<repo>/<name>`.
 
 The per-project policy outranks the global `worktree.policy` key ("conductor" is a base value, not a policy value). A parse error or out-of-enum value REFUSES creation (fail closed): ensure exits non-zero with empty stdout, so the caller holds.
@@ -103,7 +103,7 @@ With `worktree.bgIsolation: "worktree"`, Claude Code runs a static analyzer over
 
 The predicate was probed live on CC 2.1.251 from a worktree session. When a command holds anything the analyzer cannot statically resolve, it is refused as too complex to verify. The refused constructs: environment-variable expansion (`echo "$VAR"`), command substitution (`$(...)`), arithmetic expansion (`$((n+1))`), and loops (`while`, `for`). The admitted constructs: plain commands, literal local variables (`i=2; echo "$i"`), pipes, `;`/`&&` compounds, redirects, and `bash /abs/path/script.sh` file indirection.
 
-Two facts agents keep getting wrong. The refusal's mention of the redirect is generic wording, not the trigger. The trigger is the construct the analyzer cannot parse. The analyzer is also NOT a path boundary. An absolute-path write outside the worktree runs ungated, including into the canonical checkout. Footnote's own hooks are that boundary (`worktree-write-protect.sh`, `git-protection.py`).
+Two facts agents keep getting wrong. The refusal's mention of the redirect is generic wording, not the trigger. The trigger is the construct the analyzer cannot parse. The analyzer is also NOT a path boundary. An absolute-path write outside the worktree runs ungated, including into the canonical checkout. Footnote's own hooks are that boundary (`worktree-write-protect.sh`, the git-protection hook).
 
 The sanctioned escapes, in order. Read env with `printenv VAR` instead of `echo "$VAR"`. Wait on CI or a review with `fno do pr wait <N> --until settled|review` instead of a hand-rolled poll loop. An inline `while`/`$(...)` watcher is refused, so no fno surface can instruct one. For a genuinely complex one-liner, put it in a file and run `bash <file>`.
 
@@ -115,7 +115,7 @@ The plugin ships that hook. `hooks/hooks.json` registers `hooks/worktree-relocat
 
 
 
-A harness or Codex substrate with no native worktree transition degrades to the Footnote-owned `<state_dir>/worktrees` fallback, normally `~/.fno/worktrees`. That fallback is Footnote's own allocation. It does not inherit an external allocator configured by `worktrees_base`, so a repo that sets the base still lands there under `harness-native`. For that reason `fno agents workspace worktree ensure` requires `--harness` and never guesses the substrate.
+A harness or Codex substrate with no native worktree transition degrades to the Footnote-owned `<state_dir>/spaces/worktrees` fallback, normally `~/.fno/spaces/worktrees`. That fallback is Footnote's own allocation. It does not inherit an external allocator configured by `worktrees_base`, so a repo that sets the base still lands there under `harness-native`. For that reason `fno agents workspace worktree ensure` requires `--harness` and never guesses the substrate.
 
 When the base is the state root itself, the ruled destination is `<state_dir>/spaces/worktrees/<repo>/<name>` (the state-root folder ruling, 2026-10-16). It is one of the eight ruled state-root categories, so the root stays closed at eight top-level names. New worktrees use it. Live checkouts never move. The allocation default flips in the worktrees-base relocation slice. Until that lands, allocations keep the spelling above and both bases stay readable.
 
@@ -168,7 +168,7 @@ Neither reading alone is safe. Bare zero-commits-ahead also reads a branch whose
 
 The process table plus the lsof cwd snapshot (`_wt_pids`) is the only truthful occupancy source. Every classification reads that enumeration. None invents a second one.
 
-Never ask a recorded cwd which tree a worker occupies. The agents-registry `cwd` field is the spawn directory, and the claude job `state.json` `cwd` field is the spawn directory too. Measured 2026-09-11: 29 of 30 alive registry rows and 17 of 17 live bg jobs read the canonical checkout while their sessions wrote inside worktrees. A hold detector built on either field named its own live worktree free. The classifier is `scripts/lib/worktree_occupancy.py`. It never reads those fields. The bridge is `scripts/lib/worktree-occupancy.sh`.
+Never ask a recorded cwd which tree a worker occupies. The agents-registry `cwd` field is the spawn directory, and the claude job `state.json` `cwd` field is the spawn directory too. Measured 2026-09-11: 29 of 30 alive registry rows and 17 of 17 live bg jobs read the canonical checkout while their sessions wrote inside worktrees. A hold detector built on either field named its own live worktree free. The classifier is `fno-agents occupancy-login --classify` (`crates/fno-agents/src/occupancy_classify.rs`). It never reads those fields. The bridge is `scripts/lib/worktree-occupancy.sh`.
 
 `claude bg-spare` argv is identical for a live session and an idle spare, so argv alone can never mark a spare reapable. The identity is the daemon's rendezvous socket farm (`session_procs.bg_socket_pid_map`), which joins a pid to its job id. A join miss holds.
 

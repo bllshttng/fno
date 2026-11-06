@@ -248,81 +248,31 @@ GRAPH_BLOCKED="$TMPDIR_PACK/graph-blocked.yaml"
 GRAPH_BLOCKED_STATUS=unavailable
 if [[ -f "${GRAPH_PATH%.json}.db" ]]; then
   # The read goes through the store api. The raw `rows` op keeps fields the
-  # typed nodes op drops, so the blocked_count arm stays live.
-  if GRAPH_BLOCKED_REPORT="$(
-    GRAPH_TARGET="$GRAPH_PATH" PACK_CLI_SRC="$SCRIPT_DIR/../cli/src" \
-      python3 <<'PY'
-import importlib.util
-import json
-import os
-import sys
-import types
-from pathlib import Path
-
-# The keeper client is stdlib-only, but `import fno.graph.store` executes
-# fno/graph/__init__.py first, and that drags in the whole graph package
-# (tomli_w and friends). Stub the two parent packages so store.py and its
-# _constants sibling load alone, exactly the stdlib leg check-pitfalls.sh
-# relies on.
-cli_src = Path(os.environ["PACK_CLI_SRC"]).resolve()
-fno_pkg = types.ModuleType("fno")
-fno_pkg.__path__ = [str(cli_src / "fno")]
-graph_pkg = types.ModuleType("fno.graph")
-graph_pkg.__path__ = [str(cli_src / "fno" / "graph")]
-sys.modules.setdefault("fno", fno_pkg)
-sys.modules.setdefault("fno.graph", graph_pkg)
-
-spec = importlib.util.spec_from_file_location(
-    "fno.graph.store", cli_src / "fno" / "graph" / "store.py"
-)
-store = importlib.util.module_from_spec(spec)
-sys.modules["fno.graph.store"] = store
-spec.loader.exec_module(store)
-
-try:
-    reply = store._client_for(Path(os.environ["GRAPH_TARGET"])).request(
-        "api", {"op": "rows", "filter": {}}
-    )
-except Exception as exc:
-    sys.stderr.write(
-        "autocorrect-pack: the store cannot be read through the store api (%s)\n" % (exc,)
-    )
-    sys.exit(1)
-
-rows = reply.get("rows", []) if isinstance(reply, dict) else []
-lines = []
-for row in rows:
-    if not isinstance(row, dict):
-        continue
-    status = row.get("status") or row.get("_status")
-    blocked_count = row.get("blocked_count") or 0
-    if status != "blocked" and not (
-        isinstance(blocked_count, (int, float)) and blocked_count > 0
-    ):
-        continue
-    node_id = row.get("id")
-    if not node_id:
-        continue
-    lines.append(
-        "  - node_id: %s\n"
-        "    title: %s\n"
-        "    blocked_count: %s\n"
-        "    last_blocked_reason: %s"
-        % (
-            node_id,
-            json.dumps(row.get("title")),
-            blocked_count,
-            json.dumps(row.get("last_blocked_reason")),
-        )
-    )
-if lines:
-    sys.stdout.write("\n".join(lines) + "\n")
-PY
-  )"; then
+  # typed nodes op drops, so the blocked_count arm stays live. An empty
+  # response is a failed read, not an empty graph: the old json.loads raised
+  # on it, and the packet's reader must not read silence as good news.
+  if ! GRAPH_ROWS="$("${FNO_AGENTS_FRONT:-fno}" backlog script-door rows --graph "$GRAPH_PATH" 2>/dev/null)" \
+     || [[ -z "$GRAPH_ROWS" ]]; then
+    echo "autocorrect-pack: the store cannot be read through the store api" >&2
+    GRAPH_BLOCKED_STATUS=failed
+  elif ! GRAPH_BLOCKED_REPORT="$(printf '%s\n' "$GRAPH_ROWS" | jq -r '
+    (if type == "array" then . else [] end)
+    | map(select(
+        (((.status // ._status) // "") == "blocked")
+        or ((((.blocked_count // 0) | type) == "number") and ((.blocked_count // 0) > 0))
+      ))
+    | map(select(((.id // "") != "")))
+    | map("  - node_id: " + .id
+      + "\n    title: " + (.title | tojson)
+      + "\n    blocked_count: " + ((.blocked_count // 0) | tostring)
+      + "\n    last_blocked_reason: " + ((.last_blocked_reason // null) | tojson))
+    | join("\n")
+  ' 2>/dev/null)"; then
+    echo "autocorrect-pack: the store cannot be read through the store api" >&2
+    GRAPH_BLOCKED_STATUS=failed
+  else
     GRAPH_BLOCKED_STATUS=ok
     printf '%s\n' "$GRAPH_BLOCKED_REPORT" >> "$GRAPH_BLOCKED"
-  else
-    GRAPH_BLOCKED_STATUS=failed
   fi
 fi
 

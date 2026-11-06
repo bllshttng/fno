@@ -4,38 +4,36 @@ Reference for how `/execute waves` reads plans. Architectural overview: `docs/ar
 
 A plan is always a single `.md` file (G1 blocks authoring new folder plans; G3 removed folder-plan *reading* entirely). There is no shape detection step anymore - callers pass a file path directly.
 
-## `load_plan_strategy(plan_input: str)` API
+## `fno-agents wave ready <plan>`
 
-`skills/execute/orchestrator.py`'s `load_plan_strategy` is the dispatcher `/execute waves` calls. It:
+`/execute waves` asks `fno-agents wave ready <plan> [--state <STATE.md>] [--node <id>] [--band low|medium|high]` for the tasks it can dispatch. The loader (`load` in `crates/fno-agents/src/wave_ready.rs`):
 
-1. Calls `fno.plan._doc.load_plan(Path(plan_input))` to parse frontmatter and sections.
-2. Extracts the `## Execution Strategy` section via `doc.get_section("Execution Strategy")`.
-3. Delegates the fenced YAML body to `fno.plan.brief.parse_execution_strategy` (the canonical Execution Strategy parser - single source of truth, shared with `fno do plan brief`) to get `execution_mode` / `scope` / `projects` / `waves`.
-4. Builds and returns an `ExecutionStrategy` dataclass (`waves: List[Wave]`, `scope`, `project_tasks`).
+1. Reads the plan through `plan_doc::doc::load_plan`, the same parser the `fno do plan parse` door uses. `fno do plan brief` uses the same parser.
+2. Validates the frontmatter through the plan-schema door. It refuses on a missing strategy section, a strategy parse error, or an edge error.
+3. Builds the waves, their tasks and each task's band, then adds the partition edges for tasks that share a file.
 
-`orchestrator.py` also has a lower-level `parse_execution_strategy(index_path: str)` - a self-contained, stdlib-only regex parser used directly by `main()`'s CLI entry point (`orchestrator.py <path-to-plan.md>`). It reads the same `## Execution Strategy` fenced YAML block from any single file; it does not go through `fno.plan._doc`.
+## Failure surfaces
 
-## Failure surfaces (`load_plan_strategy`)
+Every failure prints one diagnostic to stderr, prints `No execution strategy found in <path>` to stdout, and exits 1. It never prints a partial ready list.
 
-| Condition | Result | Detail |
-|-----------|--------|--------|
-| `fno.plan._doc` not importable | Returns `None` | Warning to stderr |
-| Plan file missing / unreadable (`OSError`) | Returns `None` | `BLOCKED blocked_reason=plan_unreadable: <exc>` to stderr |
-| Plan doc malformed (frontmatter parse failure) | Returns `None` | `Error: malformed plan doc (Execution Strategy YAML): <exc>` to stderr |
-| `## Execution Strategy` section absent | Returns `None` | `Warning: No execution strategy section found in <path>` to stderr |
-| `fno.plan.brief` not importable | Returns `None` | Warning to stderr |
-| Execution Strategy YAML malformed (`BriefParseError`) | Returns `None` | `Error: malformed Execution Strategy YAML in <path>: <exc>` to stderr |
-| No valid waves parsed | Returns `None` | `Error: No valid waves found in Execution Strategy of <path>` |
-
-Every failure mode returns `None` and prints a diagnostic to stderr - never raises past this function, never returns a partially-built `ExecutionStrategy`.
+| Condition | Detail on stderr |
+|-----------|--------|
+| Plan file missing / unreadable | `BLOCKED blocked_reason=plan_unreadable: <reason>` |
+| Plan doc malformed (frontmatter parse failure) | `Error: malformed plan doc (frontmatter): <reason>` |
+| Frontmatter fails the plan-schema door | `BLOCKED blocked_reason=plan_frontmatter_invalid: <path>` and one line per field |
+| `## Execution Strategy` section absent | `Warning: No execution strategy section found in <path>` |
+| Execution Strategy YAML malformed | `Error: malformed Execution Strategy YAML in <path>: <reason>` |
+| A task edge names an unknown task or makes a cycle | `BLOCKED blocked_reason=plan_task_edges_invalid: <path>` and the edge errors |
+| No valid waves parsed | `Error: No valid waves found in Execution Strategy of <path>` |
 
 ## Task-scoped file targets
 
-`get_task_file_targets(plan_path, task_id)` extracts a single task's `Files:` section for parallel-wave conflict detection (`detect_hidden_output_conflicts`, `resolve_wave_execution_mode`). Since a plan is one file, this scans that file for the `### Task <task_id>` heading via `_extract_task_section` - no directory globbing.
+The partition step reads each task's `Files:` section from the `### Task <id>` heading in the one plan file, with no directory globbing. Tasks in a parallel wave that share a path serialize in wave order (`crates/fno-agents/src/backlog/collision.rs`).
 
 ## See also
 
-- `cli/src/fno/plan/_doc.py` - `load_plan`, `PlanDoc`
-- `cli/src/fno/plan/brief.py` - `parse_execution_strategy` (the canonical Execution Strategy YAML parser)
-- `skills/execute/orchestrator.py` - `load_plan_strategy`, `parse_execution_strategy`, `get_task_file_targets`
+- `crates/fno-agents/src/plan_doc/doc.rs` - `load_plan`, `PlanDocument`
+- `crates/fno-agents/src/plan_doc/brief.rs` - `parse_execution_strategy` (the canonical Execution Strategy YAML parser)
+- `crates/fno-agents/src/plan_doc/cli.rs` - the `fno do plan` door and its `parse` leaf
+- `crates/fno-agents/src/wave_ready.rs` - `load`, the ready payload, the partition edges
 - `skills/blueprint/references/single-doc-spec.md` - mutation contract and section ownership

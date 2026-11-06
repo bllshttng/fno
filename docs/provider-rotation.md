@@ -131,7 +131,25 @@ Settings are read from two locations. Project-local wins over global:
 
 `fno config accounts add --scope project` writes to the project file.
 `fno config accounts add --scope global` writes to the global file.
-`fno config accounts use` defaults to `--scope project`.
+
+`fno config accounts use` defaults to `--scope project`. The `u` key in the mux Connections view always passes `--scope global`.
+
+### What the `u` key does to live workers
+
+Press `u` on a row in the Connections view, then press Enter. The prompt names the live workers on that harness. A claude process started outside the mux is not in that count, but the result line carries the real count.
+
+| Record | Shared slot | Live workers | New spawns |
+|---|---|---|---|
+| claude `managed` | Refreshes the target, saves the outgoing account, writes the slot, and verifies it. | They keep running, and the result line warns about them. What they bill next is unmeasured. | Run on the new account. |
+| codex `managed` | Writes only when no codex runs. | Any live codex defers the switch with exit 2, and the slot does not change. | Run on the new account. |
+| claude with a `config_dir` | None. `u` names the `s` key and runs nothing. | No change. | Only through `s` or `--account`. |
+| `api_key`, `oauth_dir` | None. Only the pointer moves. | No change. | No change. No spawn path reads the pointer, so name the account with `--account`. |
+
+The pointer is one value across all harnesses, so `u` on a codex row also moves it off a claude row. A project `active` key wins over the global pointer. If that hides the move, the result line warns. A stored login that is spent refuses the switch, and the result line sends you to `r`, which opens a login pane.
+
+The Connections view groups accounts by provider: Anthropic, OpenAI, zai, Amazon Bedrock, DeepSeek, OpenCode and Llama. A route, a Bedrock key, or a base URL names a record's provider. A record with none of these groups under its harness's own vendor. A provider with no saved account still shows, with an add hint. The `[ACTIVE]` badge marks the record new spawns use. When no record is active, it marks the System default row, the plain harness login. Enter does what `u` does. A row names its plan and the email its saved login proved at sign-in, masked as `j•••@m•••.xyz`. The plan comes from a record's own `plan` key, else from the saved claude login's tier, such as `Max 20x`.
+
+On a claude row, `r` re-authenticates. After a confirm it opens a pane that runs `fno config accounts use <id> --scope global --login`. `--login` forces the vault login, so a working stored copy does not stop it. It runs two browser logins, one per Keychain item. Each login proves its principal before the store write. The account then takes the shared slot. The pane takes the focus as it opens. The code the browser shows pastes straight into it. The login never holds the account-switch lock while it waits, so a login left mid-paste never blocks another switch. If a switch lands mid-wait, the final write refuses with `superseded` instead of stamping over the moved slot, and names the retry. On a codex row with a spent login, `r` opens `codex login` in a focused pane and a second `r` saves it. On any other row, `r` saves the current login again.
 
 ---
 
@@ -314,10 +332,9 @@ It is deliberately **not** a `clear-taint` command, and it will not act on anyth
 An unreachable profile endpoint, a malformed response, a slot `security` could not read, a principal matching no registered account, or one matching two of them each leave the stamp, the snapshots, and the taint byte-identical, and exit non-zero naming which of those happened.
 Clearing a taint without proof would file one account's usage under another's name, which is worse than staying `unknown`.
 
-It also refuses with `slot-pinned` while a session that was pinning when the taint was written is still alive.
-Proving the principal proves it now, and that session was launched under the outgoing account, so its next token refresh can overwrite the slot with that account's credential.
-The taint marker records those sessions for exactly this check: a session started after the switch already read the new credential and never blocks a repair, which matters because on the shared slot the pinning session is usually the account being proven.
-Each is recorded as a pid *and* its start time, because pids are reused and a recycled one wearing a dead session's number would hold the repair open permanently.
+Live sessions do not block the proof. A busy fleet has twenty or more claude pids alive at once, and waiting for all of them to exit meant the slot was never proven.
+The proof binds to the bytes it read instead. The credential is read once, proven through the profile endpoint, and read again before the snapshot is written and again before the taint clears. If a session rewrote the slot in between, the outcome is `slot-changed` and the taint stays set.
+When the reconcile lands under live sessions, it prints how many now bill to the proven account and their pids, the same report `fno config accounts use` prints.
 Reading the slot also ignores any ambient `CLAUDE_CONFIG_DIR`, since a worker pinned to another account exports it and reconciliation would otherwise prove the pinned account and stamp it onto the canonical slot.
 On macOS the shared slot has two Keychain items, scoped and unscoped, and a stale one can sit beside a live one holding a different account.
 The on-disk `~/.claude/.credentials.json` is a third source: the usage probe reads it first even on macOS, so a stale file bearer could otherwise prove out and have its quota reported while the Keychain account occupies the slot.
@@ -391,19 +408,19 @@ And the active shared-slot occupant correctly keeps `config_dir = None`, because
 
 One question had four readers: which account will this claude launch bill? `resolve_account_overlay` read the active stamp. `dispatch_env` returned a config directory. The usage probe ranked credential sources. `doctor` compared a stamp against a live principal. A path says where a credential is meant to be. A stamp says who put it there. Neither says who the credential presents as. So the four disagreed, and each one still printed a receipt naming an account.
 
-`fno.adapters.providers.binding.resolve_account_binding` is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
+`accounts::binding` (`crates/fno-agents/src/accounts/binding.rs`) is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
 
 The verdict is `matched`, `mismatch`, `ambiguous` or `unknown`. Only one of them refuses. A `mismatch` is a positive observation, so both launch env paths refuse with `account_identity_mismatch` before they spawn anything. An `unknown` never refuses. An unreachable profile endpoint must not ground the fleet, and an unpinned manual login keeps its permissive posture. What `unknown` forbids is a receipt naming an account as served. `doctor` and `fno config accounts usage` print `account_identity_unknown` with its cause instead.
 
 A reading is bound to the credential generation that produced it. Identity is proven before the usage request, which stops another account's numbers being fetched at all. A sign-in that lands after the request is a separate window, and a reading from it is discarded with `identity_changed`. The marker matters as much as the discard: a missing snapshot alone reads exactly like a probe that never ran.
 
-The accounts list and the Connections modal carry an identity column. The modal renders the cell that `fno config accounts list` prints, so one renderer states every token, and a row states who its credential is proved to serve. A matched row names its own record. A mismatch renders `!serves <record>`. The active stamp names the account that put a credential in the slot. The slot credential presents as the named record. The row shows both instead of papering over the gap. `?<reason>` marks anything unproved, and two credential roots observing one principal flag `!shared-identity`. A row never names an account it did not prove. To keep the account that is signed in, run `fno config accounts reconcile-slot claude`. To move to another account, follow the switch in the section below.
+The accounts list carries an identity column, and a row states who its credential is proved to serve. If that cell warns, as `!serves` or `!shared-identity` does, the Connections modal shows it. The modal drops the `?` tokens. A matched row names its own record. A mismatch renders `!serves <record>`. The active stamp names the account that put a credential in the slot. The slot credential presents as the named record. The row shows both instead of papering over the gap. `?<reason>` marks anything unproved, and two credential roots observing one principal flag `!shared-identity`. A row never names an account it did not prove. To keep the account that is signed in, run `fno config accounts reconcile-slot claude`. To move to another account, follow the switch in the section below.
 
 One lane fact, observed on Claude Code 2.1.266. The Keychain item is chosen by whether `CLAUDE_CONFIG_DIR` is set at all, not by which account will read it. An interactive `claude` reads the unscoped `Claude Code-credentials` item. A daemon-hosted background session reads the scoped `Claude Code-credentials-<hash>` item, where the hash is the first 8 hex of the sha256 of `$HOME/.claude`. A login reaches a running session on its next request, with no restart.
 
 ### Switching claude accounts is manual, by design
 
-Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` is not the switch yet, because it writes a stored copy whose refresh token the live session has already spent.
+Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` refreshes the stored copy first. If the live session has already spent that copy's refresh token, the switch refuses.
 
 A second account can instead keep its own credential directory (`--config-dir ~/.claude-alt`). Its transcript folders are often symlinks back into canonical. Sharing transcripts never merges credential identity. The binding reads the Keychain item scoped to that directory, plus that directory's own `.credentials.json`. Neither source is a transcript.
 
@@ -466,8 +483,7 @@ Plain strings (no `${` prefix) pass through unchanged.
     (empty marker dir - api_key auth, no symlink)
 ```
 
-For `oauth_dir` auth, the symlink target is `credentials_source`. The symlink
-is created by `staging.stage(record)` and verified by `staging.verify_staged(record)`.
+For `oauth_dir` auth, the symlink target is `credentials_source`. You create the symlink, as the recipes below show. `staging::verify_staged` in `crates/fno-agents/src/accounts/staging.rs` checks it before every launch.
 
 ---
 
@@ -514,7 +530,7 @@ The paragraph below is the superseded theory, kept as the historical record of t
 
 A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
-**The Rust arm owns live Claude resume directly.** The `resume` command routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_COMMANDS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
+**The Rust client owns live Claude resume.** Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
 
 Both doors apply the same usability rule, not just an existence check: a recorded
 file that is missing, unparseable, or carries only the auth-scrub floor all
@@ -584,39 +600,25 @@ happened, so that question is read from the session transcript instead.
 
 ---
 
-## dispatch_env() contract
+## The launch env contract
 
-```python
-from fno.adapters.providers.dispatch import dispatch_env
-from pathlib import Path
+`accounts::env::launch_env` in `crates/fno-agents/src/accounts/env.rs` answers it. `fno-agents spawn-overlay` serves the same answer to every Python caller. For a staged claude `oauth_dir` record named `claude-max-secondary` it returns:
 
-env = dispatch_env(
-    provider_id="claude-max-secondary",
-    repo_root=Path("/path/to/project"),   # optional; defaults to os.getcwd()
-    root=Path.home() / ".fno" / "providers",  # optional; override for tests
-)
-# Returns: {"CLAUDE_CONFIG_DIR": "/Users/me/.fno/providers/claude-max-secondary/.claude"}
+```
+{"CLAUDE_CONFIG_DIR": "/Users/me/.fno/providers/claude-max-secondary/.claude"}
 ```
 
-**Input:** `provider_id` (string), optional `repo_root` (Path), optional `root` (Path).
+**Input:** the record id, the repo root, and the providers store root (`<state_dir>/providers`, `~/.fno/providers` by default).
 
-**Output:** A dict of environment variables to merge into the subprocess env before
-invoking the CLI binary. The dict is minimal: only the keys strictly required
-for credential isolation.
+**Output:** the environment variables to merge into the subprocess env before invoking the CLI binary. The map is minimal: only the keys strictly required for credential isolation.
 
-**Isolation guarantee:** `dispatch_env()` is a pure function. It reads
-`config.toml` and the filesystem but holds no module-level state and
-acquires no locks. Safe to call concurrently from a `ThreadPoolExecutor` or
-`asyncio` without additional synchronisation.
+**Isolation guarantee:** the read holds no state and takes no lock. It reads `config.toml` and the filesystem only, so concurrent callers need no synchronisation.
 
 **Failure modes:**
 
 - `ProviderNotFoundError` (subclass of `KeyError`) - `provider_id` not present
   in `config.accounts.records`. The record was never configured.
-- `ProviderUnavailableError` (subclass of `RuntimeError`) - the record exists
-  but cannot be used right now. For `oauth_dir`: provider is not staged (call
-  `staging.stage(record)` first). For `api_key`: an env reference cannot be
-  resolved (missing env var, keychain item, or file).
+- `ProviderUnavailableError` (subclass of `RuntimeError`) - the record exists but cannot be used right now. For `oauth_dir`: provider is not staged (run `fno config accounts register`). For `api_key`: an env reference cannot be resolved (missing env var, keychain item, or file).
 
 The distinction matters for callers: `ProviderNotFoundError` is a configuration
 error (stop, ask user to run `fno config accounts add`); `ProviderUnavailableError` is
@@ -659,13 +661,9 @@ fno config accounts add claude-max-secondary \
     --credentials-source ~/.claude.secondary \
     --scope global
 
-# Stage it (creates the symlink under ~/.fno/providers/)
-python3 -c "
-from fno.adapters.providers.loader import load_providers
-from fno.adapters.providers.staging import stage
-cfg = load_providers()
-stage(cfg.by_id['claude-max-secondary'])
-"
+# Stage it: link the account's claude dir under ~/.fno/providers/
+mkdir -p ~/.fno/providers/claude-max-secondary
+ln -s ~/.claude.secondary ~/.fno/providers/claude-max-secondary/.claude
 
 # Activate it for the next session
 fno config accounts use claude-max-secondary --scope global
@@ -683,22 +681,12 @@ fno config accounts add claude-backup \
     --scope global \
     --account-id my-backup-account
 
-# Stage (creates symlink)
-python3 -c "
-from fno.adapters.providers.loader import load_providers
-from fno.adapters.providers.staging import stage
-cfg = load_providers()
-stage(cfg.by_id['claude-backup'])
-"
+# Stage: link the account's claude dir under ~/.fno/providers/
+mkdir -p ~/.fno/providers/claude-backup
+ln -s ~/.claude.backup ~/.fno/providers/claude-backup/.claude
 
-# Verify staging is intact
-python3 -c "
-from fno.adapters.providers.loader import load_providers
-from fno.adapters.providers.staging import verify_staged
-cfg = load_providers()
-rec = cfg.by_id['claude-backup']
-print('staged:', verify_staged(rec))
-"
+# Verify staging is intact: the link must resolve
+ls -lL ~/.fno/providers/claude-backup/.claude
 ```
 
 ---
@@ -765,14 +753,9 @@ intent.
 
 **dispatch_env returns wrong env for the `claude` CLI kind**
 
-For `auth: oauth_dir` + `harness: claude`, `dispatch_env()` returns
-`{"CLAUDE_CONFIG_DIR": "..."}`. If the returned dict contains `HOME` instead,
-the record was added with a non-`claude` CLI value. Remove and re-add with
-`--harness claude`.
+For `auth: oauth_dir` + `harness: claude`, the launch env is `{"CLAUDE_CONFIG_DIR": "..."}`. If the returned map contains `HOME` instead, the record was added with a non-`claude` CLI value. Remove and re-add with `--harness claude`.
 
-For `auth: api_key`, `dispatch_env()` returns the resolved `env` dict directly.
-If `CLAUDE_CONFIG_DIR` is expected but absent, the record is using `oauth_dir`
-auth but is not staged. Call `staging.stage(record)` first.
+For `auth: api_key`, the launch env is the resolved `env` map. If `CLAUDE_CONFIG_DIR` is expected but absent, the record is using `oauth_dir` auth but is not staged. Run `fno config accounts register` first.
 
 ---
 
@@ -786,7 +769,7 @@ downstream tooling reconstruct what ran where.
 
 ### Error Taxonomy
 
-`cli/src/fno/adapters/providers/error_taxonomy.py` normalizes the
+`crates/fno-agents/src/accounts/error_class.rs` normalizes the
 outcome of a provider call (HTTP status + body, or CLI subprocess exit
 code + stderr) to a closed taxonomy. Only the first three classes
 trigger a swap.
@@ -857,33 +840,13 @@ trips first wins. v0 attribution math is approximate
 to bound damage. Exact per-segment math (rate card x tokens per
 segment) is deferred to Spec 2.5.
 
-### Per-turn Attribution Sidecar
+### Per-turn Attribution
 
-`cli/src/fno/turn_attribution.py` owns
-`.fno/turn-attribution.jsonl`. Each line records one assistant
-turn with the active provider and any normalized error class:
-
-```jsonl
-{"turn_index":0,"ts":"2026-05-05T01:23:45Z","provider_id":"claude-anthropic","error_class":null}
-{"turn_index":1,"ts":"2026-05-05T01:24:48Z","provider_id":"claude-openrouter","error_class":"provider_5xx"}
-```
-
-Writes serialize via `fcntl.LOCK_EX` so concurrent dispatchers can't
-tear the JSONL. Writes are non-blocking on failure: a turn that can't
-write the stamp continues and the sidecar's missing entries fall back
-to active-at-compute attribution at downstream read time.
-
-The sidecar feeds:
-
-- The stop hook's per-turn provider summary (logged at completion)
-- `fno config accounts list` per-session per-provider spend (deferred to 2.5)
-
-### State Files Owned by Spec 2
-
-| File | Owner | Reset on |
-|---|---|---|
-| `.fno/turn-attribution.jsonl` | dispatch layer | session boundary (gitignored, re-created per session) |
-| `~/.fno/config.toml.lock` | save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
+The per-turn sidecar (`turn_attribution.py`, `.fno/turn-attribution.jsonl`) retired with the
+Python dispatch layer: it had no writer or reader left. Per-provider attribution computes
+from session facts at read time (active-at-compute with the same fallback the sidecar's
+readers used). `~/.fno/config.toml.lock` stays: save_providers, the Rust
+`accounts/writer.rs`, n/a (lock file, content irrelevant).
 
 ---
 
@@ -1004,7 +967,7 @@ contract tests against golden output captured before the bash oracle was deleted
 
 The error taxonomy classifies a provider call into a closed `ErrorClass` set. Plan A adds two behaviors on top of it:
 
-1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `cli/src/fno/adapters/providers/error_taxonomy.py::ERROR_RULES` as a verbatim rule table.
+1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `ERROR_RULES` in `crates/fno-agents/src/accounts/error_class.rs` as a verbatim rule table.
 
 2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at 5min). The level drops back to 0 when the entry ages past the 1h health TTL. The Rust writer `accounts::state::update_health` does this arithmetic.
 
@@ -1227,12 +1190,7 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 
 ### Layers
 
-- **Probe** (`adapters/providers/usage.py`): `probe_usage(record)` returns a
-  `UsageSnapshot` (per-window `used_pct` clamped to [0,100] + `resets_at` epoch)
-  or `None`. Claude reads its OAuth usage endpoint; codex reads the `rate_limits`
-  payload in its most recent session events. Both are `[VERIFY-AT-IMPL]` and
-  fail-open - any failure (endpoint drift, 401, timeout, missing files) is
-  `None`, never a raise, and never logs a token. Other CLIs are `None` in v1.
+- **Probe** (`crates/fno-agents/src/accounts/usage_probe.rs`): `probe_detail` returns a snapshot or nothing. A snapshot holds each window's `used_pct`, clamped to [0,100], and its `resets_at` epoch. Claude reads its OAuth usage endpoint. Codex reads the `rate_limits` payload in its most recent session events. Both fail open. Any failure (endpoint drift, 401, timeout, missing files) reads as no snapshot, never a raise, and never logs a token. Other CLIs read as no snapshot.
 - **Snapshot cache**: an additive `usage` field on `provider-runtime-state.json`
   under the existing `.update.lock` (no schema bump - the `model_locks`
   precedent). Every existing writer carries it through so a health/cursor write
@@ -1252,6 +1210,7 @@ When the resolved signal is `UNKNOWN` for any reason and the launch proceeds any
 ### CLI
 
 - `fno config accounts usage [--json/-J] [--refresh]` - per-provider windows (used %, resets-in). `--refresh` forces a probe past the TTL cache and renders that probe's own result, with no second cache read. Two reads of one observation can disagree. That disagreement once printed `unknown` while the probe returned real windows. An unknown provider is `{"state": "unknown", "reason": "<slug>"}` in JSON and `unknown (<slug>)` in human output. The slug names the boundary that failed. Capability is classified before attribution. So an unsupported harness or an api_key record is never reported as an account-binding fault it does not have. When the reading is good but its cache write lost the update-lock race, a known provider additionally carries `"persisted": false`. The reading is still displayed, because persistence and displayability are separate outcomes.
+- `fno config accounts usage --logins [--json]` - every login already on the machine, managed or not. It reads the plain claude Keychain item, shown as the System default row. It also reads each claude config dir, codex `auth.json`, and API keys in the env or `~/.fno/.env`. Each row names the provider, kind, plan, masked identity, and each window with used %, reset, span and pace. The read is read-only. It sends the live token as stored. An expired token reads `token-expired` and makes no request. It never refreshes, copies or writes a slot, and it keeps no cache. An API key with no usage endpoint (kimi, anthropic, openai, deepseek) reads `usage-unsupported`.
 
   | Slug | The boundary it names |
   |---|---|
@@ -1432,7 +1391,7 @@ separate post-hoc layer).
 | size `M` | `diverse_preferred` |
 | size `S` / unknown | `portable` |
 
-The effective kinds start from the session's ambient harness (`resolve_harness_identity`), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
+The effective kinds start from the session's ambient harness (the route-slot resolve door), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
 
 `assess_assurance(policy, ...)` turns the *effective reviewer kinds* (what the
 panel will genuinely dispatch to) into a verdict with a single load-bearing
@@ -1448,3 +1407,11 @@ asymmetry:
   different-family capacity exists - the review cannot silently pass.
 
 `fno do review --assess-assurance --policy-size <S|M|L> [--risk-surface ...]` prints the verdict JSON and exits `3` when unsatisfied. A direct CLI caller is blocked the same way the `/fno:ship pr check` skill is (no skill-only guard). See `skills/ship/references/check.md` Step 0c.
+
+## Add a provider from the Accounts tab
+
+Press `a` on the Accounts tab. A picker opens. Type to search. Popular providers come first, then Local servers, then the rest of the models.dev catalog from A to Z. Each row names the harnesses that can run it.
+
+Anthropic and OpenAI start a login pane. zai asks for a key. Any other catalog provider asks for a name and a key, and `fno` saves an opencode `api_key` account whose route names the provider.
+
+A Local server (Ollama, LM Studio, vLLM, llama.cpp, MLX) asks for a base URL instead of a key. `fno` asks the server for its models. An empty list adds nothing. The probe waits up to 2 seconds.

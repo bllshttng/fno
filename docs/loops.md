@@ -1,6 +1,6 @@
 # Scheduled loops
 
-The control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the verb that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.
+The control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the command that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.
 
 | loop | scheduler | interval (s) | armed by | ends with receipt | reads with |
 |---|---|---|---|---|---|
@@ -27,9 +27,11 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 | `board_render` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `team_ledger` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `lead_eval` | `daemon` | 600 | always | `control_plane_tick` | `fno agents loops table` |
+| `question_judge` | `daemon` | 3600 | `questions.judge.enabled` | `control_plane_tick` | `fno inbox outstanding judge --report` |
 | `attention` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 | `heal` | `launchd:sh.fno.pr-watcher` | 600 | `auto_heal.enabled` | `pr_heal_tick` | `fno do pr watch status` |
 | `otlp_export` | `daemon` | 300 | `telemetry.otlp.enabled` | `control_plane_tick` | `fno agents feed --otlp` |
+| `eval_events` | `daemon` | 300 | `telemetry.eval_events.enabled` | `control_plane_tick` | `fno-agents evals events` |
 | `pane_loop` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 
 The launchd labels the pr-watch installer and the autocorrect installer own, as the table reports them: `sh.fno.pr-watcher`, `sh.fno.groom`, `sh.fno.autocontinue`, `sh.fno.sync-backlog`, `sh.fno.board-server`, `com.user.autocorrect`, `com.user.autocorrect-watcher`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.
@@ -126,6 +128,10 @@ Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in th
 
 Start: daemon fires, every 600s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
 
+### question_judge
+
+Start: daemon fires, every 3600s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno inbox outstanding judge --report`. If the row reads `unarmed`, arm it with `fno config set questions.judge.enabled true`.
+
 ### attention
 
 Start: daemon fires, every 30s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
@@ -138,8 +144,10 @@ Start: launchd:sh.fno.pr-watcher fires, every 600s. End: a `pr_heal_tick` receip
 
 Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents feed --otlp`. If the row reads `unarmed`, arm it with `fno config set telemetry.otlp.enabled true`.
 
+### eval_events
+
+Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno-agents evals events`. If the row reads `unarmed`, arm it with `fno config set telemetry.eval_events.enabled true`.
+
 ### pane_loop
 
 Start: daemon fires, every 30s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
-
-The launchd fold is not applicable on this host, and the table fabricates no alarm for it.

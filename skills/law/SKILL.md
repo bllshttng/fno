@@ -27,8 +27,10 @@ Type `/fno:law Merges belong to the user` in chat. A `d-` id comes back.
 4. Record it:
 
 ```bash
-fno inbox law set "<subject>" "<decision>" --rationale "<why>" [--supersedes d-xxxxxxxx]
+fno inbox law set "<subject>" "<decision>" --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx]
 ```
+
+Pass the words the user typed as `--quote`. Under `autonomy.mode` `balanced` (the default) and `ask`, a session's law write with no quote refuses with exit 3. If the user did not ask for this rule, ask them first. The quote records the ask. It never changes the row's authority.
 
 The command prints the `d-` id on stdout. Report that id and the subject.
 
@@ -43,13 +45,14 @@ Recording law from chat works, and so does retracting a chat-recorded law. When 
 
 ## Refusals
 
-`fno inbox law set` refuses, records nothing, and exits **3** in six cases:
+`fno inbox law set` refuses, records nothing, and exits **3** in seven cases:
 
 - the statement is coordination rather than durable law,
 - the rationale is missing,
 - `--supersedes` is not a `d-` decision id, or names no recoverable decision,
 - `--supersedes` names an `operator` law row while this recording is `chat_attested`,
 - `--graduation` is not a valid kind,
+- `autonomy.mode` asks and a session passed no `--quote`,
 - no harness session resolves and no terminal is attached, so nothing marks a decider.
 
 Exit **1** means something else entirely. It means the row IS recorded and the recall index write failed. Run `fno backlog decide-reindex`. Never re-run the command.

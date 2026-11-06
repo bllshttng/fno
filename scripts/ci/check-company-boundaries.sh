@@ -126,46 +126,17 @@ LAYERS = (
         "platform",
         (
             "fno.paths",
-            "fno.config",
-            "fno.events",
+            # The events store client: the events package's Python residue
+            # port left this module as the package's only Python reader.
+            "fno.events.store_client",
             # Leaf utilities with callers on both sides of the runtime boundary.
             # Declared, not merely moved: an undeclared module is unmapped, and
             # the scan skips unmapped modules entirely, so relocating code
             # without adding it here would clear a finding while leaving the
             # dependency in place.
-            "fno.drive_authority",
-            "fno.harness_identity",
-            "fno.harness_names",
             "fno.rust_binary",
-            # The registry table door: claims, identity and agents all read
-            # the registry through it.
-            "fno.registry_door",
-            # Where a session's transcript is and what it says about itself.
-            # Asked by the agents runtime (`fno agents fleet truth`) and by the graph
-            # writer that stamps a node's session rows - opposite sides of the
-            # runtime boundary, which is what makes it a platform leaf.
-            # The MODULE, not the fno.provenance package: its siblings
-            # (autobrief, runtime_attempts) are orchestration that legitimately
-            # reaches up, and declaring the package would map them too. Its one
-            # sibling import, provenance.resolver, stays unmapped and reaches
-            # fno.agents.discover only on the opencode branch, which
-            # resolve_transcript_path cannot reach (it returns None for any
-            # agent outside {claude, codex} before calling the resolver).
-            "fno.provenance.observed",
         ),
     ),
-    (
-        1,
-        "core",
-        (
-            "fno.company",
-            "fno.company.contracts",
-            "fno.graph",
-            "fno.claims",
-            "fno.plan",
-        ),
-    ),
-    (5, "runtime", ("fno.runtime", "fno.agents")),
 )
 
 root = Path(sys.argv[1]).resolve()
@@ -252,16 +223,14 @@ for path, source, tree in parsed:
         for imported in imported_modules(
             node, source_module, source_is_package=path.name == "__init__.py"
         ):
-            # Control edge (was fno.roles.models -> contracts); re-point when
-            # these modules retire.
-            if (
-                source_module == "fno.agents.history"
-                and imported == "fno.graph._reconcile"
-            ):
-                positive_control = True
             target_layer = layer_for(imported)
             if target_layer is None:
                 continue
+            # Any classified edge proves the scan read content (the runtime
+            # layer's own downward edges died with the agents package, which
+            # was the one runtime module set the Python tree had; platform
+            # modules importing platform modules now carry the control).
+            positive_control = True
             if target_layer[0] in seen_target_layers:
                 continue
             seen_target_layers.add(target_layer[0])
@@ -283,7 +252,7 @@ for path, source, tree in parsed:
 if not positive_control:
     print(
         "check-company-boundaries: positive control failed "
-        "(no runtime -> core edge observed); scan did not reach content",
+        "(no classified import edge observed); scan did not reach content",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -324,7 +293,7 @@ rendered_cycle = None
 if cycle:
     rendered_cycle = " -> ".join(f"L{number} {names[number]}" for number in cycle)
 
-print("check-company-boundaries: positive control ok (runtime -> core edge observed)")
+print("check-company-boundaries: positive control ok (classified import edge observed)")
 # Printed on every run, not only a clean one: an unmapped module is invisible
 # to this scan, so the coverage figure is what tells a reader how much of a
 # green verdict is enforcement and how much is silence.

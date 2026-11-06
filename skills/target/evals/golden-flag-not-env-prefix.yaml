@@ -1,0 +1,27 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+# The 2026-11-04 ruling widened it: the golden grades the rule (flags over env
+# prefixes) on any fno command, not target init alone. start-vs-init inside a
+# worktree is a separate golden, never this one.
+id: golden-flag-not-env-prefix
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You must start a target run in steps mode. The node is ab-1234abcd.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *fno .*--steps'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "529679ba:misunderstood_instruction"}
+  quote: "I want --steps. i don't want ENV vars ahead of it."
+  expected: "The fno command that starts the run, carrying --steps, with no ENV VAR= prefix."
+  rule: "Agents call fno do something --param, never ENV_VAR=x fno do something: the steps posture rides the --steps flag."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed

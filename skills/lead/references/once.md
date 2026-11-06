@@ -33,7 +33,7 @@ The dispatch act is a spawn with `--promote <scope>` (or an in-place `fno agents
 
 Two rules keep the org from growing:
 
-1. **A role's scope must be a strict subset of the grantor's scope.** You cannot grant authority you do not hold, and you cannot grant all of it. This is what actually bounds the depth, because you run out of scope before you run out of levels.
+1. **Below level 0, a grant stays inside the grantor's scope.** The user and a level 0 lead grant any scope. A lower lead cannot grant authority it does not hold, and it cannot grant all of it. This is what actually bounds the depth, because you run out of scope before you run out of levels.
 2. **The ladder is three rungs, and the rung is a fact about the territory, not a number you pick:**
    - **Level 0** - several projects; a portfolio. Its org is project leads.
    - **Level 1** - one project. Its org is epic leads.
@@ -46,7 +46,7 @@ State your level, altitude, and scope in your own opening line, so the transcrip
 **The role is stamped by a grantor, never self-declared.**
 Grant it at spawn: `fno agents spawn ... --promote <scope>`, repeating the flag for a portfolio or a set of epics.
 
-When a human promotes an already-running session, the target first runs `fno agents registry register`. The human then runs `fno agents org promote <printed-handle> --scope <scope>` from another attended terminal. When its own role strictly contains the scope, a live lead can run this path too, to re-scope a subordinate. The registry records the actual grantor, either the attended `human` or the granting lead. It preserves the target's transcript and placement and never performs succession.
+When a human promotes an already-running session, the target first runs `fno agents registry register`. The human then runs `fno agents org promote <printed-handle> --scope <scope>` from another attended terminal. A live level 0 lead can run this path over any scope. If its own role strictly contains the scope, a lower lead can run it. The registry records the actual grantor, either the attended `human` or the granting lead. It preserves the target's transcript and placement and never performs succession.
 You never pass a level.
 Naming one epic makes an epic lead, several epics one epic lead over the set, one project a project lead, and several projects a portfolio lead; naming anything else is refused, because a scope that is not a territory has no rung to derive.
 The row records the derived `level`, the `scope`, and the grantor (a live superset-lead, or the attended `human`), the same provenance discipline as harness-stamped mail identity.
@@ -93,7 +93,7 @@ A wrapped prompt ("run $fno:target ... and here is why") does not reliably load 
 
 The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fno:target`. Single-quote the codex payload: in double quotes the shell eats `$fno` and the command with it. When the harness cannot expand an invocation, the prompt names the skill path to Read. A hand-rolled prose prompt for a role is the defect this rule exists to prevent.
 
-**A role said in prose is not a role.** Telling a session it is lead does not stamp anything. Authority lives in three registry fields (`role_level`, `role_scope`, `role_grantor`) that only `fno agents org promote` and spawn-time `--promote` write, and `fno agents org init` deliberately never writes them: a session enabled to stamp its own role could role itself. So the handshake is two steps and both are required. The target runs `fno agents registry register` and prints a handle. An attended shell, or a lead whose own role strictly contains the scope, runs `fno agents org promote <handle> --scope <scope>`.
+**A role said in prose is not a role.** Telling a session it is lead does not stamp anything. Authority lives in three registry fields: `role_level`, `role_scope`, `role_grantor`. Only `fno agents org promote` and spawn-time `--promote` write them. `fno agents org init` never writes them, because a session that stamps its own role can role itself. So the handshake is two steps and both are required. The target runs `fno agents registry register` and prints a handle. An attended shell, a level 0 lead, or a lead whose own role strictly contains the scope runs `fno agents org promote <handle> --scope <scope>`.
 
 **What an unstamped row costs.** Nobody must mistake the silence for success. Three readers key on those fields and every one of them fails CLOSED and QUIETLY. `fno agents org done` refuses, so the lead cannot step down and its manifest is orphaned on disk. `fno agents org chart manifest-path` exits non-zero and prints no path, so the stop hook leaves `LEAD_STATE_FILE` unset. `hooks/lead-postcompact-reinject.sh` exits 0 before injecting, so the post-compact brief never arrives. That brief tells you to reuse a live session with `fno agents registry retask` before you spawn a cold one. A lead with an armed manifest and an unstamped row looks exactly like a working lead until it tries to put the role down. If `lead init` sees that state, it warns. If the row's role names OTHER territory, it warns the same way. These three readers key on `role_scope`, so a role over somewhere else is as absent to them as no role at all. Heed the warning rather than proceeding.
 
@@ -101,7 +101,7 @@ The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fn
 
 **If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents org promote` yourself, or tell them plainly that the grant needs an attended shell, and name the command they should ask for.
 
-**In-place promotion keeps the session where it is.** `fno agents org promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, or from a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
+**In-place promotion keeps the session where it is.** `fno agents org promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, a live level 0 lead, or a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
 
 **Succession happens at spawn too, but it is explicit.** A lead stepping down that spawns a successor over its OWN scope must pass `--hand-off`. Without it, the spawn is refused and the caller keeps its role. With it, the vacate and stamp land in one registry write, so the scope is never doubly ruled and never briefly unruled. It has to happen while you still lead - a session that has already exited spawns nothing. A transferred successor can return the role with `fno agents org promote --reclaim`, which uses the recorded grantor and creates no session. An attended shell can also move a role between two LIVE sessions without spawning anyone. Re-scope the incumbent first with `fno agents org promote <incumbent> --scope <other territory>`, which frees the old scope in the same write. Then promote the newcomer over it. The order is the non-obvious half. Promoting the newcomer first is refused with the incumbent named and the same three remedies spelled out.
 
@@ -198,7 +198,7 @@ The bare 8-hex prefix is a display handle, and under UUIDv7 minute-siblings shar
 Every session prints its own handle in its startup header; find a peer's with `fno agents internal discovered-json` or `fno agents fleet top`.
 Add `--from-self` to stamp your own reply handle so the answer comes back to you, and do not trust a sender's advertised `from-name` as an address - it can be stale.
 
-The fallbacks, and why they rank below: `fno agents mail send <name>` reaches a registered agent (fine when the name resolves); `--to-project <X>` is anycast that queues durable into what may be a ghost inbox when no live peer resolves - the receipt now names the routing-reason (`[live-miss]`, `[param-forced: --to-project]`) so a durable demotion is legible rather than reading like success, but a durable queue is still not a live delivery.
+The fallbacks, and why they rank below: `fno agents mail send <name>` reaches a registered agent (fine when the name resolves); `--to-project <X>` is anycast to the one live peer on that project, and exits 16 with nothing written when none is live; a durable queue is still not a live delivery.
 A live inject writes nothing to the bus; the durable envelope is written only when the inject misses, so it survives a dead recipient as recovery, not delivery.
 
 **Treat a `queued` or `failed` receipt as not delivered: re-resolve the handle and send again, do not re-queue. A `parked` or `injected` receipt means the bytes already sit with the recipient: peek, never resend.**
@@ -399,7 +399,6 @@ fno backlog join width <plan-path>
 
 It prints the int and exits 0.
 It exits 1 with no output when the plan does not measure.
-Run it under the interpreter that resolves `fno`, because a bare python without the fno dependencies exits 1 for the wrong reason.
 When the probe exits 1, the plan is unmeasured, not narrow.
 Never read that silence as a width of one.
 

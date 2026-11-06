@@ -41,7 +41,6 @@ Located in `scripts/`, these shell test scripts cover core plugin features:
 | `test-target-state-recovery.sh` | State file recovery after crashes or corruption |
 | `test-thrashing-detection.sh` | Thrashing loop detection (unit) |
 | `test-thrashing-integration.sh` | Thrashing loop detection (integration, end-to-end) |
-| `test-parallel-wave-conflicts.sh` | Parallel wave conflict detection for shared outputs |
 | `test-scan-antipatterns.sh` | Antipattern scanning correctness in plans |
 | `test-sync-codex-agents.sh` | Codex agent synchronization from shared sources |
 | `test-validate-plan.sh` | Plan validation logic and format checking |
@@ -72,14 +71,12 @@ Three validation scripts enforce structural and process rules:
 |--------|---------|
 | `validate-test-first.sh` | PreToolUse hook that blocks build/start commands when no recent test run detected (checks `.fno/.last-test-run` marker) |
 | `validate-plan.sh` | Plan format validation, antipattern scanning, stub detection |
-| `validate-roadmap.sh` | Roadmap structure validation - checks `00-INDEX.md` format and task references |
 
 ### Python Utilities
 
 | Script | Purpose |
 |--------|---------|
-| `skills/execute/orchestrator.py` | Wave orchestration engine with a testable CLI interface |
-| `scripts/roadmap-tasks.py` | Task lifecycle management - status tracking, dependency resolution |
+| `crates/fno-agents/src/wave_ready.rs` | Wave commands behind `fno-agents wave` |
 | `scripts/metrics/register-task.py` | Task registration for metrics tracking |
 | `scripts/metrics/session-cost.py` | Session cost calculation and reporting |
 
@@ -113,17 +110,14 @@ bash scripts/test-thrashing-detection.sh
 bash scripts/lib/test_config.sh
 ```
 
-### Orchestrator CLI
+### Wave CLI
 
 ```bash
-# Show help and available options
-python skills/execute/orchestrator.py --help
+# Print the dispatchable tasks of a plan as JSON
+fno-agents wave ready path/to/plan.md
 
-# Parse and validate a plan's execution strategy
-python skills/execute/orchestrator.py path/to/00-INDEX.md
-
-# Route a task description to the correct agent
-python skills/execute/orchestrator.py --agent "Build React component" --tags ui,frontend
+# Print the dispatchable tasks against a STATE.md
+fno-agents wave ready path/to/plan.md --state path/to/STATE.md
 ```
 
 ### Reading a gate's result (assert a positive marker)
@@ -163,6 +157,8 @@ until grep -q '"settled": true' out; do sleep 45; fno do pr status "$PR" --json 
 
 The sanctioned watcher applies this rule for you. `fno do pr wait "$PR" --until settled --timeout 15m` polls the positive settled marker through the coalescing cache. N waiters on one PR cost one network read per TTL. The command exits with the status command's own code. Reach for it instead of writing either loop by hand.
 
+Settled is about the PR's current head, never about the commit you pushed. A merged PR stops tracking new pushes. Its head stays green forever while your commit sits untested. Every read then says the push landed. Pin the read: `fno do pr status "$PR" --expect-head HEAD` exits 6 with a `head_mismatch` blocker unless the verdict is about your commit. A MERGED or CLOSED PR names itself as one that will never test your sha. `HEAD` names the local checkout's own HEAD, which the door reads from git for free, so the command stays plain. The same flag arms the watcher. When a live read shows the PR head is not your commit, `fno do pr wait "$PR" --until settled --expect-head HEAD --timeout 15m` exits 6.
+
 Both wait on a file the loop keeps rewriting, and they are one condition apart.
 The first tests for an ABSENCE, and an absence has two explanations: the checks really finished, or the command never produced usable output.
 When `gh` failed with a transient TLS error, the error text went into the file, contained no "pending", and the watcher announced that CI had settled while it was still running.
@@ -184,9 +180,6 @@ Last, and it is the one a control does not save you from: believe the reading on
 
 # Validate a plan file for format issues and antipatterns
 ./scripts/validate-plan.sh path/to/plan-directory
-
-# Validate roadmap structure
-./scripts/validate-roadmap.sh path/to/roadmap
 
 # Scan for antipatterns in plans
 ./scripts/scan-antipatterns.sh path/to/plan-directory

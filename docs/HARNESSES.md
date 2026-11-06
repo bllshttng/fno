@@ -38,7 +38,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agents session stop <name>`, then ask again |
 | `the footnote host exited before the session opened` | The binary refused the launch spec, often a version skew | Read the host log the refusal names, under `~/.fno/agents/fnh/` |
-| `footnote is retired; use fno` | The release tarball no longer ships the harness; the name on PATH is the updater-compat stub | Build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
+| `footnote is retired; use fno` | The release tarball ships no `footnote` name; only an install that last updated during the 2026-10 compat window still carries the stub on PATH | Build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
 
 Tools run with your own permissions. There is no sandbox.
 
@@ -125,9 +125,9 @@ An agent-typed `claude --bg` line must carry `--name`. Without it, claude titles
 
 A launched session is adopted through the SessionStart hook file named in its row. A pi session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents session list`, `fno agents session peek`, mail and the stop command reach it like any other.
 
-## Boxed headless workers
+## Sandboxed headless workers
 
-The `[sandbox]` table boxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The box holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Box a worker](https://fno.sh/docs/guides/box-a-worker).
+The `[sandbox]` table sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The sandbox holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Sandbox a worker](https://fno.sh/docs/guides/sandbox-a-worker).
 
 ## What this means in practice
 
@@ -225,13 +225,13 @@ pi is the first harness whose driving lane is neither a shellout nor a keystroke
 
 ## Codex skill discovery
 
-Codex reads project skills from one discovery root (default `.agents/skills`, recorded in `.fno/codex-skills-root`) and reads the installed plugin from `~/.codex/plugins/cache/footnote/fno/<version>/`. Both advertise the same canonical skill names, so exactly one of them must be the selected source per name; `scripts/setup.sh --provider codex` enforces that choice and `scripts/doctor.sh` audits it through the same engine (`scripts/lib/skill_discovery.py`).
+Codex reads project skills from one discovery root (default `.agents/skills`, recorded in `.fno/codex-skills-root`) and reads the installed plugin from `~/.codex/plugins/cache/footnote/fno/<version>/`. Both advertise the same canonical skill names, so exactly one of them must be the selected source per name. `scripts/setup.sh --provider codex` enforces that choice. `scripts/doctor.sh` audits it through the same engine, `fno-agents plugin-install --codex-skills` (`crates/fno-agents/src/codex_skills.rs`).
 
 Setup resolves the mode from `--skills-source`: `auto` (default) picks the installed plugin when a usable one is present and development aliases otherwise; `installed` makes the plugin the single source and reports any source skill the plugin does not ship as a gap; `development` links `skills/*` as `plugin--fno--<name>` aliases and prints the source tree and revision. `--skills-root` still overrides the discovery root, and a bootstrap without the plugin keeps working.
 
 Setup also curates the root: symlinks pointing outside this repository are removed with a printed restore line, while real directories, links into `skills/`, and the explicit growth-studio dependencies (today: none, the pack names no foreign skill) are preserved. Shared sources are never deleted; curation removes only this project's exposure.
 
-Doctor reports `broken` (dangling link), `stale` (link target has no `SKILL.md`), `duplicate` (name exposed by both plugin and alias) as failures, and `unavailable` (malformed YAML, empty or placeholder description) as a warning whose fix belongs to the owning project. `--inventory` prints every entry with alias path, resolved source, and content digest. The full-metadata checks need a `python3` with pyyaml; set `FNO_PYTHON` to an interpreter that has it.
+Doctor reports three failures: `broken` (dangling link), `stale` (link target has no `SKILL.md`), and `duplicate` (name exposed by both plugin and alias). It reports `unavailable` (malformed YAML, empty or placeholder description) as a warning. The owning project fixes that one. `--inventory` prints every entry with alias path, resolved source, and content digest.
 
 `python3 scripts/diagnostics/codex-skill-load-audit.py --discovery --repo . --skills-root .agents/skills` compares actually exposed names and resolved content per skill, distinguishes source files from the plugin's generated distribution bundle, and names a stale cache with its digest gap and the supported repair. It covers codex only; other harness discovery is reported as unmeasured. A stale cache is repaired by reinstalling the plugin through its supported flow, never by editing the private plugin cache in place. Removed links restore with the `ln -sfn` lines setup printed, or by rerunning setup with `--skills-source development`.
 

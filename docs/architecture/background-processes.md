@@ -22,7 +22,7 @@ Beyond the five kinds, two other long-lived fno processes exist: the mux server 
 
 ## What is pr_watch_merge?
 
-It is the merge phase of the `sh.fno.pr-watcher` tick: `cli/src/fno/pr_watch/cli.py`, function `tick`, calls `_run_phase("merge", _phase_merge, arm="pr_watch_merge")`. Launchd fires the tick every 600 seconds, and the same invocation also drives the other launchd arms in the table below.
+It is the merge phase of the `sh.fno.pr-watcher` tick: `crates/fno-agents/src/pr_watch/tick.rs`, function `run`, calls `run_phase("merge", Some("pr_watch_merge"), 1, 0, phase_merge)`. Launchd fires the tick every 600 seconds, and the same invocation also drives the other launchd arms in the table below.
 
 Read it with `fno agents session status` (the `via=launchd:sh.fno.pr-watcher` column says which scheduler owns the row) and `fno do pr watch status`. See [pr-watch-merge-phase.md](pr-watch-merge-phase.md) for why the merge phase fails and what each failure means.
 
@@ -32,7 +32,7 @@ The gated table: every `sh.fno.*` label an installer in this repo writes. Column
 
 | label | installed by | runs | cadence | arms it hosts | health read | safe stop |
 |---|---|---|---|---|---|---|
-| `sh.fno.pr-watcher` | `fno do pr watch install` (`cli/src/fno/pr_watch/_install.py`, constant `_LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents session status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
+| `sh.fno.pr-watcher` | `fno do pr watch install` (`crates/fno-agents/src/pr_watch/install.rs`, constant `LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents session status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
 | `sh.fno.groom` | `fno backlog groom --install-agent` (`crates/fno-agents/src/backlog/groom.rs`, `install_agent`) | `fno backlog groom` | daily at `--hour` (default 2) | none: it writes no `control_plane_tick` row | `launchctl list sh.fno.groom` last exit, `fno doctor`, `~/.fno/logs/groom.out.log` | `launchctl bootout gui/$(id -u)/sh.fno.groom` (no uninstall command exists) |
 
 Below the table: other `sh.fno.*` labels can appear in `launchctl list` that footnote does not install. Today those are `sh.fno.autocontinue`, `sh.fno.board-server` and `sh.fno.sync-backlog`, an operator's own agents, and `fno agents loop control table` lists every label it folds, including them. The `auto_continue` arm's 1800 s heartbeat needs some scheduler that runs `fno backlog advance` with `FNO_CONTROL_PLANE_SCHEDULER` set (`cli/src/fno/control_plane.py`, `scheduler_from_env`). Without one the arm reads `session`.
@@ -83,9 +83,11 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 | `board_render` | `daemon` | `fno-agents-daemon` | renders graph.md plus every configured board target once per moved store version, the render-views command bounded at 300 s | 300 s |
 | `team_ledger` | `daemon` | `fno-agents-daemon` | renders rundown.html | 300 s |
 | `lead_eval` | `daemon` | `fno-agents-daemon` | writes missing eval parts for ended Claude leads | 600 s |
+| `question_judge` | `daemon` | `fno-agents-daemon` | reads a batch of open questions against the record with a one-shot reader and writes shadow verdicts when `questions.judge.enabled` is on | 3600 s |
 | `attention` | `daemon` | `fno-agents-daemon` | selects attention rows into the status payload | 30 s |
 | `notice_route` | `daemon` | `fno-agents-daemon` | routes reconcile warnings to the owning lead and folds repeated failures into one node | 300 s |
 | `otlp_export` | `daemon` | `fno-agents-daemon` | exports the tick ledger's control-plane rows to the configured OTLP endpoint when `telemetry.otlp.enabled` is on | 300 s |
+| `eval_events` | `daemon` | `fno-agents-daemon` | sends each eval attempt to PostHog as an event when `telemetry.eval_events.enabled` is on | 300 s |
 | `pane_loop` | `daemon` | `fno-agents-daemon` | types each due armed loop prompt into its session's pane, skipping a pane the manifest reads working or blocked | 30 s |
 | `heal` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the PR auto-heal drive, gated on `auto_heal.enabled` | 600 s |
 | `evals` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the eval bank's demand leg | per `evals.schedule_days` |
@@ -93,6 +95,8 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 | `recovery` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the recovery sweep | one tick in three |
 
 Under the table, four notes. First, `evals`, `stranded` and `recovery` have no `KNOWN_ARMS` row, so the readout shows them only after they tick and never reads them `UNOBSERVED`. Second, `stranded`, `recovery` and `watchdog` run one tick in three on staggered slots of the 600 s tick. Their effective cadence is one run per 1800 s. Third, the daemon runs work that writes no arm row: the worktree sweep, the merge reaper, orphan sweeps, the terminal-stop sweep, and liveness. [reaping-faq.md](../reaping-faq.md) holds that list. Fourth, [loops.md](../loops.md) is generated from this same arm list and carries each loop's arming key and live state. When a row reads red, run `fno agents loop control table`.
+
+The sweep's per-PR rich read is bounded: one row no more often than every two intervals, default 20 minutes. The cheap listing leg already answered that row's state. The least-recently-read order spreads the pool across the window. A fleet budget hold above 10 s pauses the read pass outright. A refused read ends the pass early and never marks the row stale.
 
 ## Stopping things safely
 

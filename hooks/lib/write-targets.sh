@@ -85,8 +85,8 @@ _strip_bash_redirects() {
 # hook payload names, resolved against the payload cwd when relative. A
 # claude Edit or Write payload contributes tool_input.file_path; a codex
 # apply_patch payload contributes its header paths from
-# tool_input.command. jq first, python3 fallback, the same NUL-split read
-# hooks/write-gate.sh uses. format-on-edit.sh and
+# tool_input.command. jq reads it with a NUL-split read; no jq answers no
+# targets. format-on-edit.sh and
 # edit-integrity.sh consume this adapter, not write_targets directly.
 payload_write_targets() {
     local payload="$1" cwd file_path patch_command path
@@ -99,19 +99,6 @@ payload_write_targets() {
         def s: if type == "string" then . else "" end;
         (.cwd | s), "\u0000", (.tool_input.file_path | s), "\u0000",
         (.tool_input.command | s), "\u0000"' 2>/dev/null)
-    elif command -v python3 >/dev/null 2>&1; then
-        {
-            IFS= read -r -d '' cwd
-            IFS= read -r -d '' file_path
-            IFS= read -r -d '' patch_command
-        } < <(printf '%s' "$payload" | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin); ti = d.get("tool_input") or {}
-    s = lambda v: v if isinstance(v, str) else ""
-    sys.stdout.write("\0".join([s(d.get("cwd")), s(ti.get("file_path")), s(ti.get("command"))]) + "\0")
-except Exception:
-    pass' 2>/dev/null)
     else
         return 0
     fi
