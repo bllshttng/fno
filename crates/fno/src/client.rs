@@ -2640,11 +2640,7 @@ impl View {
             return Some(self.confirm_overlay_layout(rows, action));
         }
         if let Some(name) = &self.create {
-            return Some(self.name_modal_layout(
-                "new workspace",
-                name,
-                Some(&self.create_hint(name)),
-            ));
+            return Some(self.create_modal_layout(name));
         }
         if let Some((target, name)) = &self.rename {
             let noun = match target {
