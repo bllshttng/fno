@@ -131,3 +131,5 @@ XDG_RUNTIME_DIR	environment
 XDG_STATE_HOME	environment
 ZDOTDIR	ambient
 __CFBundleIdentifier	environment
+test_front_handoff_pid_path	ambient
+test_local_forward_pid_path	ambient
