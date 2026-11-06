@@ -1106,7 +1106,7 @@ impl Ritual {
         } else if run.timed_out {
             "timeout".to_string()
         } else {
-            format!("exit={} {}", run.code, refusal_cause(run))
+            format!("exit={} {}", run.code, Self::refusal_cause(run))
         };
         format!("spawn-failed: {cause}; {inputs}")
     }

@@ -1351,7 +1351,7 @@ pub(crate) fn run_catchup(deps: &Deps, cwd: &Path) -> CatchupOut {
             .rev()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty() && !l.starts_with("post-merge sync"))
-            .cloned()
+            .map(|l| l.to_string())
             .collect();
         let tail = diagnostics
             .iter()
