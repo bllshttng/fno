@@ -112,8 +112,7 @@ pub(crate) fn lines(
         let x = col * col_w + 1;
         for (slot, node) in layers[layer].iter().enumerate() {
             let y = band_y[band] + slot * NODE_STEP;
-            let action_id = action_id(node);
-            let is_selected = selected.is_some_and(|id| action_id.as_deref() == Some(id));
+            let is_selected = selected == Some(node.id.as_str());
             positions.insert(node.id.as_str(), Pos { x, y, w: node_w });
             if is_selected {
                 selected_y = Some(y + 1);
@@ -206,7 +205,7 @@ fn node_label(node: &GraphNode) -> String {
 }
 
 fn node_role(node: &GraphNode, selected: Option<&str>) -> TextStyle {
-    if selected.is_some_and(|id| action_id(node).as_deref() == Some(id)) {
+    if selected == Some(node.id.as_str()) {
         return TextStyle::Title;
     }
     let Some(lead) = node.card.as_ref().and_then(|card| card.lead.as_ref()) else {

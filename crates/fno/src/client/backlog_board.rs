@@ -610,6 +610,10 @@ fn graph_cursor_node(b: &BoardView) -> Option<&crate::backlog_graph::GraphNode> 
         .nth(b.row)
 }
 
+fn graph_cursor_node_id(b: &BoardView) -> Option<String> {
+    graph_cursor_node(b).map(|node| node.id.clone())
+}
+
 /// Put the cursor on `id` when the board still shows it, else on the first
 /// painted card anywhere.
 pub(crate) fn focus_card(b: &mut BoardView, id: Option<&str>) {
@@ -811,7 +815,7 @@ pub(crate) fn render(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>) {
     if b.query.view == backlog_model::View::Graph {
         if let Some(graph) = &board.graph {
             let start = lines.len();
-            let selected = cursor_card_id(b);
+            let selected = graph_cursor_node_id(b);
             let (graph_lines, graph_follow) =
                 backlog_graph_paint::lines(graph, selected.as_deref(), w);
             follow = graph_follow.map(|line| start + line);

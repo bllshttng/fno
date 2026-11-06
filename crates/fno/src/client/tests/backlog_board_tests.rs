@@ -1413,6 +1413,10 @@ fn tab_cycles_kanban_list_and_graph_views() {
         "title": "graph child", "project": "fno", "parent": "x-1"
     }));
     inputs.order.push("x-4".into());
+    inputs.rows.push(json!({
+        "id": "x-done", "status": "done", "priority": "p2", "parent": "x-1"
+    }));
+    inputs.order.push("x-done".into());
     let mut view = key_view(board_with(inputs));
     toggle_view(&mut view);
     assert_eq!(
@@ -1456,6 +1460,14 @@ fn tab_cycles_kanban_list_and_graph_views() {
         edit_target(view.backlog_board.as_ref().unwrap()).as_deref(),
         Some("x-1"),
         "h moves to the parent layer and keeps actions on its node"
+    );
+    move_col(&mut view, true);
+    move_row(&mut view, true);
+    move_row(&mut view, true);
+    let (lines, follow) = render(view.backlog_board.as_ref().unwrap(), 120);
+    assert!(
+        follow.is_some(),
+        "a focused Done stub remains visible: {lines:?}"
     );
 }
 
