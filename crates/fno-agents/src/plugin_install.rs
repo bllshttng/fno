@@ -1038,19 +1038,14 @@ struct RenameFinding {
 }
 
 /// The owner/repo slug a marketplace source names, when it is a GitHub one.
-/// `github` sources carry the slug directly; a `git` url contributes only
-/// when its host is github.com, the only host the alias slugs describe.
+/// `github` sources carry the slug directly; a `git` url goes through the
+/// shared remote parser, which anchors the github.com host.
 fn marketplace_repo_slug(source: &Value) -> Option<String> {
     match source.get("source").and_then(Value::as_str)? {
-        "github" => source.get("repo").and_then(Value::as_str),
+        "github" => source.get("repo").and_then(Value::as_str).map(String::from),
         "git" => {
             let url = source.get("url").and_then(Value::as_str)?;
-            let rest = url
-                .strip_prefix("https://github.com/")
-                .or_else(|| url.strip_prefix("http://github.com/"))?
-                .trim_end_matches('/');
-            let slug = rest.strip_suffix(".git").unwrap_or(rest);
-            (!slug.is_empty()).then(|| slug.to_string())
+            crate::ledger_register::slug_from_remote(url)
         }
         _ => None,
     }
@@ -3445,9 +3440,11 @@ mod tests {
     /// a Claude marketplace cloning a renamed repo, plugin ids registered
     /// under the pre-rename marketplace, and the Codex entry whose
     /// marketplace is gone. No legacy-marketplace duplicate fires while a
-    /// plugin id already carries the story.
+    /// plugin id already carries the story. One test flips the fixture from
+    /// populated to clean in place: the scan reads CLAUDE_CONFIG_DIR and
+    /// CODEX_HOME, which parallel tests must not see swapped mid-read.
     #[test]
-    fn rename_scan_names_claude_and_codex_old_registrations() {
+    fn rename_scan_names_old_registrations_then_goes_quiet_on_a_clean_machine() {
         let base = std::env::temp_dir().join(format!("pi-rename-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let claude = base.join("claude");
@@ -3505,27 +3502,20 @@ mod tests {
             "a directory-sourced footnote marketplace moves by the dev install: {}",
             claude_finding.command
         );
-        let _ = fs::remove_dir_all(&base);
-    }
 
-    /// A machine with no plugin state produces no rename findings, and the
-    /// redirect arm stays quiet for a marketplace whose repo moved nowhere.
-    #[test]
-    fn rename_scan_is_quiet_on_a_clean_machine() {
-        let base = std::env::temp_dir().join(format!("pi-rename-clean-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let claude = base.join("claude");
-        let plugins_dir = claude.join("plugins");
-        fs::create_dir_all(&plugins_dir).unwrap();
+        // The clean machine: the same dirs rewritten in place, so no env
+        // swap can interleave. A moved-nowhere marketplace names nothing.
         fs::write(
             plugins_dir.join("known_marketplaces.json"),
-            r#"{"anthropics/skills": {"source": {"source": "github", "repo": "anthropics/skills"}}}"#,
+            r#"{"claude-code-plugins": {"source": {"source": "github", "repo": "anthropics/skills"}}}"#,
         )
         .unwrap();
-        let codex = base.join("codex");
-        fs::create_dir_all(&codex).unwrap();
-        std::env::set_var("CLAUDE_CONFIG_DIR", &claude);
-        std::env::set_var("CODEX_HOME", &codex);
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            r#"{"plugins": {}}"#,
+        )
+        .unwrap();
+        fs::write(codex.join("config.toml"), "").unwrap();
         let findings = rename_findings();
         assert!(
             findings.is_empty(),
