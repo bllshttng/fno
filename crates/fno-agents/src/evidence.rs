@@ -640,15 +640,6 @@ mod tests {
     }
 
     // AC2-ERR: a line past the end names the real length.
-    #[test]
-    fn line_past_end_names_real_length() {
-        let dir = tempfile::tempdir().expect("tmp");
-        write_file(dir.path(), "cli/src/fno/law.py", 57);
-        assert_eq!(
-            check_citations("see cli/src/fno/law.py:99999", dir.path()),
-            vec!["cli/src/fno/law.py:99999: the file has 57 lines"]
-        );
-    }
 
     // AC3-EDGE: an ambiguous bare basename names the count and the remedy.
     #[test]

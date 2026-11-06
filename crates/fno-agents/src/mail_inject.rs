@@ -3056,27 +3056,10 @@ mod tests {
 
     #[test]
     fn command_marker_is_rewritten_to_the_receiving_harness_form() {
-        // Operator, 2026-09-14: the marker is bidirectional. A command typed in
-        // either dialect lands in the recipient's native form, through the
-        // shared renderer.
-        assert_eq!(
-            crate::provider::render_command_seed("$fno:review medium", "claude"),
-            "/fno:review medium"
-        );
-        assert_eq!(
-            crate::provider::render_command_seed("/fno:review medium", "codex"),
-            "$fno:review medium"
-        );
-        // A payload already in the native form passes through byte-identical.
-        assert_eq!(
-            crate::provider::render_command_seed("$fno:lead x-bbbb", "codex"),
-            "$fno:lead x-bbbb"
-        );
-        assert_eq!(
-            crate::provider::render_command_seed("/fno:review", "claude"),
-            "/fno:review"
-        );
-        // The keeper lane hosts a claude pane, so it takes the slash form.
+        // Operator, 2026-09-14: the marker is bidirectional (the renderer's
+        // own tests pin each dialect). What the mail door owns is WHICH
+        // capability row a recipient resolves to: the keeper lane hosts a
+        // claude pane, so its command takes the slash form.
         assert_eq!(
             crate::provider::render_command_seed(
                 "$fno:fix x-1",
@@ -3084,23 +3067,8 @@ mod tests {
             ),
             "/fno:fix x-1"
         );
-        // Non-command payloads, mid-line markers, and lookalikes ride verbatim.
-        assert_eq!(
-            crate::provider::render_command_seed("hello there", "claude"),
-            "hello there"
-        );
-        assert_eq!(
-            crate::provider::render_command_seed("see /fno:docs", "codex"),
-            "see /fno:docs"
-        );
-        assert_eq!(
-            crate::provider::render_command_seed("/compact", "codex"),
-            "/compact"
-        );
-        assert_eq!(
-            crate::provider::render_command_seed("//fno:x", "codex"),
-            "//fno:x"
-        );
+        assert_eq!(recipient_capability_row(MailInjectHarness::Pane), "claude");
+        assert_eq!(recipient_capability_row(MailInjectHarness::Codex), "codex");
     }
 
     #[test]

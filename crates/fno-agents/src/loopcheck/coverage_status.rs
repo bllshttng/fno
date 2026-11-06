@@ -207,9 +207,12 @@ pub(super) fn current_law_status(fno_bin: &str, cwd: &Path, subject: &str) -> La
 
 /// The `operator`-authority rows of one `fno backlog decisions --json`
 /// payload, or `None` when the payload carries no `decisions` array (a shape
-/// the CLI never emits: a failed instrument). Shared with the head-scoped
-/// merge-grant reader, which applies the same trust boundary - only a person
-/// at a terminal carries `operator` authority - over its own subject.
+/// the CLI never emits: a failed instrument). The waiver reader's trust
+/// boundary: only a person at a terminal carries `operator` authority, and a
+/// waiver asserts that person read the diff. The head-scoped merge-grant
+/// reader uses the wider `merge_grant::user_ruling_rows` instead, because a
+/// merge grant asserts the user approved and their own chat words carry
+/// that fact.
 pub(crate) fn operator_law_rows(stdout: &[u8]) -> Option<Vec<Value>> {
     let parsed = serde_json::from_slice::<Value>(stdout).ok()?;
     let rows = parsed.get("decisions")?.as_array()?;

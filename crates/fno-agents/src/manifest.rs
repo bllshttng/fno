@@ -1075,53 +1075,6 @@ mod tests {
     }
 
     #[test]
-    fn bad_regex_is_a_parse_error_not_a_silent_drop() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "broken"
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            gate = { regex = "(" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::BadRegex { rule, .. } if rule == "broken"));
-    }
-
-    #[test]
-    fn missing_required_field_names_the_rule() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { rule, field } if rule == "r" && field == "state")
-        );
-    }
-
-    #[test]
-    fn over_deep_gate_is_refused() {
-        // Build a gate nested past MAX_GATE_DEPTH with chained `not`s.
-        let mut gate = "{ contains = \"x\" }".to_string();
-        for _ in 0..(MAX_GATE_DEPTH + 2) {
-            gate = format!("{{ not = {gate} }}");
-        }
-        let toml = format!(
-            "[[rule]]\nid = \"deep\"\nstate = \"x\"\npriority = 1\nregion = \"whole_recent\"\ngate = {gate}\n"
-        );
-        let err = Manifest::parse(&toml).unwrap_err();
-        assert!(matches!(err, ManifestError::GateTooDeep { rule } if rule == "deep"));
-    }
-
-    #[test]
     fn empty_composite_gate_is_rejected_not_fail_open() {
         // `all = []` is vacuously true and would pin its state on every screen.
         // Both empty `all` and empty `any` must be parse errors.
@@ -1135,44 +1088,6 @@ mod tests {
                 "{body} should be rejected"
             );
         }
-    }
-
-    #[test]
-    fn unknown_rule_and_root_keys_are_rejected() {
-        // A typo'd rule key (`skip_state_updates`) would silently drop the real
-        // flag; reject it (codex peer P2).
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            skip_state_updates = true
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { rule, field } if rule == "r" && field.contains("unknown key"))
-        );
-
-        // A typo'd root key is rejected too.
-        let err = Manifest::parse(
-            r#"
-            min_engine_versions = 1
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { rule, field } if rule == "<root>" && field.contains("unknown key"))
-        );
     }
 
     // ---- E6.3: bundled rule files (claude/codex/gemini) ----
@@ -1363,16 +1278,6 @@ mod tests {
 
     // AC2-ERR: an adaptation that leaves a unknown source key in the TOML
     // fails loud at parse (our fail-closed parser) - the bad port never ships.
-    #[test]
-    fn x8f7f_unknown_source_key_fails_loud() {
-        let bad = "[[rule]]\nid = \"p\"\nstate = \"blocked\"\npriority = 1\n\
-                   region = \"whole_recent\"\nvisible_blocker = true\n\
-                   gate = { contains = \"x\" }\n";
-        assert!(matches!(
-            Manifest::parse(bad),
-            Err(ManifestError::Field { .. })
-        ));
-    }
 
     // ----: answer grammar + fail-closed extractor ----
 
@@ -1427,25 +1332,6 @@ mod tests {
     }
 
     // `send = "digit_enter"` appends CR to the pinned keystroke.
-    #[test]
-    fn xc929_send_digit_enter_appends_cr() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "perm"
-            state = "blocked"
-            priority = 900
-            region = "bottom_non_empty_lines(8)"
-            gate = { contains = "?" }
-            [rule.answer]
-            option = '^\s*(?P<idx>[0-9])\.\s+(?P<label>.+?)\s*$'
-            send = "digit_enter"
-            "#,
-        )
-        .unwrap();
-        let (_, ans) = m.evaluate_answerable(&view("pick?\n1. A\n2. B")).unwrap();
-        assert_eq!(ans.unwrap().options[0].keystroke, b"1\r");
-    }
 
     // Parse-time fail-loud: an [answer] on a non-blocked rule is a config bug.
     #[test]

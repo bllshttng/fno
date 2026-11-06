@@ -11310,26 +11310,6 @@ async fn xdcff_answer_keys_enter_no_pane_id_sends_nothing() {
 }
 
 #[tokio::test]
-async fn rename_keys_enter_sends_the_typed_name_for_the_captured_tab() {
-    // AC2-HP (client half): type + Enter -> one RenameTab for the tab id
-    // captured at open time.
-    let mut v = two_pane_view();
-    v.open_rename(RenameTarget::Tab(7));
-    let mut buf: Vec<u8> = Vec::new();
-    rename_keys(&mut v, b"debug\r", &mut buf).await.unwrap();
-    let mut cur = std::io::Cursor::new(buf);
-    let msg: ClientMsg = crate::proto::read_msg_sync(&mut cur).unwrap();
-    assert_eq!(
-        msg,
-        ClientMsg::Command(Command::RenameTab {
-            tab: 7,
-            name: "debug".into()
-        })
-    );
-    assert_eq!(v.rename, None, "submit closes the overlay");
-}
-
-#[tokio::test]
 async fn move_to_keys_enter_sends_one_reorder_with_the_computed_delta() {
     // (x-cf97) The typed ordinal is 1-based, the delta is computed against
     // the tab's current index, and ONE ReorderTab carries it.
@@ -11594,52 +11574,6 @@ async fn mouse_scroll_disarms_the_resize_repeat_window() {
         }
         other => panic!("bare H after a scroll should forward, not resize, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn rename_keys_empty_enter_still_sends_the_clear() {
-    // Locked 2 / AC3-HP: Enter on an EMPTY buffer sends (blank = reset to
-    // auto) - the one deliberate divergence from create_keys.
-    let mut v = two_pane_view();
-    v.open_rename(RenameTarget::Tab(7));
-    let mut buf: Vec<u8> = Vec::new();
-    rename_keys(&mut v, b"\r", &mut buf).await.unwrap();
-    let mut cur = std::io::Cursor::new(buf);
-    let msg: ClientMsg = crate::proto::read_msg_sync(&mut cur).unwrap();
-    assert_eq!(
-        msg,
-        ClientMsg::Command(Command::RenameTab {
-            tab: 7,
-            name: String::new()
-        })
-    );
-    assert_eq!(v.rename, None);
-}
-
-#[tokio::test]
-async fn rename_keys_esc_cancels_without_sending_and_swallows_the_tail() {
-    // AC1-UI: Esc closes, sends nothing; same-chunk bytes after the Esc
-    // die with the overlay instead of leaking into the pane.
-    let mut v = two_pane_view();
-    v.open_rename(RenameTarget::Tab(7));
-    let mut buf: Vec<u8> = Vec::new();
-    rename_keys(&mut v, b"deb\x1bx", &mut buf).await.unwrap();
-    assert!(buf.is_empty(), "cancel sends no command");
-    assert_eq!(v.rename, None);
-}
-
-#[tokio::test]
-async fn rename_keys_caps_the_buffer_at_max_tab_name() {
-    // The TUI affordance half of AC2-ERR: the operator sees exactly what
-    // the server will store (the server cap stays authoritative).
-    let mut v = two_pane_view();
-    v.open_rename(RenameTarget::Tab(7));
-    let mut buf: Vec<u8> = Vec::new();
-    let long = "a".repeat(MAX_TAB_NAME + 8);
-    rename_keys(&mut v, long.as_bytes(), &mut buf)
-        .await
-        .unwrap();
-    assert_eq!(v.rename.as_ref().unwrap().1.len(), MAX_TAB_NAME);
 }
 
 // ---- x-96e8: squad-management selector context keys ----

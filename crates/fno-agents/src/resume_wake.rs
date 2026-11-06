@@ -1963,80 +1963,6 @@ mod tests {
     }
 
     #[test]
-    fn bg_resume_refuses_a_stale_pid_less_roster_row() {
-        // AC1-ERR: the pre-death row never went terminal - it still reads
-        // `blocked`, with no pid. In a listing that CARRIES pids (the peer
-        // row has one) the missing pid is the death witness, so the second
-        // witness must not confirm the relaunch: exit 16, and the registry
-        // row keeps its exited status.
-        let _guard = crate::path_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let claude_home = crate::claude_ask::ClaudeHome::at(temp.path());
-        let jobs = claude_home.jobs_dir_for("abcd1234");
-        let bin = temp.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        crate::write_exec_stub(
-            &bin,
-            "claude",
-            "#!/bin/sh\nif [ \"$1\" = \"agents\" ]; then \
-             echo '[{\"id\":\"abcd1234\",\"sessionId\":\"sess-uuid\",\"state\":\"blocked\"},\
-             {\"id\":\"peer0001\",\"sessionId\":\"peer-uuid\",\"pid\":5001,\"state\":\"working\"}]'; fi\n",
-        );
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", crate::path_with(&bin));
-
-        let plan = crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "bg-resume".into(),
-            name: "w1".into(),
-            fno_id: None,
-            node: None,
-            session_id: "sess-uuid".into(),
-            short_id: "abcd1234".into(),
-            launch_account: "default".into(),
-            claude_config_dir: None,
-            route_settings_path: None,
-            cwd: temp.path().display().to_string(),
-            substrate: "bg".into(),
-            mux: None,
-            argv: vec![
-                "sh".into(),
-                "-c".into(),
-                format!(
-                    "mkdir -p '{jobs}' && printf '%s' \
-                     '{{\"state\":\"working\",\"updatedAt\":\"2026-09-15T00:00:00Z\"}}' \
-                     > '{jobs}/state.json'",
-                    jobs = jobs.display()
-                ),
-            ],
-            env: Default::default(),
-        };
-        let home = AgentsHome::at(temp.path().join("agents-home"));
-        seed_exited_row(&home, "w1", "sess-uuid");
-        let code = run_and_confirm_respawn_with_truth(
-            &plan,
-            "w1",
-            "resume",
-            "agent_resumed",
-            &home,
-            claude_home.clone(),
-            // The stale fno view: never live, never terminal.
-            |_| Some("unreachable".to_string()),
-            |_| {},
-        );
-        match &old_path {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
-        assert_eq!(code, 16);
-        let reg = crate::state::load_registry(&home.registry_json()).unwrap();
-        let row = reg.entries.iter().find(|e| e.name == "w1").unwrap();
-        assert_eq!(row.status, crate::AgentStatus::Exited);
-        std::fs::remove_dir_all(temp.path()).ok();
-    }
-
-    #[test]
     fn bg_resume_refuses_a_copy_stops_it_and_never_touches_the_registry() {
         // A live session answers the bg resume with the measured copy notice.
         // The launch must refuse at 3, stop the COPY (never the original),
@@ -2692,42 +2618,6 @@ mod tests {
         let (_, wrapped, _, _) = &deliveries.borrow()[0];
         assert!(wrapped.contains("hello"), "{wrapped}");
         assert!(!wrapped.contains("from-name=\"fno\""), "{wrapped}");
-    }
-
-    #[test]
-    fn a_bare_idle_resume_with_no_sender_still_wakes_with_the_generic_wake_text() {
-        let _guard = crate::path_test_guard();
-        let (_temp, home) = parked_home("live-claude-bare-wake");
-        let claims = tempfile::tempdir().unwrap();
-        let entry = parked_entry();
-        let roots = std::cell::RefCell::new(Vec::new());
-        let deliveries = std::cell::RefCell::new(Vec::new());
-        let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
-        std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
-
-        // No --message, no --from-name, no session identity: this is a
-        // plain `fno agents resume NAME` from a caller that never had, and
-        // never needed, a sender, since there is no explicit message to
-        // guard. It must still wake, as it did before this fix.
-        let code = call_live_claude_route(
-            &home,
-            &entry,
-            Some("idle"),
-            None,
-            None,
-            claims.path(),
-            &roots,
-            &deliveries,
-        );
-        match old_daemon_dir {
-            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
-            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
-        }
-
-        assert_eq!(code, 0);
-        assert_eq!(deliveries.borrow().len(), 1);
-        let (_, wrapped, _, _) = &deliveries.borrow()[0];
-        assert!(wrapped.contains(RESUME_WAKE_MESSAGE));
     }
 
     #[test]

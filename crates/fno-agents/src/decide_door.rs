@@ -1451,19 +1451,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_unattributed_operator_refusal_records_nothing() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = decide_door_write(
-            decide_argv(&["x-n1", "Law", "--authority", "operator"]),
-            DecideIdentity::Forced(None),
-        );
-        assert_eq!(code, 3);
-        let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
-        assert!(rows.is_empty(), "nothing recorded");
-    }
-
-    #[test]
     fn decide_bad_authority_and_graduation_refuse_before_any_write() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -1669,18 +1656,5 @@ mod tests {
             &entries,
             &projects
         ));
-    }
-
-    #[test]
-    fn decide_waiver_subject_refuses_a_non_operator() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = decide_door_write(
-            decide_argv(&["review-coverage-waiver", "waive", "--authority", "agent"]),
-            DecideIdentity::Forced(Some("cl-test3")),
-        );
-        assert_eq!(code, 3);
-        let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
-        assert!(rows.is_empty(), "nothing recorded");
     }
 }

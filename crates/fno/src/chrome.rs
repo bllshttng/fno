@@ -193,16 +193,18 @@ impl Chrome {
     /// this and every modal is sized by it, so clamping it here would resize
     /// surfaces this change has no business resizing.
     pub fn fit_to(mut self, inner_w: usize) -> Self {
-        let wrap = |s: String| {
-            if str_cols(&s) <= inner_w {
+        let wrap = |s: String, w: usize| {
+            if str_cols(&s) <= w {
                 return s;
             }
             let mut lines = Vec::new();
-            crate::client::wrap_line(&s, inner_w, &mut lines);
+            crate::client::wrap_line(&s, w, &mut lines);
             lines.join("\n")
         };
-        self.footer = self.footer.take().map(wrap);
-        self.subtitle = self.subtitle.take().map(wrap);
+        // The footer keeps its side pad, so it wraps four columns narrower.
+        let foot_w = inner_w.saturating_sub(4).max(1);
+        self.footer = self.footer.take().map(|s| wrap(s, foot_w));
+        self.subtitle = self.subtitle.take().map(|s| wrap(s, inner_w));
         self
     }
 
@@ -1504,9 +1506,11 @@ mod tests {
             .iter()
             .find(|l| l.hits.iter().any(|(_, _, len)| *len == 9))
             .expect("the footer line carries the close target");
-        assert_eq!(row.hits, vec![(ESC_CLOSE_HIT, char_off + 1, 9)]);
+        // The footer wears the body's 2-cell side pad, so the span moves with it.
+        let pad = 2;
+        assert_eq!(row.hits, vec![(ESC_CLOSE_HIT, pad + char_off + 1, 9)]);
         // The span is inside the line and lands on the words.
-        let words: String = row.text.chars().skip(char_off + 1).take(9).collect();
+        let words: String = row.text.chars().skip(pad + char_off + 1).take(9).collect();
         assert_eq!(words, "esc close");
 
         // No words, no FOOTER target: a footer without "esc close"/"esc"
