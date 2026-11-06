@@ -596,25 +596,29 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
     // retires keeper C. The exit assertions live on the drop keeper below.
     drop(seat);
 
-    // Drop leg, on its own keeper with the 3 s bound: seated then dropped,
-    // the keeper ends itself inside the bound plus one poll, ends its
-    // child, and unlinks the socket the normal way, since the dir is
-    // still standing.
+    // Drop leg, on its own keeper: seated then dropped, the keeper ends
+    // itself inside the bound plus one poll, ends its child, and unlinks
+    // the socket the normal way, since the dir is still standing. The
+    // bound is a generous 8 s (not the hold keeper's 30 s, not 3 s): the
+    // exit is measured from the last seated reset, so 8 s costs ~5 s of
+    // wall time while any claim landing inside it keeps the probe safe - a
+    // claim starved past it surfaces as a loud identify failure, never a
+    // silent red.
     let dir_d = scratch.join("d/panes");
     std::fs::create_dir_all(&dir_d).unwrap();
     let sock_d = dir_d.join("k.sock");
-    let mut d = spawn_blocked_keeper(&sock_d, 34, Some("3000"));
+    let mut d = spawn_blocked_keeper(&sock_d, 34, Some("8000"));
     let seat_d = connect_seat(&sock_d, 2);
     let child_d = identify(&sock_d)["child_pid"].as_u64().unwrap() as u32;
     let _child_d = KillGuard(child_d);
     let _keeper_d = KillGuard(d.id());
     drop(seat_d);
     assert!(
-        wait_exit(&mut d, 15),
+        wait_exit(&mut d, 20),
         "keeper D must end itself once the seat sits empty past the bound"
     );
     assert!(
-        wait_child_gone(child_d, 15),
+        wait_child_gone(child_d, 20),
         "keeper D must end its child on the idle bound"
     );
     assert!(
