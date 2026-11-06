@@ -580,19 +580,32 @@ pub(super) fn resolve_pane_entry(
         candidates.push(rec);
     }
     for candidate in candidates {
-        for row in rows.iter() {
-            // Python hands each candidate to resolve_agent, whose ladder
-            // answers name, short id, and the canonical handle too, not just
-            // the full session id this door kept matching.
-            let sid = opt_str_field(row, "harness_session_id");
-            if opt_str_field(row, "name").as_deref() == Some(candidate)
-                || opt_str_field(row, "short_id").as_deref() == Some(candidate)
-                || sid.as_deref() == Some(candidate)
-                || sid
-                    .as_deref()
-                    .is_some_and(|s| crate::identity::canonical_handle(s) == candidate)
-            {
-                return Some(row.clone());
+        let matches: Vec<Value> = rows
+            .iter()
+            .filter(|row| {
+                // Python hands each candidate to resolve_agent, whose ladder
+                // answers name, short id, and the canonical handle too, not
+                // just the full session id this door kept matching.
+                let sid = opt_str_field(row, "harness_session_id");
+                opt_str_field(row, "name").as_deref() == Some(candidate)
+                    || opt_str_field(row, "short_id").as_deref() == Some(candidate)
+                    || sid.as_deref() == Some(candidate)
+                    || sid
+                        .as_deref()
+                        .is_some_and(|s| crate::identity::canonical_handle(s) == candidate)
+            })
+            .cloned()
+            .collect();
+        match matches.as_slice() {
+            [one] => return Some(one.clone()),
+            [] => {}
+            _ => {
+                // A short candidate two rows answer to names no pane; the
+                // first match would paste into the sibling's session.
+                eprintln!(
+                    "refusing ambiguous pane address {candidate:?}: multiple registry rows answer to it; send the full session id"
+                );
+                return None;
             }
         }
     }
@@ -1045,8 +1058,11 @@ pub(super) fn queue_durable_fallback(
     subject: Option<&str>,
 ) -> Result<(String, String), (String, i32)> {
     let sid = opt_str_field(row, "harness_session_id");
+    // The durable address is the FULL harness session id, never the
+    // first-eight handle: two same-window codex ids share a head, and the
+    // sibling would drain a row staged under it.
     let durable_recipient = match sid {
-        Some(sid) => crate::identity::canonical_handle(&sid),
+        Some(sid) => sid,
         None => {
             let name = str_field(row, "name");
             return Err((
@@ -1459,8 +1475,9 @@ pub(super) fn dispatch_send_locked(
     };
     let (from_harness, from_session) = stamped_sender_provenance(sender_row.as_ref(), from_name);
     let msg_id = generate_msg_id();
-    let durable_recipient = opt_str_field(&existing, "harness_session_id")
-        .map(|sid| crate::identity::canonical_handle(&sid));
+    // Full session id, never the first-eight handle: the head is shared by
+    // same-window codex ids, so a row staged under it drains twice.
+    let durable_recipient = opt_str_field(&existing, "harness_session_id");
     let budget_recipient = durable_recipient
         .clone()
         .or_else(|| opt_str_field(&existing, "short_id"))
@@ -1790,9 +1807,9 @@ pub(super) fn dispatch_send_lock_timeout_locked(
         resolve_sender_entry(&timeout_entries, from_name).as_ref(),
         from_name,
     );
-    let timeout_recipient = opt_str_field(&timeout_entry, "harness_session_id")
-        .map(|sid| crate::identity::canonical_handle(&sid))
-        .unwrap_or_default();
+    // Full session id, never the first-eight handle: the head is shared by
+    // same-window codex ids, so a row staged under it drains twice.
+    let timeout_recipient = opt_str_field(&timeout_entry, "harness_session_id").unwrap_or_default();
     let timeout_mail_ctx = build_mail_ctx(
         from_name,
         from_session.clone(),
@@ -2022,5 +2039,47 @@ mod wake_rung_tests {
             super::wake_rung(&codex, "<fno_mail>hi</fno_mail>"),
             (false, None, lane)
         );
+    }
+}
+
+#[cfg(test)]
+mod resolve_pane_entry_tests {
+    // contract: "ambiguous-pane-address-refuses"
+
+    /// Two same-window codex rows share a first-eight head. A short
+    /// candidate that names both rows names no pane; the send refuses
+    /// instead of first-match picking the sibling.
+    #[test]
+    fn a_short_candidate_two_rows_answer_to_names_no_pane() {
+        crate::mail_hold::tests::with_hold_env(|dir| {
+            crate::mail_hold::tests::write_registry(
+                dir,
+                serde_json::json!([
+                    {
+                        "name": "t-parked-prompt-blocked",
+                        "status": "live",
+                        "cwd": "/repo",
+                        "harness": "codex",
+                        "harness_session_id": "01a1ad25-f04f-7220-8b8e-6c41a3bad0dd",
+                        "created_at": "2026-11-05T00:00:00Z"
+                    },
+                    {
+                        "name": "t-composer-flags",
+                        "status": "live",
+                        "cwd": "/repo",
+                        "harness": "codex",
+                        "harness_session_id": "01a1ad25-7752-7020-a858-4253ed259833",
+                        "created_at": "2026-11-05T00:00:00Z"
+                    }
+                ]),
+            );
+            let hit = super::resolve_pane_entry(None, Some("01a1ad25"), None);
+            assert!(hit.is_none(), "the shared head names no pane");
+            let by_name = super::resolve_pane_entry(None, Some("t-parked-prompt-blocked"), None);
+            assert!(by_name.is_some(), "an exact name still resolves");
+            let by_full =
+                super::resolve_pane_entry(None, Some("01a1ad25-f04f-7220-8b8e-6c41a3bad0dd"), None);
+            assert!(by_full.is_some(), "a full id still resolves");
+        });
     }
 }
