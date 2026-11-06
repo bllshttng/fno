@@ -6,7 +6,7 @@ Usage: extract.py <transcript.jsonl> [OLD=NEW ...] > events.jsonl
 Each OLD=NEW pair replaces text, so a name or host never reaches the GIF.
 
 Each output line is {"t": seconds_since_start, "kind": "...", "text": "..."}.
-Kinds: prompt, say, tool, done. Only the first line of each message is kept.
+Kinds: prompt, say, tool. Only the first line of each message is kept.
 """
 
 import json
@@ -40,6 +40,17 @@ def tool_label(block):
     return name
 
 
+def prompt_text(text):
+    """What the user typed, or "" for injected text (hook context, skill bodies)."""
+    name = re.search(r"<command-name>(.*?)</command-name>", text, re.S)
+    if name:
+        args = re.search(r"<command-args>(.*?)</command-args>", text, re.S)
+        return f"{name.group(1).strip()} {args.group(1).strip() if args else ''}".strip()
+    if text.startswith("<") or text.startswith("Base directory for this skill"):
+        return ""
+    return text
+
+
 def events(lines):
     start = None
     for raw in lines:
@@ -57,10 +68,9 @@ def events(lines):
         for block in content or []:
             kind = block.get("type")
             if row["type"] == "user" and kind == "text":
-                text = block["text"]
-                if text.startswith("<") or "tool_result" in text:
-                    continue
-                yield {"t": ts - start, "kind": "prompt", "text": first_line(text)}
+                text = prompt_text(block["text"])
+                if text:
+                    yield {"t": ts - start, "kind": "prompt", "text": first_line(text)}
             elif row["type"] == "assistant" and kind == "text":
                 yield {"t": ts - start, "kind": "say", "text": first_line(block["text"])}
             elif row["type"] == "assistant" and kind == "tool_use":

@@ -12,12 +12,11 @@ import json
 import sys
 import time
 
-DIM, BOLD, GREEN, CYAN, RESET = "\033[2m", "\033[1m", "\033[32m", "\033[36m", "\033[0m"
+DIM, BOLD, CYAN, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[0m"
 STYLE = {
     "prompt": lambda s: f"{BOLD}> {s}{RESET}",
     "say": lambda s: f"{CYAN}● {RESET}{s}",
     "tool": lambda s: f"{DIM}  ⎿ {s}{RESET}",
-    "done": lambda s: f"{GREEN}{BOLD}✔ {s}{RESET}",
 }
 
 
