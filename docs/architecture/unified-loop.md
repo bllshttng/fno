@@ -249,6 +249,10 @@ The dedupe key is a hash of the sorted stalled row set. It is not the session an
 
 Gated by `config.lead.enabled` (default false), visible as the `lead loop` row in `fno agents admit autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
 
+### Runs that owe no PR
+
+`fno do target init --advisory` or plan `gates: advisory` marks a run as owing no PR. A promise then ends as `DoneAdvisory`. If a node closes as `done` or `superseded` with no PR record, loop-check takes the no-PR shortcut on a promise. That shortcut still holds for operator findings, dirty or unpushed work, and failing probes. Any PR record, including URL-only, closed, or history-marked rows, keeps the regular PR gate while `gh` is available. If `gh` is unavailable, an attended session retains the existing promise-and-budget fallback. Company work can use `completion: delivery` with `company_work` evidence for `DoneDelivery`. See [Generic delivery evidence](generic-delivery-evidence.md).
+
 ### `done_probes`: the operational-evidence conjunct
 
 `DonePRGreen` normally conjuncts PR-exists + CI-green + review-clean + HEAD-shipped.
@@ -282,9 +286,9 @@ Hence the process-group kill, and hence stderr being drained by a reader thread 
 A refusal where probes were declared but none actually ran (unparseable, over cap, plan unreadable) records `{"_undeterminable": "<cause>"}` rather than a bare `null`.
 That matters because the fail-closed path keys off "did a prior fire record probes": a `null` would make the refusal invisible to it, so a plan that tripped the cap and then went missing would silently degrade to "no gate".
 
-**Scope: `DonePRGreen` only.**
-`DoneAdvisory`, `DonePlanned`, and `DoneBatched` return earlier and do not consult probes.
-Those units ship no PR of their own, so there is no ship gate to hang evidence on; a recurring deliverable reaches its finish line through `DonePRGreen`.
+**Scope: `DonePRGreen` and completed-node no-PR advisory.**
+
+Explicit advisory runs, `DonePlanned`, `DoneBatched`, and the attended no-gh fallback skip probe evaluation. The completed-node no-PR shortcut checks declared probes before `DoneAdvisory`. A failing or unreadable probe keeps the normal gate. A recurring deliverable that owes a PR reaches its finish line through `DonePRGreen`.
 
 Every fire records its results in the `loop_check` event as `data.done_probes` (`{"<cmd>": "pass" \| "fail:<code>" \| "timeout"}`). `fno whoami scoreboard --plan-fidelity` joins that against the declaration to report probes declared vs passed.
 

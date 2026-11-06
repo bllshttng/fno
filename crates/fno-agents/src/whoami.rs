@@ -3,8 +3,8 @@
 //! (`cli/src/fno/agent/`) is deleted in the same change that lands this;
 //! the goldens under `tests/golden/whoami/` freeze its bytes.
 //!
-//! Two layers load independently: walker (`.fno/megawalk-state.md`), session
-//! (`.fno/target-state.md`, else `.fno/session-state.md`). The state-file
+//! One layer loads: session (`.fno/target-state.md`, else
+//! `.fno/session-state.md`). The state-file
 //! dialect is YAML's block-mapping subset that manifests and mission files
 //! actually carry: scalars, quoted strings, bools, ints, nulls, nested
 //! mappings, block lists. Anything else is malformed and the command exits 2,
@@ -25,12 +25,11 @@ use std::time::Duration;
 
 const GROUP_HELP: &str = "Usage: fno whoami [OPTIONS] COMMAND [ARGS]...
 
-  Operating-stack summary: project + fleet + walker + session + harness.
+  Operating-stack summary: project + fleet + session + harness.
 
 Options:
   -J, --json         emit JSON to stdout
   --state-file PATH  override session state-file detection
-  --no-walker        suppress walker layer in output
   --no-fleet         suppress fleet layer in output
   --help             Show this message and exit.
 
@@ -45,7 +44,6 @@ const STATUS_HELP: &str = "Usage: fno whoami status [OPTIONS]
 Options:
   -J, --json         emit JSON to stdout
   --state-file PATH  override session state-file detection
-  --no-walker        suppress walker layer in output
   --no-fleet         suppress fleet layer in output
   --help             Show this message and exit.
 ";
@@ -77,7 +75,6 @@ pub fn run(args: &[String]) -> i32 {
                 return 0;
             }
             (_, "--json") | (_, "-J") => opts.json_output = true,
-            (_, "--no-walker") => opts.no_walker = true,
             // Accepted and ignored: the fleet layer is gone, the flag stays so
             // existing callers keep working.
             (_, "--no-fleet") => {}
@@ -134,29 +131,11 @@ pub fn run(args: &[String]) -> i32 {
 struct Options {
     json_output: bool,
     state_file: Option<PathBuf>,
-    no_walker: bool,
-}
-
-/// The layer suppressions: a suppressed layer renders as absent, the same
-/// replacement the Python leg applied before rendering.
-fn drop_layers(mut state: AgentContext, opts: &Options) -> AgentContext {
-    if opts.no_walker {
-        state.walker = None;
-    }
-    state
 }
 
 // -------------------------------------------------------------------------
 // State layer
 // -------------------------------------------------------------------------
-
-struct WalkerState {
-    session_id: Option<String>,
-    phase: Option<String>,
-    in_flight: i64,
-    done: i64,
-    path: PathBuf,
-}
 
 struct SessionState {
     session_id: Option<String>,
@@ -171,7 +150,6 @@ struct SessionState {
 struct AgentContext {
     project_root: PathBuf,
     harness: String,
-    walker: Option<WalkerState>,
     session: Option<SessionState>,
     detected_paths: Vec<PathBuf>,
     warnings: Vec<String>,
@@ -191,7 +169,6 @@ fn load_agent_context(
     let mut detected: Vec<PathBuf> = Vec::new();
     let project_root = detect_project_root(&mut warnings);
     let harness = detect_harness(home);
-    let walker = load_walker_state(&project_root, &mut warnings, &mut detected);
     let mut session = load_session_state(
         &project_root,
         state_file_override,
@@ -220,7 +197,6 @@ fn load_agent_context(
     Ok(AgentContext {
         project_root,
         harness,
-        walker,
         session,
         detected_paths: detected,
         warnings,
@@ -459,43 +435,6 @@ fn int_or_none(value: &Value) -> Option<i64> {
     }
 }
 
-fn load_walker_state(
-    project_root: &Path,
-    warnings: &mut Vec<String>,
-    detected: &mut Vec<PathBuf>,
-) -> Option<WalkerState> {
-    let path = project_root.join(".fno").join("megawalk-state.md");
-    let ok = path.exists()
-        && std::fs::metadata(&path)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false);
-    if !ok {
-        return None;
-    }
-    let fields = match parse_state_file(&path) {
-        Ok(f) => f,
-        Err(StateError::Malformed { path, .. }) => {
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-            if let Some(name) = name {
-                warnings.push(format!("walker: malformed {name}"));
-            }
-            return None;
-        }
-        Err(_) => return None,
-    };
-    detected.push(path.clone());
-    Some(WalkerState {
-        session_id: fields.get("session_id").and_then(str_or_none),
-        phase: fields
-            .get("current_phase")
-            .and_then(str_or_none)
-            .or_else(|| fields.get("phase").and_then(str_or_none)),
-        in_flight: fields.get("in_flight").and_then(int_or_none).unwrap_or(0),
-        done: fields.get("done").and_then(int_or_none).unwrap_or(0),
-        path,
-    })
-}
-
 fn load_session_state(
     project_root: &Path,
     state_file_override: Option<&Path>,
@@ -568,7 +507,6 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
             return 2;
         }
     };
-    let state = drop_layers(state, opts);
     let get = |name: &str| std::env::var(name).ok();
     let ident = resolve_self_identity(&get, None, None, home);
     // The reply handle. An ambiguous environment is the one refusal the
@@ -670,19 +608,6 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
     if let Some(v) = &state.visitor {
         println!("visitor: {v}");
     }
-    if let Some(walker) = &state.walker {
-        let phase = walker
-            .phase
-            .as_ref()
-            .map(|p| format!(" phase={p}"))
-            .unwrap_or_default();
-        println!(
-            "walker:   {}{phase} - {} in-flight, {} done",
-            walker.session_id.as_deref().unwrap_or("(unknown)"),
-            walker.in_flight,
-            walker.done
-        );
-    }
     if let Some(session) = &state.session {
         let phase = if let Some(p) = &session.phase {
             format!(" phase={p}")
@@ -777,7 +702,6 @@ fn status_render(opts: &Options, home: &AgentsHome) -> i32 {
             return 2;
         }
     };
-    let state = drop_layers(state, opts);
     let events_path = state.project_root.join(".fno").join("events.jsonl");
     let tail = tail_events(&events_path, EVENTS_TAIL_BYTES, EVENTS_TAIL_LINES);
     let events_warning: Option<String> = tail
@@ -852,14 +776,6 @@ fn status_render(opts: &Options, home: &AgentsHome) -> i32 {
                 println!("  [{mark}] {key}: {}", py_repr(value));
             }
         }
-    }
-    if let Some(walker) = &state.walker {
-        println!(
-            "walker:   {} in_flight={} done={}",
-            walker.session_id.as_deref().unwrap_or("(unknown)"),
-            walker.in_flight,
-            walker.done
-        );
     }
     if !tail.events.is_empty() {
         println!("events (last {}):", tail.events.len());
@@ -1074,22 +990,6 @@ fn ctx_to_jsonable(state: &AgentContext) -> Map<String, Value> {
     // Always null: the layer read megatron mission indexes nothing writes.
     // The key stays so a consumer of the JSON shape keeps parsing.
     payload.insert("fleet".into(), Value::Null);
-    payload.insert(
-        "walker".into(),
-        state
-            .walker
-            .as_ref()
-            .map(|w| {
-                json!({
-                    "session_id": w.session_id,
-                    "phase": w.phase,
-                    "in_flight": w.in_flight,
-                    "done": w.done,
-                    "path": w.path.to_string_lossy(),
-                })
-            })
-            .unwrap_or(Value::Null),
-    );
     payload.insert(
         "session".into(),
         state

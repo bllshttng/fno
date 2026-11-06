@@ -53,10 +53,9 @@ const SYNTH_TIMEOUT_SECS: u64 = 900;
 const REPLAY_TIMEOUT_SECS: u64 = 900;
 
 /// Both spellings remain drivers during the one-release compatibility window.
-const DRIVER_SKILLS: [&str; 6] = [
+const DRIVER_SKILLS: [&str; 5] = [
     "fno:think",
     "fno:target",
-    "fno:megawalk",
     "fno:do",
     "fno:execute",
     "fno:blueprint",

@@ -541,4 +541,19 @@ mod tests {
         );
         assert!(reason.contains("reason=\"merge_slot\""), "got: {reason}");
     }
+
+    #[test]
+    fn no_pr_and_closed_pr_guidance_names_the_advisory_exit() {
+        for state in [PrState::None, PrState::Closed] {
+            let mut pr = frozen_pr();
+            pr.state = state;
+            let reason = build_block_reason(&pr, "abc", true, true);
+            assert!(reason.contains("fno do target init --advisory"), "{reason}");
+            assert!(reason.contains("gates: advisory"), "{reason}");
+        }
+        let mut red_open = frozen_pr();
+        red_open.ci_conclusion = CiConclusion::Failure(None);
+        let reason = build_block_reason(&red_open, "abc", true, true);
+        assert!(!reason.contains("--advisory"), "{reason}");
+    }
 }
