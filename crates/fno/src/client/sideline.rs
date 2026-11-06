@@ -1721,9 +1721,11 @@ impl View {
         };
         let tail = format!("{created} · {activity}");
         let tail_w = crate::chrome::str_cols(&tail).min(text_w);
-        let head_w = text_w.saturating_sub(tail_w);
+        // One space always parts the head from the tail, so a cut id never meets the age.
+        let gap = usize::from(text_w > tail_w);
+        let head_w = text_w.saturating_sub(tail_w + gap);
         let head = crate::chrome::fit_ellipsis(&left, head_w);
-        let pad = " ".repeat(head_w.saturating_sub(crate::chrome::str_cols(&head)));
+        let pad = " ".repeat(head_w.saturating_sub(crate::chrome::str_cols(&head)) + gap);
         format!("{head}{pad}{tail}")
     }
 
