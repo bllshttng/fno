@@ -3957,18 +3957,6 @@ mod tests {
 
     // --- locate_session ---
 
-    fn write_session(dir: &Path, pid: &str, job: &str, kind: &str, sock: Option<&str>) {
-        let sock_field = match sock {
-            Some(s) => format!("\"{}\"", s),
-            None => "null".to_string(),
-        };
-        let body = format!(
-            "{{\"jobId\":\"{}\",\"kind\":\"{}\",\"messagingSocketPath\":{},\"sessionId\":\"sess-{}\",\"cwd\":\"/tmp\"}}",
-            job, kind, sock_field, job
-        );
-        fs::write(dir.join(format!("{}.json", pid)), body).unwrap();
-    }
-
     // --- read_state_json ---
 
     // --- socket round-trip ---
@@ -3993,22 +3981,6 @@ mod tests {
     // --- ask_followup (live socket + state.json) ---
 
     // --- ask-lane control.sock fallback ---
-
-    // daemon_roster_path reads FNO_CLAUDE_DAEMON_DIR, a process-global. Serialize
-    // the env-touching tests below (cargo runs tests in parallel threads; no
-    // serial_test dep in this crate) so they never observe each other's mutation.
-    static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
-        std::sync::LazyLock::new(crate::claims::test_env_lock);
-
-    fn write_roster(home: &Path, session_uuid: &str) {
-        let daemon = home.join(".claude").join("daemon");
-        fs::create_dir_all(&daemon).unwrap();
-        let body = format!(
-            "{{\"workers\":{{\"w\":{{\"sessionId\":\"{}\",\"pid\":5}}}}}}",
-            session_uuid
-        );
-        fs::write(daemon.join("roster.json"), body).unwrap();
-    }
 
     #[test]
     fn container_rows() {

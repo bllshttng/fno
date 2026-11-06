@@ -194,11 +194,6 @@ impl Behavior {
         self
     }
 
-    pub fn with_refused_initialize(mut self) -> Self {
-        self.refuse_initialize = true;
-        self
-    }
-
     pub fn with_projects(mut self, projects: Vec<Value>) -> Self {
         self.projects = projects;
         self

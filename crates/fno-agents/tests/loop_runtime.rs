@@ -43,14 +43,6 @@ fn make_unit(id: &str, session_key: &str) -> Unit {
     }
 }
 
-/// Build an Evidence value for a given TerminationReason.
-fn make_evidence(reason: TerminationReason) -> Evidence {
-    Evidence {
-        reason,
-        message: "test done".to_string(),
-    }
-}
-
 /// Write a valid termination event line into `journal_path` for `session_key`.
 fn seed_termination_event(journal_path: &Path, session_key: &str, reason: &str) {
     let line = format!(
@@ -115,14 +107,6 @@ impl FixedQueue {
             units: Mutex::new(units),
             closed: Mutex::new(vec![]),
             close_outcome: CloseOutcome::Closed,
-        }
-    }
-
-    fn with_close_outcome(units: Vec<Unit>, outcome: CloseOutcome) -> Self {
-        Self {
-            units: Mutex::new(units),
-            closed: Mutex::new(vec![]),
-            close_outcome: outcome,
         }
     }
 
