@@ -1986,8 +1986,8 @@ mod tests {
 
 #[cfg(test)]
 mod user_theme_tests {
-    use crate::proto::Color;
-    use crate::theme::{ground_set, Theme};
+    use super::materialize_user_theme;
+    use crate::theme::Theme;
 
     fn spec(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs

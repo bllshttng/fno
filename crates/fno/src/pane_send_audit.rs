@@ -350,7 +350,6 @@ pub(crate) fn pane_send_audit_events_path() -> PathBuf {
 mod tests {
     use super::*;
     use crate::mux_cli::{dispatch, PaneCmd, SendSource, EXIT_ERROR};
-    use std::ffi::OsString;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
     fn control_test_sock(name: &str) -> std::path::PathBuf {

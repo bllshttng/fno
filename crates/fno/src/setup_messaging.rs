@@ -582,22 +582,6 @@ mod tests {
         }
     }
 
-    impl Http for Updates {
-        fn call(
-            &mut self,
-            _m: &str,
-            url: &str,
-            _h: &[(&str, String)],
-            _b: Option<&str>,
-        ) -> Option<(u16, String)> {
-            assert_eq!(url, "https://api.telegram.org/bottok/getUpdates");
-            Some((
-                200,
-                r#"{"result":[{"message":{"chat":{"id":100},"from":{"id":42}}}]}"#.into(),
-            ))
-        }
-    }
-
     /// The Telegram `getUpdates` answer for any token, and a success for
     /// every other endpoint the walks reach.
     struct TwoChannel;
