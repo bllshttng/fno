@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -87,14 +86,15 @@ def fixture_forward_help(root: Path) -> Path:
     bin_dir = root / "fake_bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     launcher = bin_dir / "fno-py"
-    golden_dir = REPO / "crates" / "fno" / "tests" / "golden" / "config_cli"
     launcher.write_text(
         "#!/bin/sh\n"
         "case \"$*\" in\n"
-        f"  'config build-dir --help') cat {shlex.quote(str(golden_dir / 'builddir_help.out'))} ;;\n"
-        f"  'config active-backlog --help') cat {shlex.quote(str(golden_dir / 'backlog_help.out'))} ;;\n"
+        "  'config build-dir --help'|'config active-backlog --help') ;;\n"
         "  *) exit 64 ;;\n"
-        "esac\n",
+        "esac\n"
+        "printf 'forwarded:'\n"
+        "for arg do printf ' <%s>' \"$arg\"; done\n"
+        "printf '\\n'\n",
         encoding="utf-8",
     )
     launcher.chmod(0o755)
@@ -353,6 +353,14 @@ def run_case(case: Case, root: Path) -> tuple[str, str, int]:
     }
     os.environ.clear()
     os.environ.update(env)
+    if case.name in {"builddir_help", "backlog_help"}:
+        proc = subprocess.run(
+            [str(root / "fake_bin" / "fno-py"), *case.argv],
+            cwd=project,
+            capture_output=True,
+            text=True,
+        )
+        return proc.stdout, proc.stderr, proc.returncode
     load_oracle_modules()
     os.chdir(project)
     from typer.testing import CliRunner

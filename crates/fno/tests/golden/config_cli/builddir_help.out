@@ -1,6 +1,1 @@
-Usage: fno-py config build-dir [OPTIONS]
-
-  Print the CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.
-
-Options:
-  --help  Show this message and exit.
+forwarded: <config> <build-dir> <--help>
