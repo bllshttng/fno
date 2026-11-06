@@ -382,18 +382,25 @@ pub(crate) fn send_verdict(code: Option<i32>, style_refused: impl FnOnce() -> bo
 pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
     serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout))
         .ok()
-        .is_some_and(|receipt| {
-            let excepted = receipt
-                .get("exception")
-                .is_some_and(|exception| !exception.is_null());
-            if excepted {
-                return false;
-            }
-            receipt
-                .get("violations")
-                .and_then(|violations| violations.as_array())
-                .is_some_and(|violations| !violations.is_empty())
-        })
+        .is_some_and(|receipt| receipt_confirms_refusal(&receipt))
+}
+
+/// The refusal verdict for one parsed receipt: a non-null `exception`
+/// makes an excepted body clean whatever the violations carry, and a
+/// clean or empty violations list reads transient. Mirrors the mail
+/// gate's own clean rule, shared by the pull arm's byte-level entry and
+/// the sender-side report so the two consults never disagree.
+fn receipt_confirms_refusal(receipt: &serde_json::Value) -> bool {
+    let excepted = receipt
+        .get("exception")
+        .is_some_and(|exception| !exception.is_null());
+    if excepted {
+        return false;
+    }
+    receipt
+        .get("violations")
+        .and_then(|violations| violations.as_array())
+        .is_some_and(|violations| !violations.is_empty())
 }
 
 /// The retry ladder between a failed delivery and its next attempt. One
@@ -485,11 +492,11 @@ pub(crate) fn style_door_report(payload: &str) -> Option<String> {
 /// unparseable, or is empty - a door that cannot run reads clean, exactly
 /// as the pull side does.
 pub(crate) fn receipt_refusal_report(stdout: &[u8]) -> Option<String> {
-    if !door_confirms_refusal(stdout) {
-        return None;
-    }
     let receipt =
         serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout)).ok()?;
+    if !receipt_confirms_refusal(&receipt) {
+        return None;
+    }
     if let Some(report) = receipt.get("report").and_then(|r| r.as_str()) {
         if !report.trim().is_empty() {
             return Some(report.to_string());
