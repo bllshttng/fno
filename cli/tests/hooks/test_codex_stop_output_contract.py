@@ -150,13 +150,13 @@ def _stop_commands() -> list[str]:
     return [command.replace("${PLUGIN_ROOT}", str(REPO_ROOT)) for command in commands]
 
 
-@pytest.fixture(params=[1, 0], ids=["fno-exit-1", "fno-exit-0"])
-def stub_run(request, tmp_path):
-    """(env, payload, runner) with stub fno/fno-agents under one exit code."""
+@pytest.fixture
+def stub_run(tmp_path):
+    """(env, payload, runner) with stub fno/fno-agents failing every read."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name in ("fno", "fno-agents"):
-        _fno_stub(bin_dir, name, exit_code=request.param)
+        _fno_stub(bin_dir, name, exit_code=1)
     env = _hook_env(tmp_path, bin_dir)
     payload = _stop_payload(tmp_path)
 

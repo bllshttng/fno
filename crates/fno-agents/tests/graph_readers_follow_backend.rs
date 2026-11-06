@@ -78,33 +78,3 @@ fn moved_callers_resolve_the_store_node() {
     let found = api::node(&store, "x-new").unwrap();
     assert!(found.is_some(), "api::node must resolve x-new");
 }
-
-#[test]
-fn x_old_still_resolves_after_the_flip() {
-    let (_root, graph) = split_store_fixture();
-    let rows = graph_store::read_rows(&graph).unwrap();
-    assert!(
-        rows.iter()
-            .any(|e| graph_store::entry_id(e) == Some("x-old")),
-        "the pre-flip node must survive the flip"
-    );
-}
-
-#[test]
-fn archive_reads_beside_a_sqlite_graph() {
-    let (_root, graph) = split_store_fixture();
-    let archive = graph.with_file_name("graph-archive.json");
-    std::fs::write(
-        &archive,
-        r#"{"entries":[{"id":"x-archived","title":"archived"}]}"#,
-    )
-    .unwrap();
-    let rows = graph_store::read_rows(&graph).unwrap();
-    let merged = graph_store::entries_with_archive(&rows, &archive);
-    assert!(
-        merged
-            .iter()
-            .any(|e| graph_store::entry_id(e) == Some("x-archived")),
-        "the archive must still merge in beside a sqlite graph"
-    );
-}

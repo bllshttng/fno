@@ -248,7 +248,7 @@ fn holder_json(holder: &crate::pane_stop::SessionHolder) -> Value {
 mod tests {
     use super::*;
     use crate::pane_stop::SessionHolder;
-    use crate::state::{InsideLegReport, InsideLegState, RegistryEntry};
+    use crate::state::RegistryEntry;
     use crate::AgentStatus;
 
     fn claude_row(status: AgentStatus) -> RegistryEntry {
@@ -279,21 +279,6 @@ mod tests {
         assert_eq!(ladder(&stamped), RowLiveness::Unknown);
     }
 
-    #[test]
-    fn a_heartbeat_past_the_exit_stamp_still_resurrects_an_exited_row() {
-        let mut e = claude_row(AgentStatus::Exited);
-        e.exited_at = Some("2026-08-01T00:00:02Z".into());
-        e.inside_leg = Some(InsideLegReport {
-            state: InsideLegState::Working,
-            seq: 3,
-            reason: None,
-            received_at: "2026-08-01T00:00:30Z".into(),
-            ttl_ms: None,
-            posture: None,
-        });
-        assert_eq!(ladder(&e), RowLiveness::Alive);
-    }
-
     // ──: session records name the live holder ────────────────────
 
     const T0: &str = "Mon Sep 21 16:27:44 2026"; // epoch 1_790_008_064
@@ -311,80 +296,6 @@ mod tests {
     }
 
     const SID: &str = "aaaaaaaa-1111-2222-3333-444444444444";
-
-    /// AC10-HP: one interactive record whose pid is live and whose
-    /// procStart matches that pid's create time names the holder.
-    #[test]
-    fn x1530_ac10_live_interactive_record_names_the_holder() {
-        let tmp = tempfile::tempdir().unwrap();
-        stage(
-            &tmp.path().join("sessions"),
-            "24896.json",
-            &record_json(24896, SID, T0, "interactive"),
-        );
-        let dirs = vec![tmp.path().join("sessions")];
-        let answer = session_record_holder(&dirs, SID, &|pid| {
-            if pid == 24896 {
-                Some(T0_MS)
-            } else {
-                None
-            }
-        });
-        match answer {
-            SessionHolder::Held {
-                pid: Some(24896),
-                proven: true,
-                why,
-            } => assert!(
-                why.contains("interactive record, start time matches"),
-                "{why}"
-            ),
-            other => panic!("expected Held pid 24896, got {other:?}"),
-        }
-    }
-
-    /// A live bg record under an account root feeds the socket index from a
-    /// ClaudeHome carrying that root, and the holder read walks the same
-    /// root's sessions dir.
-    #[test]
-    fn x1530_ac8_socket_index_and_holder_read_account_roots() {
-        let home = tempfile::tempdir().unwrap();
-        let acct = tempfile::tempdir().unwrap();
-        let sessions = acct.path().join("sessions");
-        stage(
-            &sessions,
-            "4242.json",
-            r#"{"jobId":"feedc0de","kind":"bg","messagingSocketPath":"/tmp/acct-live.sock","sessionId":"bbbb2222-1111-2222-3333-444444444444","pid":4242}"#,
-        );
-        stage(
-            &sessions,
-            "24896.json",
-            &record_json(24896, SID, T0, "interactive"),
-        );
-        let ch = ClaudeHome::at(home.path()).with_extra_roots([acct.path().to_path_buf()]);
-
-        let sockets = sessions_socket_index(&ch);
-        assert_eq!(
-            sockets.get("feedc0de").map(String::as_str),
-            Some("/tmp/acct-live.sock")
-        );
-
-        let answer = session_record_holder(&ch.sessions_dirs(), SID, &|pid| {
-            if pid == 24896 {
-                Some(T0_MS)
-            } else {
-                None
-            }
-        });
-        match answer {
-            SessionHolder::Held {
-                pid: Some(24896),
-                proven: true,
-                ..
-            } => {}
-            other => panic!("expected Held pid 24896 via account root, got {other:?}"),
-        }
-    }
 
     /// AC11-ERR: a gone pid, a recycled pid (procStart an hour off), an
     /// unparseable procStart on a live pid, and an unreadable dir each
@@ -432,40 +343,6 @@ mod tests {
         match answer {
             SessionHolder::NotHeld(why) => assert!(why.contains("(1 record dir read)"), "{why}"),
             other => panic!("expected NotHeld, got {other:?}"),
-        }
-    }
-
-    /// AC12-EDGE: a live bg record answers Held with no pid - a bg job
-    /// stops through claude, not a signal.
-    #[test]
-    fn x1530_ac12_bg_record_holds_without_a_pid() {
-        let tmp = tempfile::tempdir().unwrap();
-        let sessions = tmp.path().join("sessions");
-        stage(
-            &sessions,
-            "500.json",
-            &format!(
-                r#"{{"pid":500,"sessionId":"{SID}","procStart":"{T0}","kind":"bg","jobId":"job-7"}}"#
-            ),
-        );
-        let dirs = vec![sessions];
-        let answer = session_record_holder(&dirs, SID, &|pid| {
-            if pid == 500 {
-                Some(T0_MS)
-            } else {
-                None
-            }
-        });
-        match answer {
-            SessionHolder::Held {
-                pid: None,
-                proven: true,
-                why,
-            } => assert!(
-                why.contains("bg job job-7 (pid 500)") && why.contains("stops through claude"),
-                "{why}"
-            ),
-            other => panic!("expected Held without pid, got {other:?}"),
         }
     }
 

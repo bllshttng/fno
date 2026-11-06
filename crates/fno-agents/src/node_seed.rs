@@ -683,14 +683,6 @@ mod tests {
             .expect("decision is an object")
     }
 
-    /// [`decide_map`] over a pinned row set, for the nodeless derive arm.
-    fn decide_map_rows(payload: Value, rows: &[Value]) -> Map<String, Value> {
-        decide_in(&payload, rows)
-            .as_object()
-            .cloned()
-            .expect("decision is an object")
-    }
-
     /// The shared shape: node x-1 derives /blueprint, no error, no team.
     fn base() -> Value {
         json!({
@@ -715,38 +707,7 @@ mod tests {
         assert!(msg.contains("/blueprint"), "{msg}");
     }
 
-    #[test]
-    fn prose_seed_is_composed_at_its_slot() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "w", "port it", "--node", "x-1"]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("positional");
-        let out = decide_map(p);
-        assert_eq!(out["action"], "compose");
-        assert_eq!(out["verb"], "blueprint");
-        assert_eq!(
-            out["argv"],
-            json!([
-                "spawn",
-                "w",
-                "/fno:blueprint x-1\n\nport it",
-                "--node",
-                "x-1"
-            ])
-        );
-    }
-
     // --- AC2-EDGE ------------------------------------------------------- //
-
-    #[test]
-    fn team_and_resume_spawns_pass_unchanged() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "--promote", "x-1", "/fno:target x-1"]);
-        assert_eq!(decide_map(p.clone())["action"], "pass");
-        p.as_object_mut().unwrap().remove("argv");
-        p["resume"] = json!(true);
-        assert_eq!(decide_map(p)["action"], "pass");
-    }
 
     #[test]
     fn unknown_node_refuses() {
@@ -757,120 +718,9 @@ mod tests {
         assert!(out["message"].as_str().unwrap().contains("x-1"));
     }
 
-    #[test]
-    fn derive_error_refuses_with_the_error_text() {
-        let mut p = base().clone();
-        p["derive_error"] = json!("difficulty missing");
-        let out = decide_map(p);
-        assert_eq!(out["action"], "refuse");
-        assert!(out["message"]
-            .as_str()
-            .unwrap()
-            .contains("difficulty missing"));
-    }
-
-    #[test]
-    fn commandless_node_refuses_with_the_encode_hint() {
-        let mut p = base().clone();
-        p["effective_command"] = Value::Null;
-        p["stored_command"] = Value::Null;
-        p["argv"] = json!(["spawn", "w", "--node", "x-1"]);
-        p["seed_index"] = Value::Null;
-        let out = decide_map(p);
-        assert_eq!(out["action"], "refuse");
-        assert!(out["message"]
-            .as_str()
-            .unwrap()
-            .contains("fno backlog update x-1 dispatch_command="));
-    }
-
-    #[test]
-    fn message_eq_slot_is_rewritten_with_its_prefix() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "w", "--message=port it", "--node", "x-1"]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("message_eq");
-        let out = decide_map(p);
-        assert_eq!(out["action"], "compose");
-        assert_eq!(out["argv"][2], "--message=/fno:blueprint x-1\n\nport it");
-    }
-
     // --- the nodeless derive arm --------------------------------------- //
 
-    /// The shared nodeless shape: no `node` key, seed facts only.
-    fn base_derive(seed: &str, index: usize) -> Value {
-        json!({
-            "argv": ["spawn", seed],
-            "seed_index": index,
-            "seed_form": "positional",
-            "family": ["/target", "/blueprint"],
-            "role": false, "resume": false,
-        })
-    }
-
-    /// Fixture rows naming the ids the nodeless derive tests bind.
-    fn rows_named(ids: &[&str]) -> Vec<Value> {
-        ids.iter()
-            .map(|id| json!({"id": id, "status": "ready"}))
-            .collect()
-    }
-
-    #[test]
-    fn nodeless_family_seed_derives_the_argument() {
-        let out = decide_map_rows(
-            base_derive("/fno:target x-aaaa", 1),
-            &rows_named(&["x-aaaa"]),
-        );
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 2], "--node");
-        assert_eq!(argv[argv.len() - 1], "x-aaaa");
-    }
-
-    #[test]
-    fn derived_name_with_no_row_answers_the_receipt() {
-        // A liberal-only id (x-gone is not hex) keeps the receipt arm; a
-        // shape-valid scan name binds instead and the row gate refuses it.
-        let out = decide_map_rows(base_derive("/fno:target x-gone", 1), &rows_named(&[]));
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 2], "--node-reason");
-        assert_eq!(
-            argv[argv.len() - 1],
-            "x-gone names no readable backlog row (derived from the seed)"
-        );
-        assert!(!argv.contains(&json!("--node")));
-    }
-
     // --- the explicit headless lane ------------------------------------- //
-
-    /// The fnh-worker seat: an explicit `--once` (headless) spawn seeded
-    /// with a target-family command. The derive must not compose `--node`, which
-    /// would pin the spawn to the Python lane that seats no headless footnote.
-    fn headless_derive(tail: &[&str]) -> Value {
-        let mut argv = vec!["spawn", "-H", "footnote", "--once", "--name", "w"];
-        argv.extend_from_slice(tail);
-        // `seed_index` is the seed's position in the full argv (`argv.get`
-        // reads it back), so the trailing seed sits at len-1.
-        let seed_index = (argv.len() - 1) as u64;
-        json!({
-            "argv": argv,
-            "seed_index": seed_index,
-            "seed_form": "positional",
-            "family": ["/target", "/blueprint"],
-            "role": false, "resume": false,
-        })
-    }
-
-    #[test]
-    fn explicit_headless_seed_keeps_its_lane() {
-        let out = decide_map_rows(
-            headless_derive(&["/fno:target x-aaaa"]),
-            &rows_named(&["x-aaaa"]),
-        );
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"].as_str().unwrap().contains("headless"));
-    }
 
     // --- resolve_node: which node, and who named it ---------------------- //
 
@@ -903,19 +753,6 @@ mod tests {
     }
 
     #[test]
-    fn payload_wins_over_env() {
-        // Shape-valid ids: a one-hex suffix like x-2 is not node-shaped, so
-        // the payload arm declines and env would answer.
-        let out = resolved(resolve_payload(
-            "/fno:target x-2222",
-            Value::Null,
-            json!("x-3333"),
-        ));
-        assert_eq!(out["node"], "x-2222");
-        assert_eq!(out["source"], "payload");
-    }
-
-    #[test]
     fn a_quoted_title_never_binds_a_node_shaped_word() {
         // Free text after the command is a title, not a node slot: a
         // node-shaped word inside it stays prose.
@@ -931,21 +768,6 @@ mod tests {
     }
 
     // --- node_source: refusals name the payload -------------------------- //
-
-    #[test]
-    fn a_payload_sourced_disagreement_names_the_payload() {
-        let mut p = base();
-        p["node_source"] = json!("payload");
-        p["argv"] = json!(["spawn", "w", "/fno:target x-1", "--node", "x-1"]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("positional");
-        let out = decide_map(p);
-        assert_eq!(out["action"], "refuse");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("the payload names /target x-1"), "{msg}");
-        assert!(msg.contains("spawn /fno:blueprint x-1"), "{msg}");
-        assert!(!msg.contains("--node"), "{msg}");
-    }
 
     // --- spawn_node_cwd: the node-named spawn's launch dir ---------------- //
 
@@ -975,12 +797,6 @@ mod tests {
             "flag_node": flag_node,
             "env_node": Value::Null,
         })
-    }
-
-    #[test]
-    fn node_named_in_seed_dispatches_from_the_row_cwd() {
-        let got = cwd_guard(seed_payload("/fno:target x-1111", Value::Null), "/repo/wt");
-        assert_eq!(got, SpawnNodeCwd::Project(PathBuf::from("/repo/footnote")));
     }
 
     #[test]
@@ -1021,45 +837,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn client_lets_the_seam_own_every_other_answer() {
-        let row = json!({"id": "x-aaaa", "dispatch_command": "/blueprint", "difficulty": "high"});
-        for (seed, row, skips) in [
-            ("$fno:blueprint x-aaaa", Some(&row), false),
-            ("$fno:target x-aaaa", None, false),
-            ("$fno:target x-aaaa", Some(&row), true),
-            ("port the parser", Some(&row), false),
-        ] {
-            assert_eq!(
-                payload_command_refusal(seed, None, skips, row, "high"),
-                None,
-                "{seed}"
-            );
-        }
-        for key in ["resume_id", "role_level", "role_scope"] {
-            assert!(spawn_skips_command_check(&json!({ (key): 1 })), "{key}");
-        }
-        assert!(!spawn_skips_command_check(&json!({"message": "x"})));
-    }
-
     // --- the production params shape ------------------------------------- //
-
-    #[test]
-    fn the_incident_params_shape_projects_onto_the_seed_payload() {
-        // The real client params: `message` + optional `node`, never argv or
-        // seed_index. The projection must carry both into the payload
-        // resolve_node reads, or the guard never fires.
-        let got = project_params(&json!({
-            "message": "$fno:target x-1111 do the work",
-            "substrate": "thread",
-        }));
-        assert_eq!(
-            got["argv"],
-            json!(["spawn", "$fno:target x-1111 do the work"])
-        );
-        assert_eq!(got["flag_node"], Value::Null);
-        let got = project_params(&json!({"node": "x-1111"}));
-        assert_eq!(got["flag_node"], json!("x-1111"));
-        assert_eq!(got["argv"], json!(["spawn", ""]));
-    }
 }

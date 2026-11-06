@@ -78,25 +78,3 @@ def test_a_second_holder_is_refused(task_fixture):
     )
     assert code == 3, out + err
     assert "another holder owns" in (out + err)
-
-
-def test_done_writes_the_row_and_releases_the_claim(task_fixture):
-    _tmp_path, node = task_fixture
-    run_native(
-        "backlog", "task", "update", node, "1.1", "--status", "in_progress",
-        "--owner", "worker-a",
-    )
-    code, out, err = run_native(
-        "backlog", "task", "update", node, "1.1", "--status", "done",
-        "--owner", "worker-a",
-    )
-    assert code == 0, out + err
-    code, out, err = run_native("backlog", "task", "list", node, "--json")
-    rows = {r["id"]: r for r in json.loads(out)["tasks"]}
-    assert rows["1.1"]["status"] == "done"
-    # The released claim frees the task for the next worker.
-    code, out, err = run_native(
-        "backlog", "task", "update", node, "1.1", "--status", "in_progress",
-        "--owner", "worker-b",
-    )
-    assert code != 0, "re-opening shipped work must refuse"

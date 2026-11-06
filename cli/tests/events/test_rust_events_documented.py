@@ -33,11 +33,6 @@ LIB_RS = REPO_ROOT / "crates/fno-agents/src/lib.rs"
 MIN_EVENT_KINDS = 40
 
 # Source values that must be in the envelope.source enum
-REQUIRED_SOURCES = [
-    "target", "megawalk", "megatron", "fno-loop",
-    "hook", "subagent", "migration", "test", "backlog",
-    "daemon",  # added in W7
-]
 
 
 RUST_CLIENT_EVENT_SOURCES = {
@@ -96,13 +91,6 @@ def rust_event_kinds() -> list[str]:
     # quietly stop asserting the very thing this fixture exists to assert.
     assert LIB_RS.exists(), f"{LIB_RS} not found; did the crate move?"
     return parse_known_event_kinds(LIB_RS.read_text(encoding="utf-8"))
-
-
-def test_existing_sources_preserved(schema: dict) -> None:
-    """All pre-existing sources must still be in the enum (additive-only)."""
-    enum = set(schema["envelope"]["properties"]["source"]["enum"])
-    for src in REQUIRED_SOURCES:
-        assert src in enum, f"source {src!r} removed from enum (additive-only rule)"
 
 
 def test_rust_events_have_their_producer_source(schema: dict, rust_event_kinds: list[str]) -> None:

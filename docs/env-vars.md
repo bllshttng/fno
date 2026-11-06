@@ -78,8 +78,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |
 | `FNO_CALLER_KIND` | rs | The surface that shelled this fno-agents command; `mux` stamps `caller_kind` on its events. |
-| `FNO_CAPABILITY_PARITY_DIR` | rs | unclear: crates/fno/src/agents_view.rs:3316 |
-| `FNO_CAPABILITY_PARITY_JSON` | rs | unclear: crates/fno/src/agents_view.rs:3318 |
 | `FNO_CARGO_CLASS` | rs | The lane an agent cargo asks for at the cargo admission doors: `repair` for a red PR or a main repair, `prepush` for the compile a push waits on. Unset is the normal lane. Both lanes queue ahead of normal, and a normal try-lock never takes a slot they wait for. |
 | `FNO_CARGO_FREE_BYTES` | rs | Overrides the free-space read the `cargo_build_dirs` cap lane defends against; test escape hatch. |
 | `FNO_CARGO_MAX_HOLD_SECS` | rs | The longest time in seconds that an agent cargo can hold an admission claim. After this time, the next cargo frees the claim and stops the holder. The default is 3600. A whole-suite run is exempt. |
@@ -137,7 +135,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
 | `FNO_INIT_PROGRESS_FILE` | rs | Step-marker file `fno do target start` hands its init door; the door appends begin/done markers and the parent prints the last marker in the 540s timeout receipt. Unset (a bare `fno do target init`), the markers are skipped. See target_init.rs `init_progress`. |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
-| `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
+| `FNO_KEEPER_ORPHAN_MAX_IDLE_MS` | rs | Pane keeper self-end bound: ms of empty subscriber seat (no server) after which the keeper ends itself and its child; default 3600000 (1 h). An unset or bad value means the default. Tests set it low. |
+| `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check and the idle-bound check; default 30000. Tests set it low. |
 | `FNO_KEEP_GOING` | rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
 | `FNO_LAUNCH_ACCOUNT` | rs | Launch account the spawn seam stamps after it applies an account overlay: the Rust spawn arm, in process. Cleared on a spawn with no account so a stale value never mislabels the next row. |
@@ -244,6 +243,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_HARNESS` | rs | The launcher-stamped harness half of the session-proof pair; a known name beside a live `FNO_SESSION_PID` answers the harness before the census walk (spawn_context.rs stamp_pair_harness). |
 | `FNO_SESSION_ID` | rs | Current session id. `fleet-incident` uses it for caller attribution; `loops pause-all` records a full UUID or `ses_` id as the mail-hold owner, falling back to `fno whoami --json` otherwise. |
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
+| `FNO_SIDECAR_EVERY_MS` | rs | Test seam: milliseconds the fleet sidecar's rewrite throttle and the mux server's refresh timer both run at (default 30000); a zero or unparseable value reads the default. It shortens the cadence for the e2e that proves an unattended machine keeps publishing. |
 | `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agents/src/mcp/sidecar.rs` (`socket_path`). |
 | `FNO_SKIP_MIGRATION` | rs | crates/fno/src/path_migration.rs run_if_needed |
 | `FNO_SNAPSHOT_GATE` | rs | The spawn-gate answer a `--view org-block` snapshot paints, as inline JSON. Unset, the snapshot runs the live probe. |
@@ -313,8 +313,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `GITHUB_ACTIONS` | rs | Folds the smoke step headers into ::group:: in CI: crates/fno-agents/src/test_smoke.rs |
 | `GITHUB_EVENT_BEFORE` | rs | The hook-tombstones deletion range on a push to main: crates/fno/src/repo_lint.rs. |
 | `GITHUB_TOKEN` | rs | Same as GH_TOKEN for gh_login: presence reads as no machine login, so the keyed rows stay off. |
-| `GIT_CONFIG_GLOBAL` | rs | the VCS tool's own ambient global-config channel; the birth display_name test guard redirects it beside HOME. |
-| `GIT_CONFIG_SYSTEM` | rs | the VCS tool's own ambient system-config channel; the birth display_name test guard redirects it beside HOME. |
 | `GLOBAL_EVENTS_PATH` | rs | unclear: crates/fno-agents/src/hook/stop.rs:462 |
 | `GROK_HOME` | rs | grok's base directory, sessions live under its `sessions` child: crates/fno-agents/src/grok_store.rs:18 |
 | `GROK_SESSION_ID` | rs | fallback session id when a grok Stop payload omits sessionId: crates/fno-agents/src/hook/stop.rs:150 |

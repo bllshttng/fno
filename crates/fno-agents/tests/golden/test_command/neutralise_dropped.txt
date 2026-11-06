@@ -81,3 +81,5 @@ VISUAL
 WORKTREE_STATUS_REGISTRY
 XDG_BIN_HOME
 ZDOTDIR
+test_front_handoff_pid_path
+test_local_forward_pid_path

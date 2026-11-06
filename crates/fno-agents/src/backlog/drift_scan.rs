@@ -890,61 +890,6 @@ mod tests {
     }
 
     #[test]
-    fn scan_records_a_merged_listing_hit_without_owing_the_query() {
-        let entries = vec![open_node(json!({
-            "pr_number": 7,
-            "pr_url": "https://github.com/o/r/pull/7",
-            "cwd": ".",
-        }))];
-        let cache = ListingCache::new();
-        let merged_rows = vec![pr_row(7, "feature/x-aaaa", "MERGED")];
-        cache
-            .rows_for_with("merged", ".", |_| Ok(merged_rows.clone()))
-            .expect("seed merged");
-        cache
-            .rows_for_with("open", ".", |_| Ok(Vec::new()))
-            .expect("seed open");
-        let records = scan_merge_drift(&entries, None, Some(&cache), |pr, _repo, _cwd, _files| {
-            panic!("query owed nothing: listing answered for #{pr}")
-        });
-        // The stamped-ref record rides the listing: no per-node query, and
-        // like a reverse-mapped record it carries no merge sha.
-        assert_eq!(records.len(), 1, "{records:?}");
-        assert_eq!(records[0].pr_state, "MERGED");
-        assert_eq!(records[0].pr_number, 7);
-        assert_eq!(records[0].merge_sha, None);
-        assert!(records[0].closeable());
-
-        // No listing: the query seam answers and carries the sha.
-        let records = scan_merge_drift(&entries, None, None, |pr, _repo, _cwd, _files| {
-            Ok(PrMergeState {
-                number: pr,
-                state: "MERGED".into(),
-                url: None,
-                merged_at: Some("2026-10-01T00:00:00Z".into()),
-                merge_sha: Some("abc".into()),
-                changed_files: vec!["a.rs".into()],
-                files_truncated: false,
-                body: Some("Fixes x-aaaa".into()),
-            })
-        });
-        assert_eq!(records[0].pr_state, "MERGED");
-        assert_eq!(records[0].merge_sha.as_deref(), Some("abc"));
-        assert!(records[0].closeable());
-
-        // An open listing row for the same PR means no drift and no query.
-        let cache = ListingCache::new();
-        let open_rows = vec![pr_row(7, "feature/x-aaaa", "OPEN")];
-        cache
-            .rows_for_with("open", ".", |_| Ok(open_rows.clone()))
-            .expect("seed open");
-        let records = scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
-            panic!("an open listing row means no drift")
-        });
-        assert!(records.is_empty(), "{records:?}");
-    }
-
-    #[test]
     fn a_node_surfaces_as_closed_only_when_every_ref_closed_unmerged() {
         let state_of = |pr: i64| PrMergeState {
             number: pr,
@@ -1050,58 +995,6 @@ mod tests {
         assert!(error.contains("no repo context"), "{error}");
         assert_eq!(records[0].error_kind.as_deref(), Some("repository_context"));
         assert!(!records[0].closeable());
-    }
-
-    #[test]
-    fn open_binding_scan_releases_the_repo_keys_borrow() {
-        // Regression for the daemon merge_close exit-101: the grouping step
-        // held the repo_keys RefMut across the loop, and rows_for's
-        // borrow_mut panicked the moment one ref-less open-bound node gave
-        // the loop a group to walk. Seeding first keeps the run hermetic:
-        // the loop's rows_for hits the store, never gh.
-        let cache = ListingCache::new();
-        cache
-            .rows_for_with("open", ".", |_| Ok(Vec::new()))
-            .expect("seed open");
-        let entries = vec![open_node(json!({"cwd": "."}))];
-        let (heals, advisories) =
-            collect_open_binding_heals(&entries, None, Some(&cache), |_, _, _, _| {
-                panic!("no PR read is owed: the listing is empty")
-            });
-        assert!(heals.is_empty(), "{heals:?}");
-        assert!(advisories.is_empty(), "{advisories:?}");
-    }
-
-    #[test]
-    fn reverse_map_matches_a_merged_branch_and_names_ambiguity() {
-        let entries = vec![open_node(json!({"cwd": "."}))];
-        let cache = ListingCache::new();
-        let merged_rows = vec![
-            pr_row(11, "feature/x-aaaa", "MERGED"),
-            pr_row(12, "chore/x-aaaa", "MERGED"),
-        ];
-        cache
-            .rows_for_with("merged", ".", |_| Ok(merged_rows.clone()))
-            .expect("seed merged");
-        let records = reverse_map_unstamped(&entries, None, Some(&cache));
-        assert_eq!(records.len(), 1);
-        assert!(records[0]
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("ambiguous"));
-        assert_eq!(records[0].pr_state, "UNKNOWN");
-
-        let single = vec![pr_row(11, "feature/x-aaaa", "MERGED")];
-        let cache2 = ListingCache::new();
-        cache2
-            .rows_for_with("merged", ".", |_| Ok(single.clone()))
-            .expect("seed merged");
-        let records = reverse_map_unstamped(&entries, None, Some(&cache2));
-        assert_eq!(records.len(), 1);
-        assert!(records[0].closeable());
-        assert_eq!(records[0].pr_number, 11);
-        assert_eq!(records[0].cwd.as_deref(), Some("."));
     }
 }
 

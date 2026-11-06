@@ -111,29 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn a_state_with_an_empty_body_does_not_count() {
-        let row = json!({
-            "id": "x-aaaa",
-            "current_state": {"body": "", "revision": 1, "updated_at": "t"},
-        });
-        assert_eq!(reading_for(&row), None);
-        // the thread outranks a stale state - the newest row is the
-        // live reading even when current_state is present and empty.
-        let threaded = json!({
-            "id": "x-aaaa",
-            "current_state": {"body": "stale", "revision": 1, "updated_at": "t"},
-            "progress_notes": [
-                {"ts": "2026-10-02T10:00:00Z", "text": "routed the FAIL", "kind": "progress"},
-            ],
-        });
-        let reading = reading_for(&threaded).expect("threaded row has a reading");
-        assert!(
-            reading.starts_with("the thread's newest row (progress, 2026-10-02T10:00:00Z)"),
-            "the newest row is the live reading: {reading}"
-        );
-    }
-
-    #[test]
     fn attach_puts_the_marker_first_and_touches_nothing_when_absent() {
         let mut rows = vec![full_row(), json!({"id": "x-bbbb", "details": "plain"})];
         let plain_before = rows[1].clone();

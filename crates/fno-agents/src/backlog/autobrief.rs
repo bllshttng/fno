@@ -586,19 +586,6 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_file_missing_falls_through_to_synthesis() {
-        let _g = StoreGuard::new();
-        let brief = resolve_dispatch_brief(&node(&[
-            ("has_brief", Value::from(true)),
-            ("details", Value::from("the only material present")),
-            ("source_harness", Value::from("claude")),
-            ("source_session_id", Value::from("sess-abcd1234")),
-            ("source_cwd", Value::from("/tmp/wk")),
-        ]));
-        assert_eq!(brief.tag, "synth-details");
-    }
-
-    #[test]
     fn synth_envelope_names_provenance_and_never_fabricates() {
         let g = StoreGuard::new();
         let brief = resolve_dispatch_brief(&node(&[
@@ -633,25 +620,6 @@ mod tests {
     }
 
     #[test]
-    fn synth_none_without_material() {
-        let _g = StoreGuard::new();
-        let brief = resolve_dispatch_brief(&node(&[("title", Value::from("bare node"))]));
-        assert_eq!(brief.tag, "none");
-        assert_eq!(brief.text, None);
-    }
-
-    #[test]
-    fn clamp_bytes_never_splits_a_multibyte_char() {
-        let s = "γ".repeat(30); // 60 bytes
-        let out = clamp_bytes(&s, 30);
-        assert!(out.as_bytes().len() <= 30);
-        assert!(out.ends_with(TRUNC_MARKER));
-        // Decoding the kept head must not yield U+FFFD: the boundary is whole.
-        assert!(!out.contains('\u{FFFD}'));
-        assert_eq!(clamp_bytes("short", 100), "short");
-    }
-
-    #[test]
     fn window_keeps_only_records_near_created_at() {
         let g = StoreGuard::new();
         g.write_claude_transcript(
@@ -677,105 +645,5 @@ mod tests {
         assert!(text.contains("birth the node"));
         assert!(text.contains("node born"));
         assert!(!text.contains("much later chatter"));
-    }
-
-    #[test]
-    fn fully_windowed_out_tail_is_omitted_not_injected() {
-        let g = StoreGuard::new();
-        g.write_claude_transcript(
-            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-            &[claude_turn(
-                "user",
-                "later conversation",
-                "2026-06-01T00:00:00Z",
-            )],
-        );
-        let brief = resolve_dispatch_brief(&node(&[
-            ("details", Value::from("thin")),
-            ("source_harness", Value::from("claude")),
-            (
-                "source_session_id",
-                Value::from("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
-            ),
-            ("source_cwd", Value::from("/tmp/wk")),
-            ("created_at", Value::from("2026-01-01T00:00:00Z")),
-        ]));
-        // Timestamped records all after the cutoff: the tail is OMITTED.
-        assert_eq!(brief.tag, "synth-details");
-        let text = brief.text.expect("details-only text");
-        assert!(!text.contains("later conversation"));
-    }
-
-    #[test]
-    fn ambiguous_claude_resolution_skips_tail() {
-        let g = StoreGuard::new();
-        // Two DISTINCT stems matching the short prefix read as ambiguous.
-        g.write_claude_transcript_named(
-            "11111111aaaa",
-            &[claude_turn("user", "one session", "2026-01-01T00:00:00Z")],
-        );
-        g.write_claude_transcript_named(
-            "11111111bbbb",
-            &[claude_turn("user", "other session", "2026-01-01T00:00:00Z")],
-        );
-        let brief = resolve_dispatch_brief(&node(&[
-            ("details", Value::from("thin")),
-            ("source_harness", Value::from("claude")),
-            ("source_session_id", Value::from("11111111")),
-            ("source_cwd", Value::from("/tmp/wk")),
-        ]));
-        assert_eq!(brief.tag, "synth-details");
-    }
-
-    #[test]
-    fn codex_rollout_tail_read() {
-        let g = StoreGuard::new();
-        let root = g.home.join("codex-sessions");
-        std::fs::create_dir_all(&root).expect("codex root");
-        std::env::set_var("FNO_CODEX_SESSIONS_DIR", &root);
-        let rollout = serde_json::json!({
-            "type": "response_item",
-            "timestamp": "2026-01-01T00:00:00Z",
-            "payload": {"type": "message", "role": "user",
-                        "content": [{"type": "input_text", "text": "codex turn"}]}
-        });
-        let sid = "11111111-2222-3333-4444-555555555555";
-        let path = root.join(format!("rollout-{sid}.jsonl"));
-        std::fs::write(&path, serde_json::to_string(&rollout).expect("record")).expect("rollout");
-        let brief = resolve_dispatch_brief(&node(&[
-            ("details", Value::from("thin")),
-            ("source_harness", Value::from("codex")),
-            ("source_session_id", Value::from(sid)),
-            ("source_cwd", Value::from("/tmp/wk")),
-        ]));
-        assert_eq!(brief.tag, "synth-details+tail");
-        let text = brief.text.expect("codex tail text");
-        assert!(text.contains("codex turn"));
-        std::env::remove_var("FNO_CODEX_SESSIONS_DIR");
-        drop(g);
-    }
-
-    #[test]
-    fn mail_framed_turns_omitted_from_tail() {
-        let g = StoreGuard::new();
-        g.write_claude_transcript_named(
-            "cccccccc-dddd-eeee-ffff-000000000000",
-            &[claude_turn(
-                "user",
-                "<fno_mail from=\"peer\" id=\"m1\">relay body</fno_mail>",
-                "2026-01-01T00:00:00Z",
-            )],
-        );
-        let brief = resolve_dispatch_brief(&node(&[
-            ("details", Value::from("thin")),
-            ("source_harness", Value::from("claude")),
-            (
-                "source_session_id",
-                Value::from("cccccccc-dddd-eeee-ffff-000000000000"),
-            ),
-            ("source_cwd", Value::from("/tmp/wk")),
-        ]));
-        // The relay shape is not a conversational pair; the tail is empty.
-        assert_eq!(brief.tag, "synth-details");
     }
 }

@@ -89,6 +89,7 @@ fn proto_agent_launch_roundtrips() {
         revision: 3,
         cwd: "/tmp/proj".into(),
         harness: "codex".into(),
+        host: Some("remote-box".into()),
         substrate: "pane".into(),
         model: None,
         provider: Some("openrouter".into()),

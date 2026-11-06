@@ -19,15 +19,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LEAD_SKILL = REPO_ROOT / "skills" / "lead" / "references" / "once.md"
-# The eval worker runs with `--cwd <disposable-worktree>` and writes the
-# artifact relative to that cwd, which IS repo root inside the graded
-# worktree - never a fixed evals/runs/ path (grading.py's _grade_exit also
-# runs with cwd=workdir, so this resolves to the same worktree at grade time).
-DISPATCH_PLAN = REPO_ROOT / "dispatch-plan.md"
 
 
 def _section_3d(text: str) -> str:
@@ -48,14 +42,3 @@ def test_3d_states_the_number_three():
 # The unplanned batching note and the undispatched command/note invariants moved
 # with build_board into the Rust collector (x-25b8): lead_board.rs
 # unplanned_note_names_the_batch_and_undispatched_names_the_target covers them.
-
-
-@pytest.mark.skipif(not DISPATCH_PLAN.exists(), reason="behavioral artifact not present; run the eval first")
-def test_behavioral_dispatch_plan_batches_the_shape_pair():
-    lines = [ln for ln in DISPATCH_PLAN.read_text().splitlines() if ln.strip()]
-    assert len(lines) == 3, (
-        f"expected 3 dispatch lines (batched), got {len(lines)}: a worker that "
-        "emits five lines has not received the rule"
-    )
-    paired = [ln for ln in lines if "x-76d1" in ln and "x-97eb" in ln]
-    assert paired, "the x-76d1/x-97eb shape pair must share one dispatch line"

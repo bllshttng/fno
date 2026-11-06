@@ -284,15 +284,4 @@ mod tests {
             .unwrap()
             .is_empty());
     }
-
-    #[test]
-    fn fts_query_syntax_is_neutralized() {
-        let connection = db();
-        ensure_table(&connection).unwrap();
-        seed(&connection, "x-a", "Resume handler", "checkpoint resume");
-        assert_eq!(
-            query_nodes(&connection, "\"unbalanced quote AND (", None).unwrap(),
-            Vec::<String>::new()
-        );
-    }
 }

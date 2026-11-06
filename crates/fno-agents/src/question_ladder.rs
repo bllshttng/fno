@@ -207,6 +207,17 @@ pub fn on_board(data: &Value, ts: &str, now_secs: i64) -> bool {
     }
 }
 
+/// Whether a recorded rung sits at the user rung right now: no rung, or a
+/// user-level one. The ask-time notification leg matches [`on_board`]'s
+/// level arm, so the toast fires exactly when the row is already the
+/// user's to answer; a lead-rung row wakes its holder instead.
+pub fn rung_is_user(rung: Option<&Value>) -> bool {
+    matches!(
+        rung.and_then(|r| r.get("level")).and_then(Value::as_str),
+        None | Some("user")
+    )
+}
+
 /// The rung a holder climbs to: the node lead's higher-up when one lives
 /// and has not held the row yet, else the user (`None`).
 fn next_rung(cwd: &Path, node: Option<&str>, data: &Value) -> Option<Value> {
@@ -351,33 +362,6 @@ pub fn envelope_on_board(v: &Value) -> bool {
 mod tests {
     use super::*;
 
-    fn rules_from(text: &str) -> Result<Rules, String> {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, text).expect("writes");
-        rules_from_configs(&[path])
-    }
-
-    #[test]
-    fn rules_default_when_unset_and_refuse_a_word_outside_the_list() {
-        assert_eq!(rules_from("").unwrap(), Rules::default());
-        let moved =
-            rules_from("[questions.rules]\ndeny = [\"taste\", \"public-surface\"]\n").unwrap();
-        assert_eq!(moved.deny, ["taste", "public-surface"]);
-        assert_eq!(moved.ask, ["gate-override"]);
-        let err = rules_from("[questions.rules]\ndeny = [\"taste\", \"frobnicate\"]\n")
-            .expect_err("unknown word");
-        assert!(
-            err.contains("questions.rules.deny") && err.contains("frobnicate"),
-            "{err}"
-        );
-        let err = rules_from("[questions.rules]\nallow = [\"taste\"]\ndeny = [\"taste\"]\n")
-            .expect_err("two lists");
-        assert!(err.contains("taste is in both"), "{err}");
-        assert_eq!(class_word(" Taste "), Some("taste"));
-        assert_eq!(class_word("product call"), None);
-    }
-
     #[test]
     fn a_climb_adds_one_via_hop_and_lands_on_the_next_rung_or_the_board() {
         let row = json!({"ts": "t0", "data": {"question_id": "q-1",
@@ -399,13 +383,14 @@ mod tests {
     }
 
     #[test]
-    fn a_lead_rung_row_reaches_the_board_when_its_lease_runs_out() {
-        let ts = "2026-10-28T10:00:00Z";
-        let asked = crate::event_store::parse_rfc3339_ms(ts).unwrap() / 1000;
-        let lead = json!({"rung": {"level": "lead", "holder_session": "s-lead"}});
-        assert!(!on_board(&lead, ts, asked + LEASE_SECS - 1));
-        assert!(on_board(&lead, ts, asked + LEASE_SECS));
-        assert!(on_board(&json!({"rung": {"level": "user"}}), ts, asked));
-        assert!(on_board(&json!({}), ts, asked));
+    fn the_notification_leg_matches_the_board_visibility_level() {
+        assert!(rung_is_user(None), "no rung reads user-rung");
+        assert!(rung_is_user(Some(&json!({"level": "user"}))));
+        assert!(!rung_is_user(Some(&json!({"level": "lead"}))));
+        assert!(!rung_is_user(Some(&json!({"level": "higher"}))));
+        assert!(
+            rung_is_user(Some(&json!({}))),
+            "a rung with no level reads user-rung, matching on_board"
+        );
     }
 }

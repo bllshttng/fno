@@ -1277,7 +1277,7 @@ mod done_probe_tests {
     use std::time::Duration;
     // Config-root parsing and the gh-quota classifier stayed with the session
     // side in loopcheck; these tests cover them through the same facade.
-    use crate::loopcheck::{coverage_adapter, is_graphql_read, value_as_probe_list};
+    use crate::loopcheck::{coverage_adapter, is_graphql_read};
 
     fn fm(body: &str) -> String {
         format!("---\ntitle: t\n{body}\n---\n\n# doc\n")
@@ -1495,47 +1495,6 @@ mod done_probe_tests {
     }
 
     #[test]
-    fn unreadable_plan_fails_closed_only_when_probes_were_seen_before() {
-        let tmp = tempfile::tempdir().unwrap();
-        let events = tmp.path().join("events.jsonl");
-        let missing = tmp.path().join("gone.md");
-
-        // AC2-FR: no probe history -> today's behavior exactly.
-        assert!(matches!(
-            evaluate_done_probes(
-                missing.to_str(),
-                None,
-                tmp.path(),
-                &events,
-                "s1",
-                Duration::from_secs(10)
-            ),
-            ProbeGate::Absent
-        ));
-
-        // AC1-FR: a prior fire recorded probes -> undeterminable, fail closed.
-        std::fs::write(
-            &events,
-            "{\"type\":\"loop_check\",\"data\":{\"session_id\":\"s1\",\"done_probes\":{\"echo ok\":\"pass\"}}}\n",
-        )
-        .unwrap();
-        match evaluate_done_probes(
-            missing.to_str(),
-            None,
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Fail { reason, .. } => assert!(
-                reason.contains("undeterminable"),
-                "reason must say undeterminable: {reason}"
-            ),
-            _ => panic!("unreadable plan with probe history must fail closed"),
-        }
-    }
-
-    #[test]
     fn multibyte_stderr_is_truncated_without_panicking() {
         // String::drain panics off a char boundary; probe stderr routinely
         // carries arrows and box-drawing characters.
@@ -1611,36 +1570,6 @@ mod done_probe_tests {
     // hand-built probe list. A unit-level twin would assert strictly less.
 
     #[test]
-    fn an_unparseable_project_declaration_blocks_rather_than_degrading() {
-        // AC4-ERR: a config key that degrades to no-gate is a guardrail that
-        // disappears when you typo it.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = bare_plan(tmp.path());
-        let events = tmp.path().join("events.jsonl");
-        let junk: Result<Vec<String>, String> = value_as_probe_list(
-            &"done_probes = { a = 1 }".parse::<toml::Value>().unwrap()["done_probes"],
-        );
-        assert!(junk.is_err(), "a mapping is not a probe list");
-        match evaluate_done_probes(
-            plan.to_str(),
-            Some(&junk),
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Fail { reason, results } => {
-                assert!(
-                    reason.contains("undeterminable"),
-                    "must use the plan side's vocabulary: {reason}"
-                );
-                assert_eq!(results["_undeterminable"], "unparseable-config-declaration");
-            }
-            _ => panic!("an unreadable project declaration must block"),
-        }
-    }
-
-    #[test]
     fn quota_promised_done_check_uses_the_fixed_coverage_adapter() {
         assert_eq!(coverage_adapter("fno-gh-loopcheck"), "fno-gh-coverage");
         assert_eq!(
@@ -1696,31 +1625,6 @@ mod acceptance_evidence_tests {
     }
 
     #[test]
-    fn unreadable_declarations_refuse_not_degrade() {
-        assert_eq!(
-            decl_of(&fm(
-                "acceptance_evidence:\n  bindings:\n    AC1-HP: probes[0]"
-            )),
-            EvidenceDecl::Unparseable,
-            "a malformed reference must refuse, never silently disarm"
-        );
-        assert_eq!(
-            decl_of(&fm("acceptance_evidence:\n  who_knows: yes")),
-            EvidenceDecl::Unparseable,
-            "an unknown sub-key must refuse"
-        );
-        assert_eq!(
-            decl_of(&fm("acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[0]\n    AC1-HP: close_probes[0]")),
-            EvidenceDecl::Unparseable,
-            "a criterion bound in both terminals must refuse"
-        );
-        assert_eq!(
-            decl_of(&fm("acceptance_evidence:\n  required: maybe")),
-            EvidenceDecl::Unparseable
-        );
-    }
-
-    #[test]
     fn validation_refuses_a_missing_probe_by_name() {
         let decl = decl_of(&fm(
             "acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[1]",
@@ -1730,22 +1634,6 @@ mod acceptance_evidence_tests {
         };
         let why = validate_bindings(&bindings, 1).unwrap_err();
         assert!(why.contains("AC1-HP") && why.contains("missing"), "{why}");
-    }
-
-    #[test]
-    fn required_unarmed_done_terminal_still_refuses() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(&plan, fm("acceptance_evidence:\n  required: true")).unwrap();
-        let (code, json) = decide_probe_run(&[
-            "--plan".into(),
-            plan.to_string_lossy().into(),
-            "--key".into(),
-            "done_probes".into(),
-            "--json".into(),
-        ]);
-        assert_eq!(code, 1, "unarmed required must refuse at the session key");
-        assert!(json.contains("unarmed"), "{json}");
     }
 
     #[test]

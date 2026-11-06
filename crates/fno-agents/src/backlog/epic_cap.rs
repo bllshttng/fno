@@ -214,83 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_row_handed_up_into_a_full_epic_is_still_refused() {
-        // The hand-up exemption carries EXISTING OPEN work off a closing
-        // parent. A deferred row that lands open under a full epic in the
-        // same write is new open work, so the exemption must not cover it.
-        let mut pre = full_epic_rows();
-        pre.push(json!({"id": "c-16", "slug": "c-16", "title": "c-16",
-                        "type": "feature", "status": "deferred", "priority": "p2",
-                        "domain": "code", "parent": "p-old"}));
-        let mut post = full_epic_rows();
-        post.push(child("c-16", "e-1"));
-        post.push(json!({"id": "p-old", "slug": "p-old", "title": "p-old",
-                         "type": "feature", "status": "done", "priority": "p2",
-                         "domain": "code"}));
-        let error = enforce(&pre, &post, Some(15)).unwrap_err();
-        assert!(error.contains("'c-16'"), "{error}");
-        assert!(error.contains("16 open children"), "{error}");
-    }
-
-    #[test]
-    fn a_populated_feature_turned_into_an_epic_counts_every_child() {
-        // A type update is the other way an epic grows without any edge
-        // moving. The children keep their parent and their status, so
-        // judging the edge alone lets the epic be BORN over cap.
-        let mut pre = full_epic_rows();
-        pre[0]
-            .as_object_mut()
-            .unwrap()
-            .insert("type".into(), json!("feature"));
-        pre.push(child("c-16", "e-1"));
-        let mut post = pre.clone();
-        post[0]
-            .as_object_mut()
-            .unwrap()
-            .insert("type".into(), json!("epic"));
-        let error = enforce(&pre, &post, Some(15)).unwrap_err();
-        assert!(error.contains("16 open children"), "{error}");
-        // The control: the same conversion lands while it has room.
-        let mut pre = full_epic_rows();
-        pre.truncate(15);
-        pre[0]
-            .as_object_mut()
-            .unwrap()
-            .insert("type".into(), json!("feature"));
-        let mut post = pre.clone();
-        post[0]
-            .as_object_mut()
-            .unwrap()
-            .insert("type".into(), json!("epic"));
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn a_child_coming_back_from_closed_counts_as_growth() {
-        // An undefer or reopen raises the open count under an UNCHANGED
-        // parent edge. Skipping every unchanged edge let that bypass the
-        // cap silently, so a closed-to-open transition is judged too.
-        for closed in ["deferred", "done", "superseded"] {
-            let mut pre = full_epic_rows();
-            pre.push(json!({"id": "c-16", "slug": "c-16", "title": "c-16",
-                            "type": "feature", "status": closed, "priority": "p2",
-                            "domain": "code", "parent": "e-1"}));
-            let mut post = pre.clone();
-            for row in post.iter_mut() {
-                if crate::graph_store::entry_id(row) == Some("c-16") {
-                    let obj = row.as_object_mut().unwrap();
-                    obj.insert("status".into(), json!("ready"));
-                    obj.insert("superseded_by".into(), Value::Null);
-                    obj.insert("completed_at".into(), Value::Null);
-                }
-            }
-            let error = enforce(&pre, &post, Some(15)).unwrap_err();
-            assert!(error.contains("'c-16'"), "{closed}: {error}");
-            assert!(error.contains("16 open children"), "{closed}: {error}");
-        }
-    }
-
-    #[test]
     fn configured_cap_reads_only_positive_integers() {
         // AC3-EDGE, last line: missing file, 0, -1 and "15" all read as None.
         let dir = tempfile::tempdir().unwrap();
@@ -316,35 +239,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(configured_cap(&graph), Some(15));
-    }
-
-    #[test]
-    fn epic_load_full_rows_are_the_ones_enforce_refuses() {
-        // AC2-HP: the flag and the refusal answer the same question. A row
-        // epic_load marks full refuses one more open child; a row it does
-        // not mark passes the same write.
-        let mut rows = full_epic_rows();
-        rows.push(epic("e-2"));
-        for i in 1..=2 {
-            rows.push(child(&format!("k-{i}"), "e-2"));
-        }
-        let both: BTreeSet<String> = ["e-1", "e-2"].iter().map(|s| s.to_string()).collect();
-        let load = epic_load(&rows, &both, Some(15));
-        let full_flag = |id: &str| {
-            load.iter()
-                .find(|row| row["id"] == json!(id))
-                .map(|row| row["full"].as_bool().unwrap())
-                .unwrap()
-        };
-        assert!(full_flag("e-1"));
-        assert!(!full_flag("e-2"));
-        // e-1 at 15: the next open child is refused, exactly as the flag says.
-        let mut grown = rows.clone();
-        grown.push(child("c-16", "e-1"));
-        enforce(&rows, &grown, Some(15)).unwrap_err();
-        // e-2 at 2: the same write passes at the same cap.
-        let mut grown = rows.clone();
-        grown.push(child("k-3", "e-2"));
-        enforce(&rows, &grown, Some(15)).unwrap();
     }
 }

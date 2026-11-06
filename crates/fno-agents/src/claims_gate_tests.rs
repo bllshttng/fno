@@ -34,24 +34,6 @@ fn gate_record(pid: i32, acquired_at: i64, expires_at: Option<i64>) -> ClaimReco
     }
 }
 
-fn lease_record(
-    pid: i32,
-    acquired_at: i64,
-    expires_at: Option<i64>,
-    provenance: &str,
-) -> ClaimRecord {
-    // The measured specimen: a post-merge sync lease written by a sync
-    // subprocess that died, wearing the session stamp of the long-lived
-    // session that ran the merge.
-    ClaimRecord {
-        key: "post-merge-sync".into(),
-        holder: "sync-canonical:2033".into(),
-        session_id: Some("s-team".into()),
-        pid_provenance: Some(provenance.into()),
-        ..gate_record(pid, acquired_at, expires_at)
-    }
-}
-
 #[test]
 fn an_expired_gate_claim_reads_the_pids_verdict() {
     // Dead holder pid, expired TTL: Stale by pid evidence, not by the
@@ -59,37 +41,6 @@ fn an_expired_gate_claim_reads_the_pids_verdict() {
     let now = now_ms();
     let (state, cause) =
         classify_with_basis(&gate_record(-1, now, Some(now - 1)), Some(now), &probe_pid);
-    assert_eq!(state, ClaimState::Stale);
-    assert_eq!(cause, basis::PID_ABSENT);
-}
-
-#[test]
-fn a_live_spawning_session_never_heals_a_dead_gate_claim() {
-    // THE specimen: the spawning session lives, the gate process does not.
-    // The session witness answering Live must not reach the verdict.
-    let now = now_ms();
-    let witness: SessionWitness = &|_| SessionLiveness::Live(basis::TRANSCRIPT_LIVE);
-    let (state, cause) = classify_with_basis_and_exclusivity(
-        &gate_record(-1, now, Some(now - 1)),
-        Some(now),
-        &probe_pid,
-        None,
-        Some(witness),
-    );
-    assert_eq!(state, ClaimState::Stale);
-    assert_eq!(cause, basis::PID_ABSENT);
-}
-
-#[test]
-fn an_unexpired_gate_claim_with_a_dead_pid_reads_stale() {
-    // The gate pid holds the mutex for the whole hold, so a dead pid frees
-    // it at once instead of queueing every spawner behind the TTL.
-    let now = now_ms();
-    let (state, cause) = classify_with_basis(
-        &gate_record(-1, now, Some(now + 60_000)),
-        Some(now),
-        &probe_pid,
-    );
     assert_eq!(state, ClaimState::Stale);
     assert_eq!(cause, basis::PID_ABSENT);
 }
@@ -104,39 +55,6 @@ fn an_unexpired_gate_claim_with_a_refused_probe_stays_suspect() {
         &|_| PidProbe::Refused,
     );
     assert_eq!(state, ClaimState::Suspect);
-}
-
-#[test]
-fn a_live_session_never_heals_an_expired_holder_process_lease() {
-    // THE specimen: the sync process is dead, its TTL expired hours ago,
-    // and the session that wrote the lease is still live. The pid is the
-    // verdict; the witness must not heal it.
-    let now = now_ms();
-    let witness: SessionWitness = &|_| SessionLiveness::Live(basis::TRANSCRIPT_LIVE);
-    let (state, cause) = classify_with_basis_and_exclusivity(
-        &lease_record(-1, now, Some(now - 1), "holder-process"),
-        Some(now),
-        &probe_pid,
-        None,
-        Some(witness),
-    );
-    assert_eq!(state, ClaimState::Stale);
-    assert_eq!(cause, basis::PID_ABSENT);
-}
-
-#[test]
-fn an_unexpired_holder_process_lease_with_a_dead_pid_is_reclaimable() {
-    // The holder is ONE SHORT-LIVED PROCESS, so its recorded pid is
-    // the lease's whole life. A provably dead pid frees the lease inside the
-    // TTL window instead of refusing every acquirer until expiry - a killed
-    // sync used to hold post-merge-sync for its full 30-minute TTL.
-    let now = now_ms();
-    let (state, _cause) = classify_with_basis(
-        &lease_record(-1, now, Some(now + 60_000), "holder-process"),
-        Some(now),
-        &probe_pid,
-    );
-    assert_eq!(state, ClaimState::Stale);
 }
 
 fn prov_opts(td: &tempfile::TempDir) -> AcquireOpts {

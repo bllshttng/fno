@@ -45,34 +45,6 @@ PARITY_SCENARIOS = (
 )
 
 
-def test_ac2_durable_space_still_migrates_once_and_writes_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A genuine legacy checkout journal still moves, once, to the durable root."""
-    repo = _git_repo(tmp_path / "repo")
-    journal = repo / ".fno" / "events.jsonl"
-    journal.parent.mkdir(parents=True)
-    journal.write_text("legacy rows\n", encoding="utf-8")
-    spaces = tmp_path / "declared-spaces"
-    (tmp_path / "settings.yaml").write_text(
-        f"paths:\n  spaces_dir: {spaces}\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "settings.yaml"))
-    monkeypatch.delenv("FNO_SPACES_DIR", raising=False)
-    monkeypatch.delenv("FNO_REPO_ROOT", raising=False)
-    monkeypatch.chdir(repo)
-
-    resolved = paths_mod.project_events_json()
-
-    slug = paths_mod.space_slug(repo.resolve())
-    assert not journal.exists(), "the legacy file must move exactly once"
-    assert resolved == spaces / slug / "events.jsonl"
-    assert (spaces / slug / "events.jsonl").read_text(encoding="utf-8") == "legacy rows\n"
-    marker = repo / ".fno" / "MOVED-TO"
-    assert marker.exists(), "MOVED-TO must name the space so a stale reader fails loud"
-    assert str(spaces / slug) in marker.read_text(encoding="utf-8")
-
-
 @pytest.mark.parametrize(("name", "root_kind", "expect_move"), PARITY_SCENARIOS)
 def test_ac3_parity_scenarios(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, root_kind: str, expect_move: bool

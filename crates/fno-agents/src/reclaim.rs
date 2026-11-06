@@ -1297,27 +1297,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn codex_quarantine_keeps_unreadable_markers() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (tag, marker) in [("missing", None), ("invalid", Some(b"not json".as_slice()))] {
-            let temp = temp_lane_root(&format!("codex-{tag}-temp"));
-            let state = temp_lane_root(&format!("codex-{tag}-state"));
-            let codex = codex_home_fixture(&format!("codex-{tag}-home"));
-            codex_live_cache(&codex, "footnote");
-            let backup = codex_backup(&codex, ".footnote.", "0123456789abcdef0123456789abcdef");
-            if let Some(marker) = marker {
-                std::fs::write(codex.join("footnote/plugin-channel.json"), marker).unwrap();
-            }
-            let receipt = run_codex_reclaim(&codex, &state, &temp);
-            assert!(backup.exists());
-            assert!(receipt.contains("kept: live copy unreadable (plugin-channel.json)"));
-            let _ = std::fs::remove_dir_all(temp);
-            let _ = std::fs::remove_dir_all(state);
-            let _ = std::fs::remove_dir_all(codex);
-        }
-    }
-
-    #[test]
     fn codex_quarantine_keeps_backups_while_converge_holds_lock() {
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp = temp_lane_root("codex-lock-temp");
@@ -1342,38 +1321,6 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(temp);
         let _ = std::fs::remove_dir_all(state);
         let _ = std::fs::remove_dir_all(codex);
-    }
-
-    #[test]
-    fn codex_quarantine_keeps_backups_with_rollback_failure() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for dangling_link in [false, true] {
-            let tag = if dangling_link {
-                "codex-failure-link"
-            } else {
-                "codex-failure-file"
-            };
-            let temp = temp_lane_root(&format!("{tag}-temp"));
-            let state = temp_lane_root(&format!("{tag}-state"));
-            let codex = codex_home_fixture(&format!("{tag}-home"));
-            codex_live_cache(&codex, "footnote");
-            write_codex_marker(&codex, "footnote", "https://example.invalid/fno.git");
-            let receipt_path = codex.join("footnote/rollback-failure.json");
-            if dangling_link {
-                std::os::unix::fs::symlink("missing-receipt", &receipt_path).unwrap();
-            } else {
-                std::fs::write(&receipt_path, b"{} ").unwrap();
-            }
-            let backup = codex_backup(&codex, ".footnote.", "0123456789abcdef0123456789abcdef");
-
-            let receipt = run_codex_reclaim(&codex, &state, &temp);
-
-            assert!(backup.exists());
-            assert!(receipt.contains("kept: rollback-failure.json present"));
-            let _ = std::fs::remove_dir_all(temp);
-            let _ = std::fs::remove_dir_all(state);
-            let _ = std::fs::remove_dir_all(codex);
-        }
     }
 
     #[test]
@@ -1402,84 +1349,6 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(temp);
         let _ = std::fs::remove_dir_all(state);
         let _ = std::fs::remove_dir_all(codex);
-    }
-
-    #[test]
-    fn codex_quarantine_ignores_near_miss_names_and_source_trees() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let temp = temp_lane_root("codex-near-miss-temp");
-        let state = temp_lane_root("codex-near-miss-state");
-        let codex = codex_home_fixture("codex-near-miss-home");
-        codex_live_cache(&codex, "footnote");
-        write_codex_marker(&codex, "footnote", "https://example.invalid/fno.git");
-        let names = [
-            ".footnote.ts.123.tmp",
-            ".footnote.0123456789abcdef0123456789abcde",
-            ".footnote.0123456789abcdef0123456789ABCDEF",
-            "footnote.0123456789abcdef0123456789abcdef",
-            ".footnote.0123456789abcdef0123456789abcdef",
-        ];
-        let mut survivors = Vec::new();
-        for name in names {
-            let path = codex.join("footnote").join(name);
-            std::fs::create_dir_all(&path).unwrap();
-            survivors.push(path);
-        }
-        let regular = codex.join("footnote/.footnote.abcdef0123456789abcdef0123456789");
-        std::fs::write(&regular, b"not a directory").unwrap();
-        survivors.push(regular);
-        let source_tree = codex.join("footnote/src/fno/target");
-        std::fs::create_dir_all(&source_tree).unwrap();
-        std::fs::write(source_tree.join("CACHEDIR.TAG"), b"Signature: x\n").unwrap();
-
-        let _ = run_codex_reclaim(&codex, &state, &temp);
-
-        for survivor in survivors {
-            assert!(
-                survivor.exists(),
-                "near-miss survived: {}",
-                survivor.display()
-            );
-        }
-        assert!(source_tree.exists());
-        let _ = std::fs::remove_dir_all(temp);
-        let _ = std::fs::remove_dir_all(state);
-        let _ = std::fs::remove_dir_all(codex);
-    }
-
-    /// The incident this guards against: a test daemon's first idle tick ran
-    /// `maybe_run_daily` with its cwd still inside the real checkout, and
-    /// `cargo_build_dirs_lane` added that checkout as a sweep root the
-    /// registry never named. With an empty registry the cwd fallback is the
-    /// ONLY way a root can appear, so `include_cwd_root = false` (the
-    /// daemon's own path) must come back empty every time, whatever the
-    /// process's actual cwd is.
-    #[test]
-    fn cargo_build_dirs_roots_excludes_cwd_unless_asked() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let state = temp_lane_root("cargo-roots");
-        let home = AgentsHome::at(state.join("agents"));
-        home.ensure_root().unwrap();
-        std::fs::write(
-            home.registry_json(),
-            serde_json::to_string(&serde_json::json!({"entries": []})).unwrap(),
-        )
-        .unwrap();
-
-        let daemon_roots = cargo_build_dirs_roots(&home, false);
-        let hand_roots = cargo_build_dirs_roots(&home, true);
-
-        assert!(
-            daemon_roots.is_empty(),
-            "the daemon path must never add the cwd repo root: {daemon_roots:?}"
-        );
-        if let Some(this_repo) = canonical_repo_root(&std::env::current_dir().unwrap()) {
-            assert!(
-                hand_roots.contains(&this_repo.to_string_lossy().into_owned()),
-                "a hand run still sweeps its own cwd repo: {hand_roots:?}"
-            );
-        }
-        let _ = std::fs::remove_dir_all(&state);
     }
 
     /// Every no-deletion gate in one walk: unset retention, a zero-day

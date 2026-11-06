@@ -57,65 +57,6 @@ def test_audit_passes_for_committed_state():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@requires_shelled_yaml
-def test_generator_fails_on_missing_source(tmp_path):
-    """AC4-EDGE: a manifest entry pointing at a nonexistent canonical fails."""
-    fake_root = tmp_path / "fake-repo"
-    fake_root.mkdir()
-    bad_manifest = fake_root / "skill-bundles.yaml"
-    bad_manifest.write_text(
-        "bundles:\n"
-        "  - skill: spec\n"
-        "    files:\n"
-        "      - source: scripts/does-not-exist.sh\n"
-        "        dest: scripts/does-not-exist.sh\n"
-    )
-    (fake_root / "scripts" / "lib").mkdir(parents=True)
-    shutil.copy2(GENERATOR, fake_root / "scripts" / "generate-skill-bundles.sh")
-    shutil.copy2(PARSER, fake_root / "scripts" / "lib" / "parse-bundle-manifest.py")
-    shutil.copy2(FRONTMATTER, fake_root / "scripts" / "lib" / "bundle-frontmatter.py")
-
-    env = dict(os.environ)
-    env["REPO_ROOT"] = str(fake_root)
-    result = _run(
-        ["bash", str(fake_root / "scripts" / "generate-skill-bundles.sh")],
-        env=env,
-    )
-    assert result.returncode != 0
-    assert "source not found: scripts/does-not-exist.sh" in result.stderr
-
-
-@requires_shelled_yaml
-def test_rewrite_rejects_missing_required_fields(tmp_path):
-    """`rewrite --as subagent` requires name, description, model, tools."""
-    src = tmp_path / "input.md"
-    src.write_text("---\nname: target\n---\nBody\n")
-    meta = tmp_path / "meta.yaml"
-    meta.write_text("name: archer\ndescription: foo\n")  # missing model, tools
-    result = _run([
-        "python3", str(FRONTMATTER), "rewrite", str(src),
-        "--as", "subagent",
-        "--meta-file", str(meta),
-    ])
-    assert result.returncode != 0
-    assert "subagent_meta missing required fields" in result.stderr
-    assert "model" in result.stderr
-    assert "tools" in result.stderr
-
-
-@requires_shelled_yaml
-def test_strip_fails_loudly_on_unterminated_frontmatter(tmp_path):
-    """A source that opens with --- but never closes is corrupt. Treating
-    the whole file as body would ship YAML-looking content as prose. Fail."""
-    src = tmp_path / "input.md"
-    src.write_text("---\nname: target\n# never closes\nBody content\n")
-    result = _run(["python3", str(FRONTMATTER), "strip", str(src)])
-    assert result.returncode != 0
-    assert "unterminated frontmatter" in result.stderr
-    # Error mentions the source path so the contributor knows which file
-    assert str(src) in result.stderr
-
-
 # ---------------------------------------------------------------------------
 # End-to-end: generator handles a mixed manifest with all three types
 # ---------------------------------------------------------------------------

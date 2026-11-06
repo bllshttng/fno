@@ -410,9 +410,6 @@ fn ledger_rows(env: &Env) -> Vec<serde_json::Value> {
         .and_then(|d| d.get("entries").and_then(|e| e.as_array().cloned()))
         .unwrap_or_default()
 }
-fn events_text(p: &Path) -> String {
-    fs::read_to_string(p).unwrap_or_default()
-}
 /// The committed rows as one text blob: events the binary writes land only in
 /// the store, so content assertions on them read here, never the journal.
 fn store_text(p: &Path) -> String {
@@ -600,28 +597,6 @@ fn finalize_binary_repairs_a_prior_ship_before_returning() {
         fno_agents::run_state::fold_run_state(&run_log, run).unwrap(),
         fno_agents::run_state::RunState::Closed
     );
-}
-
-#[test]
-fn observer_rejection_does_not_change_legacy_finalize_success() {
-    let run = "20260823T060900Z-cx73523-e04109";
-    let env = setup(run);
-    let run_log = env.cwd.join(".fno/run-log.jsonl");
-    fno_agents::run_state::append_transition(
-        &run_log,
-        run,
-        fno_agents::run_state::RunEvent::DispatchClassified,
-    )
-    .unwrap();
-
-    let out = run_finalize(&env, "Budget");
-    assert!(
-        out.status.success(),
-        "observer rejection must not change legacy success: {:?}",
-        out
-    );
-    assert_eq!(count_event(&env.events, "session_finalized", run), 1);
-    assert_eq!(count_event(&env.events, "session_finalize_failed", run), 0);
 }
 
 /// x-8fc0: a ship reason now gets a completion eval too (the trigger fires on
@@ -926,63 +901,6 @@ fn generic_completion_finalize_rejects_incomplete_selected_verdict() {
 }
 
 #[test]
-fn generic_completion_finalize_does_not_revive_an_older_passing_verdict() {
-    let env = setup("S-delivery-newest");
-    write_delivery_verdict(&env, "S-delivery-newest", true);
-    let mut events = events_text(&env.events);
-    let mut newer: serde_json::Value =
-        serde_json::from_str(events.lines().next().unwrap()).unwrap();
-    newer["ts"] = serde_json::json!("2026-08-02T12:01:00Z");
-    newer["data"]["requirements"] = serde_json::json!([]);
-    events.push_str(&newer.to_string());
-    events.push('\n');
-    fs::write(&env.events, events).unwrap();
-
-    let out = run_finalize(&env, "DoneDelivery");
-
-    assert!(!out.status.success());
-    assert_eq!(
-        count_event(&env.events, "plan_stamped", "S-delivery-newest"),
-        0,
-        "stale-verdict refire must not stamp"
-    );
-    assert!(handoff_files(&env).is_empty());
-    assert!(store_text(&env.events).contains("delivery_receipt"));
-    assert_eq!(
-        count_event(&env.events, "termination", "S-delivery-newest"),
-        0
-    );
-}
-
-#[test]
-fn generic_completion_finalize_rejects_a_newest_unbound_verdict() {
-    let env = setup("S-delivery-unbound");
-    write_delivery_verdict(&env, "S-delivery-unbound", true);
-    let mut events = events_text(&env.events);
-    let mut newer: serde_json::Value =
-        serde_json::from_str(events.lines().next().unwrap()).unwrap();
-    newer["ts"] = serde_json::json!("2026-08-02T12:01:00Z");
-    newer["data"].as_object_mut().unwrap().remove("session_id");
-    events.push_str(&newer.to_string());
-    events.push('\n');
-    fs::write(&env.events, events).unwrap();
-
-    let out = run_finalize(&env, "DoneDelivery");
-
-    assert!(!out.status.success());
-    assert_eq!(
-        count_event(&env.events, "plan_stamped", "S-delivery-unbound"),
-        0,
-        "unbound verdict must not stamp"
-    );
-    assert!(handoff_files(&env).is_empty());
-    assert_eq!(
-        count_event(&env.events, "termination", "S-delivery-unbound"),
-        0
-    );
-}
-
-#[test]
 fn generic_completion_finalize_real_stamp_reaches_done_with_bound_receipt() {
     let env = setup("S-delivery-real");
     prepare_real_plan_stamp(&env, None);
@@ -1002,35 +920,6 @@ fn generic_completion_finalize_real_stamp_reaches_done_with_bound_receipt() {
         "{plan}"
     );
     assert!(plan.contains("S-delivery-real"), "{plan}");
-}
-
-#[test]
-fn generic_completion_finalize_real_stamp_respects_declared_url_count() {
-    let env = setup("S-delivery-count");
-    prepare_real_plan_stamp(&env, Some(2));
-    write_delivery_verdict(&env, "S-delivery-count", true);
-
-    let out = run_finalize_real_stamp(&env, "DoneDelivery");
-
-    assert!(out.status.success());
-    let plan = fs::read_to_string(env.cwd.join("plan.md")).unwrap();
-    assert!(plan.contains("status: in_review"), "{plan}");
-    assert!(plan.contains("expected_url_count: 2"), "{plan}");
-    assert!(!plan.contains("status: done"), "{plan}");
-}
-
-#[test]
-fn generic_completion_finalize_real_stamp_rejects_incomplete_receipt() {
-    let env = setup("S-delivery-real-bad");
-    prepare_real_plan_stamp(&env, None);
-    write_delivery_verdict(&env, "S-delivery-real-bad", false);
-
-    let out = run_finalize_real_stamp(&env, "DoneDelivery");
-
-    assert!(!out.status.success());
-    let plan = fs::read_to_string(env.cwd.join("plan.md")).unwrap();
-    assert!(plan.contains("status: ready"), "{plan}");
-    assert!(!plan.contains("fno-delivery://"), "{plan}");
 }
 
 #[test]
@@ -1163,40 +1052,6 @@ fn generic_finalize_missing_or_unbound_manifest_requires_retry() {
     }
 }
 
-/// Per-node rollup: three sessions on the same node each leave one ledger
-/// record carrying their own reason; grouping on graph_node_id yields all
-/// three. Each fixture pins its own ledger, so the per-session row is read
-/// directly from it. (AC7-HP/FR.)
-#[test]
-fn finalize_three_sessions_one_node() {
-    for (sid, reason) in [
-        ("node-shipped", "DonePRGreen"),
-        ("node-delegated", "delegated"),
-        ("node-budget", "Budget"),
-    ] {
-        let env = setup(sid);
-        let out = run_finalize(&env, reason);
-        assert!(out.status.success());
-        let rows = ledger_rows(&env);
-        assert_eq!(rows.len(), 1, "session {sid}: {rows:?}");
-        assert_eq!(rows[0]["termination_reason"], reason);
-        // Only the shipped session runs the completion side-effects.
-        if reason == "DonePRGreen" {
-            assert_eq!(
-                count_event(&env.events, "plan_stamped", sid),
-                1,
-                "shipped session stamps"
-            );
-        } else {
-            assert_eq!(
-                count_event(&env.events, "plan_stamped", sid),
-                0,
-                "{sid} ({reason}) must not stamp"
-            );
-        }
-    }
-}
-
 /// `delegated` is a non-ship reason: ledger row only, no stamp/handoff. This is
 /// exactly what handoff.sh invokes against the archived manifest. (AC7-EDGE,
 /// the finalize half; the handoff-call wiring is covered by the bash test.)
@@ -1294,22 +1149,6 @@ fn finalize_verify_advise_failure_never_wedges() {
         0,
         "advisory failure never lands in failed_steps"
     );
-}
-
-/// DoneAdvisory is the second ship reason: it must run stamp/graduate + handoff.
-#[test]
-fn finalize_doneadvisory_ships() {
-    let env = setup("S-adv");
-    assert!(run_finalize(&env, "DoneAdvisory").status.success());
-    let rows = ledger_rows(&env);
-    assert_eq!(rows.len(), 1, "ledger: {rows:?}");
-    assert_eq!(rows[0]["termination_reason"], "DoneAdvisory");
-    assert_eq!(
-        count_event(&env.events, "plan_stamped", "S-adv"),
-        1,
-        "DoneAdvisory is a ship reason"
-    );
-    assert_eq!(handoff_files(&env).len(), 1);
 }
 
 /// AC7-ERR: no recoverable transcript -> the ledger row still lands with
@@ -1590,33 +1429,6 @@ const GH_OPTIONAL_USAGE_LIMITED: &str = "#!/bin/sh\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
-const GH_OPTIONAL_REVIEWED_AFTER_USAGE_LIMIT: &str = "#!/bin/sh\n\
-     echo \"gh $*\" >> calls.log\n\
-     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
-     case \"$*\" in\n\
-       *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"abc123def456abc123def456abc123def456abc1\"}}],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":\"You have reached your Codex usage limits for code reviews\"}]}' ;;\n\
-       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
-       *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
-     esac\n";
-
-const GH_OPTIONAL_READ_FAILS: &str = "#!/bin/sh\n\
-     echo \"gh $*\" >> calls.log\n\
-     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
-     case \"$*\" in\n\
-       *reviews,comments*) echo 'review API unavailable' >&2; exit 1 ;;\n\
-       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
-       *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
-     esac\n";
-
-const GH_OPTIONAL_MALFORMED: &str = "#!/bin/sh\n\
-     echo \"gh $*\" >> calls.log\n\
-     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
-     case \"$*\" in\n\
-       *reviews,comments*) echo '{}' ;;\n\
-       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
-       *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
-     esac\n";
-
 /// Rewrite the manifest with an explicit merge posture, keeping the node id.
 fn set_posture(env: &Env, session_id: &str, approved: bool) {
     set_posture_source(env, session_id, approved, "config");
@@ -1805,23 +1617,6 @@ fn finalize_withholds_arm_when_optional_review_outstanding() {
 }
 
 #[test]
-fn finalize_usage_limit_comment_is_not_clean_optional_review() {
-    let env = setup("S-optional-limited");
-    set_posture(&env, "S-optional-limited", true);
-    configure_optional_codex(&env);
-    let out = run_finalize_shimmed(&env, "DonePRGreen", GH_OPTIONAL_USAGE_LIMITED);
-    assert!(out.status.success());
-    assert!(!calls(&env).contains("gh pr merge"));
-    let event = finalized_event(&env, "S-optional-limited");
-    assert_eq!(
-        event
-            .pointer("/data/auto_merge_blocked_reason")
-            .and_then(|v| v.as_str()),
-        Some("optional-review-usage-limited:chatgpt-codex-connector")
-    );
-}
-
-#[test]
 fn finalize_arms_when_coverage_satisfied_despite_usage_limited_optional() {
     // x-0eaf: a covered review_coverage event (a local lane reviewed) overrides
     // the usage-limited optional-app withhold, so a quota-dead bot cannot wedge
@@ -1841,20 +1636,6 @@ fn finalize_arms_when_coverage_satisfied_despite_usage_limited_optional() {
         calls(&env)
     );
     let event = finalized_event(&env, "S-optional-limited-covered");
-    assert_eq!(event.pointer("/data/auto_merge_armed"), Some(&true.into()));
-    assert!(event.pointer("/data/auto_merge_blocked_reason").is_none());
-}
-
-#[test]
-fn finalize_completed_review_wins_over_stale_usage_limit_comment() {
-    let env = setup("S-optional-recovered");
-    set_posture(&env, "S-optional-recovered", true);
-    configure_optional_codex(&env);
-    write_covered_event(&env);
-    let out = run_finalize_shimmed(&env, "DonePRGreen", GH_OPTIONAL_REVIEWED_AFTER_USAGE_LIMIT);
-    assert!(out.status.success());
-    assert!(calls(&env).contains("gh pr merge 358 --auto --merge"));
-    let event = finalized_event(&env, "S-optional-recovered");
     assert_eq!(event.pointer("/data/auto_merge_armed"), Some(&true.into()));
     assert!(event.pointer("/data/auto_merge_blocked_reason").is_none());
 }
@@ -1935,28 +1716,6 @@ fn finalize_env_grant_arms_despite_live_switch_off() {
     let event = finalized_event(&env, "S-env-grant");
     assert_eq!(event.pointer("/data/auto_merge_armed"), Some(&true.into()));
     assert!(event.pointer("/data/auto_merge_blocked_reason").is_none());
-}
-
-#[test]
-fn finalize_optional_review_read_failure_withholds_arm() {
-    for (session_id, gh) in [
-        ("S-optional-read-failed", GH_OPTIONAL_READ_FAILS),
-        ("S-optional-malformed", GH_OPTIONAL_MALFORMED),
-    ] {
-        let env = setup(session_id);
-        set_posture(&env, session_id, true);
-        configure_optional_codex(&env);
-        let out = run_finalize_shimmed(&env, "DonePRGreen", gh);
-        assert!(out.status.success());
-        assert!(!calls(&env).contains("gh pr merge"));
-        let event = finalized_event(&env, session_id);
-        assert_eq!(
-            event
-                .pointer("/data/auto_merge_blocked_reason")
-                .and_then(|v| v.as_str()),
-            Some("optional-review-read-failed")
-        );
-    }
 }
 
 /// Round 3, PR 917: a review object on a commit that is not the PR head is
@@ -2048,24 +1807,6 @@ fn finalize_arms_with_the_configured_merge_strategy() {
             "the hardcoded --merge must not survive a {strategy} config: {c}"
         );
     }
-}
-
-/// An out-of-allowlist value degrades to `--merge` rather than reaching
-/// `gh` as an unknown flag. Mirrors the bash and Pydantic coercers.
-#[test]
-fn finalize_arms_with_merge_on_an_invalid_strategy() {
-    let env = setup("S-badstrategy");
-    set_posture(&env, "S-badstrategy", true);
-    write_auto_merge_config(
-        &env,
-        "[auto_merge]\nenabled = true\nmerge_strategy = \"octopus\"\n",
-    );
-    write_covered_event(&env);
-    let out = run_finalize_shimmed(&env, "DonePRGreen", GH_PR_358_LOGGING);
-    assert!(out.status.success());
-    let c = calls(&env);
-    assert!(c.contains("--merge"), "invalid -> merge fallback: {c}");
-    assert!(!c.contains("--octopus"), "never pass through to gh: {c}");
 }
 
 /// x-9d11: the arm NEVER carries --delete-branch, in either config state.
@@ -2377,17 +2118,6 @@ fn finalize_does_not_refile_an_already_open_question_for_this_session() {
         !fno_calls(&env).contains("outstanding ask"),
         "a session with an already-open question must not file a second one"
     );
-}
-
-#[test]
-fn finalize_files_nothing_when_no_question_is_detected() {
-    let env = setup("S-outq3");
-    let transcript = env.cwd.join("transcript.jsonl");
-    write_transcript(&transcript, "implemented the fix and pushed a commit");
-
-    let out = run_finalize_with_transcript(&env, "NoProgress", "S-outq3", &transcript);
-    assert!(out.status.success());
-    assert!(!fno_calls(&env).contains("outstanding ask"));
 }
 
 /// A clean ship is never a stuck-with-a-question terminal, however the

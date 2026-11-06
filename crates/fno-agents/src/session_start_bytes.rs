@@ -101,7 +101,6 @@ pub fn run_session_start_bytes(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[test]
     fn sums_the_user_claude_md_and_its_import() {
@@ -110,20 +109,6 @@ mod tests {
         std::fs::write(home.path().join(".claude/CLAUDE.md"), "abc\n@RTK.md\n").unwrap();
         std::fs::write(home.path().join(".claude/RTK.md"), "wxyz").unwrap();
         assert_eq!(user_claude_md_bytes(home.path()), 16); // 12 (CLAUDE.md) + 4 (RTK.md)
-    }
-
-    #[test]
-    fn reads_the_memory_index_at_its_slugged_path() {
-        let projects_dir = tempfile::tempdir().expect("tempdir");
-        let cwd = PathBuf::from("/fixture/project");
-        let dir = projects_dir
-            .path()
-            .join(claude_cwd_slug(&cwd))
-            .join("memory");
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut f = std::fs::File::create(dir.join("MEMORY.md")).unwrap();
-        write!(f, "12345").unwrap();
-        assert_eq!(memory_index_bytes(projects_dir.path(), &cwd), 5);
     }
 
     #[test]

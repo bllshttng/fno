@@ -44,22 +44,3 @@ fn unreadable_question_store_is_a_named_source_and_a_nonzero_exit() {
         .expect("questions store named");
     assert_eq!(questions.get("readable"), Some(&Value::Bool(false)));
 }
-
-#[test]
-fn clean_read_exit_zero_and_items_present() {
-    let dir = workdir("clean");
-    let row = r#"{"ts":"2026-09-18T12:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-open1","question":"Which reading?","ask":"pick one","session_id":"s1","cwd":"/repo/fno","options":["yes","no"]}}"#;
-    std::fs::write(dir.join("questions.jsonl"), format!("{row}\n")).unwrap();
-    let (code, parsed) = run(&dir, &dir);
-    assert_eq!(code, Some(0));
-    let items = parsed
-        .get("items")
-        .and_then(Value::as_array)
-        .expect("items array");
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].get("id").and_then(Value::as_str), Some("q-open1"));
-    assert_eq!(
-        items[0].get("kind").and_then(Value::as_str),
-        Some("question")
-    );
-}

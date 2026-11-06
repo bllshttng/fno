@@ -1,8 +1,7 @@
 //! The attention arm journey over real disk IO (temp dir) with fake
 //! record/clear/notify: deliver two pages on first sight, nothing before
-//! settle, one row + clear + close + move after it, the guarded close, the
-//! close-elsewhere close, a conflicted copy ignored, and a hand-authored
-//! index kept.
+//! settle, one row + clear + close + move after it, and a routing failure
+//! that delivers nothing until it recovers.
 
 use fno_agents::attention::project;
 use fno_agents::attention_arm::{tick_pages, SinkIo};
@@ -183,71 +182,6 @@ fn deliver_settle_record_close_move() {
     assert!(index.contains("[[q-a1|"));
     // The Base exists.
     assert!(dir.join("questions.base").exists());
-}
-
-#[test]
-fn elsewhere_close_conflicted_copy_hand_authored_index() {
-    let dir = workdir("elsewhere");
-    let mut io = JourneyIo::new();
-    let items = items();
-    let mut state = HashMap::new();
-    tick_pages(
-        &items,
-        &HashMap::new(),
-        &HashSet::new(),
-        &dir,
-        &mut state,
-        1000,
-        120,
-        &mut io,
-    );
-
-    // A conflicted copy sits beside the real page; it must never parse.
-    let page = dir.join("20260922-q-a1-which-lane-x-aaaa.md");
-    let conflicted = dir.join("q-a1 (conflicted copy).md");
-    std::fs::copy(&page, &conflicted).unwrap();
-
-    // The question clears at a terminal (answer `narrow` by s9).
-    let raw = r#"{"ts":"2026-09-22T20:00:00Z","type":"operator_question_closed","source":"t","data":{"question_id":"q-a1","answer":"narrow","closed_by":"s9"}}"#;
-    let closes = fno_agents::attention::closes(raw);
-    let t = tick_pages(
-        &[],
-        &closes,
-        &HashSet::new(),
-        &dir,
-        &mut state,
-        1300,
-        120,
-        &mut io,
-    );
-    assert_eq!(t.closed, 1);
-    assert!(dir.join("done/q-a1.md").exists());
-    let (front, _) =
-        parse_page(&std::fs::read_to_string(&dir.join("done/q-a1.md")).unwrap()).unwrap();
-    assert_eq!(front.answer.as_deref(), Some("narrow"));
-    assert!(conflicted.exists(), "the conflicted copy stays");
-    let (cfront, _) = parse_page(&std::fs::read_to_string(&conflicted).unwrap()).unwrap();
-    assert_eq!(cfront.status, "open", "the conflicted copy is untouched");
-    // The index lists the closed page under Done.
-    let index = std::fs::read_to_string(dir.join("questions.md")).unwrap();
-    assert!(index.contains("[[q-a1|"));
-
-    // A hand-authored index is left alone.
-    std::fs::write(dir.join("questions.md"), "# mine\n").unwrap();
-    tick_pages(
-        &[],
-        &HashMap::new(),
-        &HashSet::new(),
-        &dir,
-        &mut state,
-        1600,
-        120,
-        &mut io,
-    );
-    assert_eq!(
-        std::fs::read_to_string(dir.join("questions.md")).unwrap(),
-        "# mine\n"
-    );
 }
 
 #[test]

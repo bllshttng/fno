@@ -21,12 +21,12 @@ pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
     Ok(payload)
 }
 
-/// How far back the scheduled leg's newest row is read. The tick runs every
-/// ten minutes, so a quiet window this long means the leg itself is down.
+/// How far back the scheduled leg's newest row is read. The daemon schedule
+/// runs every minute, so a quiet window this long means the leg is down.
 const SCHEDULED_LOOKBACK_MS: i64 = 86_400_000;
 
 /// Why a behind bank did not run, from the newest scheduled-leg row: the
-/// tick's evals arm row (a skip token, or a launch) or the run's
+/// daemon evals arm row (a skip token, or a launch) or the run's
 /// `evals_stale` row (the failure the launch ended in).
 fn scheduled_outcome(events_paths: &[PathBuf]) -> String {
     let since = chrono::Utc::now().timestamp_millis() - SCHEDULED_LOOKBACK_MS;
@@ -61,7 +61,7 @@ fn scheduled_outcome(events_paths: &[PathBuf]) -> String {
         }
     }
     newest.map_or_else(
-        || "no scheduled-leg row in 24h; is the pr-watch tick running?".to_string(),
+        || "no scheduled-leg row in 24h; is the daemon evals schedule running?".to_string(),
         |(_, outcome)| outcome,
     )
 }

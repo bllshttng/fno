@@ -643,7 +643,12 @@ pub(super) fn build_section_menu(
         };
         rows.push(entry_acc("✎", "Rename", "rename-workspace"));
         actions.push(MenuAction::Rename);
-        rows.push(entry("▣", "Add folder"));
+        rows.push(PopupRow::Entry {
+            glyph: "▣".into(),
+            label: "Group sessions from a folder".into(),
+            hint: "grants no access".into(),
+            enabled: true,
+        });
         actions.push(MenuAction::AddFolder);
         rows.push(entry("▲", "Move up"));
         actions.push(MenuAction::MoveSquad(-1));

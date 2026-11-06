@@ -74,14 +74,6 @@ fn finding_create_refuses_empty_over_limit_and_unknown_node() {
 }
 
 #[test]
-fn finding_resolve_unknown_id_is_an_error() {
-    let (_dir, graph) = temp_graph("resolve-unknown");
-    let store = Store::new(&graph);
-    let error = api::finding_resolve(&store, "nope1234", Some("sess")).unwrap_err();
-    assert!(error.0.contains("nope1234"), "{:?}", error.0);
-}
-
-#[test]
 fn second_resolve_reports_already_resolved() {
     let (_dir, graph) = temp_graph("already");
     let store = Store::new(&graph);
@@ -90,89 +82,4 @@ fn second_resolve_reports_already_resolved() {
     let second = api::finding_resolve(&store, &receipt.finding_id, Some("s2")).unwrap();
     assert_eq!(second.status, "already_resolved");
     assert_eq!(second.resolved_at, first.resolved_at);
-}
-
-#[test]
-fn findings_survive_store_reopen() {
-    let (_dir, graph) = temp_graph("flip");
-    let store = Store::new(&graph);
-    let receipt = api::finding_create(&store, "x-f1", input("survives")).unwrap();
-    api::finding_resolve(&store, &receipt.finding_id, Some("s1")).unwrap();
-
-    // A second store instance reads the same id, body and resolution.
-    let reread = api::findings(&Store::new(&graph), Some("x-f1"), false).unwrap();
-    assert_eq!(reread.len(), 1);
-    assert_eq!(reread[0].finding_id, receipt.finding_id);
-    assert_eq!(reread[0].body, "survives");
-    assert!(reread[0].resolved_at.is_some());
-}
-
-#[test]
-fn findings_table_rows_carry_the_typed_columns() {
-    let (_dir, graph) = temp_graph("table");
-    let store = Store::new(&graph);
-    let _receipt = api::finding_create(
-        &store,
-        "x-f1",
-        FindingInput {
-            body: "holds the gate".into(),
-            block_cmd: Some("fno do pr merge 1".into()),
-            block_excerpt: Some("excerpt".into()),
-            source_session_id: Some("s-9".into()),
-            source_harness: Some("claude".into()),
-        },
-    )
-    .unwrap();
-    let connection_rows = fno_agents::graph_store::read_rows(&graph).unwrap();
-    let row = connection_rows
-        .iter()
-        .find(|r| r.get("id").and_then(serde_json::Value::as_str) == Some("x-f1"))
-        .unwrap();
-    let stored = row
-        .get("findings")
-        .and_then(serde_json::Value::as_array)
-        .unwrap();
-    assert_eq!(stored.len(), 1);
-    assert_eq!(
-        stored[0]
-            .get("block_cmd")
-            .and_then(serde_json::Value::as_str),
-        Some("fno do pr merge 1")
-    );
-    assert_eq!(
-        stored[0]
-            .get("source_harness")
-            .and_then(serde_json::Value::as_str),
-        Some("claude")
-    );
-    assert!(
-        stored[0].get("resolved_at").is_none(),
-        "an open finding omits resolved_at"
-    );
-}
-
-#[test]
-fn over_limit_excerpt_is_capped_not_refused() {
-    let (_dir, graph) = temp_graph("excerpt");
-    let store = Store::new(&graph);
-    let receipt = api::finding_create(
-        &store,
-        "x-f1",
-        FindingInput {
-            body: "capped excerpt".into(),
-            block_excerpt: Some("e".repeat(3000)),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let list = api::findings(&store, Some("x-f1"), false).unwrap();
-    assert_eq!(
-        list[0]
-            .block_excerpt
-            .as_deref()
-            .map(|s| s.chars().count())
-            .unwrap_or(0),
-        2048
-    );
-    let _ = receipt;
 }

@@ -4200,14 +4200,14 @@ event_types:
 
   - name: control_plane_tick
     retention: telemetry
-    description: "One tick of one control-plane arm (lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire): what it did, or why it did nothing. The arms readout (`fno agents status`, `fno doctor`) folds these into one row per arm, newest first, red when the newest tick is older than 2x interval_s. Shape owned by crates/fno-agents/src/tick_ledger.rs."
+    description: "One tick of one control-plane arm (evals, lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire): what it did, or why it did nothing. The arms readout (`fno agents status`, `fno doctor`) folds these into one row per arm, newest first, red when the newest tick is older than 2x interval_s. Shape owned by crates/fno-agents/src/tick_ledger.rs."
     sources: [daemon, loop, hook, test, pr-heal]
     data:
       required: [arm, scheduler, acted, interval_s]
       properties:
         arm:
           type: string
-          description: "Stable arm name: lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire, pane_loop."
+          description: "Stable arm name: evals, lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire, pane_loop."
         scheduler:
           type: string
           description: "What schedules the arm: daemon, launchd:<label>, hook:<name>, or session (an in-process caller)."
@@ -4344,7 +4344,7 @@ event_types:
     consumers: [operator, fno doctor]
 
   - name: evals_scheduled_run
-    description: "The pr-watch tick ran the regression tier on its schedule (the eval bank's demand leg): what ran and what it graded. The counterpart row in `fno doctor` and `fno backlog triage health` reads the same history this run appends, so a run that appends nothing is a could-not-fire (evals_stale), never a success."
+    description: "The daemon evals schedule ran the regression tier (the eval bank's demand leg): what ran and what it graded. The counterpart row in `fno doctor` and `fno backlog triage health` reads the same history this run appends, so a run that appends nothing is a could-not-fire (evals_stale), never a success."
     sources: [daemon, test]
     data:
       required: [task_count, passes, duration_s]
@@ -4367,7 +4367,7 @@ event_types:
     consumers: [operator]
 
   - name: evals_stale
-    description: "The eval bank is past twice its stale window and the scheduled run could not fire (gate refused, subprocess timeout, non-zero exit, or an exit-0 run that appended no rows). One journal row per attempt; the operator notice rides at most once per schedule window and reads this journal as its rate bound, so this event is the dedup."
+    description: "The eval bank is past twice its stale window and the scheduled run could not fire (gate refused, bounded subprocess timeout, non-zero exit, or an exit-0 run that appended no rows). One journal row per attempt; the operator notice rides at most once per schedule window and reads this journal as its rate bound, so this event is the dedup."
     sources: [daemon, test]
     data:
       required: [reason]
@@ -4375,7 +4375,7 @@ event_types:
         reason:
           type: string
           enum: [gate, timeout, error, no_rows, no_bank]
-          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended), no_bank (no checkout carries evals/bank, so nothing launched)."
+          description: "Why the run could not fire: gate (spawn gate refused), timeout (the bounded daemon invocation killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended), no_bank (no checkout carries evals/bank, so nothing launched)."
         detail:
           type: string
           description: "Optional. The refusal, exit line, or stderr tail naming the cause."
@@ -6538,6 +6538,18 @@ event_types:
           type: integer
         total:
           type: integer
+  - name: evals_settle
+    description: "The daemon's evals-gate settle arm graded a finished gate run on its one-minute floor, outside the pr-watch tick whose budget a fleet-loaded sweep saturates, or journaled a minute spent waiting on a run in flight. A fully idle minute stays silent by design: its whole cost is the one state read that found nothing."
+    sources: [daemon]
+    data:
+      required: [outcome, note]
+      properties:
+        outcome:
+          type: string
+          description: "'ok' on a waiting or acting minute; the arm emits nothing when the gate sits idle."
+        note:
+          type: string
+          description: "The settle's own note: a verdict landed, a run in flight, a head held, or a read failure."
   - name: trust_prompt_answered
     description: "The daemon answered a fno-spawned codex pane's folder-trust modal itself: the modal's first option trusts the worker's own launch cwd. One event per attempt; sent names whether the keystroke landed. Every other parked prompt (approvals, permissions) stays report-only."
     sources: [daemon]

@@ -714,37 +714,6 @@ jobs:
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
-  # TODO: graduate to blocking in the next release - remove continue-on-error
-  prompt-drift:
-    runs-on: ubuntu-24.04
-    # Widest of 40 passing runs sampled 2026-09-24: 0.2m.
-    timeout-minutes: 5
-    continue-on-error: true
-    # paths: cli/src/fno/review/prompts/**, agents/**
-    # Job runs whenever those paths appear in the changeset (top-level trigger
-    # already gates the whole workflow on cli/** and agents/**).
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Check prompt drift
-        id: drift
-        run: |
-          bash cli/scripts/check-prompt-drift.sh && echo "drift=false" >> "$GITHUB_OUTPUT" || echo "drift=true" >> "$GITHUB_OUTPUT"
-
-      - name: Note drift in summary
-        if: steps.drift.outputs.drift == 'true'
-        run: |
-          {
-            echo "## Prompt Drift Detected"
-            echo ""
-            echo "One or more bundled CLI agent prompts have drifted from their"
-            echo "canonical plugin agents. Run \`bash cli/scripts/check-prompt-drift.sh\`"
-            echo "locally to see the diff. This check is non-blocking for now."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-          bash cli/scripts/check-prompt-drift.sh || true
-
   hook-latency:
     name: per-turn hook latency budgets
     needs: [pr-affected]

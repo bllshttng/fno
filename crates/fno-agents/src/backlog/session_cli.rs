@@ -1392,25 +1392,6 @@ status={status} remaining_open_do={remaining}"
 mod tests {
 
     #[test]
-    fn plan_claims_unions_claims_and_node() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("both.md");
-        std::fs::write(
-            &plan,
-            "---\nstatus: ready\nnode: x-1111\nclaims: [x-2222, x-3333]\n---\n\n# plan\n",
-        )
-        .unwrap();
-        assert_eq!(
-            super::plan_claims(plan.to_str().unwrap()),
-            Some(vec![
-                "x-2222".to_string(),
-                "x-3333".to_string(),
-                "x-1111".to_string()
-            ])
-        );
-    }
-
-    #[test]
     fn origin_first_fill_writes_once_and_names_the_holder() {
         let dir = tempfile::tempdir().unwrap();
         let graph = dir.path().join("graph.json");

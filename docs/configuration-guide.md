@@ -242,7 +242,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `evals.gate.daily_usd` | float | `15.0` | never | Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off. |
 | `evals.gate.lane` | str | `zai-flash` | never | Lane the gate's golden runs use. Defaults zai-flash. |
 | `evals.enabled` | bool | `true` | never | Enable the headless eval-suite grading-worker spawn. Defaults true. |
-| `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs on the pr-watch tick (0 disables). |
+| `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs; the daemon checks each minute (0 disables). |
 | `evals.stale_days` | int | `7` | never | Age in days at which the newest regression-tier run reads STALE in doctor and triage health. |
 | `evals.scratch_threshold` | int | `3` | never | Distinct jobs inside the window at which a recurring scratch shape files one p1 node. |
 | `evals.scratch_window_days` | int | `28` | never | Window in days the scratch-shape sweep reads job tmp dirs over. |

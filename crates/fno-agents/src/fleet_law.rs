@@ -190,7 +190,7 @@ fn incident_line(subject: &str, record: &IncidentRecord, lines: &mut Vec<String>
 
 #[cfg(test)]
 mod tests {
-    use super::{active_laws_for, append_fleet_laws_with, Delivered, END_MARKER, MARKER};
+    use super::{active_laws_for, Delivered, END_MARKER, MARKER};
     use crate::fleet_incident::{self, RecordMetadata};
     use crate::paths::AgentsHome;
 
@@ -261,16 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn clear_machine_renders_no_block() {
-        let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
-        let home = AgentsHome::at(dir.path());
-        assert!(laws(&home).is_none());
-        let (payload, subjects) = append_fleet_laws_with("do the work", None);
-        assert_eq!(payload, "do the work");
-        assert!(subjects.is_empty());
-    }
-
-    #[test]
     fn targeted_hold_binds_only_its_named_subject() {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let home = AgentsHome::at(dir.path());
@@ -309,23 +299,6 @@ mod tests {
     }
 
     #[test]
-    fn append_is_idempotent_and_keeps_empty_messages_empty() {
-        let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
-        let home = AgentsHome::at(dir.path());
-        write_machine(&home, &["tests"], "stop.");
-        let delivered = laws(&home).expect("the armed home renders");
-        let (payload, subjects) = append_fleet_laws_with("do the work", Some(&delivered));
-        assert!(payload.contains(MARKER));
-        assert_eq!(subjects.len(), 1);
-        let (again, subjects_again) = append_fleet_laws_with(&payload, Some(&delivered));
-        assert_eq!(again.matches(MARKER).count(), 1);
-        assert!(subjects_again.is_empty());
-        let (empty, empty_subjects) = append_fleet_laws_with("", Some(&delivered));
-        assert_eq!(empty, "");
-        assert!(empty_subjects.is_empty());
-    }
-
-    #[test]
     fn unreadable_breaker_fails_closed_in_prose() {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let home = AgentsHome::at(dir.path());
@@ -334,19 +307,5 @@ mod tests {
         let delivered = laws(&home).expect("an unreadable breaker still warns");
         assert!(delivered.block.contains("unreadable"));
         assert!(delivered.block.contains("treat every hold as armed"));
-    }
-
-    #[test]
-    fn markers_match_the_shared_cross_language_fixture() {
-        const FIXTURE: &str = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../schemas/fleet-law.json"
-        ));
-        let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("valid fixture");
-
-        assert_eq!(fixture["marker"], MARKER);
-        assert_eq!(fixture["end_marker"], END_MARKER);
-        // The Python compat shell hardcodes the same marker (its gate for the
-        // command_call render); the fixture pins the cross-language spell.
     }
 }

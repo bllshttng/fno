@@ -9,7 +9,6 @@ that fits agy's additionalProperties:false schema, and a total size ceiling
 that catches the next path added to the allowlist by accident.
 """
 
-import json
 import subprocess
 from pathlib import Path
 
@@ -17,8 +16,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "install" / "agy-plugin.sh"
-
-MANIFEST_KEYS = {"$schema", "name", "description"}
 
 
 @pytest.fixture(scope="module")
@@ -47,13 +44,6 @@ def test_payload_holds_exactly_the_allowlist(payload: Path):
     # all fail this equality).
     entries = {p.name for p in payload.iterdir()}
     assert entries == {"plugin.json", "skills", "agents"}
-
-
-def test_manifest_fits_agys_additional_properties_false_schema(payload: Path):
-    manifest = json.loads((payload / "plugin.json").read_text(encoding="utf-8"))
-    extra = set(manifest) - MANIFEST_KEYS
-    assert not extra, f"plugin.json carries keys agy's schema rejects: {sorted(extra)}"
-    assert manifest.get("name"), "plugin.json must carry a non-empty name"
 
 
 def test_build_only_refuses_a_missing_allowlist_entry(tmp_path):

@@ -4,10 +4,9 @@
 //! A cell assertion proves a flag is set. It cannot tell you a prompt washed
 //! out, which is what an operator actually reports.
 //!
-//! The colour model imitates what terminals do, not what the spec permits:
-//! `INVERSE` swaps the resolved pair, `BOLD` brightens the foreground BEFORE
-//! that swap (the default in iTerm2, Terminal.app and GNOME Terminal), `DIM`
-//! drops it toward the background.
+//! The colour lens models bold brightening for default and base ANSI colors.
+//! Explicit RGB and extended-palette colors stay literal under bold. `INVERSE`
+//! swaps the resolved pair, and `DIM` drops the foreground toward the background.
 //!
 //! Tests use it as a lens on the render path. `fno mux serve --snapshot` uses
 //! [`screen_html`] and [`frame_svg`] to publish one frame in one theme. Neither
@@ -146,7 +145,7 @@ fn resolve(c: Color, fallback: (u8, u8, u8), theme: Theme) -> (u8, u8, u8) {
     }
 }
 
-/// Brighten toward white, the way a terminal renders bold as a bright colour.
+/// Brighten a default or base ANSI foreground toward white.
 fn brighten((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
     let up = |v: u8| v.saturating_add(((255 - v) as f32 * 0.45) as u8);
     (up(r), up(g), up(b))
@@ -168,13 +167,11 @@ fn hex((r, g, b): (u8, u8, u8)) -> String {
 pub fn cell_colors(cell: &Cell, theme: Theme) -> ((u8, u8, u8), (u8, u8, u8)) {
     let mut fg = resolve(cell.fg, theme.fg, theme);
     let mut bg = resolve(cell.bg, theme.bg, theme);
-    // Bold brightens the foreground BEFORE the inverse swap, exactly as a
-    // terminal does: SGR 1 sets a foreground attribute and SGR 7 then swaps the
-    // resolved pair. That order is what turns bold-over-inverse into a bright
-    // BACKGROUND with the theme's background colour as the text.
-    // A terminal brightens bold only for palette colours: a truecolor
-    // foreground keeps its value, so the shot shows the colour the client paints.
-    if cell.flags & cell_flags::BOLD != 0 && !matches!(cell.fg, Color::Rgb(..)) {
+    // Only default/base ANSI colors can brighten before the inverse swap.
+    // Specified RGB and extended-palette colors keep their color under SGR 1.
+    if cell.flags & cell_flags::BOLD != 0
+        && matches!(cell.fg, Color::Default | Color::Indexed(0..=7))
+    {
         fg = brighten(fg);
     }
     if cell.flags & cell_flags::DIM != 0 {
@@ -630,6 +627,20 @@ mod tests {
             })
             .collect();
         cells.last_mut().unwrap().flags = cell_flags::INVERSE;
+        cells.extend([
+            Cell {
+                c: 'r',
+                fg: Color::Rgb(10, 20, 30),
+                bg: Color::Default,
+                flags: cell_flags::BOLD,
+            },
+            Cell {
+                c: 'p',
+                fg: Color::Indexed(42),
+                bg: Color::Default,
+                flags: cell_flags::BOLD,
+            },
+        ]);
         let frame = Frame {
             rows: 1,
             cols: cells.len() as u16,
@@ -648,6 +659,14 @@ mod tests {
         );
         for theme in [dark, theme_by_name("light").unwrap(), DARK, LIGHT] {
             let svg = frame_svg(&frame, theme);
+            assert!(
+                svg.contains("fill=\"#0a141e\""),
+                "bold keeps explicit RGB: {svg}"
+            );
+            assert!(
+                svg.contains("fill=\"#00d787\""),
+                "bold keeps extended palette colors: {svg}"
+            );
             assert!(svg.contains(&format!("height=\"100%\" fill=\"{}\"", hex(theme.bg))));
             assert!(svg.contains(&format!("height=\"17\" fill=\"{}\"", hex(theme.fg))));
             assert!(svg.contains("a\u{a0}&lt;b&gt;\u{a0}\u{a0}\u{a0}c"), "{svg}");
@@ -662,15 +681,6 @@ mod tests {
             bg: Color::Default,
             flags,
         }
-    }
-
-    #[test]
-    fn bold_keeps_a_truecolor_foreground() {
-        let rgb = Cell {
-            fg: Color::Rgb(0x79, 0x68, 0x23),
-            ..cell(cell_flags::BOLD)
-        };
-        assert_eq!(cell_colors(&rgb, LIGHT).0, (0x79, 0x68, 0x23));
     }
 
     #[test]

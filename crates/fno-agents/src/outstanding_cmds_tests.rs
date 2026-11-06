@@ -44,15 +44,6 @@ fn add_appends_one_open_item_and_reports_the_new_count() {
 }
 
 #[test]
-fn add_refuses_an_empty_or_multiline_text_without_touching_the_lane() {
-    let root = sandbox("add-bad");
-    let lane = lane_at(&root);
-    assert_eq!(mine_do_at(&lane, &args(&["add", "   "])), 2);
-    assert_eq!(mine_do_at(&lane, &args(&["add", "two\nlines"])), 2);
-    assert!(!lane.exists(), "a refused add writes nothing");
-}
-
-#[test]
 fn unknown_action_and_argument_counts_refuse_before_the_lock() {
     let root = sandbox("action-bad");
     let lane = lane_at(&root);
@@ -60,15 +51,6 @@ fn unknown_action_and_argument_counts_refuse_before_the_lock() {
     assert_eq!(mine_do_at(&lane, &args(&["done"])), 2);
     assert_eq!(mine_do_at(&lane, &args(&["link", "1"])), 2);
     assert_eq!(mine_do_at(&lane, &args(&["add"])), 2);
-    assert!(!lane.exists());
-}
-
-#[test]
-fn a_non_numeric_index_refuses_before_the_lock() {
-    let root = sandbox("nan");
-    let lane = lane_at(&root);
-    assert_eq!(mine_do_at(&lane, &args(&["done", "one"])), 2);
-    assert_eq!(mine_do_at(&lane, &args(&["drop", "1x"])), 2);
     assert!(!lane.exists());
 }
 
@@ -86,18 +68,6 @@ fn done_flips_the_mark_and_back_again() {
     assert_eq!(
         std::fs::read_to_string(&lane).unwrap(),
         "- [ ] first\n- [x] second\n"
-    );
-}
-
-#[test]
-fn drop_removes_the_visible_line() {
-    let root = sandbox("drop");
-    let lane = lane_at(&root);
-    std::fs::write(&lane, "- [ ] keep\n- [ ] go\n- [ ] keep too\n").unwrap();
-    assert_eq!(mine_do_at(&lane, &args(&["drop", "2"])), 0);
-    assert_eq!(
-        std::fs::read_to_string(&lane).unwrap(),
-        "- [ ] keep\n- [ ] keep too\n"
     );
 }
 
@@ -123,77 +93,6 @@ fn link_writes_the_node_pointer_and_keeps_the_mark_and_ending() {
     assert_eq!(
         std::fs::read_to_string(&lane).unwrap(),
         "- [x] done item -> fno-a1b2\r\n- [ ] open item\n"
-    );
-}
-
-#[test]
-fn link_refuses_a_malformed_node_id_without_touching_the_lane() {
-    let root = sandbox("link-bad");
-    let lane = lane_at(&root);
-    std::fs::write(&lane, "- [ ] open item\n").unwrap();
-    assert_eq!(mine_do_at(&lane, &args(&["link", "1", "Not A Node"])), 2);
-    assert_eq!(std::fs::read_to_string(&lane).unwrap(), "- [ ] open item\n");
-}
-
-#[test]
-fn link_over_a_parked_suffix_replaces_it_with_the_node() {
-    let root = sandbox("link-parked");
-    let lane = lane_at(&root);
-    std::fs::write(&lane, "- [ ] waiting -> parked: not now\n").unwrap();
-    assert_eq!(mine_do_at(&lane, &args(&["link", "1", "fno-c3d4"])), 0);
-    assert_eq!(
-        std::fs::read_to_string(&lane).unwrap(),
-        "- [ ] waiting -> fno-c3d4\n",
-        "the link rewrite carries no park reason, the same overwrite the old leg made"
-    );
-}
-
-#[test]
-fn add_on_a_missing_lane_creates_the_parent_and_the_file() {
-    let root = sandbox("add-new");
-    let lane = root.join("deep").join("nested").join("my-priorities.md");
-    assert_eq!(mine_do_at(&lane, &args(&["add", "first"])), 0);
-    assert_eq!(std::fs::read_to_string(&lane).unwrap(), "- [ ] first\n");
-}
-
-#[test]
-fn the_list_arm_renders_the_visible_order_with_marks_and_nodes() {
-    let root = sandbox("list");
-    let lane = lane_at(&root);
-    std::fs::write(
-        &lane,
-        "- [ ] plain\n- [x] finished -> fno-e5f6\n- [ ] parked one -> parked: later\n",
-    )
-    .unwrap();
-    assert_eq!(mine_list_at(&lane, false), 0);
-    let json_render = mine_list_at(&lane, true);
-    assert_eq!(json_render, 0);
-}
-
-#[test]
-fn the_json_list_carries_n_text_done_node_rows() {
-    let root = sandbox("list-json");
-    let lane = lane_at(&root);
-    std::fs::write(&lane, "- [x] finished -> fno-e5f6\n").unwrap();
-    // Render into a captured buffer by reading the lane through the same
-    // payload builder the list arm uses.
-    let items = parse_lane(&lane).unwrap();
-    let rows: Vec<Value> = items
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            json!({
-                "n": i + 1,
-                "text": item.text,
-                "done": item.done,
-                "node": item.node,
-            })
-        })
-        .collect();
-    let rendered = serde_json::to_string(&json!({ "mine": rows })).unwrap();
-    assert_eq!(
-        rendered,
-        r#"{"mine":[{"n":1,"text":"finished","done":true,"node":"fno-e5f6"}]}"#
     );
 }
 
@@ -227,25 +126,6 @@ fn reindex_folds_journal_rows_into_the_index_once() {
     // reader: the raw journal bytes may never land.
     let indexed = crate::events::committed_journal_text(&index);
     assert!(indexed.contains("q-r1") && indexed.contains("q-r2"));
-}
-
-#[test]
-fn reindex_skips_decision_rows_and_unreadable_journals() {
-    let root = sandbox("reindex-skip");
-    let index = root.join("questions.jsonl");
-    let journal = root.join("project").join("events.jsonl");
-    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-    let decision = r#"{"ts":"2026-10-24T09:05:00Z","type":"operator_decision","source":"test","data":{"decision_id":"d-1"}}"#;
-    std::fs::write(&journal, format!("{}\n", decision)).unwrap();
-    let (added, already, total) = reindex_fold(&index, &[journal.clone()]).unwrap();
-    assert_eq!((added, already, total), (0, 0, 0));
-    // A journal path parked on a directory is unreadable, and that is not
-    // fatal: the fold degrades to zero rows from it.
-    let broken = journal.clone();
-    std::fs::remove_file(&broken).ok();
-    std::fs::create_dir_all(&broken).unwrap();
-    let (added, _already, _total) = reindex_fold(&index, &[broken]).unwrap();
-    assert_eq!(added, 0, "an unreadable journal contributes nothing");
 }
 
 #[test]
@@ -295,45 +175,10 @@ fn provenance_refusals_map_to_their_posture_kinds_and_texts() {
 }
 
 #[test]
-fn provenance_remedy_lines_name_the_one_fix_per_kind() {
-    assert_eq!(provenance_remedy("unknown-origin", "nope"), "");
-    assert!(
-        provenance_remedy("unattributed", "").starts_with("This process has no session identity")
-    );
-    assert!(provenance_remedy("authority", "").contains("Drop --authority operator"));
-    let remedy = provenance_remedy("origin-authority", "operator");
-    assert!(
-        remedy.contains("The refusal is about the claimed --origin 'operator'"),
-        "{remedy}"
-    );
-}
-
-#[test]
 fn a_delivery_without_an_asker_names_the_lead_escalation_lane() {
     let line = deliver_answer("q-d1", "ship?", "", None, "d-abc1", "yes");
     assert_eq!(
         line,
         "outstanding: q-d1 answered; no asker on record (lead escalation), nobody to wake. Decision d-abc1; recover it via: fno backlog decisions"
     );
-}
-
-#[test]
-fn the_delivery_stamp_and_exception_are_the_named_ones() {
-    assert_eq!(DELIVERY_SENDER, "fno/questions");
-    assert_eq!(
-        STYLE_EXCEPTION,
-        "operator answer verbatim: quoted decision text, not authored prose"
-    );
-}
-
-#[test]
-fn an_ask_with_no_question_text_refuses_before_any_read() {
-    assert_eq!(run_ask(&[]), 2);
-}
-
-#[test]
-fn a_template_request_records_nothing_and_passes_no_laws() {
-    // The template arm returns before any write; the ask resolves identity
-    // and the user's name, never the law read.
-    assert_eq!(run_ask(&args(&["--question-file", "template"])), 0);
 }

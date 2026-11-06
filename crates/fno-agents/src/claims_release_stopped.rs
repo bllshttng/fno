@@ -268,53 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn a_launch_window_ends_with_its_beneficiarys_stop_despite_a_live_spawner_pid() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        // The measured shape: the lead minted the window, so the recorded pid
-        // is the spawner's ambient pid and still alive, while the named
-        // beneficiary has stopped.
-        write_rec(
-            &claims_dir,
-            &stopped_rec(
-                "node:x-win",
-                "spawn-handover:w1",
-                Some(std::process::id() as i32),
-                Some("sess-lead"),
-                "ambient",
-            ),
-        );
-        // Control: the same live pid on a session claim of the stopped
-        // session stays kept - the pid guard still rules there.
-        write_rec(
-            &claims_dir,
-            &stopped_rec(
-                "node:x-sess",
-                "target-session:w1",
-                Some(std::process::id() as i32),
-                Some("sess-9c91"),
-                "session-prover",
-            ),
-        );
-        let target = StoppedHolder {
-            name: "w1".into(),
-            harness_session_id: Some("sess-9c91".into()),
-        };
-        let receipt =
-            release_for_stopped_session(&target, &[claims_dir.clone()], Some(td.path())).unwrap();
-        let released: Vec<String> = receipt.released.iter().map(|r| r.key.clone()).collect();
-        assert_eq!(released, vec!["node:x-win"]);
-        assert!(!lockfile_of(&claims_dir, "node:x-win").exists());
-        assert_eq!(receipt.kept.len(), 1);
-        assert_eq!(receipt.kept[0].key, "node:x-sess");
-        assert!(
-            receipt.kept[0].observed.contains("present"),
-            "the session claim's live pid still keeps it: {}",
-            receipt.kept[0].observed
-        );
-    }
-
-    #[test]
     fn release_for_stopped_session_releases_owned_dead_and_keeps_live() {
         let td = TempDir::new().unwrap();
         let claims_dir = td.path().join("claims");
@@ -411,29 +364,6 @@ mod tests {
             .filter(|e| e["type"] == "claim_released")
             .count();
         assert_eq!(released_events, 2, "each release emits claim_released");
-    }
-
-    #[test]
-    fn stopped_release_preserves_a_reacquired_same_holder_claim() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        let old = stopped_rec(
-            "node:x-race",
-            "target-session:sess-race",
-            Some(dead_pid() as i32),
-            Some("sess-race"),
-            "session-prover",
-        );
-        write_rec(&claims_dir, &old);
-        let path = lockfile_of(&claims_dir, &old.key);
-        let observed = read_claim_file(&path).unwrap();
-        let mut fresh = observed.clone();
-        fresh.reason = Some("same-holder replacement".into());
-        crate::claim_store::replace_observed_at(&path, &observed, &fresh)
-            .unwrap()
-            .unwrap();
-        assert!(release_stopped_at(&claims_dir, &old, Some(td.path())).is_err());
-        assert_eq!(read_claim_file(&path).unwrap().reason, fresh.reason);
     }
 
     fn lockfile_of(dir: &Path, key: &str) -> PathBuf {

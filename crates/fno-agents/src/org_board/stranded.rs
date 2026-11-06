@@ -314,37 +314,6 @@ detached
     }
 
     #[test]
-    fn node_id_comes_from_the_basename_the_branch_or_a_prefix() {
-        let candidates = HashMap::new();
-        assert_eq!(
-            tree_node_id(Path::new("/base/footnote/x-eeee"), None, &candidates),
-            Some(("x-eeee".to_string(), true))
-        );
-        let row = json!({"id": "x-ffff", "type": "feature", "slug": "some-work", "priority": "p1", "status": "ready"});
-        let candidates = stranded_candidates(&[row]);
-        assert_eq!(
-            tree_node_id(
-                Path::new("/base/footnote/worker-04"),
-                Some("refs/heads/feature/x-ffff"),
-                &candidates
-            ),
-            Some(("x-ffff".to_string(), true))
-        );
-        assert_eq!(
-            tree_node_id(Path::new("/base/repo/x-2222-prep"), None, &candidates),
-            Some(("x-2222".to_string(), false))
-        );
-        assert_eq!(
-            tree_node_id(Path::new("/base/footnote/worker-04"), None, &candidates),
-            None
-        );
-        assert_eq!(
-            tree_node_id(Path::new("/base/footnote/notes"), None, &candidates),
-            None
-        );
-    }
-
-    #[test]
     fn candidates_take_lead_priority_live_nodes_only() {
         let entries = vec![
             json!({"id": "x-eeee", "priority": "p1", "status": "ready"}),

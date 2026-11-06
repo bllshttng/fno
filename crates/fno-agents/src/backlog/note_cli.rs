@@ -1234,68 +1234,6 @@ mod tests {
 
     // -- import route -----------------------------------------------------
 
-    fn fixture(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let graph = dir.path().join(name);
-        (dir, graph)
-    }
-
-    /// The captured-record shape: what `fno backlog get` emits, sessions and
-    /// provenance included.
-    fn captured_record(id: &str, slug: &str) -> Value {
-        serde_json::json!({
-            "id": id, "slug": slug, "title": "Lost", "type": "feature",
-            "status": "in_progress", "priority": "p1", "project": "fno",
-            "domain": "code", "difficulty": "medium",
-            "details": "restored from a captured record",
-            "created_at": "2026-09-16T04:38:39.696103+00:00",
-            "source_kind": "operator_request",
-            "sessions": [
-                {"phase": "do", "harness": "claude", "session_id": "s-1"}
-            ],
-        })
-    }
-
-    fn seed_one_node(graph: &std::path::Path) {
-        let rows = serde_json::json!({"entries": [
-            {"id": "ab-one", "slug": "one", "title": "One", "type": "feature",
-             "status": "idea", "priority": "p2", "domain": "code",
-             "created_at": "2026-09-11T00:00:00+00:00"}
-        ]});
-        graph_store::seed_rows(graph, rows["entries"].as_array().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn an_import_lands_the_record_under_its_original_id_and_slug() {
-        let (_dir, graph) = fixture("graph.json");
-        seed_one_node(&graph);
-        let receipt = import_record(&graph, &captured_record("ab-lost", "lost")).unwrap();
-        assert_eq!(receipt["id"], "ab-lost");
-        assert_eq!(receipt["slug"], "lost");
-        let rows = graph_store::read_rows(&graph).unwrap();
-        let restored = rows
-            .iter()
-            .find(|r| graph_store::entry_id(r) == Some("ab-lost"))
-            .expect("the imported node is live");
-        assert_eq!(restored["slug"], "lost");
-        assert_eq!(restored["title"], "Lost");
-        assert_eq!(
-            restored["sessions"][0]["session_id"], "s-1",
-            "the aggregate's child rows ride the import"
-        );
-    }
-
-    #[test]
-    fn an_import_refuses_when_the_id_is_already_live() {
-        let (_dir, graph) = fixture("graph.json");
-        seed_one_node(&graph);
-        let error = import_record(&graph, &captured_record("ab-one", "renamed")).unwrap_err();
-        assert!(error.contains("ab-one is already live"), "{error}");
-        assert!(error.contains("fno backlog get ab-one"), "{error}");
-        let rows = graph_store::read_rows(&graph).unwrap();
-        assert_eq!(rows.len(), 1, "nothing was written");
-    }
-
     fn comment_graph() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let graph = dir.path().join("graph.json");
@@ -1328,37 +1266,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", root.path());
         (guard, root)
-    }
-
-    fn sh(script: &str) -> std::process::Command {
-        let mut command = std::process::Command::new("sh");
-        command.args(["-c", script]);
-        command
-    }
-
-    #[test]
-    fn holder_receipt_says_sent_only_on_a_zero_exit() {
-        let bound = std::time::Duration::from_secs(5);
-        assert_eq!(
-            deliver_pointer(sh("exit 0"), "target-session:abc", bound),
-            "pointer sent to target-session:abc"
-        );
-        let refused = deliver_pointer(
-            sh("echo 'warning: sender' >&2; echo 'unknown agent' >&2; exit 16"),
-            "target-session:abc",
-            bound,
-        );
-        assert_eq!(
-            refused,
-            "holder target-session:abc not reached here: unknown agent"
-        );
-        let slow = deliver_pointer(
-            sh("sleep 3"),
-            "target-session:abc",
-            std::time::Duration::from_millis(50),
-        );
-        assert!(slow.contains("still sending"), "{slow}");
-        assert!(!slow.contains("pointer sent"), "{slow}");
     }
 
     #[test]

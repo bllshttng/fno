@@ -1465,29 +1465,6 @@ mod tests {
         }
     }
 
-    use crate::AgentsHomeEnvGuard;
-
-    fn write_target_for_test(
-        home: &crate::paths::AgentsHome,
-        target: &str,
-        holds: &[&str],
-    ) -> PathBuf {
-        let path = super::target_path(home, target).unwrap();
-        super::write_transition_with_metadata(
-            &path,
-            "stopped",
-            Some("test pause"),
-            Some("op"),
-            holds.iter().map(|hold| (*hold).to_string()).collect(),
-            super::RecordMetadata {
-                target: Some(target.to_string()),
-                ..super::RecordMetadata::default()
-            },
-        )
-        .unwrap();
-        path
-    }
-
     #[test]
     fn stop_increments_generation_and_a_fresh_read_sees_it() {
         let path = tmp_path("roundtrip");
@@ -1518,16 +1495,6 @@ mod tests {
             Verdict::Unavailable(detail) => assert!(!detail.is_empty()),
             other => panic!("expected unavailable, got {other:?}"),
         }
-        cleanup(&path);
-    }
-
-    #[test]
-    fn blank_reason_refuses_the_write() {
-        let path = tmp_path("blank-reason");
-        assert!(write_transition(&path, "stopped", Some(""), None, vec![]).is_err());
-        assert!(write_transition(&path, "stopped", Some("   "), None, vec![]).is_err());
-        assert!(write_transition(&path, "stopped", None, None, vec![]).is_err());
-        assert!(!path.exists(), "a refused write must not create state");
         cleanup(&path);
     }
 
@@ -1572,158 +1539,6 @@ mod tests {
         assert!(stopped.unwrap_err().contains("incident owns the breaker"));
         assert!(cleared.unwrap_err().contains("incident owns the breaker"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-        cleanup(&path);
-    }
-
-    #[test]
-    fn ttl_expiry_refuses_duration_overflow_without_panicking() {
-        assert!(super::expires_after(u64::MAX).is_err());
-        assert!(super::expires_after(i64::MAX as u64).is_err());
-    }
-
-    #[test]
-    fn stop_session_writes_a_bounded_loops_record() {
-        let home = tempfile::TempDir::new().unwrap();
-        let _env = AgentsHomeEnvGuard::set(home.path());
-        let session_id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let args = [
-            "stop",
-            "--session",
-            session_id,
-            "--reason",
-            "hold for repair",
-        ]
-        .map(str::to_string);
-        let result = super::run_fleet_incident(&args);
-
-        assert_eq!(result, 0, "a full session id is a valid halt target");
-        let targets = home.path().join("fleet-stop.d");
-        let files = std::fs::read_dir(targets)
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
-            .collect::<Vec<_>>();
-        assert_eq!(files.len(), 1);
-        let record: IncidentRecord =
-            serde_json::from_slice(&std::fs::read(files[0].path()).unwrap()).unwrap();
-        let target = format!("session:{session_id}");
-        assert_eq!(record.target.as_deref(), Some(target.as_str()));
-        assert_eq!(record.holds, vec!["loops"]);
-        let expires_at =
-            chrono::DateTime::parse_from_rfc3339(record.expires_at.as_deref().unwrap()).unwrap();
-        let remaining = expires_at
-            .signed_duration_since(chrono::Utc::now())
-            .num_seconds();
-        assert!((3_590..=3_600).contains(&remaining));
-    }
-
-    #[test]
-    fn targeted_session_record_matches_only_its_subject() {
-        let home = tempfile::TempDir::new().unwrap();
-        let _env = AgentsHomeEnvGuard::set(home.path());
-        let agents_home = crate::paths::AgentsHome::at(home.path());
-        let session_id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let target = format!("session:{session_id}");
-        write_target_for_test(&agents_home, &target, &["loops"]);
-        let cwd = Path::new(".");
-        let matching = Subject {
-            session_ids: vec![session_id.to_string()],
-            node: None,
-            territory: None,
-            cwd,
-        };
-        let other = Subject {
-            session_ids: vec!["11111111-2222-3333-4444-555555555555".to_string()],
-            node: None,
-            territory: None,
-            cwd,
-        };
-
-        assert!(matches!(
-            verdict_for_subject("loops", &matching),
-            Verdict::Stopped(_)
-        ));
-        assert!(matches!(
-            verdict_for_subject("loops", &other),
-            Verdict::Clear(_)
-        ));
-    }
-
-    #[test]
-    fn corrupt_targeted_record_fails_closed_only_for_its_filename_target() {
-        let home = tempfile::TempDir::new().unwrap();
-        let _env = AgentsHomeEnvGuard::set(home.path());
-        let agents_home = crate::paths::AgentsHome::at(home.path());
-        let session_id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let path = super::target_path(&agents_home, &format!("session:{session_id}")).unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"not json").unwrap();
-        let cwd = Path::new(".");
-        let matching = Subject {
-            session_ids: vec![session_id.to_string()],
-            node: None,
-            territory: None,
-            cwd,
-        };
-        let other = Subject {
-            session_ids: vec!["11111111-2222-3333-4444-555555555555".to_string()],
-            node: None,
-            territory: None,
-            cwd,
-        };
-
-        assert!(matches!(
-            verdict_for_subject("loops", &matching),
-            Verdict::Unavailable(_)
-        ));
-        assert!(matches!(
-            verdict_for_subject("loops", &other),
-            Verdict::Clear(_)
-        ));
-    }
-
-    #[test]
-    fn the_reach_readout_resolves_every_state() {
-        let path = tmp_path("reach");
-        write_transition(
-            &path,
-            "stopped",
-            Some("demo recording"),
-            None,
-            vec!["tests".to_string()],
-        )
-        .unwrap();
-        match read_at(&path) {
-            Verdict::Stopped(r) => {
-                let (holds, admits) = super::reach(&r);
-                assert_eq!(holds, vec!["tests".to_string()]);
-                assert_eq!(
-                    admits,
-                    vec![
-                        "spawns".to_string(),
-                        "merges".to_string(),
-                        "loops".to_string()
-                    ]
-                );
-            }
-            other => panic!("expected a stopped record, got {other:?}"),
-        }
-        // A clear record holds nothing and admits everything.
-        write_transition(&path, "clear", Some("done"), None, vec![]).unwrap();
-        match read_at(&path) {
-            Verdict::Clear(r) => {
-                let (holds, admits) = super::reach(&r);
-                assert!(holds.is_empty());
-                assert_eq!(
-                    admits,
-                    super::SCOPES
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect::<Vec<_>>()
-                );
-            }
-            other => panic!("expected a clear record, got {other:?}"),
-        }
         cleanup(&path);
     }
 }

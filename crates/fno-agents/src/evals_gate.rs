@@ -1,7 +1,7 @@
 //! The evals gate: the daemon's check on skill, agent, hook, command and bank
 //! changes. CI cannot run it: a bank run needs worker lanes.
 //!
-//! Each `evals-arm` tick runs one pass over two independent legs.
+//! Each daemon `evals-arm` schedule tick runs one pass over two independent legs.
 //!
 //! **Main leg.** Once a day, and at once when the route config hash changes,
 //! it runs one cohort per seat at `origin/main`. The worker seat runs the
@@ -11,25 +11,34 @@
 //! runs at a time, and the worker goes first. The golden set is read at the
 //! fetched sha through a detached worktree, never from this repo's working tree: the
 //! checkout the daemon runs from can sit behind the ref, and a tag read
-//! there misses a golden main added. Each finished cohort becomes the
-//! baseline of its seat, and it is compared to that seat's one before. A
-//! regression files a node, so a route change that breaks a golden reaches
-//! the backlog.
+//! there misses a golden main added. Each finished cohort that graded every
+//! gate task of its seat becomes the baseline of that seat, and it is compared to
+//! that seat's one before. A cohort that graded only part of the set is no
+//! baseline: it retries the same day, then falls back. A regression files a
+//! node, so a route change that breaks a golden reaches the backlog.
 //!
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
 //! head, one PR at a time. A head whose gated hits are all bank files grades
 //! only the goldens it changed, so a goldens-only PR fits the 20-minute wall.
 //! A newer head kills the older run. The head runs on
-//! the worker seat and pays one side only: it compares to the worker
-//! baseline. Until a first baseline exists the
-//! leg posts nothing, so a fresh install holds no PR on a check it cannot do.
+//! the worker seat and pays one side only. When the worker baseline covers
+//! the selection it compares against that baseline; when it does not - no
+//! baseline yet, or one that predates a golden at the head - the head grades
+//! on its own pass rate instead, so no PR waits forever on the day's main
+//! run. A queued head reposts pending, so a re-run never keeps an older red.
 //!
-//! The runs are detached, and the tick never waits on one. A later tick reads
+//! The runs are detached, and the daemon arm never waits on one. A later arm tick reads
 //! the history rows, so a daemon restart loses no run. Plumbing never reads as
 //! a pass: no result by the limit, or a spent budget, is red and names the
 //! cause and the clearing command. A baseline the compare cannot answer reads
-//! pending, never red: the head re-runs once a main run covers its tasks.
+//! pending, never red. A run whose rows are all status unavailable is the
+//! lane's gap, not the head's: it reads pending and re-runs.
+//!
+//! **The settle.** Grading a finished run also runs on the daemon's one-minute
+//! `evals_settle` sweep: the pr-watch budget can saturate, and a green run once
+//! waited over an hour for a tick with room. Both graders take the state-dir settle lock, so one finished
+//! run grades exactly once; an idle gate costs the sweep one state read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -326,6 +335,75 @@ fn save_state(dir: &Path, state: &State) {
     let tmp = dir.join(format!("state.json.{}", std::process::id()));
     if std::fs::write(&tmp, text).is_ok() {
         let _ = std::fs::rename(&tmp, dir.join("state.json"));
+    }
+}
+
+/// The settle lock: the tick's gate pass and the daemon's minute settle both
+/// grade finished runs from one `state.json`, and the lock admits one grader
+/// per finished run - without it, a tick landing the same second the daemon
+/// settles posts the verdict twice and files the regression nodes twice. It
+/// lives beside the state it guards, so both drivers resolve it from the one
+/// history path. A holder that died mid-grade loses it: a dead pid at once,
+/// any holder past the two-minute wall. Either way - acquired or held - the
+/// caller's state is re-read: another grader may have settled the run while
+/// this pass loaded stale state, and a grader that graded its stale clone
+/// would post the verdict twice. `None` says "nothing here for you".
+struct SettleLock {
+    path: PathBuf,
+    holder: String,
+}
+
+/// A grader whose lock outlived its usefulness: dead pid, or two minutes.
+const SETTLE_LOCK_WALL_S: u64 = 120;
+
+impl SettleLock {
+    fn acquire_or_sync(dir: &Path, state: &mut State) -> Option<Self> {
+        // A gate whose first run never saved state has no dir yet.
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join("settle.lock");
+        let holder = std::process::id().to_string();
+        for _ in 0..2 {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+            {
+                use std::io::Write as _;
+                let _ = writeln!(file, "{holder}");
+                *state = load_state(dir);
+                return Some(Self { path, holder });
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let held = text.trim().to_string();
+            let dead = held
+                .parse::<u32>()
+                .map(|pid| !crate::evals_arm::pid_alive(pid))
+                .unwrap_or(true);
+            let aged = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > SETTLE_LOCK_WALL_S);
+            if dead || aged {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+            *state = load_state(dir);
+            return None;
+        }
+        *state = load_state(dir);
+        None
+    }
+}
+
+impl Drop for SettleLock {
+    fn drop(&mut self) {
+        if std::fs::read_to_string(&self.path)
+            .map(|t| t.trim() == self.holder)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -697,20 +775,19 @@ fn main_covers(p: &Paths) -> Vec<String> {
 
 /// The merge door's expectation answer: does this head owe an evals/gate
 /// status? The same map the tick reads decides it - the five gated prefixes,
-/// or a `covers:` prefix of main's bank - and only once the worker seat has
-/// a baseline. A first install holds nobody on a check it cannot run yet.
-/// A machine with no gate state at all reads as first install, so a merge
-/// from a non-daemon machine keeps today's pass. Fail-open by construction:
-/// an unread bank answers an empty map, a missing state answers no baseline.
+/// or a `covers:` prefix of main's bank - and the gate owes one as soon as
+/// gate state exists, because a head now grades on its own pass rate even
+/// before the first main baseline is seated. A machine with no gate state at
+/// all reads as first install, so a merge from a non-daemon machine keeps
+/// today's pass. Fail-open by construction: an unread bank answers an empty
+/// map, a missing state answers no gate.
 pub(crate) fn head_owes_status(repo: &Path, history: &Path, files: &[String]) -> bool {
     let dir = state_dir(history);
-    let Some(state) = std::fs::read_to_string(dir.join("state.json"))
+    let readable = std::fs::read_to_string(dir.join("state.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<State>(&t).ok())
-    else {
-        return false;
-    };
-    if state.worker.baseline.is_none() {
+        .is_some();
+    if !readable {
         return false;
     }
     let ref_bank = dir.join("ref-main").join("evals").join("bank");
@@ -985,6 +1062,42 @@ fn ref_bank(p: &Paths, slot: &str) -> PathBuf {
     }
 }
 
+/// The exited main run, graded under the settle lock: whichever driver - the
+/// tick's gate pass or the daemon's minute settle - takes the lock grades it,
+/// and the other re-reads state and finds nothing. `None` reads "still
+/// running, or settled by the other grader just now".
+fn settle_main_run(p: &Paths, d: &Deps, state: &mut State) -> Option<String> {
+    let Some(run) = state.main_run.clone() else {
+        return None;
+    };
+    let alive = (d.alive)(run.pid);
+    if alive && d.now.timestamp() - run.started <= MAIN_LIMIT_S {
+        return None;
+    }
+    let _lock = SettleLock::acquire_or_sync(&p.state_dir, state)?;
+    let Some(run) = state.main_run.clone() else {
+        return None;
+    };
+    let alive = (d.alive)(run.pid);
+    if alive && d.now.timestamp() - run.started <= MAIN_LIMIT_S {
+        return None;
+    }
+    if alive {
+        (d.kill)(run.pid);
+    }
+    state.main_run = None;
+    let seat = if run.seat == LEAD.name {
+        &LEAD
+    } else {
+        &WORKER
+    };
+    let note = finish_main(p, d, state, seat, &run.cohort);
+    // Same self-persistence as the head settle: the minute arm has no
+    // trailing save, and an unpersisted grade would repeat.
+    save_state(&p.state_dir, state);
+    Some(note)
+}
+
 fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd: f64) -> String {
     if let Some(run) = state.main_run.clone() {
         let over = d.now.timestamp() - run.started > MAIN_LIMIT_S;
@@ -992,16 +1105,8 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
         if alive && !over {
             return format!("main {} running", run.cohort);
         }
-        if alive {
-            (d.kill)(run.pid);
-        }
-        state.main_run = None;
-        let seat = if run.seat == LEAD.name {
-            &LEAD
-        } else {
-            &WORKER
-        };
-        return finish_main(p, d, state, seat, &run.cohort);
+        return settle_main_run(p, d, state)
+            .unwrap_or_else(|| format!("main {} running", run.cohort));
     }
     let day = format!(
         "gate-main-{}-{}",
@@ -1221,19 +1326,69 @@ fn bank_moved(p: &Paths, d: &Deps, rows: &[Value], older: &str, newer: &str) -> 
 /// bank changed between the two, the new cohort starts a fresh baseline and no
 /// compare runs: every golden the harder bank fails would file a regression.
 fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str) -> String {
-    let graded = read_rows(&p.history.to_string_lossy(), None, None)
+    let rows = read_rows(&p.history.to_string_lossy(), None, None);
+    let graded: Vec<&crate::evals_trend::Row> = rows
         .iter()
-        .any(|r| r.experiment_id.as_deref() == Some(cohort) && crate::evals_trend::is_scored(r));
+        .filter(|r| r.experiment_id.as_deref() == Some(cohort) && crate::evals_trend::is_scored(r))
+        .collect();
     if cohort.ends_with(FALLBACK_SUFFIX) {
         // A fallback lane measures a different seat: it is never a baseline.
         let tail = log_tail(&p.state_dir.join(MAIN_LOG));
-        return if graded {
+        return if !graded.is_empty() {
             format!("main {cohort} graded on the fallback lane; no baseline, no compare")
         } else {
             format!("main {cohort} wrote no grade: {tail}")
         };
     }
-    if !graded {
+    // A main that did not grade every gate task is no baseline: a run that
+    // died mid-cohort would otherwise hold the day and starve every head
+    // whose tasks it lacks. The "wrote no grade" prefix keeps the same-day
+    // retry and the fallback lane.
+    let expected = crate::evals::bank::discover_bank_tolerant(&ref_bank(p, "main"))
+        .ok()
+        .map(|(tasks, _)| {
+            tasks
+                .iter()
+                .filter(|t| t.tags.iter().any(|tag| tag == seat.tag) && !t.is_demoted())
+                .map(|t| t.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .filter(|tasks| !tasks.is_empty());
+    if let Some(expected) = expected {
+        let graded_ids: BTreeSet<&str> = graded.iter().map(|r| r.task_id.as_str()).collect();
+        let missing: Vec<&str> = expected
+            .iter()
+            .map(String::as_str)
+            .filter(|t| !graded_ids.contains(t))
+            .collect();
+        if !missing.is_empty() {
+            let tail = log_tail(&p.state_dir.join(MAIN_LOG));
+            // The named list rides the note, so a big bank cannot bloat the
+            // state: six names, then a count.
+            let shown: Vec<&str> = missing.iter().take(6).copied().collect();
+            let more = missing.len() - shown.len();
+            let names = if more > 0 {
+                format!("{} and {more} more", shown.join(", "))
+            } else {
+                shown.join(", ")
+            };
+            return main_failed(
+                d,
+                state,
+                seat,
+                cohort,
+                format!(
+                    "wrote no grade: {} of {} gate tasks (missing: {}): {}",
+                    expected.len() - missing.len(),
+                    expected.len(),
+                    names,
+                    tail
+                ),
+            );
+        }
+    } else if graded.is_empty() {
+        // The bank is unread at settle, so completeness cannot be proven;
+        // only an empty grade still fails.
         let tail = log_tail(&p.state_dir.join(MAIN_LOG));
         return main_failed(d, state, seat, cohort, format!("wrote no grade: {tail}"));
     }
@@ -1291,9 +1446,7 @@ fn head_leg(
     settle_head_run(p, d, state, slug, prs);
     let open: BTreeSet<&str> = prs.iter().map(|pr| pr.sha.as_str()).collect();
     state.heads.retain(|sha, _| open.contains(sha.as_str()));
-    let Some(baseline) = state.worker.baseline.clone() else {
-        return "head leg waits for a first baseline".into();
-    };
+    let baseline = state.worker.baseline.clone();
     let covers = main_covers(p);
     let mut new_heads = 0;
     for pr in prs {
@@ -1345,7 +1498,16 @@ fn head_leg(
         .collect();
     let mut note = "no head queued".to_string();
     for pr in due_heads {
-        note = launch_head(p, d, state, slug, pr, &baseline, daily_usd, &today);
+        note = launch_head(
+            p,
+            d,
+            state,
+            slug,
+            pr,
+            baseline.as_deref(),
+            daily_usd,
+            &today,
+        );
         if state.head_run.is_some() {
             return note;
         }
@@ -1359,9 +1521,20 @@ fn wrote_rows(p: &Paths, cohort: &str) -> bool {
         .any(|r| row_cohort(r) == cohort)
 }
 
+/// True when the cohort wrote rows and every one is status unavailable: the
+/// lane produced no sample at all, which reads pending rather than red.
+fn rows_all_unavailable(p: &Paths, cohort: &str) -> bool {
+    let rows = history_rows(p.history);
+    let mine: Vec<&Value> = rows.iter().filter(|r| row_cohort(r) == cohort).collect();
+    !mine.is_empty()
+        && mine
+            .iter()
+            .all(|r| r.get("status").and_then(Value::as_str) == Some("unavailable"))
+}
+
 /// True when the baseline cohort has grade rows for every selected task. The
 /// compare folds rows to the run's tasks first, so a baseline that predates a
-/// golden the head graded errs the compare on that side.
+/// golden the head graded errs the compare against the head.
 fn baseline_covers(rows: &[Value], baseline: &str, tasks: &[String]) -> bool {
     tasks.iter().all(|task| {
         rows.iter().any(|r| {
@@ -1371,8 +1544,101 @@ fn baseline_covers(rows: &[Value], baseline: &str, tasks: &[String]) -> bool {
     })
 }
 
+/// Grades the head cohort on its own pass rate: no covering baseline exists,
+/// so nothing can regress. A task every scored run fails is red, a task whose
+/// rows are all status unavailable reads pending and the requeue re-runs it,
+/// a task with no row at all is no result, and everything else passes.
+fn own_grade(p: &Paths, cohort: &str, tasks: &[String], sha: &str) -> (&'static str, String) {
+    let rows = read_rows(&p.history.to_string_lossy(), None, None);
+    let mine: Vec<&crate::evals_trend::Row> = rows
+        .iter()
+        .filter(|r| r.experiment_id.as_deref() == Some(cohort))
+        .collect();
+    let mut failing: Vec<&str> = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
+    let mut retrying: Vec<&str> = Vec::new();
+    let mut graded = 0usize;
+    for task in tasks {
+        let scored: Vec<&crate::evals_trend::Row> = mine
+            .iter()
+            .filter(|r| r.task_id == *task && crate::evals_trend::is_scored(r))
+            .copied()
+            .collect();
+        if !scored.is_empty() {
+            if scored.iter().all(|r| !r.pass) {
+                failing.push(task.as_str());
+            } else {
+                graded += 1;
+            }
+        } else if mine.iter().any(|r| r.task_id == *task) {
+            let unavailable_only = mine
+                .iter()
+                .filter(|r| r.task_id == *task)
+                .all(|r| r.raw_str("status") == Some("unavailable"));
+            if unavailable_only {
+                retrying.push(task.as_str());
+            } else {
+                // A lane that scores nothing any other way is no result.
+                missing.push(task.as_str());
+            }
+        } else {
+            missing.push(task.as_str());
+        }
+    }
+    if !retrying.is_empty() {
+        return (
+            "pending",
+            format!(
+                "only unavailable rows for {}; the gate re-runs it",
+                retrying.join(", ")
+            ),
+        );
+    }
+    if !missing.is_empty() {
+        return (
+            "failure",
+            no_result(sha, &format!("no grade: {}", missing.join(", "))),
+        );
+    }
+    if !failing.is_empty() {
+        return (
+            "failure",
+            format!(
+                "always fails at this head over {REPEATS} runs: {}. Fix it or push a new head.",
+                failing.join(", ")
+            ),
+        );
+    }
+    (
+        "success",
+        format!(
+            "graded {} of {} on its own pass rate: 0 failed",
+            graded,
+            tasks.len()
+        ),
+    )
+}
+
 /// The in-flight head run: drop it when its head moved, read it when done.
 fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr]) {
+    let Some(run) = state.head_run.clone() else {
+        return;
+    };
+    let current = prs
+        .iter()
+        .any(|pr| pr.number == run.pr && pr.sha == run.sha);
+    let alive = (d.alive)(run.pid);
+    let over = alive && d.now.timestamp() - run.started > HEAD_LIMIT_S;
+    // A run still in flight on a current head is nobody's settle; skip
+    // before the lock so the minute sweep's cost is one probe.
+    if current && alive && !over {
+        return;
+    }
+    let Some(_lock) = SettleLock::acquire_or_sync(&p.state_dir, state) else {
+        return;
+    };
+    // The state is fresh under the lock: the other grader may have settled
+    // this run while this pass loaded it.
     let Some(run) = state.head_run.clone() else {
         return;
     };
@@ -1409,57 +1675,74 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
             ),
         ),
         // A run that wrote no row quit early: a failed build names itself in the log.
-        (Some(_), false) if run.built && !wrote_rows(p, &run.cohort) => (
+        (_, false) if run.built && !wrote_rows(p, &run.cohort) => (
             "failure",
             no_result(
                 &run.sha,
                 &format!("no grade: {}", log_tail(&p.state_dir.join(HEAD_LOG))),
             ),
         ),
-        (Some(baseline), false) => {
-            match compare(
-                &ref_bank(p, "head"),
-                p.history,
-                baseline,
-                &run.cohort,
-                Some(&run.tasks),
-            ) {
-                Ok(view) => {
-                    // The unmeasured view compare folds for a baseline side
-                    // that holds no rows for the kept tasks is a machine
-                    // gap: pending, never green on an unmeasured grade.
-                    let unmeasured = view["regressions"].as_array().is_some_and(|r| r.is_empty())
-                        && view["errors"].as_array().is_some_and(|rows| {
-                            !rows.is_empty()
-                                && rows
-                                    .iter()
-                                    .all(|r| r.get("a_grades").and_then(Value::as_u64) == Some(0))
-                        });
-                    if unmeasured {
-                        (
+        (_, false) => {
+            // Rows every one status unavailable are the lane's gap, not the
+            // head's: pending, and the requeue re-runs the head. A lane that
+            // scores nothing any other way (substituted) stays red.
+            if rows_all_unavailable(p, &run.cohort) {
+                (
+                    "pending",
+                    "the run wrote only unavailable rows; the gate re-runs it".to_string(),
+                )
+            } else {
+                let rows = history_rows(p.history);
+                match &state.worker.baseline {
+                    Some(baseline) if baseline_covers(&rows, baseline, &run.tasks) => {
+                        match compare(
+                        &ref_bank(p, "head"),
+                        p.history,
+                        baseline,
+                        &run.cohort,
+                        Some(&run.tasks),
+                    ) {
+                        Ok(view) => {
+                            // The unmeasured view compare folds for a baseline
+                            // side that holds no rows for the kept tasks is a
+                            // machine gap: pending, never green on an
+                            // unmeasured grade.
+                            let unmeasured =
+                                view["regressions"].as_array().is_some_and(|r| r.is_empty())
+                                    && view["errors"].as_array().is_some_and(|rows| {
+                                        !rows.is_empty()
+                                            && rows.iter().all(|r| {
+                                                r.get("a_grades").and_then(Value::as_u64)
+                                                    == Some(0)
+                                            })
+                                    });
+                            if unmeasured {
+                                (
+                                    "pending",
+                                    "waiting for a gate-main baseline that covers the tasks at this head"
+                                        .to_string(),
+                                )
+                            } else {
+                                verdict(&view, &run.sha)
+                            }
+                        }
+                        // The covers read and the compare read the history at
+                        // different instants; a drift between them requeues.
+                        Err(_) if !baseline_covers(&history_rows(p.history), baseline, &run.tasks) => (
                             "pending",
                             "waiting for a gate-main baseline that covers the tasks at this head"
                                 .to_string(),
-                        )
-                    } else {
-                        verdict(&view, &run.sha)
+                        ),
+                        Err(e) => ("failure", no_result(&run.sha, &e)),
                     }
+                    }
+                    // No baseline, or one that cannot answer the selection:
+                    // the head grades on its own pass rate, so no head waits
+                    // forever.
+                    _ => own_grade(p, &run.cohort, &run.tasks, &run.sha),
                 }
-                // A baseline that predates a golden the head graded is a
-                // machine gap, not a head defect: pending, and the head
-                // re-runs once a baseline covers the selection.
-                Err(_) if !baseline_covers(&history_rows(p.history), baseline, &run.tasks) => (
-                    "pending",
-                    "waiting for a gate-main baseline that covers the tasks at this head"
-                        .to_string(),
-                ),
-                Err(e) => ("failure", no_result(&run.sha, &e)),
             }
         }
-        (None, false) => (
-            "pending",
-            "waiting for a first gate-main baseline".to_string(),
-        ),
     };
     let disposition = if status == "pending" { QUEUED } else { DONE };
     // A dropped POST keeps the run, so the next tick posts it. A terminal
@@ -1469,6 +1752,9 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     if post_status(p, d, slug, &run.sha, status, &text) {
         state.heads.insert(run.sha.clone(), disposition.into());
         state.head_run = None;
+        // The settle persists itself: the minute arm has no trailing save,
+        // and an unpersisted settle would re-grade and re-post each minute.
+        save_state(&p.state_dir, state);
     }
 }
 
@@ -1479,7 +1765,7 @@ fn launch_head(
     state: &mut State,
     slug: &str,
     pr: &Pr,
-    baseline: &str,
+    baseline: Option<&str>,
     daily_usd: f64,
     today: &str,
 ) -> String {
@@ -1494,7 +1780,7 @@ fn launch_head(
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
     let rows = history_rows(p.history);
-    let slow = slow_tasks(&rows, baseline);
+    let slow = baseline.map(|b| slow_tasks(&rows, b)).unwrap_or_default();
     // An unreadable bank at the head is red, never green: a PR that broke
     // its bank file must not pass for want of tasks. A check kind newer
     // than this binary is the one exception: the readable tasks still run,
@@ -1536,14 +1822,6 @@ fn launch_head(
     let builds = tasks.iter().any(|t| !t.covers.is_empty())
         && files.iter().any(|f| f.starts_with("crates/"));
     let tasks: Vec<String> = tasks.into_iter().map(|t| t.id).collect();
-    // Launching only spends the run to read pending at settle; wait for a
-    // main run that covers the selection instead.
-    if !baseline_covers(&rows, baseline, &tasks) {
-        return format!(
-            "head {} waits for a baseline covering its tasks",
-            short(&pr.sha)
-        );
-    }
     if spent_today(&rows, d.now) + cost > daily_usd {
         finish(
             "failure",
@@ -1557,20 +1835,6 @@ fn launch_head(
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
     let lane = lane_with_room(p.repo, &lane, d.now, d.room);
-    // Posted here, not earlier: only a launch attempt that reaches the
-    // spawn names the skips, so an early return neither repeats the post
-    // on retry nor supersedes it within the same attempt.
-    let skip_note = skip_suffix(&skipped);
-    if !skipped.is_empty() {
-        post_status(
-            p,
-            d,
-            slug,
-            &pr.sha,
-            "pending",
-            &format!("run in flight{skip_note}"),
-        );
-    }
     let mut argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
@@ -1591,6 +1855,19 @@ fn launch_head(
         };
         argv = with_build(p, "head", root, argv);
     }
+    // Every launch posts pending, so a re-queued head (gate-retry, an
+    // unavailable requeue) never keeps an older red while it re-runs. It
+    // sits after the checkout resolves, so a tick that seats no run posts
+    // nothing here.
+    let skip_note = skip_suffix(&skipped);
+    post_status(
+        p,
+        d,
+        slug,
+        &pr.sha,
+        "pending",
+        &format!("run in flight{skip_note}"),
+    );
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(HEAD_LOG)) {
         Ok(pid) => {
             state.head_run = Some(HeadRun {
@@ -1664,31 +1941,19 @@ fn spawn_detached(argv: &[String], cwd: &Path, log: &Path) -> Result<u32, String
         .map_err(|e| e.to_string())
 }
 
-/// One pass of both legs. The daemon's tick calls this first, and it never
-/// fails the tick: its note lands in `state.json`.
-pub(crate) fn tick(
-    history: &Path,
-    fno_bin: &str,
-    repo: &Path,
-    graph: Option<&Path>,
-    can_launch: bool,
-) {
+/// The production `Deps` both drivers share: git/gh probes, the detached
+/// spawner, pid liveness and kill, the real zai window. The closures are
+/// locals, so `Deps` borrows them only for the call's scope.
+fn with_live_deps<T>(body: impl FnOnce(&Deps<'_>) -> T) -> T {
     let run = crate::stacked_base_stamp::runner("git", "gh");
-    let paths = Paths {
-        history,
-        fno_bin,
-        repo,
-        state_dir: state_dir(history),
-        graph,
-    };
+    let slot_runner =
+        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let kill = |pid: u32| {
         // SAFETY: the run leads its own session, so -pid is only its group.
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     };
-    let slot_runner =
-        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let deps = Deps {
         run: &run,
         slot_run: &slot_runner,
@@ -1698,11 +1963,91 @@ pub(crate) fn tick(
         room: &real_room,
         now: Utc::now(),
     };
-    tick_with(&paths, &deps, can_launch);
+    body(&deps)
+}
+
+/// One pass of both legs. The daemon's tick calls this first, and it never
+/// fails the tick: its note lands in `state.json`.
+pub(crate) fn tick(
+    history: &Path,
+    fno_bin: &str,
+    repo: &Path,
+    graph: Option<&Path>,
+    can_launch: bool,
+) {
+    let paths = Paths {
+        history,
+        fno_bin,
+        repo,
+        state_dir: state_dir(history),
+        graph,
+    };
+    with_live_deps(|d| tick_with(&paths, d, can_launch));
+}
+
+/// The minute settle's one pass: grade a finished gate run here instead of
+/// waiting for a pr-watch tick with budget left - a fleet-loaded sweep
+/// saturates the tick, and a green run once waited over an hour. Never
+/// launches: launches stay on the tick's gate pass. An idle gate costs one
+/// state read; a run still in flight costs one pid probe. Returns the note
+/// the sweep journals, `"idle"` when nothing is in flight.
+pub(crate) fn daemon_settle(history: &Path, fno_bin: &str, repo: &Path) -> String {
+    let paths = Paths {
+        history,
+        fno_bin,
+        repo,
+        state_dir: state_dir(history),
+        graph: None,
+    };
+    with_live_deps(|d| daemon_settle_with(&paths, d))
+}
+
+/// The injectable core, so the settle's note contract is testable without
+/// git, gh or a live pid table.
+fn daemon_settle_with(paths: &Paths, d: &Deps) -> String {
+    let mut state = load_state(&paths.state_dir);
+    if state.head_run.is_none() && state.main_run.is_none() {
+        return "idle".into();
+    }
+    let mut notes: Vec<String> = Vec::new();
+    {
+        if state.main_run.is_some() {
+            match settle_main_run(&paths, d, &mut state) {
+                Some(note) => notes.push(note),
+                None => notes.push("main in flight".into()),
+            }
+        }
+        if let Some(run) = state.head_run.clone() {
+            let alive = (d.alive)(run.pid);
+            let over = alive && d.now.timestamp() - run.started > HEAD_LIMIT_S;
+            if alive && !over {
+                notes.push(format!("head {} in flight", short(&run.sha)));
+            } else {
+                // One PR read settles it, however the tick's budget sits.
+                let read = crate::stacked_base_stamp::origin_slug(paths.repo, d.run)
+                    .and_then(|slug| open_prs(&paths, d, &slug).map(|prs| (slug, prs)));
+                match read {
+                    Some((slug, prs)) => {
+                        settle_head_run(&paths, d, &mut state, &slug, &prs);
+                        if state.head_run.is_some() {
+                            notes.push(format!("head {} held", short(&run.sha)));
+                        } else {
+                            notes.push("head settled".into());
+                        }
+                    }
+                    None => notes.push("head pr read failed".into()),
+                }
+            }
+        }
+    }
+    if notes.is_empty() {
+        "idle".into()
+    } else {
+        notes.join("; ")
+    }
 }
 
 /// The zero-match answer. Heads on this machine but not this sha is a true
-/// negative; no heads at all means this machine likely never ran the gate, so
 /// the line points at the status that names the owner.
 fn zero_match_line(record_here: bool, prefix: &str, found: usize) -> String {
     let count = format!("gate-retry: {found} heads match {prefix}");
@@ -1753,20 +2098,6 @@ mod tests {
 
     const SHA: &str = "abcdef1234567890";
     const SHA2: &str = "1234567890abcdef";
-
-    #[test]
-    fn checkout_of_resolves_the_ref_slots_bank_to_its_own_checkout() {
-        // state_dir/ref-<slot>/evals/bank -> state_dir/ref-<slot>: the dir
-        // whose crates/ the build wrapper compiles. One parent short and the
-        // build looks for <state_dir>/crates, which never exists.
-        let bank = Path::new("/state/evals-gate/ref-head/evals/bank");
-        assert_eq!(
-            checkout_of(bank),
-            Some(Path::new("/state/evals-gate/ref-head"))
-        );
-        assert_eq!(checkout_of(Path::new("/evals/bank")), Some(Path::new("/")));
-        assert_eq!(checkout_of(Path::new("/bank")), None);
-    }
 
     fn ok(stdout: &str) -> Option<Run> {
         Some(Run {
@@ -2070,14 +2401,40 @@ mod tests {
                 s.worker.main_tried = Some(tried);
             });
         }
+
+        /// A world whose single head launched once already: the queue's
+        /// pending and the launch's run-in-flight both posted, the run is
+        /// seated.
+        fn first_launch_world() -> World {
+            let w = World::new("skills/x/SKILL.md\n");
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            w
+        }
+
+        /// Appends N rows of one status for a task in one cohort.
+        fn append_status_rows(&self, cohort: &str, task: &str, status: &str, n: usize) {
+            std::fs::create_dir_all(self.history().parent().unwrap()).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.history())
+                .unwrap();
+            for _ in 0..n {
+                let row = json!({"task_id": task, "tier": "capability", "pass": true,
+                    "status": status, "variant": "v1", "experiment_id": cohort});
+                writeln!(f, "{row}").unwrap();
+            }
+        }
     }
 
     #[test]
     fn a_crate_head_runs_only_the_tasks_covering_it_and_an_uncovered_one_posts_nothing() {
-        // (changed files, tasks the one launch must hold or None, statuses posted)
+        // (changed files, tasks the one launch must hold or None, statuses
+        // posted: the queue's pending plus the launch's run-in-flight)
         let cases = [
-            ("cli/x/a.rs\n", Some("--task c1 "), 1),
-            ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 1),
+            ("cli/x/a.rs\n", Some("--task c1 "), 2),
+            ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 2),
             ("cli/y/a.rs\n", None, 0),
         ];
         for (files, task_arg, posted) in cases {
@@ -2155,34 +2512,45 @@ mod tests {
     }
 
     #[test]
-    fn with_no_baseline_the_main_leg_runs_goldens_and_no_status_posts() {
+    fn with_no_baseline_the_main_leg_runs_goldens_and_the_head_still_runs() {
         let w = World::new("skills/x/SKILL.md\n");
         w.tick(true, Utc::now());
         let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1);
-        let argv = spawns[0].join(" ");
-        assert!(argv.contains("--tag golden --repeat 3"), "{argv}");
-        assert!(argv.contains("--ref mainsha"), "{argv}");
-        assert!(w.posts.borrow().is_empty());
+        assert_eq!(spawns.len(), 2, "one main run and one head run");
+        assert!(
+            spawns[0].join(" ").contains("--tag golden --repeat 3"),
+            "{spawns:?}"
+        );
+        assert!(spawns[0].join(" ").contains("--ref mainsha"), "{spawns:?}");
+        drop(spawns);
+        // The head posts its own pending pair; the main leg posts nothing.
+        let posts = w.posts.borrow();
+        assert_eq!(posts.len(), 2, "{posts:?}");
+        assert!(
+            posts.iter().all(|p| p.contains("state=pending")),
+            "{posts:?}"
+        );
     }
 
     /// The merge door's expectation probe: the tick's own precondition,
     /// answered from the same state and the same covers map. A head the
-    /// daemon cannot judge (no baseline yet, no gate state at all) owes no
-    /// status, so the door never holds it.
+    /// daemon cannot see (no gate state at all) owes no status, so the door
+    /// never holds it; gate state alone puts the head on the hook, because a
+    /// head now grades on its own pass rate before any baseline is seated.
     #[test]
-    fn the_merge_door_expects_a_status_only_for_a_gated_head_with_a_seated_baseline() {
+    fn the_merge_door_expects_a_status_once_gate_state_exists() {
         let w = World::new("skills/x/SKILL.md\n");
         let gated = vec!["skills/x/SKILL.md".to_string()];
         let ungated = vec!["cli/src/fno/whatever.py".to_string()];
-        // First install: no gate state at all reads no baseline -> no debt.
+        // No gate state at all: a merge from a non-daemon machine keeps
+        // today's pass.
         assert!(!head_owes_status(w.dir.path(), &w.history(), &gated));
 
-        // A seated baseline + a gated diff owes a status.
-        w.state(|s| s.worker.baseline = Some("base".into()));
+        // Gate state, baseline or not: a gated diff owes a status.
+        w.state(|s| s.worker.baseline = None);
         assert!(head_owes_status(w.dir.path(), &w.history(), &gated));
 
-        // The same baseline + an ungated diff owes none.
+        // The same gate state + an ungated diff owes none.
         assert!(!head_owes_status(w.dir.path(), &w.history(), &ungated));
 
         // A covered prefix from the checkout's own bank owes one too (the
@@ -2221,7 +2589,10 @@ mod tests {
         let state = load_state(&dir);
         assert_eq!(w.spawns.borrow().len(), 1, "no retry before the wait ends");
         let failure = state.worker.main_failure.as_ref().unwrap();
-        assert_eq!(failure.cause, "wrote no grade: Error: unknown lane");
+        assert_eq!(
+            failure.cause,
+            "wrote no grade: 0 of 1 gate tasks (missing: g2): Error: unknown lane"
+        );
         assert!(
             state.last_note.contains("unknown lane"),
             "{}",
@@ -2273,6 +2644,51 @@ mod tests {
         assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
         assert!(state.worker.main_failure.is_none());
         assert_eq!(w.spawns.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_main_that_missed_gate_tasks_is_no_baseline_and_retries_the_same_day() {
+        let w = World::new("skills/x/SKILL.md\n");
+        std::fs::write(
+            w.dir.path().join("evals/bank/g6.yaml"),
+            "id: g6\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden]\n",
+        )
+        .unwrap();
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
+        w.tick(true, now);
+        let cohort = load_state(&state_dir(&w.history()))
+            .worker
+            .main_tried
+            .unwrap();
+        // The run died at one of two goldens: g2 graded, g6 never wrote a row.
+        w.rows(&cohort, "g2", [true, true, true]);
+        w.tick(false, now);
+        let state = load_state(&state_dir(&w.history()));
+        assert!(
+            state.worker.baseline.is_none(),
+            "a partial main is no baseline"
+        );
+        let failure = state.worker.main_failure.as_ref().unwrap();
+        assert!(
+            failure.cause.starts_with("wrote no grade"),
+            "{}",
+            failure.cause
+        );
+        assert!(failure.cause.contains("missing: g6"), "{}", failure.cause);
+
+        // The same cohort retries the same day: after the retry wait the
+        // main leg launches again instead of sitting tried until midnight.
+        w.tick(true, now + chrono::Duration::seconds(MAIN_RETRY_S + 1));
+        let spawns = w.spawns.borrow();
+        assert!(spawns.len() >= 2, "the same-day retry launched");
+        assert!(
+            spawns.last().unwrap().join(" ").contains("--tag golden"),
+            "{spawns:?}"
+        );
     }
 
     #[test]
@@ -2335,7 +2751,7 @@ mod tests {
         let w = World::new("skills/x/SKILL.md\n");
         w.with_baseline();
         w.tick(true, Utc::now());
-        assert_eq!(w.posts.borrow().len(), 1);
+        assert_eq!(w.posts.borrow().len(), 2, "{:?}", w.posts.borrow());
         assert!(w.posts.borrow()[0].contains("state=pending"));
         let argv = w.spawns.borrow()[0].join(" ");
         assert!(argv.contains("--task g1 --repeat 3 --workers 4"), "{argv}");
@@ -2546,13 +2962,14 @@ mod tests {
     }
 
     #[test]
-    fn a_baseline_that_predates_the_head_tasks_requeues_pending_not_red() {
+    fn a_baseline_that_predates_the_head_tasks_own_grades_not_red() {
         let w = World::new("skills/x/SKILL.md\n");
         w.with_baseline();
         w.tick(true, Utc::now());
         assert_eq!(w.spawns.borrow().len(), 1, "head launched");
-        // The baseline's rows vanish mid-run (a reaped history answers this),
-        // so the compare folds no rows on the baseline side.
+        // The baseline's rows vanish mid-run (a reaped history answers
+        // this), but the head wrote passing rows: the head grades on its
+        // own pass rate instead of waiting for a covering baseline.
         let kept: Vec<String> = std::fs::read_to_string(w.history())
             .unwrap()
             .lines()
@@ -2560,22 +2977,34 @@ mod tests {
             .map(String::from)
             .collect();
         std::fs::write(w.history(), kept.join("\n") + "\n").unwrap();
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
         w.tick(false, Utc::now());
         let posts = w.posts.borrow();
         let post = posts.last().cloned().unwrap();
-        assert!(post.contains("state=pending"), "{post}");
-        assert!(post.contains("waiting for a gate-main baseline"), "{post}");
+        assert!(post.contains("state=success"), "{post}");
+        assert!(post.contains("own pass rate"), "{post}");
+        drop(posts);
         let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
-        assert!(state.head_run.is_none(), "the pending requeues the head");
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(DONE));
+        assert!(state.head_run.is_none(), "the verdict settles the head");
 
-        // The next tick holds the launch instead of spending it again, and
-        // posts nothing beyond the queue's pending and the settle's pending:
-        // no red, no run, until a baseline covers the selection.
-        let posted = w.posts.borrow().len();
-        w.tick(true, Utc::now());
-        assert_eq!(w.spawns.borrow().len(), 1, "no second spend");
-        assert_eq!(w.posts.borrow().len(), posted, "no new posts");
+        // A head whose own run wrote nothing with no covering baseline has
+        // no grade to show: red, retryable through gate-retry.
+        let w2 = World::new("skills/x/SKILL.md\n");
+        w2.with_baseline();
+        w2.tick(true, Utc::now());
+        let kept: Vec<String> = std::fs::read_to_string(w2.history())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.contains("\"experiment_id\":\"base\""))
+            .map(String::from)
+            .collect();
+        std::fs::write(w2.history(), kept.join("\n") + "\n").unwrap();
+        w2.tick(false, Utc::now());
+        let post = w2.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=failure"), "{post}");
+        assert!(post.contains("no grade"), "{post}");
     }
 
     #[test]
@@ -2595,22 +3024,26 @@ mod tests {
     }
 
     #[test]
-    fn a_head_settled_with_no_baseline_at_all_reads_pending_and_requeues() {
+    fn a_head_with_no_baseline_at_all_still_runs_and_own_grades() {
         let w = World::new("skills/x/SKILL.md\n");
         w.with_baseline();
         w.tick(true, Utc::now());
         w.state(|s| s.worker.baseline = None);
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
         w.tick(false, Utc::now());
         let post = w.posts.borrow().last().cloned().unwrap();
-        assert!(post.contains("state=pending"), "{post}");
-        assert!(post.contains("first gate-main baseline"), "{post}");
+        // No baseline at all is no reason to wait: the head's own rows
+        // decide, and its passing rows read green.
+        assert!(post.contains("state=success"), "{post}");
+        assert!(post.contains("own pass rate"), "{post}");
         let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(DONE));
         assert!(state.head_run.is_none());
     }
 
     #[test]
-    fn a_head_its_baseline_cannot_cover_waits_instead_of_spending_a_run() {
+    fn a_head_its_baseline_cannot_cover_runs_and_grades_on_its_own_pass_rate() {
         let w = World::new("skills/x/SKILL.md\n");
         w.rows("base", "g_other", [true, true, true]);
         let tried = format!(
@@ -2623,13 +3056,37 @@ mod tests {
             s.worker.main_tried = Some(tried);
         });
         w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "the head launches anyway");
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=success"), "{post}");
+        assert!(post.contains("own pass rate"), "{post}");
+    }
+
+    #[test]
+    fn a_head_run_of_only_unavailable_rows_reads_pending_and_the_relaunch_reposts_pending() {
+        let w = World::first_launch_world();
+        // The run's rows all read status unavailable (a daemon gap): the
+        // settle reads pending and requeues, never red.
+        w.append_status_rows("gate-head-abcdef123456", "g1", "unavailable", 3);
+        w.tick(false, Utc::now());
         let posts = w.posts.borrow();
-        assert_eq!(posts.len(), 1, "only the queue's pending posts");
-        assert!(posts[0].contains("state=pending"), "{posts:?}");
+        assert!(
+            posts.iter().any(|p| p.contains("only unavailable rows")),
+            "{posts:?}"
+        );
         drop(posts);
-        assert!(w.spawns.borrow().is_empty(), "no run spent");
         let state = load_state(&dir_of(&w));
         assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        // The same pass relaunches the head (settle runs before the launch
+        // loop), and the relaunch posts pending, so a re-queued head never
+        // keeps an older red while it re-runs.
+        assert!(state.head_run.is_some(), "the head re-ran");
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=pending"), "{post}");
+        assert!(post.contains("run in flight"), "{post}");
     }
 
     #[test]
@@ -2670,9 +3127,15 @@ mod tests {
         // this remove fails and the slot poisons every later tick.
         run(&["worktree", "lock", slot.to_str().unwrap()]);
         w.tick(true, Utc::now());
+        // The healing contract is about this slot, not about how many other
+        // slots a tick may seat: the head leg launches its own runs, and the
+        // lead seat's selection can add its own re-checkout.
+        let slot_str = slot.to_string_lossy().into_owned();
         let adds = w.adds.borrow();
-        assert_eq!(adds.len(), 1, "the slot was re-added: {adds:?}");
-        assert_eq!(adds[0], slot.to_string_lossy(), "{adds:?}");
+        assert!(
+            adds.iter().any(|a| a == &slot_str),
+            "the slot was re-added: {adds:?}"
+        );
         drop(adds);
         let head = String::from_utf8_lossy(
             &std::process::Command::new("git")
@@ -2741,8 +3204,9 @@ mod tests {
             "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
         )
         .unwrap();
-        // Head 7 covers a task the baseline never graded; head 8 is gated and
-        // fully covered. The lane must reach head 8 in the same tick.
+        // Head 7 covers a task the baseline never graded and would need a
+        // build the fixture cannot seat; its launch attempt skips and the
+        // lane still reaches head 8 in the same tick.
         w.files_b = "skills/s\n".into();
         w.with_baseline();
         w.tick(true, Utc::now());
@@ -2759,6 +3223,156 @@ mod tests {
 
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
+    }
+
+    // ── the settle lock ────────────────────────────────────────────────────
+
+    /// Two graders, one finished run: the daemon settles a run whose grading
+    /// tick loaded state before the settle saved. The second grader holds a
+    /// stale clone with `head_run` still set; the lock admits the first and
+    /// the second re-reads state under the lock and finds nothing, so the
+    /// verdict posts once.
+    #[test]
+    fn a_second_grader_holding_a_stale_state_never_reposts_a_settled_run() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        let now = Utc::now();
+        w.state(|s| {
+            s.head_run = Some(HeadRun {
+                pr: 7,
+                sha: SHA.into(),
+                cohort: cohort.clone(),
+                pid: 4242,
+                started: (now - chrono::Duration::seconds(30)).timestamp(),
+                tasks: vec!["g1".into()],
+                skipped: Vec::new(),
+                built: true,
+            });
+        });
+        let posts = RefCell::new(Vec::<String>::new());
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["gh", "api", "--method", "POST", _, "-f", _, _, _, _, _] => {
+                    posts.borrow_mut().push("posted".into());
+                    ok("{}")
+                }
+                _ => ok("{}"),
+            }
+        };
+        let is_alive = |_: u32| false;
+        let noop_kill = |_: u32| {};
+        let noop_room = |_: &Path, _: DateTime<Utc>| Some(true);
+        let deps = Deps {
+            run: &run,
+            slot_run: &run,
+            spawn: &|_, _, _| Ok(0),
+            alive: &is_alive,
+            kill: &noop_kill,
+            room: &noop_room,
+            now,
+        };
+        let paths = Paths {
+            history: &w.history(),
+            fno_bin: "fno",
+            repo: w.dir.path(),
+            state_dir: dir_of(&w),
+            graph: None,
+        };
+        let slug = "o/r";
+        let prs = vec![Pr {
+            number: 7,
+            sha: SHA.into(),
+            armed: false,
+        }];
+        let mut state = load_state(&paths.state_dir);
+        settle_head_run(&paths, &deps, &mut state, slug, &prs);
+        assert_eq!(posts.borrow().len(), 1, "the first grader posts");
+        let settled = load_state(&paths.state_dir);
+        assert!(settled.head_run.is_none(), "the run cleared");
+
+        // The racing grader loaded state before the settle saved. Its stale
+        // clone still carries the run; the lock is free now (the first
+        // grader released), so it acquires, re-reads, and finds nothing.
+        let mut stale = load_state(&paths.state_dir);
+        stale.head_run = Some(HeadRun {
+            pr: 7,
+            sha: SHA.into(),
+            cohort: cohort.clone(),
+            pid: 4242,
+            started: (now - chrono::Duration::seconds(30)).timestamp(),
+            tasks: vec!["g1".into()],
+            skipped: Vec::new(),
+            built: true,
+        });
+        settle_head_run(&paths, &deps, &mut stale, slug, &prs);
+        assert_eq!(posts.borrow().len(), 1, "the stale grader must not repost");
+        // And it synced: the stale clone's run is gone after the re-read.
+        assert!(stale.head_run.is_none());
+    }
+
+    /// The daemon's minute settle settles a finished head run without any
+    /// pr-watch tick: one gh read, one verdict post, the run cleared.
+    #[test]
+    fn the_minute_settle_grades_a_finished_head_run_within_one_pass() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        let now = Utc::now();
+        w.state(|s| {
+            s.head_run = Some(HeadRun {
+                pr: 7,
+                sha: SHA.into(),
+                cohort: cohort.clone(),
+                pid: 4242,
+                started: (now - chrono::Duration::seconds(30)).timestamp(),
+                tasks: vec!["g1".into()],
+                skipped: Vec::new(),
+                built: true,
+            });
+        });
+        let posts = RefCell::new(Vec::<String>::new());
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["gh", "api", "--method", "POST", _, "-f", _, _, _, _, _] => {
+                    posts.borrow_mut().push("posted".into());
+                    ok("{}")
+                }
+                ["gh", "api", e] if e.contains("/pulls?") => {
+                    let row = json!({"number": 7,
+                        "auto_merge": Value::Null,
+                        "head": {"sha": SHA, "repo": {"full_name": "o/r"}}});
+                    ok(&Value::Array(vec![row]).to_string())
+                }
+                ["gh", "api", e] if e.contains("remote") => ok("git@github.com:o/r.git\n"),
+                ["git", "remote", ..] => ok("git@github.com:o/r.git\n"),
+                _ => ok("{}"),
+            }
+        };
+        let is_alive = |_: u32| false;
+        let noop_kill = |_: u32| {};
+        let noop_room = |_: &Path, _: DateTime<Utc>| Some(true);
+        let deps = Deps {
+            run: &run,
+            slot_run: &run,
+            spawn: &|_, _, _| Ok(0),
+            alive: &is_alive,
+            kill: &noop_kill,
+            room: &noop_room,
+            now,
+        };
+        let paths = Paths {
+            history: &w.history(),
+            fno_bin: "fno",
+            repo: w.dir.path(),
+            state_dir: dir_of(&w),
+            graph: None,
+        };
+        let note = daemon_settle_with(&paths, &deps);
+        assert!(note.contains("settled"), "{note}");
+        assert_eq!(posts.borrow().len(), 1, "one verdict posts");
     }
 
     // ── the disarm sweep ─────────────────────────────────────────────────

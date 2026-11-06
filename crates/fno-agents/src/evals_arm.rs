@@ -1,10 +1,10 @@
 //! `evals-arm`: the eval bank's scheduled writer, native.
 //!
-//! Two modes behind one command. **Tick mode** (default) is the pr-watch tick's
-//! evals leg: when the newest regression-tier run is older than
+//! Two modes behind one command. **Tick mode** (default) is the daemon's
+//! scheduled evals arm: when the newest regression-tier run is older than
 //! `evals.schedule_days` it launches **run mode** detached (new session,
 //! stdio on /dev/null) and holds the `evals:scheduled-run` claim across
-//! ticks, so the 480s tick budget never bounds the task-timeout sum. The bank holds one reserved slot: a fleet at `max_live` never
+//! daemon ticks, so the pr-watch deadline never bounds the task-timeout sum. The bank holds one reserved slot: a fleet at `max_live` never
 //! blocks the launch (only a fleet incident or low ram does), so a busy
 //! machine cannot starve the bank the way a `fleet_full` skip every tick
 //! did. **Run mode** (`--run`) is the child:
@@ -185,6 +185,15 @@ fn bank_repo(o: &Opts) -> Option<PathBuf> {
     if let Some(repo) = &o.repo {
         return Some(repo.clone()).filter(has_bank);
     }
+    any_bank_repo()
+}
+
+/// The repo resolution minus the explicit `--repo` override: the plugin
+/// root, the cwd and its ancestors, the registered projects - the first
+/// checkout with a bank. The daemon's settle arm resolves the gate's repo
+/// with this, since no caller hands it one.
+pub(crate) fn any_bank_repo() -> Option<PathBuf> {
+    let has_bank = |root: &PathBuf| root.join("evals").join("bank").is_dir();
     let plugin = crate::provider::plugin_root().filter(|root| root.join(".git").exists());
     let cwd = std::env::current_dir().ok();
     plugin

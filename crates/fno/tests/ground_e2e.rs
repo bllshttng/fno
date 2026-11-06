@@ -40,7 +40,7 @@ fn ground_set_and_restore_ride_the_launch_and_exit() {
     settle(&mut h, 500);
     let raw = h.raw_output();
     assert!(
-        raw.contains("\x1b]111\x1b\\\x1b]110\x1b\\\x1b]104\x1b\\"),
+        raw.contains("\x1b]111\x1b\\\x1b]110\x1b\\\x1b]112\x1b\\\x1b]104\x1b\\"),
         "exit restores background, foreground and palette"
     );
 }
@@ -62,7 +62,7 @@ fn sigterm_restores_the_ground_too() {
     settle(&mut h, 500);
     let raw = h.raw_output();
     assert!(
-        raw.contains("\x1b]111\x1b\\\x1b]110\x1b\\\x1b]104\x1b\\"),
+        raw.contains("\x1b]111\x1b\\\x1b]110\x1b\\\x1b]112\x1b\\\x1b]104\x1b\\"),
         "SIGTERM restores background, foreground and palette"
     );
     assert!(

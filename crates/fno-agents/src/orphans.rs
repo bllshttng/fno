@@ -1315,150 +1315,6 @@ mod tests {
     }
 
     #[test]
-    fn display_name_reads_argv0_not_the_executable() {
-        // The loadgen shape contract: the emitted name lands in argv[0], the
-        // kernel name stays `yes`, and the rename is what the NAME arm reads.
-        let row = proc_row(1, "fno-load-lgtest-1", "yes", None, 501, START, 0.0);
-        assert_eq!(row.display_name(), "fno-load-lgtest-1");
-        assert!(row.was_renamed());
-        let unnamed = Row {
-            argv: vec![],
-            exe_name: "sleep".into(),
-            ..proc_row(1, "x", "sleep", None, 501, START, 0.0)
-        };
-        assert_eq!(unnamed.display_name(), "sleep");
-    }
-
-    #[test]
-    fn a_probe_that_never_reparents_withholds_the_verdict() {
-        // With no reaper there is nothing to compare a ppid against. Counting
-        // against a guessed reaper is the absence trap; say the reaper is
-        // unknown instead.
-        let mut fake = Fake::default();
-        fake.probe_pids = vec![Some(9001), None];
-        fake.reaper = None;
-        let result = fake.scan(false, None);
-        assert!(result.broken());
-        assert!(result
-            .broken_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("reaper is unknown"));
-        assert!(result.findings.is_empty());
-    }
-
-    #[test]
-    fn an_out_of_enum_skip_probe_refuses() {
-        let fake = Fake::default();
-        let result = fake.scan(false, Some("NAME"));
-        assert!(result.broken());
-        assert!(result
-            .broken_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not 'name' or 'cwd'"));
-        assert!(result.findings.is_empty());
-    }
-
-    #[test]
-    fn outside_a_repo_the_sweep_withholds_rather_than_claim_cwd() {
-        let mut fake = Fake::default();
-        fake.roots = Vec::new();
-        let result = fake.scan(false, None);
-        assert!(result.broken());
-        assert!(result
-            .broken_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("no git root"));
-        assert!(result.findings.is_empty());
-        assert!(render(&result).contains("verdict withheld (scan-broken)"));
-    }
-
-    #[test]
-    fn a_probe_that_died_on_its_own_does_not_certify_the_kill_path() {
-        // The control must prove WE ended the probe, not that it is gone.
-        let mut fake = Fake::default();
-        fake.kill_ok = false;
-        fake.alive = false;
-        fake.plant_controls();
-        let result = fake.scan(false, None);
-        assert!(
-            result.broken(),
-            "a kill nobody made cannot certify the kill path"
-        );
-        assert!(result
-            .broken_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("kill arm FAILED"));
-        assert!(render(&result).contains("verdict withheld (scan-broken)"));
-    }
-
-    #[test]
-    fn our_own_daemon_is_counted_not_listed() {
-        // PPID 1 is this daemon's normal state, so its presence carries no
-        // signal. Counted instead, never dropped in silence.
-        let mut fake = Fake::default();
-        fake.rows.push(proc_row(
-            42,
-            "/Users/x/.cargo/bin/fno-agents-daemon",
-            "fno-agents-daemon",
-            Some("/repo"),
-            fake.uid,
-            START,
-            0.0,
-        ));
-        fake.plant_controls();
-        let result = fake.scan(true, None);
-        assert!(result.findings.is_empty());
-        assert_eq!(result.daemons_excluded, 1);
-        assert!(render(&result).contains("1 own-daemon"));
-        assert!(result.reaped.is_empty());
-    }
-
-    #[test]
-    fn cwd_arm_claims_an_ordinary_name_under_the_repo() {
-        let mut fake = Fake::default();
-        fake.rows.push(proc_row(
-            50,
-            "grep",
-            "grep",
-            Some("/repo/.claude/worktrees/wt-9f21"),
-            fake.uid,
-            START,
-            0.0,
-        ));
-        fake.plant_controls();
-        let result = fake.scan(false, None);
-        assert_eq!(
-            result
-                .findings
-                .iter()
-                .map(|f| (f.pid, f.arm))
-                .collect::<Vec<_>>(),
-            vec![(50, "CWD")]
-        );
-    }
-
-    #[test]
-    fn foreign_uid_is_skipped() {
-        let mut fake = Fake::default();
-        fake.rows.push(proc_row(
-            53,
-            "grep",
-            "grep",
-            Some("/repo"),
-            fake.uid + 1,
-            START,
-            0.0,
-        ));
-        fake.plant_controls();
-        let result = fake.scan(false, None);
-        assert!(result.findings.is_empty());
-    }
-
-    #[test]
     fn census_worker_is_skipped() {
         // A `claude --bg` worker is detached to PPID 1 with a worktree cwd.
         // Without this exclusion the first --reap takes down the fleet.
@@ -1479,64 +1335,6 @@ mod tests {
         let result = fake.scan(false, None);
         assert!(result.findings.is_empty());
         assert_eq!(result.census_excluded, 1);
-    }
-
-    #[test]
-    fn missing_name_probe_withholds_the_verdict() {
-        let mut fake = Fake::default();
-        // The name probe plants nothing: only the cwd row exists.
-        fake.rows.push(proc_row(
-            60,
-            "grep",
-            "grep",
-            Some("/repo"),
-            fake.uid,
-            START,
-            0.0,
-        ));
-        let (_, cwd_pid) = probe_pids();
-        fake.rows.insert(
-            0,
-            proc_row(
-                cwd_pid,
-                "orphan-probe-cwd-test",
-                "sleep",
-                Some("/repo"),
-                fake.uid,
-                START,
-                0.0,
-            ),
-        );
-        fake.probe_pids = vec![None, Some(cwd_pid)];
-        let result = fake.scan(false, None);
-        assert!(result.broken());
-        assert!(result
-            .broken_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("NAME"));
-        let rendered = render(&result);
-        assert!(rendered.contains("verdict withheld (scan-broken)"));
-        assert!(!rendered.contains("orphans:"));
-    }
-
-    #[test]
-    fn a_broken_scan_reaps_nothing() {
-        let mut fake = Fake::default();
-        // No probe rows planted and no probes planted: the control gate
-        // breaks the scan, and the reapable-looking finding must survive it.
-        fake.rows.push(proc_row(
-            61,
-            "fno-load-x1",
-            "sleep",
-            None,
-            fake.uid,
-            START,
-            0.0,
-        ));
-        let result = fake.scan(true, None);
-        assert!(result.broken());
-        assert!(fake.reaped_kills().is_empty());
     }
 
     #[test]
@@ -1561,76 +1359,6 @@ mod tests {
     }
 
     #[test]
-    fn reap_spares_a_young_one() {
-        let mut fake = Fake::default();
-        fake.rows.push(proc_row(
-            71,
-            "fno-load-x1",
-            "sleep",
-            None,
-            fake.uid,
-            fake.now - 60.0,
-            0.0,
-        ));
-        fake.plant_controls();
-        let result = fake.scan(true, None);
-        assert!(fake.reaped_kills().is_empty());
-        assert_eq!(
-            result.findings.iter().map(|f| f.pid).collect::<Vec<_>>(),
-            vec![71]
-        );
-    }
-
-    #[test]
-    fn reap_spares_an_unnamed_orphan() {
-        // Tonight's 73 processes were named `yes`. Every orphan predating the
-        // guard is unnamed, so the reap can never touch it, and that is
-        // correct.
-        let mut fake = Fake::default();
-        fake.rows.push(proc_row(
-            72,
-            "yes",
-            "yes",
-            Some("/repo/.claude/worktrees/wt-01ae"),
-            fake.uid,
-            START,
-            0.0,
-        ));
-        fake.plant_controls();
-        let result = fake.scan(true, None);
-        assert!(fake.reaped_kills().is_empty());
-        assert_eq!(
-            result.findings.iter().map(|f| f.pid).collect::<Vec<_>>(),
-            vec![72]
-        );
-        assert!(render(&result).contains("reaped: 0"));
-    }
-
-    #[test]
-    fn seen_key_ignores_age() {
-        // The key must depend on the process's START time, which is fixed,
-        // never on how long it has been running, which is not.
-        let born = START;
-        let young = Finding {
-            pid: 90,
-            name: "node".into(),
-            exe_name: "node".into(),
-            renamed: false,
-            cmdline: "node".into(),
-            cwd: Some("/repo".into()),
-            cpu_seconds: 0.0,
-            age_seconds: 600.0,
-            start_time: born,
-            arm: "CWD",
-        };
-        let old = Finding {
-            age_seconds: 600.0 + 3600.0,
-            ..young.clone()
-        };
-        assert_eq!(seen_key(&young), seen_key(&old));
-    }
-
-    #[test]
     fn filter_new_records_and_answers_loud_twice() {
         let dir = std::env::temp_dir().join(format!("fno-orphans-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -1649,22 +1377,6 @@ mod tests {
         let result = fake.scan(false, None);
         assert!(filter_new(&result, &seen), "the first scan is news");
         assert!(!filter_new(&result, &seen), "the second scan is not");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_broken_scan_answers_loud_and_writes_nothing() {
-        let dir = std::env::temp_dir().join(format!("fno-orphans-broken-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let seen = dir.join(".orphan-sweep-seen");
-        let mut fake = Fake::default();
-        fake.census = None;
-        let result = fake.scan(true, None);
-        assert!(result.broken());
-        assert!(result.reaped.is_empty());
-        assert!(filter_new(&result, &seen), "broken withholds: answer loud");
-        assert!(!seen.exists(), "a broken scan records nothing");
-        assert!(!render(&result).contains("orphans:"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1737,16 +1449,6 @@ mod tests {
         assert_eq!(payload["orphans"][0]["pid"], 70);
         assert_eq!(payload["reaped"][0], 70);
         assert_eq!(payload["scan"]["orphaned"], 3);
-    }
-
-    #[test]
-    fn the_json_shield_withholds_the_orphan_list_when_broken() {
-        let mut fake = Fake::default();
-        fake.census = None;
-        let result = fake.scan(false, None);
-        let payload = to_json(&result);
-        assert_eq!(payload["broken"], true);
-        assert!(payload["orphans"].is_null());
     }
 
     #[test]

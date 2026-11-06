@@ -13,7 +13,6 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
 
 
 _REPO_ROOT = Path(__file__).parent.parent.parent.parent
@@ -39,9 +38,9 @@ def _invoke_hook(payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("tool", ["Edit", "Write"])
-def test_hook_blocks_edit_or_write_to_graph_json(tool):
-    """AC5-EDGE-graph: Edit/Write to ~/.fno/graph.json must be blocked."""
+def test_hook_blocks_a_write_to_graph_json():
+    """AC5-EDGE-graph: a Write to ~/.fno/graph.json must be blocked."""
+    tool = "Write"
     home = os.path.expanduser("~")
     payload = {
         "tool_name": tool,

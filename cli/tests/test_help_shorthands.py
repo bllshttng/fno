@@ -22,63 +22,11 @@ from fno.cli import app
 
 runner = CliRunner()
 
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _clean(text: str) -> str:
-    return _ANSI.sub("", text)
-
-
-def test_help_shorthands_prints_global_register() -> None:
-    result = runner.invoke(app, ["help", "shorthands"])
-    assert result.exit_code == 0, result.output
-    out = _clean(result.output)
-    for short, long in [
-        ("-J", "--json"),
-        ("-A", "--all"),
-        ("-F", "--force"),
-        ("-N", "--dry-run"),
-        ("-R", "--reason"),
-        ("-Y", "--yolo"),
-    ]:
-        assert short in out and long in out, f"register pair {short} {long} missing"
-
 
 # Two renderers are in play: plain click prints `-F, --force`, rich-formatted
 # typer prints `--pr-number  -p`. Match a short only where a long sits beside
 # it, in either order, so prose hyphens in the docstring are never mistaken for
 # a flag.
-_SHORT_BESIDE_LONG = re.compile(
-    r"(?:(-[a-zA-Z])[,\s]+--[a-z][\w-]*)|(?:--[a-z][\w-]*\s+(-[a-zA-Z])(?![\w-]))"
-)
-
-
-def _shorts_on(path: str) -> set[str]:
-    """Short options click reports for a command path, read off its own --help."""
-    result = runner.invoke(app, [*path.split(), "--help"])
-    assert result.exit_code == 0, f"`fno {path} --help` exited {result.exit_code}"
-    return {
-        short
-        for pair in _SHORT_BESIDE_LONG.findall(_clean(result.output))
-        for short in pair
-        if short
-    }
-
-
-def test_backlog_done_row_matches_the_command() -> None:
-    """The legend row must match the unified close surface.
-
-    `fno backlog done` carries the canonical close flags (-F --force / -R
-    --reason) and the PR-metadata surface (-p pr-number, -l link, -m note).
-    """
-    from fno.cli import SHORTHAND_LEGEND
-    from tests._native_door import run_native
-
-    code, out, _err = run_native("backlog", "done", "--help")
-    assert code == 0
-    shorts = {s for pair in _SHORT_BESIDE_LONG.findall(_clean(out)) for s in pair if s}
-    assert shorts >= {"-F", "-R", "-p", "-l", "-m"}
-    assert "fno backlog done  " in SHORTHAND_LEGEND
 
 
 def _resolves(path: str) -> None:

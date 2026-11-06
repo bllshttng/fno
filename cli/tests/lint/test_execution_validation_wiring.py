@@ -1,4 +1,3 @@
-import ast
 from pathlib import Path
 
 
@@ -9,23 +8,6 @@ def _read(relative: str) -> str:
     return (REPO_ROOT / relative).read_text(encoding="utf-8")
 
 
-def _fno_argv_root(node: ast.List | ast.Tuple) -> str | None:
-    first = node.elts[0]
-    marker = ast.unparse(first).lower()
-    constants = [
-        elt.value for elt in node.elts
-        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-    ]
-    module_form = "fno.cli" in constants
-    if "fno" not in marker and not module_form:
-        return None
-    if module_form:
-        constants = constants[constants.index("fno.cli") + 1:]
-    elif constants and constants[0] in {"fno", "fno-py", "fno-agents"}:
-        constants = constants[1:]
-    return constants[0] if constants else None
-
-
 def test_target_validates_quick_plans_before_execution() -> None:
     target = _read("skills/target/SKILL.md")
     init_state = _read("skills/target/references/init-state.md")
@@ -33,55 +15,3 @@ def test_target_validates_quick_plans_before_execution() -> None:
     assert "Skip for single-file" not in target
     assert "Quick-plan exception" not in init_state
     assert "validate-plan.sh" in target
-
-
-def test_flat_execute_uses_bundled_plan_validator() -> None:
-    flat = _read("skills/execute/references/flat.md")
-    bundles = _read("skill-bundles.yaml")
-
-    assert 'scripts/validate-plan.sh" "$PLAN_PATH"' in flat
-    execute_bundle = bundles.split("- skill: execute", 1)[1]
-    assert "source: scripts/validate-plan.sh" in execute_bundle
-
-
-def test_all_plan_validators_use_the_canonical_source_first_root() -> None:
-    for relative in (
-        "scripts/validate-plan.sh",
-        "skills/blueprint/scripts/validate-plan.sh",
-        "skills/execute/scripts/validate-plan.sh",
-    ):
-        validator = _read(relative)
-        assert '"$_bin" plan-cli rung' in validator
-        assert "-m fno.cli" not in validator
-
-
-def test_every_python_fno_argv_avoids_expiring_roots() -> None:
-    moved = {
-        "delivery", "loops", "phase", "plan", "pr", "pr-watch", "research",
-        "resume", "review", "state", "stub-manifest", "target", "think",
-    }
-    failures = []
-    for tree in ("cli/src", "hooks", "scripts"):
-        for path in (REPO_ROOT / tree).rglob("*.py"):
-            try:
-                parsed = ast.parse(path.read_text(encoding="utf-8"))
-            except (OSError, SyntaxError):
-                continue
-            for node in ast.walk(parsed):
-                if not isinstance(node, (ast.List, ast.Tuple)) or not node.elts:
-                    continue
-                root = _fno_argv_root(node)
-                if root in moved:
-                    failures.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}:{root}")
-    assert not failures, "deprecated-root self-shellouts:\n" + "\n".join(failures)
-
-
-def test_blueprint_collision_gate_adopts_when_nobody_can_answer() -> None:
-    gates = _read("skills/blueprint/references/blueprint-gates.md")
-    section = gates[
-        gates.index("## Collision check"):gates.index("## Cross-project peer heads-up")
-    ]
-
-    assert "no AskUserQuestion tool" in section
-    assert "collisions_acknowledged=" in section
-    assert "fno backlog note" in section

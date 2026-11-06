@@ -193,16 +193,18 @@ impl Chrome {
     /// this and every modal is sized by it, so clamping it here would resize
     /// surfaces this change has no business resizing.
     pub fn fit_to(mut self, inner_w: usize) -> Self {
-        let wrap = |s: String| {
-            if str_cols(&s) <= inner_w {
+        let wrap = |s: String, w: usize| {
+            if str_cols(&s) <= w {
                 return s;
             }
             let mut lines = Vec::new();
-            crate::client::wrap_line(&s, inner_w, &mut lines);
+            crate::client::wrap_line(&s, w, &mut lines);
             lines.join("\n")
         };
-        self.footer = self.footer.take().map(wrap);
-        self.subtitle = self.subtitle.take().map(wrap);
+        // The footer keeps its side pad, so it wraps four columns narrower.
+        let foot_w = inner_w.saturating_sub(4).max(1);
+        self.footer = self.footer.take().map(|s| wrap(s, foot_w));
+        self.subtitle = self.subtitle.take().map(|s| wrap(s, inner_w));
         self
     }
 
@@ -260,14 +262,16 @@ impl Chrome {
         // instead of cutting them. The tab strip is the same shape of chrome
         // (popup width rules): ` tab ` rows need the strip inside the border.
         let widest = |t: &Option<String>| t.iter().flat_map(|t| t.lines()).map(str_cols).max();
-        let sub_w = widest(&self.subtitle).unwrap_or(0);
-        let foot_w = widest(&self.footer).unwrap_or(0);
-        // Strip: a leading space, then per tab `● label` with two spaces
-        // between tabs - matching `tab_row`'s assembly.
+        // Both carry the two-cell side pad plus two cells of right air,
+        // matching what `frame` paints around them.
+        let sub_w = widest(&self.subtitle).map_or(0, |w| w + 4);
+        let foot_w = widest(&self.footer).map_or(0, |w| w + 4);
+        // Strip: two cells of side pad, then per tab `● label` with two
+        // spaces between tabs - matching `tab_row`'s assembly.
         let tabs_w = if self.tabs.is_empty() {
             0
         } else {
-            1 + self
+            2 + self
                 .tabs
                 .iter()
                 .map(|(l, _)| 2 + str_cols(l))
@@ -465,8 +469,13 @@ pub fn frame(body: &[BodyLine], chrome: &Chrome, body_w: usize, scroll: Option<S
     // definition (rows_above/below already account for this), so even if a Bare
     // chrome carries them they are not rendered.
     if chrome.level == Level::Full {
+        let pad = side_pad(inner_w);
         for s in chrome.subtitle.iter().flat_map(|s| s.lines()) {
-            out.push(content_row(s, Role::Subtitle, inner_w));
+            out.push(content_row(
+                &format!("{}{s}", " ".repeat(pad)),
+                Role::Subtitle,
+                inner_w,
+            ));
         }
         if !chrome.tabs.is_empty() {
             out.push(tab_row(&chrome.tabs, inner_w));
@@ -481,20 +490,34 @@ pub fn frame(body: &[BodyLine], chrome: &Chrome, body_w: usize, scroll: Option<S
     // Footer rides above the bottom border under Full; under Bare the esc hint
     // IS the bottom border, so a footer (if any was set) is ignored there.
     if chrome.level == Level::Full {
+        let pad = side_pad(inner_w);
         for f in chrome.footer.iter().flat_map(|f| f.lines()) {
-            let mut row = content_row(f, Role::Footer, inner_w);
+            let padded = format!("{}{f}", " ".repeat(pad));
+            let mut row = content_row(&padded, Role::Footer, inner_w);
             // The close words are a mouse target, defined once here so every
             // popup that sets this footer inherits the clickable close (a
             // per-modal hit test leaves the others printing the same lie).
             // Only when the words survived the row's width: a hit span reaching
             // past the border would advertise a click target that is not drawn.
-            if let Some((off, len)) = esc_close_span(f).filter(|&(off, len)| off + len <= inner_w) {
-                row.hits.push((ESC_CLOSE_HIT, off + 1, len)); // +1: past the left border
+            if let Some((off, len)) =
+                esc_close_span(f).filter(|&(off, len)| pad + off + len <= inner_w)
+            {
+                row.hits.push((ESC_CLOSE_HIT, pad + off + 1, len)); // +1: past the left border
             }
             out.push(row);
         }
     }
     out.push(bottom_border(chrome, inner_w));
+
+    // The snapshot guard walks every frame the shared chrome paints, before
+    // the flat remap re-roles the borders. The call rides the assert's args,
+    // so a release build pays nothing: the branch folds away and the format
+    // args evaluate only on failure.
+    debug_assert!(
+        pad_violations(&out).is_empty(),
+        "a framed row puts text beside a border glyph: {:?}",
+        pad_violations(&out)
+    );
 
     // The flat frame maps its chrome rows to the panel slots after building,
     // so every row helper keeps one shape and the mapping lives here, once.
@@ -744,6 +767,50 @@ fn edge_row(
     flatten(row)
 }
 
+/// The side pad every framed text row shares: two cells when the row has
+/// room, degrading 2 -> 1 -> 0 as the width shrinks. Body rows, subtitles,
+/// tab strips and footers all take it, so no text line sits beside a
+/// border glyph at a width that could ever carry air.
+fn side_pad(inner_w: usize) -> usize {
+    if inner_w >= 4 {
+        2
+    } else {
+        usize::from(inner_w > 1)
+    }
+}
+
+/// The snapshot guard's read: which framed rows put text beside a border
+/// glyph with no space between. The check is the LEFT edge only: the shared
+/// pad always precedes the text when a row carries it, so a text cell at
+/// the first inner column is the unpadded-row defect this guard exists for
+/// (the pre-fix subtitle and footer painted exactly that shape). The right
+/// edge is not checkable here: every framed row is padded to full width, so
+/// a text cell at the last inner column is a deliberately clipped or
+/// exactly-filled line (truncation, a fullwidth label, a `PopupRow::Rule`
+/// run, a scrollbar cell), all legal. Rows too narrow for the two-cell pad
+/// degrade legally and are skipped. `frame` asserts this empty, so every
+/// overlay demo that paints through the shared chrome walks the rule.
+pub(crate) fn pad_violations(lines: &[FramedLine]) -> Vec<String> {
+    let mut bad = Vec::new();
+    for line in lines {
+        let cols = str_cols(&line.text);
+        if cols.saturating_sub(2) < 4 {
+            continue;
+        }
+        let ch = line.text.chars().nth(1);
+        let role = line.roles.get(1).copied();
+        if let (Some(ch), Some(role)) = (ch, role) {
+            let chrome_cell = role == Role::Border
+                || matches!(role, Role::ScrollTrack | Role::ScrollThumb)
+                || ch == '─';
+            if ch != ' ' && !chrome_cell {
+                bad.push(format!("left edge of {:?}", line.text));
+            }
+        }
+    }
+    bad
+}
+
 /// `│ content │`, content left-aligned, padded with spaces (same role) so the
 /// inverse block stays a clean rectangle.
 fn content_row(content: &str, role: Role, inner_w: usize) -> FramedLine {
@@ -771,9 +838,10 @@ fn content_row(content: &str, role: Role, inner_w: usize) -> FramedLine {
     flatten(row)
 }
 
-/// The section tab strip: `●`/`○` (active gets the accent) + label per tab.
+/// The section tab strip: the shared two-cell side pad, then `●`/`○` (the
+/// active tab gets the accent) + label per tab.
 fn tab_row(tabs: &[(String, bool)], inner_w: usize) -> FramedLine {
-    let mut inner: Vec<Seg> = vec![(' ', Role::Tab(false))];
+    let mut inner: Vec<Seg> = vec![(' ', Role::Tab(false)), (' ', Role::Tab(false))];
     let mut hits = Vec::new();
     for (i, (label, active)) in tabs.iter().enumerate() {
         if i > 0 {
@@ -901,16 +969,12 @@ fn body_row(
     text.push('│');
     roles.push(Role::Border);
 
-    // Side padding between the border and the body text: two cells when the
-    // row has room (degrading 2 -> 1 -> 0 as the width shrinks), matching the
-    // popup's own right-edge gap. The pad joins the row's own treatment, so a
-    // whole-row selection highlight reads edge to edge, pad included
-    // (highlight-span fix).
-    let pad = if body_w >= 4 {
-        2
-    } else {
-        usize::from(body_w > 1)
-    };
+    // Side padding between the border and the body text: the shared two-cell
+    // pad (degrading as the width shrinks), matching the popup's own
+    // right-edge gap. The pad joins the row's own treatment, so a whole-row
+    // selection highlight reads edge to edge, pad included (highlight-span
+    // fix).
+    let pad = side_pad(body_w);
     let sel_from_start = line.sel_span.is_some_and(|(off, _)| off == 0);
     let pad_role = if line.disabled {
         Role::Text(TextStyle::Meta)
@@ -1099,6 +1163,90 @@ mod tests {
         );
         assert!(strip.hits.iter().all(|(t, _, _)| !is_row_hit(*t)));
         assert!(!is_row_hit(ESC_CLOSE_HIT) && is_row_hit(0));
+    }
+
+    #[test]
+    fn subtitle_tab_strip_and_footer_share_the_two_cell_side_pad() {
+        // Law: every framed text row keeps the same side air. The footer
+        // gained the pad first; the subtitle painted raw against the border
+        // and the strip led with one cell - all three now take `side_pad`.
+        let chrome = Chrome::new("t", Anchor::Center)
+            .subtitle("a subtitle line")
+            .tabs(vec![("general".into(), true)])
+            .footer("esc close");
+        let framed = frame(&[bl("row")], &chrome, 24, None);
+        let row_head = |needle: &str| {
+            framed
+                .lines
+                .iter()
+                .find(|l| l.text.contains(needle))
+                .map(|l| l.text.chars().take(4).collect::<String>())
+                .expect("the row paints")
+        };
+        assert_eq!(
+            row_head("a subtitle line"),
+            "│  a",
+            "the subtitle leads with the shared pad"
+        );
+        assert_eq!(
+            row_head("● general"),
+            "│  ●",
+            "the strip leads with the shared pad"
+        );
+        assert_eq!(row_head("esc close"), "│  e", "the footer keeps its pad");
+        assert!(pad_violations(&framed.lines).is_empty());
+    }
+
+    #[test]
+    fn the_guard_reports_text_beside_a_border_and_skips_legal_rows() {
+        // `content_row` pads the tail and never the head, so an unpadded
+        // call is exactly the defect the guard exists to catch (the
+        // pre-fix subtitle painted this shape). The check is the LEFT edge:
+        // every framed row is padded to full width, so right-edge text is a
+        // deliberately clipped or exactly-filled line, always legal.
+        let segs = |cs: &str, r: Role| cs.chars().map(|c| (c, r)).collect::<Vec<Seg>>();
+        let mut row = vec![('│', Role::Border)];
+        row.extend(segs("hint", Role::Subtitle));
+        row.push(('│', Role::Border));
+        let touching = flatten(row);
+        let bad = pad_violations(std::slice::from_ref(&touching));
+        assert_eq!(bad.len(), 1, "the left edge names the row: {bad:?}");
+        assert!(bad[0].contains("hint"), "{bad:?}");
+
+        // The padded shape is clean.
+        let padded = content_row(" hint ", Role::Subtitle, 8);
+        assert!(pad_violations(std::slice::from_ref(&padded)).is_empty());
+
+        // Right-edge text in any role is legal: a scrollbar cell, a rule
+        // run, and a clipped or exactly-filled label all end flush there.
+        let right_edge = |right: char, role: Role| {
+            let mut row = vec![('│', Role::Border)];
+            row.extend(segs(" ab ", Role::Text(TextStyle::Item)));
+            row.push((right, role));
+            row.push(('│', Role::Border));
+            flatten(row)
+        };
+        assert!(
+            pad_violations(std::slice::from_ref(&right_edge('░', Role::ScrollTrack))).is_empty()
+        );
+        assert!(pad_violations(std::slice::from_ref(&right_edge(
+            '█',
+            Role::Text(TextStyle::Item)
+        )))
+        .is_empty());
+        let mut rule = vec![('│', Role::Border)];
+        rule.extend(segs("  ", Role::Text(TextStyle::Item)));
+        rule.extend(segs("────────", Role::Text(TextStyle::Meta)));
+        rule.push(('│', Role::Border));
+        let rule_row = flatten(rule);
+        assert!(pad_violations(std::slice::from_ref(&rule_row)).is_empty());
+
+        // Rows too narrow for the two-cell pad degrade legally.
+        let mut row = vec![('│', Role::Border)];
+        row.extend(segs("a", Role::Text(TextStyle::Item)));
+        row.push(('│', Role::Border));
+        let narrow = flatten(row);
+        assert!(pad_violations(std::slice::from_ref(&narrow)).is_empty());
     }
 
     #[test]
@@ -1350,9 +1498,11 @@ mod tests {
             .iter()
             .find(|l| l.hits.iter().any(|(_, _, len)| *len == 9))
             .expect("the footer line carries the close target");
-        assert_eq!(row.hits, vec![(ESC_CLOSE_HIT, char_off + 1, 9)]);
+        // The footer wears the body's 2-cell side pad, so the span moves with it.
+        let pad = 2;
+        assert_eq!(row.hits, vec![(ESC_CLOSE_HIT, pad + char_off + 1, 9)]);
         // The span is inside the line and lands on the words.
-        let words: String = row.text.chars().skip(char_off + 1).take(9).collect();
+        let words: String = row.text.chars().skip(pad + char_off + 1).take(9).collect();
         assert_eq!(words, "esc close");
 
         // No words, no FOOTER target: a footer without "esc close"/"esc"

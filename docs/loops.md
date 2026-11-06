@@ -32,6 +32,7 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 | `heal` | `launchd:sh.fno.pr-watcher` | 600 | `auto_heal.enabled` | `pr_heal_tick` | `fno do pr watch status` |
 | `otlp_export` | `daemon` | 300 | `telemetry.otlp.enabled` | `control_plane_tick` | `fno agents feed --otlp` |
 | `eval_events` | `daemon` | 300 | `telemetry.eval_events.enabled` | `control_plane_tick` | `fno-agents evals events` |
+| `evals` | `daemon` | 60 | always | `control_plane_tick` | `fno agents loops table` |
 | `pane_loop` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 
 The launchd labels the pr-watch installer and the autocorrect installer own, as the table reports them: `sh.fno.pr-watcher`, `sh.fno.groom`, `sh.fno.autocontinue`, `sh.fno.sync-backlog`, `sh.fno.board-server`, `com.user.autocorrect`, `com.user.autocorrect-watcher`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.
@@ -147,6 +148,10 @@ Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in th
 ### eval_events
 
 Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno-agents evals events`. If the row reads `unarmed`, arm it with `fno config set telemetry.eval_events.enabled true`.
+
+### evals
+
+Start: daemon fires, every 60s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
 
 ### pane_loop
 

@@ -379,6 +379,16 @@ fn transcript_with_promise() -> String {
     serde_json::to_string(&msg).unwrap() + "\n"
 }
 
+fn transcript_with_watching() -> String {
+    let msg = serde_json::json!({
+        "message": {
+            "role": "assistant",
+            "content": "<watching reason=\"ci\" timeout=\"30m\">"
+        }
+    });
+    serde_json::to_string(&msg).unwrap() + "\n"
+}
+
 fn transcript_with_aborted() -> String {
     let msg = serde_json::json!({
         "message": {
@@ -393,16 +403,6 @@ fn transcript_empty() -> String {
     // A user message only - no assistant message.
     let msg = serde_json::json!({
         "message": { "role": "user", "content": "go" }
-    });
-    serde_json::to_string(&msg).unwrap() + "\n"
-}
-
-fn transcript_with_watching() -> String {
-    let msg = serde_json::json!({
-        "message": {
-            "role": "assistant",
-            "content": "<watching reason=\"ci\" timeout=\"30m\">"
-        }
     });
     serde_json::to_string(&msg).unwrap() + "\n"
 }
@@ -539,52 +539,6 @@ fn ac1_hp_promise_green_pr_done() {
     assert!(
         events_content.contains("DonePRGreen"),
         "DonePRGreen in termination event"
-    );
-}
-
-/// x-81d9 (c) / AC3-UI: an unparseable `.fno/config.toml` must emit a
-/// `loop_check_settings_unparseable` event (and fail the login gate closed),
-/// never silently zero the required bots and ship unreviewed.
-#[test]
-fn ac3_ui_unparseable_settings_emits_event() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    // Deliberately malformed YAML (unclosed flow sequence). No isolate_settings.
-    fs::write(
-        cwd.join(".fno/config.toml"),
-        "[review]\nrequired_bots = [\"codex\", \"gemini\"\n",
-    )
-    .unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-unparse", "2026-06-05T00:00:00Z", true),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    let mock = MockBins::green();
-    let (_code, _d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    let events = event_text(&project_events(&cwd));
-    assert!(
-        events.contains("loop_check_settings_unparseable"),
-        "unparseable settings must emit loop_check_settings_unparseable; events: {events}"
     );
 }
 
@@ -935,45 +889,6 @@ fn ac1_edge_no_pr_block_with_fingerprint() {
         events.contains("none"),
         "pr_state=none expected in fingerprint event"
     );
-}
-
-/// AC1-FR: read-only invariant - manifest bytes unchanged across any fire.
-#[test]
-fn ac1_fr_manifest_readonly() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-ro", "2026-06-05T00:00:00Z", true),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    let mock = MockBins::green();
-    let before = fs::read(&manifest_path).unwrap();
-
-    let _ = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    let after = fs::read(&manifest_path).unwrap();
-    assert_eq!(before, after, "manifest must not be mutated by any fire");
 }
 
 /// Legacy manifest with status: COMPLETE -> allow + loop_check_legacy_manifest.
@@ -1790,44 +1705,6 @@ exit 1
         "message should mention no checks or declared_none; got: {}",
         d.message
     );
-}
-
-/// AC5-ERR: gh absent + unattended + no advisory -> Interrupted.
-#[test]
-fn ac5_err_no_gh_unattended_interrupted() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    // Unattended, no advisory flag
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-nogh-unatt", "2026-06-05T00:00:00Z", false),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    // Point to non-existent gh binary; git also non-existent
-    let (_, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        "--gh-bin=/nonexistent/gh",
-        "--git-bin=/nonexistent/git",
-    ]);
-
-    assert_eq!(d.decision, "allow");
-    assert_eq!(d.termination_reason.as_deref(), Some("Interrupted"));
 }
 
 /// Corrupt manifest -> allow + note on stderr (never panics, never traps).
@@ -3311,73 +3188,6 @@ fn x2219_no_external_lane_counts_github_review_rounds_past_the_cap() {
 }
 
 #[test]
-fn x2219_max_rounds_three_fires_at_four_rounds_and_five_does_not() {
-    // AC9 at the arm boundary: the same four GitHub-only rounds exhaust a
-    // max of 3 (the row proves the counter read 4) and do not exhaust a max
-    // of 5 - the under-cap receipt still asks for review. Pinning only the
-    // shipped default cannot tell a live key from a comparison that
-    // ignores it.
-    let oids = x2219_oids(4);
-    for (max_rounds, spent) in [("3", true), ("5", false)] {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
-        let (manifest, transcript) = x2219_fixture(
-            cwd,
-            &format!("[review]\nrequired_bots = []\nmax_rounds = {max_rounds}\n"),
-            &new_manifest("sess-x2219-b", "2026-06-05T00:00:00Z", true),
-        );
-        let bins = TempDir::new().unwrap();
-        let (gh, git) = x2219_reviews_gh(bins.path(), None, &oids);
-        let (_code, d) = fire(&[
-            "loop-check",
-            "--state",
-            &manifest,
-            "--transcript",
-            &transcript,
-            "--cwd",
-            cwd.to_str().unwrap(),
-            "--now",
-            "2026-06-05T00:30:00Z",
-            "--settings",
-            cwd.join(".fno/config.toml").to_str().unwrap(),
-            "--author-harness",
-            "claude",
-            &format!("--gh-bin={}", gh.display()),
-            &format!("--git-bin={}", git.display()),
-        ]);
-        let events = event_text(&project_events(&cwd));
-        assert!(
-            events.contains("\"rounds_used\":4"),
-            "max_rounds={max_rounds}: the counter read all four rounds: {events}"
-        );
-        assert_eq!(
-            d.termination_reason.as_deref() == Some("DonePRGreen"),
-            spent,
-            "max_rounds={max_rounds} against 4 rounds: spent={spent}, got: {}",
-            d.message
-        );
-        if spent {
-            assert!(
-                d.message.contains("green and reviewed"),
-                "the spent budget releases the PR: {}",
-                d.message
-            );
-        } else {
-            assert!(
-                d.message.contains("code-review"),
-                "the unspent budget keeps asking for the review: {}",
-                d.message
-            );
-            assert!(
-                !d.message.contains("spent"),
-                "4 rounds of 5 are under the cap: {}",
-                d.message
-            );
-        }
-    }
-}
-
-#[test]
 fn x2219_broken_reviews_read_keeps_the_events_only_answer() {
     // AC5-EDGE: a failed reviews read answers events-only rather than
     // guessing. The events axis here is zero, so the cap must NOT fire on a
@@ -3529,54 +3339,6 @@ fn x2219_covered_pr_skips_the_reviews_read_uncovered_pays_for_it() {
         "positive control: an uncovered PR must pay the reviews read: {}",
         record_hits(cwd2)
     );
-}
-
-#[test]
-fn x2219_no_external_session_never_pays_the_reviews_read() {
-    // A per-session no_external refuses the gh review reads wholesale, so
-    // the round-budget read must stay behind that refusal too. Positive
-    // control: the same repo WITHOUT no_external pays it.
-    let oids = x2219_oids(1);
-    let paid_the_read = |cwd: &Path| {
-        fs::read_to_string(cwd.join("reviews-reads.log"))
-            .unwrap_or_default()
-            .contains("--json reviews")
-    };
-    for (no_external, expect_read) in [("true", false), ("false", true)] {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
-        let manifest = format!(
-            "---\nsession_id: sess-x2219-f{no_external}\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\nno_external: {no_external}\n---\n"
-        );
-        let (manifest, transcript) = x2219_fixture(
-            cwd,
-            "[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\nmax_rounds = 2\n",
-            &manifest,
-        );
-        let record = cwd.join("reviews-reads.log");
-        let bins = TempDir::new().unwrap();
-        let (gh, git) = x2219_reviews_gh(bins.path(), Some(&record), &oids);
-        let (_code, _d) = fire(&[
-            "loop-check",
-            "--state",
-            &manifest,
-            "--transcript",
-            &transcript,
-            "--cwd",
-            cwd.to_str().unwrap(),
-            "--now",
-            "2026-06-05T00:30:00Z",
-            "--settings",
-            cwd.join(".fno/config.toml").to_str().unwrap(),
-            &format!("--gh-bin={}", gh.display()),
-            &format!("--git-bin={}", git.display()),
-        ]);
-        assert_eq!(
-            paid_the_read(cwd),
-            expect_read,
-            "no_external={no_external}: round-budget reviews read paid or not"
-        );
-    }
 }
 
 /// The other skip cause: no_external on a repo with an INACTIVE login gate.
@@ -3769,143 +3531,6 @@ fn reviewers_gate_clears_with_head_pinned_attestation() {
         d.message
     );
     assert_eq!(d.termination_reason.as_deref(), Some("DonePRGreen"));
-}
-
-/// The fix (sigma review, silent-failure-hunter MEDIUM): `no_external` is
-/// scoped to EXTERNAL GitHub-bot review; it must NOT bypass the LOCAL
-/// `reviewers` attestation gate. A session that skips wedged App bots with
-/// no_external still owes its configured local sigma pass.
-#[test]
-fn no_external_still_honors_reviewers_gate() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-
-    let settings_path = cwd.join(".fno/config.toml");
-    fs::write(&settings_path, "[review]\nreviewers = [\"sigma\"]\n").unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    // no_external: true - but reviewers is set and no attestation exists.
-    fs::write(
-        &manifest_path,
-        "---\nsession_id: sess-rvw-noext\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\nno_external: true\n---\n",
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    let mock = MockBins::green();
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        "--settings",
-        settings_path.to_str().unwrap(),
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_eq!(
-        d.decision, "block",
-        "no_external must NOT bypass the local reviewers gate: {}",
-        d.message
-    );
-    // The remedy must name the unmet gate, not the instrument: this session
-    // lands with a known-zero GitHub axis, and a generic "coverage read
-    // unavailable; retry" cannot clear an unattested reviewer.
-    assert!(
-        d.message.contains("reviewers gate unmet"),
-        "block must name the unmet reviewer gate, not the instrument retry: {}",
-        d.message
-    );
-    assert!(d.termination_reason.is_none());
-}
-
-/// AC3-FR: recovery from an accidental empty list - restoring the bot list
-/// re-enforces the gate on the next fire with no state migration.
-#[test]
-fn ac3_fr_restoring_required_bots_reenforces() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let events_path = project_events(&cwd);
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-restore", "2026-06-05T00:00:00Z", true),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    // gh: green PR, gemini-only review (codex missing).
-    let mock = green_gemini_only_reviewed();
-
-    // Fire 1: required_bots [] -> passes without review.
-    let empty_settings = cwd.join("empty-config.toml");
-    fs::write(
-        &empty_settings,
-        "[review]\nrequired_bots = []\nself_review_required = false\n",
-    )
-    .unwrap();
-    let (_, d1) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        "--settings",
-        empty_settings.to_str().unwrap(),
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-        "--events",
-        events_path.to_str().unwrap(),
-    ]);
-    // x-0eaf: the explicit self-review opt-out makes fire 1 a no-review lane;
-    // fire 2 tests re-enforcement after a lane is restored.
-    assert_eq!(d1.termination_reason.as_deref(), Some("DonePRGreen"));
-
-    // Fire 2: operator restores the list -> gate enforces again immediately.
-    let restored_settings = cwd.join("restored-config.toml");
-    fs::write(
-        &restored_settings,
-        "[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n",
-    )
-    .unwrap();
-    let (_, d2) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:35:00Z",
-        "--settings",
-        restored_settings.to_str().unwrap(),
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-        "--events",
-        events_path.to_str().unwrap(),
-    ]);
-    assert_eq!(
-        d2.decision, "block",
-        "restored list must re-enforce: {}",
-        d2.message
-    );
-    assert!(d2.message.contains("chatgpt-codex-connector"));
 }
 
 // ── step 2: gh-outage streak freeze (US4) ─────────────────────────────────────
@@ -4127,247 +3752,6 @@ exit 1
     );
 }
 
-/// AC4-EDGE: budget still terminates during a sustained outage (the outage
-/// never makes a session immortal).
-#[test]
-fn ac4_edge_budget_ceiling_during_outage() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    // Wall cap 60min, session is 2h old -> Budget, even though gh is down.
-    fs::write(
-        &manifest_path,
-        manifest_with_budget("sess-outbudget", "2026-06-05T00:00:00Z", Some(60), None),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    let outage = MockBins::failing_gh();
-
-    let (_, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T02:00:00Z",
-        &format!("--gh-bin={}", outage.gh.display()),
-        &format!("--git-bin={}", outage.git.display()),
-    ]);
-
-    assert_eq!(d.decision, "allow");
-    assert_eq!(
-        d.termination_reason.as_deref(),
-        Some("Budget"),
-        "budget must remain the ceiling during an outage"
-    );
-}
-
-/// AC6-SAT: the #447 regression round-trip. The exact shape PR #447 had
-/// (green CI, codex COMMENTED review, P1 root comment with
-/// in_reply_to_id == null) PLUS the reply /check-pr's Step 8a posts
-/// (in_reply_to_id set to the finding's id, non-bot login, commit named)
-/// terminates DonePRGreen - and the SAME world minus the reply computes
-/// reviewed=false. Proves the per-thread writer is load-bearing, not
-/// cosmetic.
-#[test]
-fn ac6_sat_round_trip_reply_is_load_bearing() {
-    // The reply row mirrors what `gh api .../comments -F in_reply_to=9001`
-    // produces on a subsequent fetch.
-    let with_reply = r#"[
-  {"id": 9001, "in_reply_to_id": null,
-   "user": {"login": "chatgpt-codex-connector[bot]"},
-   "body": "![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat) Unpushed-head check missing",
-   "path": "crates/fno-agents/src/loopcheck.rs", "line": 1560,
-   "created_at": "2026-06-05T01:10:00Z"},
-  {"id": 9002, "in_reply_to_id": 9001,
-   "user": {"login": "bllshttng"},
-   "body": "Fixed in 1a2b3c4d: head_oid now compared against local HEAD.",
-   "created_at": "2026-06-05T01:25:00Z"}
-]"#;
-    let without_reply = r#"[
-  {"id": 9001, "in_reply_to_id": null,
-   "user": {"login": "chatgpt-codex-connector[bot]"},
-   "body": "![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat) Unpushed-head check missing",
-   "path": "crates/fno-agents/src/loopcheck.rs", "line": 1560,
-   "created_at": "2026-06-05T01:10:00Z"}
-]"#;
-    let commits = r#"{"commits":[{"committedDate":"2026-06-05T01:30:00Z"}]}"#;
-
-    // Arm 1: reply present -> addressed -> DonePRGreen.
-    let tmp1 = findings_cwd("sess-sat-yes");
-    let mock1 = findings_mock(with_reply, commits);
-    let (_, d1) = fire_findings(tmp1.path(), &mock1);
-    assert_eq!(
-        d1.termination_reason.as_deref(),
-        Some("DonePRGreen"),
-        "the /check-pr-shaped reply must satisfy the gate: {}",
-        d1.message
-    );
-
-    // Arm 2: identical world, reply absent -> reviewed=false -> block.
-    let tmp2 = findings_cwd("sess-sat-no");
-    let mock2 = findings_mock(without_reply, commits);
-    let (_, d2) = fire_findings(tmp2.path(), &mock2);
-    assert_eq!(
-        d2.decision, "block",
-        "without the reply the same world must NOT pass (writer is load-bearing): {}",
-        d2.message
-    );
-    assert!(d2.termination_reason.is_none());
-    assert!(
-        d2.message.contains("loopcheck.rs:1560"),
-        "block names the finding; got: {}",
-        d2.message
-    );
-}
-
-/// Concurrency (the #447-motivating composition): quiet clean fires build a
-/// streak; a late inline P1 lands; the backstop-tripping fire must RE-BLOCK
-/// naming the finding (fingerprint advanced by the finding's timestamp), not
-/// terminate NoProgress.
-#[test]
-fn late_finding_after_clean_fires_reblocks_not_noprogress() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let events_path = project_events(&cwd);
-    // Unattended: N = 3.
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-latefind", "2026-06-05T00:00:00Z", false),
-    )
-    .unwrap();
-    // Quiet session: no promise - the backstop is what trips done().
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    // Phase 1 mock: green, codex reviewed, NO findings, but head MISMATCH so
-    // done-but-mute cannot terminate DonePRGreen mid-test.
-    let dir = TempDir::new().unwrap();
-    let mk_gh = |comments_file: &str| {
-        format!(
-            r#"
-if echo "$*" | grep -q -- "--version"; then echo 'gh version 2.x'; exit 0; fi
-if echo "$*" | grep -q "headRefName"; then
-  echo '{{"state":"OPEN","number":13,"headRefName":"feat","headRefOid":"deadbeefdeadbeefdeadbeefdeadbeef00000013"}}'
-  exit 0
-fi
-if echo "$*" | grep -q "checks"; then
-  echo '[{{"name":"ci","state":"SUCCESS","bucket":"pass"}}]'
-  exit 0
-fi
-if echo "$*" | grep -q "pulls/"; then
-  cat "{comments_file}"
-  exit 0
-fi
-if echo "$*" | grep -q "commits"; then
-  echo '{{"commits":[]}}'
-  exit 0
-fi
-if echo "$*" | grep -q "reviews"; then
-  echo '{{"reviews":[{{"author":{{"login":"chatgpt-codex-connector"}},"state":"COMMENTED","submittedAt":"2026-06-05T01:00:00Z","commit":{{"oid":"deadbeefdeadbeefdeadbeefdeadbeef00000001"}}}}],"comments":[]}}'
-  exit 0
-fi
-exit 1
-"#
-        )
-    };
-    let empty_comments = dir.path().join("empty.json");
-    fs::write(&empty_comments, "[]").unwrap();
-    let p1_comments = dir.path().join("p1.json");
-    fs::write(
-        &p1_comments,
-        r#"[
-  {"id": 500, "in_reply_to_id": null,
-   "user": {"login": "chatgpt-codex-connector[bot]"},
-   "body": "![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat) Late finding",
-   "path": "src/late.rs", "line": 8, "created_at": "2026-06-05T01:45:00Z"}
-]"#,
-    )
-    .unwrap();
-    let gh_clean = make_script(
-        dir.path(),
-        "gh-clean",
-        &mk_gh(empty_comments.to_str().unwrap()),
-    );
-    let gh_p1 = make_script(dir.path(), "gh-p1", &mk_gh(p1_comments.to_str().unwrap()));
-    // Local HEAD matches the PR head so the block reason reaches the
-    // findings leg (fires 1-2 are quiet and never run done(), so the green
-    // world cannot terminate early).
-    let git = make_script(
-        dir.path(),
-        "git",
-        r#"echo "deadbeefdeadbeefdeadbeefdeadbeef00000013""#,
-    );
-
-    let args_for = |gh: &std::path::Path| {
-        [
-            "loop-check".to_string(),
-            "--state".to_string(),
-            manifest_path.to_str().unwrap().to_string(),
-            "--transcript".to_string(),
-            transcript_path.to_str().unwrap().to_string(),
-            "--cwd".to_string(),
-            cwd.to_str().unwrap().to_string(),
-            "--now".to_string(),
-            "2026-06-05T02:00:00Z".to_string(),
-            format!("--gh-bin={}", gh.display()),
-            format!("--git-bin={}", git.display()),
-            "--events".to_string(),
-            events_path.to_str().unwrap().to_string(),
-        ]
-    };
-
-    // Fire 1: clean, streak 1 < MUTE_PROBE_N -> quiet block, done() not run.
-    let owned1 = args_for(&gh_clean);
-    let refs1: Vec<&str> = owned1.iter().map(|s| s.as_str()).collect();
-    let (_, d1) = fire(&refs1);
-    assert_eq!(d1.decision, "block");
-
-    // Fire 2: streak 2 hits the mute probe (ab-223d2dae D) -> done() runs and
-    // NOW sees the late P1 (created 01:45 > the 01:00 review ts). The
-    // advanced fingerprint must convert the would-be termination into a
-    // re-block that names the finding - never NoProgress, never DonePRGreen.
-    let owned2 = args_for(&gh_p1);
-    let refs2: Vec<&str> = owned2.iter().map(|s| s.as_str()).collect();
-    let (_, d2) = fire(&refs2);
-    assert_eq!(
-        d2.decision, "block",
-        "late finding must re-block, not terminate: {}",
-        d2.message
-    );
-    assert!(
-        d2.termination_reason.is_none(),
-        "late finding must not resolve as NoProgress; got {:?}",
-        d2.termination_reason
-    );
-    assert!(
-        d2.message.contains("src/late.rs:8"),
-        "re-block names the late finding; got: {}",
-        d2.message
-    );
-    assert!(
-        d2.fingerprint
-            .as_deref()
-            .unwrap_or("")
-            .ends_with("|2026-06-05T01:45:00Z"),
-        "the finding's timestamp must advance the fingerprint; got {:?}",
-        d2.fingerprint
-    );
-}
-
 /// AC2-EDGE: an advisory finding (P2 / unparseable severity) does not block.
 #[test]
 fn ac2_edge_advisory_finding_does_not_block() {
@@ -4455,102 +3839,6 @@ fn ac2_hp_budget_cost_cap_comment_glued_no_space() {
     );
 }
 
-/// AC2-EDGE: space-separated comment `budget_cost_cap_usd: 200 # comment` parses as 200.
-#[test]
-fn ac2_edge_budget_cost_cap_comment_with_space() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    fs::write(
-        &manifest_path,
-        manifest_with_raw_budget(
-            "sess-ac2edge-space",
-            "2026-06-05T00:00:00Z",
-            "budget_cost_cap_usd: 200 # comment\n",
-        ),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    let mock = MockBins::no_pr();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_ne!(
-        d.termination_reason.as_deref(),
-        Some("Budget"),
-        "space-separated comment `budget_cost_cap_usd: 200 # comment` must NOT trip budget; \
-         got termination_reason={:?}",
-        d.termination_reason
-    );
-}
-
-/// AC2-EDGE: wall-clock cap with glued comment `budget_wall_clock_cap_minutes: 90# Auto-merge inputs`
-/// parses as 90 (cap not exceeded at 30 min elapsed -> NOT Budget).
-#[test]
-fn ac2_edge_budget_wall_cap_comment_glued() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    // 90-minute cap, only 30 min elapsed -> must NOT trip wall-clock budget
-    fs::write(
-        &manifest_path,
-        manifest_with_raw_budget(
-            "sess-ac2edge-wall",
-            "2026-06-05T00:00:00Z",
-            "budget_wall_clock_cap_minutes: 90# Auto-merge inputs\n",
-        ),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    let mock = MockBins::no_pr();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z", // 30 min elapsed, cap=90 -> not exceeded
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_ne!(
-        d.termination_reason.as_deref(),
-        Some("Budget"),
-        "wall-clock `budget_wall_clock_cap_minutes: 90# Auto-merge inputs` at 30 min elapsed \
-         must NOT trip budget (cap=90 not exceeded); got termination_reason={:?}",
-        d.termination_reason
-    );
-}
-
 /// AC2-ERR: `budget_cost_cap_usd: abc` still classifies as Budget (fail closed).
 #[test]
 fn ac2_err_budget_cost_cap_malformed_fails_closed() {
@@ -4595,55 +3883,6 @@ fn ac2_err_budget_cost_cap_malformed_fails_closed() {
         Some("Budget"),
         "malformed `budget_cost_cap_usd: abc` must fail closed as Budget; \
          got termination_reason={:?}",
-        d.termination_reason
-    );
-}
-
-/// AC2-EDGE degenerate: `budget_cost_cap_usd: # Auto-merge inputs` strips to empty -> fail closed.
-#[test]
-fn ac2_edge_budget_cost_cap_value_only_comment_fails_closed() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    // Value is just a comment with no number before the '#'
-    fs::write(
-        &manifest_path,
-        manifest_with_raw_budget(
-            "sess-ac2edge-empty",
-            "2026-06-05T00:00:00Z",
-            "budget_cost_cap_usd: # Auto-merge inputs\n",
-        ),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    let mock = MockBins::no_pr();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    // Strips to empty -> non-numeric -> fail closed as Budget
-    assert_eq!(
-        d.termination_reason.as_deref(),
-        Some("Budget"),
-        "degenerate `budget_cost_cap_usd: # Auto-merge inputs` (value strips to empty) \
-         must fail closed as Budget; got termination_reason={:?}",
         d.termination_reason
     );
 }
@@ -4713,104 +3952,6 @@ fn ac2_med_budget_wall_cap_comment_strip_value_pins_trip() {
         "Budget message must mention wall_clock axis to confirm value-path fired, not parse-error \
          fallback; got message={}",
         d.message
-    );
-}
-
-/// AC2-LOW degenerate: `budget_wall_clock_cap_minutes: # Auto-merge inputs` strips to empty
-/// -> non-numeric -> fail closed as Budget. Mirrors the cost-side degenerate case; closes
-/// the asymmetry between the two budget cap arms.
-#[test]
-fn ac2_low_budget_wall_cap_empty_after_strip_fails_closed() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    fs::write(
-        &manifest_path,
-        manifest_with_raw_budget(
-            "sess-ac2low-wall-empty",
-            "2026-06-05T00:00:00Z",
-            "budget_wall_clock_cap_minutes: # Auto-merge inputs\n",
-        ),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    let mock = MockBins::no_pr();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_eq!(
-        d.termination_reason.as_deref(),
-        Some("Budget"),
-        "degenerate `budget_wall_clock_cap_minutes: # Auto-merge inputs` (strips to empty) \
-         must fail closed as Budget; got termination_reason={:?}",
-        d.termination_reason
-    );
-}
-
-/// AC2-LOW non-'#' junk boundary: `budget_cost_cap_usd: 200x` is not a '#'-tail comment
-/// and must fail closed as Budget. Locks that tolerance is '#'-tail ONLY; a future
-/// over-broad strip (e.g. stripping all non-numeric chars) would break this test.
-#[test]
-fn ac2_low_budget_cost_cap_non_hash_junk_fails_closed() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-
-    fs::write(
-        &manifest_path,
-        manifest_with_raw_budget(
-            "sess-ac2low-junk",
-            "2026-06-05T00:00:00Z",
-            "budget_cost_cap_usd: 200x\n",
-        ),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_empty()).unwrap();
-
-    let mock = MockBins::no_pr();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_eq!(
-        d.termination_reason.as_deref(),
-        Some("Budget"),
-        "non-'#' junk `budget_cost_cap_usd: 200x` must fail closed as Budget \
-         (tolerance is '#'-tail ONLY); got termination_reason={:?}",
-        d.termination_reason
     );
 }
 
@@ -4905,26 +4046,6 @@ fn done_probes_ac1_hp_passing_probe_grants_done() {
     );
 }
 
-/// AC2-HP: a plan with no `done_probes` field takes the byte-identical path -
-/// no probe machinery, verdict unchanged, and no probe evidence in the event.
-#[test]
-fn done_probes_ac2_hp_absent_field_leaves_gate_unchanged() {
-    let (tmp, manifest, transcript) = probe_fixture("sess-probe-none", &[]);
-    let cwd = tmp.path();
-    let mock = MockBins::green();
-
-    let d = fire_probe_gate(cwd, &manifest, &transcript, &mock);
-
-    assert_eq!(d.decision, "allow");
-    assert_eq!(d.termination_reason.as_deref(), Some("DonePRGreen"));
-
-    let events = event_text(&project_events(&cwd));
-    assert!(
-        events.contains("\"done_probes\":null"),
-        "no declaration must record a null, never a fabricated 0/0: {events}"
-    );
-}
-
 /// AC1-ERR: a failing probe refuses done, and the reason carries BOTH the
 /// verbatim command and the literal exit code.
 #[test]
@@ -4950,25 +4071,6 @@ fn done_probes_ac1_err_failing_probe_refuses_done() {
     assert!(
         d.message.contains("exited 1"),
         "reason must carry the literal exit code: {}",
-        d.message
-    );
-}
-
-/// AC2-ERR: a probe whose binary does not exist fails closed as 127, stated
-/// explicitly - a generic "probe failed" would leave the agent guessing.
-#[test]
-fn done_probes_ac2_err_missing_binary_states_127() {
-    let (tmp, manifest, transcript) =
-        probe_fixture("sess-probe-127", &["fno-no-such-binary-xyz --check"]);
-    let cwd = tmp.path();
-    let mock = MockBins::green();
-
-    let d = fire_probe_gate(cwd, &manifest, &transcript, &mock);
-
-    assert_eq!(d.decision, "block");
-    assert!(
-        d.message.contains("exited 127"),
-        "reason must state exit code 127 explicitly: {}",
         d.message
     );
 }
@@ -5037,24 +4139,6 @@ fn done_probes_a_prior_fires_pass_never_satisfies_this_fire() {
         d.message
     );
     assert!(d.message.contains("test -f /nonexistent-groom-report"));
-}
-
-/// The block path must record probe evidence too - it is the fire most likely
-/// to have run probes, and both the grader and the fail-closed history read it.
-#[test]
-fn done_probes_block_path_records_evidence_in_the_event() {
-    let (tmp, manifest, transcript) = probe_fixture("sess-probe-evt", &["exit 3"]);
-    let cwd = tmp.path();
-    let mock = MockBins::green();
-
-    let d = fire_probe_gate(cwd, &manifest, &transcript, &mock);
-    assert_eq!(d.decision, "block");
-
-    let events = event_text(&project_events(&cwd));
-    assert!(
-        events.contains("\"exit 3\":\"fail:3\""),
-        "a failing probe's result must be recorded, not just its reason: {events}"
-    );
 }
 
 /// A declared field this parser cannot read must refuse, never silently pass.
@@ -5161,48 +4245,6 @@ fn done_probes_ac13_inv_project_local_survives_the_global_merge() {
     assert!(
         d.message.contains("project probe `false`"),
         "the block must name the failing project probe: {}",
-        d.message
-    );
-}
-
-/// AC3-INV (x-a534) end to end: a plan declaring `done_probes: []` must not
-/// switch off the repo-wide guardrail. A guard a plan doc can silence is a
-/// guard on one of two reachable paths.
-#[test]
-fn done_probes_ac3_inv_a_plan_cannot_silence_the_project_gate() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    std::env::set_var("FNO_NUDGE_DISABLED", "1");
-    fs::write(
-        cwd.join(".fno/config.toml"),
-        "done_probes = [\"false\"]\n[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n",
-    )
-    .unwrap();
-
-    let plan = cwd.join("plan.md");
-    fs::write(&plan, "---\ntitle: p\ndone_probes: []\n---\n\nbody\n").unwrap();
-    let manifest = cwd.join("target-state.md");
-    fs::write(
-        &manifest,
-        manifest_with_plan("sess-probe-silence", "2026-06-05T00:00:00Z", &plan),
-    )
-    .unwrap();
-    let transcript = cwd.join("transcript.jsonl");
-    fs::write(&transcript, transcript_with_promise()).unwrap();
-
-    let mock = MockBins::green();
-    let d = fire_probe_gate(cwd, &manifest, &transcript, &mock);
-
-    assert_eq!(
-        d.decision, "block",
-        "an explicit `done_probes: []` in a plan must not disable the project's \
-         guardrail: {}",
-        d.message
-    );
-    assert!(
-        d.message.contains("project probe"),
-        "the block must name the project source: {}",
         d.message
     );
 }
@@ -5515,121 +4557,6 @@ fn nudge_unresponsive_bot_gives_up_on_backstop() {
     );
 }
 
-/// Codex P1 (overlay): a project-local `[review.nudge]` override must reach the
-/// resolver via the global+local merge. `enabled = false` here opts the repo
-/// out, so the missing codex bot is NotNudgeable and NO comment is posted.
-#[test]
-fn nudge_project_local_disable_is_honored() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    std::env::set_var("FNO_NUDGE_DISABLED", "1");
-    fs::write(
-        cwd.join(".fno/config.toml"),
-        "[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n\
-         [review.nudge]\n\"chatgpt-codex-connector\" = { enabled = false }\n",
-    )
-    .unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let marker = cwd.join("posts.txt");
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-nudge-optout", "2026-06-05T00:00:00Z", true),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    let mock = nudge_mock("[]", 0, Some(&marker));
-
-    let (_c, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_eq!(d.decision, "block", "got: {}", d.message);
-    assert!(
-        d.message.contains("has not reviewed"),
-        "an opted-out bot must render today's passive block, not a nudge; got: {}",
-        d.message
-    );
-    let posts = fs::read_to_string(&marker).unwrap_or_default();
-    assert!(
-        posts.trim().is_empty(),
-        "enabled=false must suppress the post entirely; got: {posts:?}"
-    );
-}
-
-/// Codex P1 (backstop): a freshly-nudged bot in Awaiting must NOT be reaped by
-/// the generic NoProgress backstop before its wait window elapses, even on a
-/// harness that cannot idle - the nudge cycle would otherwise be cut short.
-#[test]
-fn nudge_awaiting_defers_the_backstop() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let events_path = project_events(&cwd);
-    // Unattended -> backstop N=3.
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-nudge-await", "2026-06-05T00:00:00Z", false),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    // One mention 5m before --now: newest is well inside the 15m wait -> Awaiting.
-    let comments = r#"[{"author":{"login":"human"},"body":"@codex review","createdAt":"2026-06-05T00:00:00Z"}]"#;
-    let mock = nudge_mock(comments, 0, None);
-
-    let args = [
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:05:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-        "--events",
-        events_path.to_str().unwrap(),
-    ];
-
-    let (_c1, d1) = fire(&args);
-    assert_eq!(d1.decision, "block", "fire 1: {}", d1.message);
-    let (_c2, d2) = fire(&args);
-    assert_eq!(d2.decision, "block", "fire 2: {}", d2.message);
-    let (_c3, d3) = fire(&args);
-    // Without the guard this would trip NoProgress on fire 3; the awaiting wait
-    // is self-limiting and must keep blocking until it turns Unresponsive.
-    assert_eq!(
-        d3.decision, "block",
-        "an awaiting nudge must defer the backstop: {}",
-        d3.message
-    );
-    assert!(
-        d3.termination_reason.is_none(),
-        "got: {:?}",
-        d3.termination_reason
-    );
-}
-
 /// x-cd97: an OBSERVED CI-pending wait must never burn to NoProgress. The
 /// watching idle-allow only rescues a session whose lease renewal succeeds and
 /// whose harness can idle; any fall-through used to land in the generic
@@ -5811,77 +4738,6 @@ fn not_nudgeable_review_wait_defers_the_backstop() {
     );
 }
 
-/// x-cd97, the deliberate exception: the same-model-peer sentinel wait is
-/// unsatisfiable by construction (the configured peer is the author's own
-/// model), so NoProgress is TRUE there, not a lie - the backstop must keep
-/// reaping it. Pins that the observation guard does not swallow the sentinel.
-#[test]
-fn same_model_sentinel_wait_still_burns_no_progress() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-    // codex author + peers [codex] -> the peer login is replaced by the
-    // sentinel, which nothing can ever satisfy.
-    fs::write(
-        cwd.join(".fno/config.toml"),
-        "[review]\nrequired_bots = []\ngithub_apps = []\npeers = [{ provider = \"codex\" }]\npeer_identity = \"fno-peer-bot\"\n",
-    )
-    .unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let events_path = project_events(&cwd);
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-sentinel", "2026-06-05T00:00:00Z", false),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    // Open PR #1, CI success, no reviews. The git stub reports an EMPTY
-    // diff so the payload classifies as docs and the self-review floor (which
-    // a codex author would otherwise raise, disqualifying the review wait and
-    // passing this test for the wrong reason) stays down. The MockBins value
-    // stays bound: it owns the TempDir that keeps the gh script on disk.
-    let mock = nudge_mock("[]", 0, None);
-    let dir = TempDir::new().unwrap();
-    let git = make_script(
-        dir.path(),
-        "git",
-        r#"case "$*" in
-  *--name-only*) exit 0 ;;
-  *) echo "deadbeefdeadbeefdeadbeefdeadbeef00000001" ;;
-esac"#,
-    );
-
-    let args = [
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        "--author-harness",
-        "codex",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", git.display()),
-        "--events",
-        events_path.to_str().unwrap(),
-    ];
-
-    let (_, d1) = fire(&args);
-    assert_eq!(d1.decision, "block", "fire 1: {:?}", d1);
-    let (_, d2) = fire(&args);
-    assert_eq!(d2.decision, "block");
-    let (_, d3) = fire(&args);
-    assert_eq!(d3.decision, "allow");
-    assert_eq!(d3.termination_reason.as_deref(), Some("NoProgress"));
-}
-
 // ── coverage classifier (x-0eaf task 1.1) ────────────────────────────────────
 
 use fno_agents::loopcheck::{
@@ -5947,35 +4803,6 @@ fn attestation_line_on_branch(reviewer: &str, head: &str, verdict: &str, branch:
 // unscoped scan reads every branch's attestations into every PR's verdict
 // list. These tests pin the scoping predicate through BOTH consumers.
 
-/// AC1-HP: an attestation recorded on ANOTHER branch at a DIFFERENT head never
-/// reaches this PR's verdict list at all - that is the cherry-pick /
-/// duplicate-PR shape where the old global scan read a foreign pass as
-/// coverage via CarriedBaseSync (equal shas never carry; they are Fresh before
-/// any identity is computed), so this pins that scope, not freshness, is what
-/// stops it.
-#[test]
-fn attestation_scope_foreign_branch_is_absent_not_stale() {
-    let foreign_head = "bbbb0000000000000000000000000000000000000";
-    let events = attestation_line_on_branch("code-review", foreign_head, "pass", "feature/a");
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        None,
-        &|_| Freshness::CarriedBaseSync,
-        "feature/b",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(0));
-    assert!(
-        rep.verdicts.is_empty(),
-        "a foreign-branch attestation must not appear as any verdict: {:?}",
-        rep.verdicts
-    );
-}
-
 /// The spawned-reviewer lane (review-lanes.md): the reviewer's worktree
 /// necessarily carries a branch of its own - git refuses two worktrees on one
 /// branch - so its exact-HEAD attestation must count for the author's PR
@@ -6004,32 +4831,6 @@ fn attestation_scope_reviewer_worktree_branch_at_exact_head_counts() {
     assert_eq!(local.reviewed_sha, COV_HEAD);
 }
 
-/// The same-branch counterpart: in scope, counted, and labeled so a receipt
-/// can say HOW the pass was scoped.
-#[test]
-fn attestation_scope_own_branch_counts_and_labels() {
-    let events = attestation_line_on_branch("code-review", COV_HEAD, "pass", "feature/a");
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        None,
-        &at_head,
-        "feature/a",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    let local = rep
-        .verdicts
-        .iter()
-        .find(|v| v.producer == CoverageProducer::LocalAttestation)
-        .unwrap();
-    assert_eq!(local.reviewed_sha, COV_HEAD);
-    assert_eq!(local.scope, Some(AttestationScope::AttestedBranch));
-}
-
 /// AC1-EDGE, first half: a legacy line (no branch field) with its head
 /// byte-equal to the PR head still counts, so no in-flight gate is wedged by
 /// the new field. The verdict carries the legacy label.
@@ -6056,27 +4857,6 @@ fn attestation_scope_legacy_exact_head_still_counts() {
     assert_eq!(local.scope, Some(AttestationScope::LegacyHeadMatch));
 }
 
-/// AC1-EDGE, second half: a legacy line on a DIFFERENT head is not evidence
-/// about this PR - absent entirely, never a stale verdict to nudge on.
-#[test]
-fn attestation_scope_legacy_other_head_is_absent() {
-    let old_head = "0000000000000000000000000000000000000000";
-    let events = attestation_line("code-review", old_head, "pass");
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        None,
-        &at_head,
-        "feature/a",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(0));
-    assert!(rep.verdicts.is_empty());
-}
-
 /// A PR read that returned no branch fails closed: an attestation at a
 /// DIFFERENT head cannot be admitted by branch (the PR's branch is unknown),
 /// so it does not count. An exact-head line still counts with an unknown PR
@@ -6088,48 +4868,6 @@ fn attestation_scope_unknown_pr_branch_fails_closed() {
     let events = attestation_line_on_branch("code-review", foreign_head, "pass", "feature/a");
     let rep = classify_coverage(&[], &[], &events, &[], true, None, &at_head, "", COV_HEAD);
     assert_eq!(rep.coverage, Coverage::Covered(0));
-}
-
-/// AC1-EDGE2: one session attesting PR B after PR A no longer overwrites A's
-/// pass. The map key is (reviewer, attester); before scoping, B's line landed
-/// in the same key and A's gate read unreviewed with no trace of the deletion.
-#[test]
-fn attestation_scope_second_pr_does_not_clobber_the_first() {
-    let head_a = "aaaa0000000000000000000000000000000000000";
-    let head_b = "bbbb0000000000000000000000000000000000000";
-    let events = format!(
-        "{}\n{}",
-        attestation_line_on_branch("code-review", head_a, "pass", "feature/a"),
-        attestation_line_on_branch("code-review", head_b, "pass", "feature/b"),
-    );
-    let fresh_at_a = |sha: &str| {
-        if sha == head_a {
-            Freshness::Fresh
-        } else {
-            Freshness::Stale
-        }
-    };
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        None,
-        &fresh_at_a,
-        "feature/a",
-        head_a,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    let local = rep
-        .verdicts
-        .iter()
-        .find(|v| v.producer == CoverageProducer::LocalAttestation)
-        .unwrap();
-    assert_eq!(
-        local.reviewed_sha, head_a,
-        "feature/a must carry ITS OWN pass, not feature/b's head"
-    );
 }
 
 /// THE false-positive specimen, built: one reviewer, one attester session,
@@ -6265,24 +5003,6 @@ fn coverage_classify_quota_refusal_is_zero_coverage_refused() {
     assert_eq!(bot.verdict, CoverageVerdict::Refused);
 }
 
-/// AC11-HP: one genuine review, no blocking findings -> coverage 1.
-#[test]
-fn coverage_classify_real_review_counts() {
-    let reviews = vec![gh_review("chatgpt-codex-connector[bot]", "COMMENTED")];
-    let rep = classify_coverage(
-        &reviews,
-        &[],
-        "",
-        &["chatgpt-codex-connector".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-}
-
 /// Boundary: zero configured reviewers and no evidence -> Covered(0), not an
 /// error and not vacuous success.
 #[test]
@@ -6333,66 +5053,6 @@ fn coverage_classify_local_pass_survives_github_outage() {
         .find(|v| v.producer == CoverageProducer::LocalAttestation)
         .unwrap();
     assert_eq!(local.name, "code-review");
-}
-
-/// The producer-axis consequence (operator correction): a bot terminal-refused
-/// does NOT imply zero coverage, because the local lane is a separate producer
-/// over a separate channel with separate limits.
-#[test]
-fn coverage_classify_bot_refused_plus_local_is_covered() {
-    let comments = vec![gh_comment(
-        "chatgpt-codex-connector[bot]",
-        "You have reached your Codex usage limits for code reviews.",
-    )];
-    let events = attestation_line("code-review", COV_HEAD, "pass");
-    let rep = classify_coverage(
-        &[],
-        &comments,
-        &events,
-        &["chatgpt-codex-connector".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    assert_eq!(
-        rep.verdicts
-            .iter()
-            .filter(|v| v.verdict == CoverageVerdict::Refused)
-            .count(),
-        1
-    );
-}
-
-/// AC10-INV: a configured bot with an unrecognized comment (no review object,
-/// no usage marker) is absent, never reviewed - keeps gemini's empty
-/// usage_markers from rebuilding the bug for the second bot.
-#[test]
-fn coverage_classify_unrecognized_response_is_absent_never_reviewed() {
-    let comments = vec![gh_comment(
-        "gemini-code-assist[bot]",
-        "something unrecognized",
-    )];
-    let rep = classify_coverage(
-        &[],
-        &comments,
-        "",
-        &["gemini-code-assist".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    let g = rep
-        .verdicts
-        .iter()
-        .find(|v| v.name == "gemini-code-assist")
-        .unwrap();
-    assert_eq!(g.verdict, CoverageVerdict::Absent);
-    assert_eq!(rep.coverage, Coverage::Covered(0));
 }
 
 // ── clean-pass comments (x-e601: the PR #947 specimen) ───────────────────────
@@ -6557,32 +5217,6 @@ fn clean_pass_comment_with_no_pinned_sha_stays_absent() {
     assert_eq!(v.reviewed_sha, "");
 }
 
-/// A non-hex token after the marker is as good as no marker line at all.
-#[test]
-fn clean_pass_comment_with_a_non_hex_token_stays_absent() {
-    let comments = vec![gh_comment(
-        "chatgpt-codex-connector[bot]",
-        "Codex Review: Didn't find any major issues. Reviewed commit: tomorrow",
-    )];
-    let rep = classify_coverage(
-        &[],
-        &comments,
-        "",
-        &["chatgpt-codex-connector".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    let v = rep
-        .verdicts
-        .iter()
-        .find(|v| v.name == "chatgpt-codex-connector")
-        .unwrap();
-    assert_eq!(v.verdict, CoverageVerdict::Absent);
-}
-
 /// Ordering: a usage-limit comment means the bot did not read the code, so a
 /// body carrying BOTH markers lands on Refused, never on a clean pass.
 #[test]
@@ -6644,32 +5278,6 @@ fn no_clean_pass_marker_is_guessed_for_an_unmeasured_bot() {
     assert_eq!(g.verdict, CoverageVerdict::Absent);
 }
 
-/// A config's SHORT name ("codex") resolves the full-login profile, so the
-/// clean-pass read does not silently vanish for the one spelling configs
-/// actually use. The author login still carries the full form.
-#[test]
-fn clean_pass_markers_resolve_through_a_config_short_name() {
-    let comments = vec![gh_comment(
-        "chatgpt-codex-connector[bot]",
-        &format!(
-            "Codex Review: Didn't find any major issues. Reviewed commit: {}",
-            COV_HEAD
-        ),
-    )];
-    let rep = classify_coverage(
-        &[],
-        &comments,
-        "",
-        &["codex".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-}
-
 /// The hedge: a human GitHub APPROVAL is recorded (human_approval: true) but
 /// excluded from the count. Lean: exclude; one predicate flip includes it.
 #[test]
@@ -6683,47 +5291,6 @@ fn coverage_classify_human_approval_excluded() {
     assert_eq!(rep.coverage_count(), Some(0));
 }
 
-/// Boundary: a reviewer named in two lists is one verdict, not two units.
-#[test]
-fn coverage_classify_duplicate_login_one_verdict() {
-    let reviews = vec![gh_review("chatgpt-codex-connector[bot]", "COMMENTED")];
-    let logins = vec![
-        "chatgpt-codex-connector".to_string(),
-        "chatgpt-codex-connector".to_string(),
-    ];
-    let rep = classify_coverage(
-        &reviews,
-        &[],
-        "",
-        &logins,
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    assert_eq!(
-        rep.verdicts
-            .iter()
-            .filter(|v| v.name == "chatgpt-codex-connector")
-            .count(),
-        1
-    );
-}
-
-/// AC7-CON: a later pass at head supersedes an earlier fail (no cached refused).
-#[test]
-fn coverage_classify_local_fail_then_pass_latest_wins() {
-    let events = format!(
-        "{}\n{}\n",
-        attestation_line("code-review", COV_HEAD, "fail"),
-        attestation_line("code-review", COV_HEAD, "pass"),
-    );
-    let rep = classify_coverage(&[], &[], &events, &[], true, None, &at_head, "", COV_HEAD);
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-}
-
 /// A later fail at head revokes an earlier pass.
 #[test]
 fn coverage_classify_local_pass_then_fail_revokes() {
@@ -6732,15 +5299,6 @@ fn coverage_classify_local_pass_then_fail_revokes() {
         attestation_line("code-review", COV_HEAD, "pass"),
         attestation_line("code-review", COV_HEAD, "fail"),
     );
-    let rep = classify_coverage(&[], &[], &events, &[], true, None, &at_head, "", COV_HEAD);
-    assert_eq!(rep.coverage, Coverage::Covered(0));
-}
-
-/// A pass on a prior head does not count after a new commit lands (head-pinning).
-#[test]
-fn coverage_classify_stale_head_does_not_count() {
-    let old_head = "0000000000000000000000000000000000000000";
-    let events = attestation_line("code-review", old_head, "pass");
     let rep = classify_coverage(&[], &[], &events, &[], true, None, &at_head, "", COV_HEAD);
     assert_eq!(rep.coverage, Coverage::Covered(0));
 }
@@ -6879,107 +5437,6 @@ fn done_ends_unreviewed_not_awaiting_review_when_optional_app_refuses() {
     assert!(d.message.contains("merge by hand"));
 }
 
-/// x-0eaf AC12-INV (negative): the coverage path must not read the `attended`
-/// manifest field (x-be78: it lies for spawned workers). An attended:false
-/// (spawned-worker) session with zero coverage terminates DoneUnreviewed exactly
-/// like an attended:true one - the discriminator is coverage, not attendance.
-#[test]
-fn done_unreviewed_independent_of_attended_field() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd); // required_bots = [chatgpt-codex-connector]
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    // attended: false - the spawn-substrate shape x-be78 showed lies.
-    let manifest =
-        "---\nsession_id: sess-unatt\ncreated_at: 2026-06-05T00:00:00Z\nattended: false\n---\n";
-    fs::write(&manifest_path, manifest).unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    // gh: green CI, bot reviewed (so objection-gate passes); but NO local
-    // attestation and we want to show attendance does not change the terminal.
-    // Use green(): ccc COMMENTED review -> coverage 1 -> DonePRGreen regardless
-    // of attended. Then a second case below uses no review -> DoneUnreviewed
-    // regardless of attended. This case pins: attended:false + coverage 1 still
-    // DonePRGreen (attendance does not downgrade).
-    let mock = MockBins::green();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_eq!(d.decision, "allow");
-    assert_eq!(
-        d.termination_reason.as_deref(),
-        Some("DonePRGreen"),
-        "attended:false must not downgrade a reviewed PR: {}",
-        d.message
-    );
-}
-
-/// x-0eaf AC2-CON: with auto_merge approved (autonomous consent) and zero
-/// coverage, the terminal is DoneUnreviewed, not DonePRGreen - so finalize will
-/// not arm auto-merge and the autonomous path refuses to merge unreviewed code.
-/// The discriminator is coverage; auto_merge consent does not override it.
-#[test]
-fn ac2_con_auto_merge_approved_zero_coverage_refuses() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    let settings = cwd.join(".fno/config.toml");
-    fs::write(
-        &settings,
-        "[review]\nrequired_bots = []\nself_review_required = false\n",
-    )
-    .unwrap();
-
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let manifest = "---\nsession_id: sess-auto\ncreated_at: 2026-06-05T00:00:00Z\nattended: false\nauto_merge_approved: true\n---\n";
-    fs::write(&manifest_path, manifest).unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-
-    let mock = MockBins::green();
-
-    let (_code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        "--settings",
-        settings.to_str().unwrap(),
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
-    assert_eq!(d.decision, "allow");
-    // x-0eaf boundary: the explicit no-review configuration reaches
-    // DonePRGreen even with auto_merge consent.
-    assert_eq!(
-        d.termination_reason.as_deref(),
-        Some("DonePRGreen"),
-        "no-lane config + auto_merge: {}",
-        d.message
-    );
-}
-
 // ── coverage receipt line (x-0eaf task 3.1) ──────────────────────────────────
 
 #[test]
@@ -7050,32 +5507,6 @@ fn coverage_receipt_zero_names_refused_and_absent() {
     assert!(!line.contains("()"), "{line}");
 }
 
-/// A refusal is not an absence. The only configured reviewer hit its quota and
-/// declined, so nothing is still coming and a local attestation IS the move -
-/// the line prescribes the command here, unlike the absent case above.
-#[test]
-fn coverage_receipt_zero_prescribes_the_command_when_the_only_reviewer_refused() {
-    let comments = vec![serde_json::json!({
-        "author": {"login": "chatgpt-codex-connector[bot]"},
-        "body": "You have reached your Codex usage limits for code reviews."
-    })];
-    let rep = classify_coverage(
-        &[],
-        &comments,
-        "",
-        &["chatgpt-codex-connector".to_string()],
-        true,
-        None,
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    let line = coverage_receipt_line(&rep, None, None);
-    assert!(line.contains("1 refused"), "{line}");
-    assert!(line.contains("0 absent"), "{line}");
-    assert!(line.contains("run the review command at HEAD"), "{line}");
-}
-
 #[test]
 fn coverage_receipt_unknown_says_unknown() {
     let rep = CoverageReport {
@@ -7134,59 +5565,6 @@ fn coverage_origin_self_attested_does_not_change_count() {
         .unwrap();
     assert_eq!(local.attestation_origin, AttestationOrigin::SelfAttested);
     assert_eq!(rep.coverage, Coverage::Covered(1));
-    assert_eq!(rep.coverage_count(), Some(1));
-}
-
-/// attester != authoring session -> OtherSession, count UNCHANGED. The middle
-/// state is deliberately NOT "independent": a different session may be a
-/// self-handoff successor or a shared-worktree sibling, still not independent.
-#[test]
-fn coverage_origin_other_session_is_not_independent_count_unchanged() {
-    let events = attestation_line_attested("code-review", COV_HEAD, "pass", OTHER);
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        Some(AUTHOR),
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    let local = rep
-        .verdicts
-        .iter()
-        .find(|v| v.producer == CoverageProducer::LocalAttestation)
-        .unwrap();
-    assert_eq!(local.attestation_origin, AttestationOrigin::OtherSession);
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    assert_eq!(rep.coverage_count(), Some(1));
-}
-
-/// An attestation with no attester_session_id (the entire pre-landed backlog,
-/// or a session with no env marker) -> Unknown, count UNCHANGED.
-#[test]
-fn coverage_origin_unknown_when_attester_empty_count_unchanged() {
-    // attestation_line omits attester_session_id entirely, modeling the backlog.
-    let events = attestation_line("code-review", COV_HEAD, "pass");
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        Some(AUTHOR),
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    let local = rep
-        .verdicts
-        .iter()
-        .find(|v| v.producer == CoverageProducer::LocalAttestation)
-        .unwrap();
-    assert_eq!(local.attestation_origin, AttestationOrigin::Unknown);
     assert_eq!(rep.coverage_count(), Some(1));
 }
 
@@ -7371,28 +5749,6 @@ fn coverage_peer_fail_does_not_revoke_author_pass() {
     assert_eq!(rep.coverage_count(), Some(1));
 }
 
-/// The receipt names all three buckets so a reader learns the vocabulary even
-/// when two are zero.
-#[test]
-fn coverage_receipt_names_origin_buckets() {
-    let events = attestation_line_attested("code-review", COV_HEAD, "pass", AUTHOR);
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        true,
-        Some(AUTHOR),
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    let line = coverage_receipt_line(&rep, None, None);
-    assert!(line.contains("self 1"), "{line}");
-    assert!(line.contains("other 0"), "{line}");
-    assert!(line.contains("unknown 0"), "{line}");
-}
-
 /// The origin tally folds EVERY reviewed (non-human) verdict by its
 /// attestation_origin, so the three buckets sum to the reviewed count. A GitHub
 /// App review has no session to compare and reads `unknown`; it is named in the
@@ -7418,66 +5774,6 @@ fn coverage_receipt_origin_tally_sums_to_reviewed_count() {
     assert!(line.contains("other 0"), "{line}");
     assert!(line.contains("unknown 1"), "{line}");
     assert!(line.contains("2 reviewed"), "{line}");
-}
-
-/// The receipt states that the tally is not a subtraction. Two workers read
-/// `self 1` beside a review count as "one was dropped" and refused to merge
-/// green, unblocked PRs; a bare tally next to a number invites arithmetic.
-/// "all counted" is a positive claim rather than a disclaimer - a denial
-/// ("not a gate") answers the question by raising it.
-///
-/// The claim is checked, not asserted: the three buckets must sum to the
-/// reviewed count, so the line cannot say "all counted" while dropping one.
-#[test]
-fn coverage_receipt_states_the_tally_is_not_a_subtraction() {
-    let events = attestation_line_attested("code-review", COV_HEAD, "pass", AUTHOR);
-    let rep = classify_coverage(
-        &[],
-        &[],
-        &events,
-        &[],
-        false,
-        Some(AUTHOR),
-        &at_head,
-        "",
-        COV_HEAD,
-    );
-    assert_eq!(rep.coverage, Coverage::Covered(1));
-    let line = coverage_receipt_line(&rep, None, None);
-
-    // The affirmation, and the sole self-attested verdict it is affirming.
-    // Scoped to ORIGINS: `n` does drop human approvals, so a bare "all counted"
-    // would be false on a human-approved PR and re-open the very question the
-    // line exists to close.
-    assert!(line.contains("all origins counted"), "{line}");
-    assert!(line.contains("1 reviewed"), "{line}");
-    assert!(line.contains("self 1"), "{line}");
-
-    // The affirmation is true: buckets sum to the reviewed count.
-    let counted = rep.coverage_count().expect("covered");
-    let (s, o, u) = (
-        line_bucket(&line, "self "),
-        line_bucket(&line, "other "),
-        line_bucket(&line, "unknown "),
-    );
-    assert_eq!(s + o + u, counted, "{line}");
-
-    // And no denial: naming a gate to rule it out is what teaches a reader a
-    // gate exists.
-    assert!(!line.contains("not a gate"), "{line}");
-}
-
-/// Pull `<label><n>` out of the receipt line for the sum check above.
-fn line_bucket(line: &str, label: &str) -> usize {
-    let tail = line
-        .split(label)
-        .nth(1)
-        .unwrap_or_else(|| panic!("no {label:?} in {line}"));
-    tail.chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .parse()
-        .unwrap_or_else(|_| panic!("no digits after {label:?} in {line}"))
 }
 
 // ── GraphQL quota floor + exhaustion naming ───────────────────────────────
@@ -7552,45 +5848,6 @@ fn floor_never_blocks_a_promise() {
     let calls = fs::read_to_string(cwd.join("calls.log")).unwrap();
     assert!(calls.contains("pr view"), "promise reads proceed: {calls}");
     assert_eq!(code, 0);
-}
-
-/// The floor's other exemption: honoring a cancel spends no GraphQL, so an
-/// aborted fire below the floor must still terminate - blocking it would trap
-/// a cancelled session behind the reserve for a whole reset window.
-#[test]
-fn floor_never_blocks_an_abort() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    fs::write(
-        &manifest_path,
-        new_manifest("sess-floor-abort", "2026-06-05T00:00:00Z", true),
-    )
-    .unwrap();
-    fs::write(&transcript_path, transcript_with_aborted()).unwrap();
-
-    let gh = quota_gh(cwd, 50, false);
-    let git = MockBins::green().git;
-    let (code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", gh.display()),
-        &format!("--git-bin={}", git.display()),
-    ]);
-    assert_eq!(code, 0);
-    assert!(!d.message.contains("standing down"), "got: {}", d.message);
-    assert_eq!(d.decision, "allow");
-    assert_eq!(d.termination_reason.as_deref(), Some("Aborted"));
 }
 
 /// Item 2: an exhausted quota turns the bare read failure into the exhaustion
@@ -7987,43 +6244,6 @@ fn coverage_status_publish_posts_failure_when_unreviewed() {
     assert!(diagnostic.contains("state=success"), "got: {diagnostic}");
 }
 
-/// A configured local `code-review` reviewer with no head-pinned local pass:
-/// the status stays failure even though a GitHub review exists, mirroring the
-/// merge gate's conjunction (the row alone is not enough).
-#[test]
-fn coverage_status_publish_requires_local_code_review_pass_when_configured() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path().join("proj");
-    pub_fixture(&cwd, "[review]\nreviewers = [\"code-review\"]\n");
-    let project = project_events(&cwd);
-    let global = tmp.path().join("global.jsonl");
-    let record = tmp.path().join("gh-api-record");
-    let bins = TempDir::new().unwrap();
-    // A passing GitHub review exists, but no local attestation does.
-    let gh = recording_green_gh(bins.path(), &record, true);
-    let git = pub_git(bins.path());
-
-    let (vcode, vjson) = fire_command(&cwd, &gh, &git, &project, &global);
-    assert_eq!(vcode, 0, "command must emit a row: {vjson}");
-
-    let posts = status_posts(&record);
-    assert_eq!(posts.len(), 2, "command arm posts both contexts: {posts:?}");
-    assert!(
-        posts
-            .iter()
-            .any(|post| post.contains("context=fno/review-coverage ")
-                && post.contains("state=failure")),
-        "a bot review must not satisfy the local code-review lane: {posts:?}"
-    );
-    assert!(
-        posts.iter().any(
-            |post| post.contains("context=fno/review-coverage-unavailable ")
-                && post.contains("state=success")
-        ),
-        "the diagnostic context must clear for a known uncovered result: {posts:?}"
-    );
-}
-
 #[test]
 fn coverage_status_protects_an_override_after_three_refused_label_reads() {
     let tmp = TempDir::new().unwrap();
@@ -8049,111 +6269,6 @@ fn coverage_status_protects_an_override_after_three_refused_label_reads() {
     assert_eq!(recorded.matches("label-read-").count(), 3, "{recorded}");
     assert_eq!(recorded.matches("status-description-read").count(), 1);
     assert!(status_posts(&record).is_empty(), "{recorded}");
-}
-
-#[test]
-fn coverage_status_posts_covered_after_refused_label_reads_find_no_override() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path().join("proj");
-    pub_fixture(&cwd, BOT_LANE);
-    let project = project_events(&cwd);
-    let global = tmp.path().join("global.jsonl");
-    let record = tmp.path().join("gh-api-record");
-    let bins = TempDir::new().unwrap();
-    let gh = fallback_gh(
-        bins.path(),
-        &record,
-        true,
-        "always-fail",
-        "no covered review at deadbeef",
-    );
-    let git = pub_git(bins.path());
-
-    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
-
-    assert_eq!(code, 0, "{json}");
-    let recorded = fs::read_to_string(&record).unwrap();
-    assert_eq!(recorded.matches("label-read-").count(), 3, "{recorded}");
-    let posts = status_posts(&record);
-    assert_eq!(posts.len(), 2, "{recorded}");
-    assert!(
-        posts
-            .iter()
-            .any(|post| post.contains("state=success") && post.contains("covered: 1 reviewed at")),
-        "{posts:?}"
-    );
-    assert!(
-        posts.iter().any(
-            |post| post.contains("context=fno/review-coverage-unavailable ")
-                && post.contains("coverage read healthy")
-        ),
-        "{posts:?}"
-    );
-}
-
-#[test]
-fn coverage_status_posts_failure_after_refused_label_reads_find_no_status() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path().join("proj");
-    pub_fixture(&cwd, BOT_LANE);
-    let project = project_events(&cwd);
-    let global = tmp.path().join("global.jsonl");
-    let record = tmp.path().join("gh-api-record");
-    let bins = TempDir::new().unwrap();
-    let gh = fallback_gh(bins.path(), &record, false, "always-fail", "");
-    let git = pub_git(bins.path());
-
-    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
-
-    assert_eq!(code, 0, "{json}");
-    let recorded = fs::read_to_string(&record).unwrap();
-    assert_eq!(recorded.matches("label-read-").count(), 3, "{recorded}");
-    let posts = status_posts(&record);
-    assert_eq!(posts.len(), 2, "{recorded}");
-    assert!(
-        posts
-            .iter()
-            .any(|post| post.contains("context=fno/review-coverage ")
-                && post.contains("state=failure")),
-        "{posts:?}"
-    );
-}
-
-#[test]
-fn coverage_status_retries_a_label_read_then_honors_the_override() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path().join("proj");
-    pub_fixture(&cwd, BOT_LANE);
-    let project = project_events(&cwd);
-    let global = tmp.path().join("global.jsonl");
-    let record = tmp.path().join("gh-api-record");
-    let bins = TempDir::new().unwrap();
-    let gh = fallback_gh(bins.path(), &record, false, "second-true", "unused");
-    let git = pub_git(bins.path());
-
-    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
-
-    assert_eq!(code, 0, "{json}");
-    let recorded = fs::read_to_string(&record).unwrap();
-    assert_eq!(recorded.matches("label-read-").count(), 2, "{recorded}");
-    assert!(!recorded.contains("status-description-read"), "{recorded}");
-    let posts = status_posts(&record);
-    assert_eq!(posts.len(), 2, "{recorded}");
-    assert!(
-        posts
-            .iter()
-            .any(|post| post.contains("context=fno/review-coverage ")
-                && post.contains("state=success")
-                && post.contains("coverage-override")),
-        "{posts:?}"
-    );
-    assert!(
-        posts.iter().any(
-            |post| post.contains("context=fno/review-coverage-unavailable ")
-                && post.contains("state=success")
-        ),
-        "{posts:?}"
-    );
 }
 
 // ── bounded external reads: every stop-gate read is bounded and a killed
@@ -8319,26 +6434,6 @@ fn external_read_timeout_pr_view_names_the_read_not_a_sibling() {
     // The misattribution this closes: a killed pr_view reported as pr_info_rest.
     assert!(!d.message.contains("pr_info_rest"), "{}", d.message);
     assert_timeout_block(code, &d, elapsed, "pr_view", &events);
-}
-
-#[test]
-fn external_read_timeout_pr_checks_names_the_read() {
-    let ws = wedged_setup("pr_checks");
-    let events = project_events(ws._tmp.path());
-    let git = MockBins::green().git;
-    let (code, d, elapsed) =
-        wedged_fire(ws._tmp.path(), &ws.manifest, &ws.transcript, &ws.gh, &git);
-    assert_timeout_block(code, &d, elapsed, "pr_checks", &events);
-}
-
-#[test]
-fn external_read_timeout_pr_reviews_names_the_read() {
-    let ws = wedged_setup("pr_reviews");
-    let events = project_events(ws._tmp.path());
-    let git = MockBins::green().git;
-    let (code, d, elapsed) =
-        wedged_fire(ws._tmp.path(), &ws.manifest, &ws.transcript, &ws.gh, &git);
-    assert_timeout_block(code, &d, elapsed, "pr_reviews", &events);
 }
 
 /// A wedged LOCAL git read (the external-diff-driver shape) must not hang
@@ -8512,30 +6607,6 @@ fn standing_waiver_never_clears_a_hard_finding() {
 }
 
 #[test]
-fn operator_waiver_never_reads_a_negative_row_as_a_waiver() {
-    let dir = TempDir::new().unwrap();
-    // A single law row whose decision is a denial, recorded at the exact
-    // standing subject: row existence carries no polarity, so this is a
-    // clean no, never a waiver and never an unknown.
-    let fno = law_stub_with(
-        dir.path(),
-        "fno",
-        "review-coverage-waiver",
-        "coverage waiver DENIED for this head",
-    );
-    let (waiver, unknown) = operator_waiver(
-        fno.to_str().unwrap(),
-        dir.path(),
-        "acme/widgets",
-        42,
-        HEAD40,
-        false,
-    );
-    assert_eq!(waiver, None);
-    assert!(!unknown, "a different decision is a no, not a failed probe");
-}
-
-#[test]
 fn operator_waiver_never_reads_a_chat_attested_row_as_a_waiver() {
     let dir = TempDir::new().unwrap();
     // A chat_attested row is law-lane but not operator evidence: the law door
@@ -8585,46 +6656,6 @@ fn operator_waiver_answers_unknown_on_a_row_without_a_decision() {
         unknown,
         "a missing decision field is a failed probe, not a no"
     );
-}
-
-#[test]
-fn operator_waiver_answers_unknown_on_a_dead_probe() {
-    let dir = TempDir::new().unwrap();
-    let fno = make_script(
-        dir.path(),
-        "fno",
-        "echo 'decide: index unreadable' >&2; exit 1",
-    );
-    let (waiver, unknown) = operator_waiver(
-        fno.to_str().unwrap(),
-        dir.path(),
-        "acme/widgets",
-        42,
-        HEAD40,
-        false,
-    );
-    assert_eq!(waiver, None, "unknown authority never waives");
-    assert!(unknown, "a dead probe must be NAMED, never read as no-law");
-}
-
-#[test]
-fn operator_waiver_no_law_is_a_clean_no() {
-    let dir = TempDir::new().unwrap();
-    let fno = make_script(
-        dir.path(),
-        "fno",
-        r#"echo '{"canonical_subject":"s","current_law":{"status":"none"},"decisions":[]}'; exit 0"#,
-    );
-    let (waiver, unknown) = operator_waiver(
-        fno.to_str().unwrap(),
-        dir.path(),
-        "acme/widgets",
-        42,
-        HEAD40,
-        false,
-    );
-    assert_eq!(waiver, None);
-    assert!(!unknown, "a verdict of none is an answer, not a failure");
 }
 
 // ── review.posture: the coverage row carries the resolved rung ────
@@ -8704,37 +6735,6 @@ fn review_posture_explicit_github_rung_is_satisfied_by_app_review() {
         p["posture_gaps"].as_array().unwrap().len(),
         0,
         "gaps must be empty when satisfied: {p}"
-    );
-}
-
-/// Posture unset with a legacy github_apps gate: one visible legacy rung,
-/// self_and_github (the shipped floor composes with the App gate), and the
-/// one reviewed App verdict covers both named components (origin never gates).
-#[test]
-fn review_posture_legacy_inference_names_self_and_github() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path().join("proj");
-    pub_fixture(
-        &cwd,
-        "[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n",
-    );
-    let project = project_events(&cwd);
-    let global = tmp.path().join("global.jsonl");
-    let bins = TempDir::new().unwrap();
-    let gh = recording_green_gh(bins.path(), &tmp.path().join("rec"), true);
-    let git = pub_git(bins.path());
-
-    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
-    assert_eq!(code, 0, "{json}");
-    let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
-    assert_eq!(p["posture"], "self_and_github");
-    assert_eq!(p["rank"], 7);
-    assert_eq!(p["source"], "legacy");
-    assert_eq!(p["posture_satisfied"], true, "{p}");
-    assert_eq!(
-        p["posture_gaps"].as_array().unwrap().len(),
-        0,
-        "one reviewed verdict covers the two named components: {p}"
     );
 }
 

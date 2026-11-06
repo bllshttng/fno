@@ -626,6 +626,12 @@ fn cohort_setup(rest: &[String], bank_dir: &std::path::Path) -> Result<Vec<Strin
 /// rows, so held-out trajectories never enter a tuning view. Exit 0
 /// exported / 1 no declared split / 2 refused or setup error.
 fn export_command(rest: &[String]) -> i32 {
+    if rest
+        .first()
+        .is_some_and(|a| a == "--profile" || a == "--profile-set")
+    {
+        return crate::evals_profile::run(rest);
+    }
     let Some(out_path) = flag_lookup(rest, "--out") else {
         eprintln!("Error: export requires --out FILE");
         return 2;

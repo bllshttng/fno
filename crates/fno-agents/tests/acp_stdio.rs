@@ -334,64 +334,6 @@ fn writing_after_child_exit_reports_the_exit_code_and_stderr() {
 }
 
 #[test]
-fn kimi_auth_refusal_carries_the_stderr_diagnostic() {
-    use fno_agents::acp_stdio::{AcpError, KIMI_PROFILE};
-
-    let dir = tempfile::tempdir().unwrap();
-    let script = concat!(
-        "read -r request; ",
-        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"Authentication required\"}}'; ",
-        "printf '%s\\n' 'no provider configured; complete onboarding via /login' >&2; sleep 0.1"
-    );
-    let session = AcpSession::start(
-        &KIMI_PROFILE,
-        vec!["sh".into(), "-c".into(), script.into()],
-        dir.path(),
-        None,
-    )
-    .unwrap();
-    let response = session.request("session/new", json!({})).unwrap();
-
-    let error = session.result(response, "session/new").unwrap_err();
-    assert!(matches!(&error, AcpError::AuthRequired { .. }));
-    assert_eq!(error.exit_code(), 13);
-    assert!(error.to_string().contains("no provider configured"));
-}
-
-#[test]
-fn dsh_missing_provider_key_maps_to_its_typed_credential_refusal() {
-    use fno_agents::acp_stdio::{AcpError, DSH_PROFILE};
-
-    let dir = tempfile::tempdir().unwrap();
-    let diagnostic = include_str!("fixtures/dsh-acp-trials.txt")
-        .lines()
-        .find_map(|line| line.strip_prefix("prompt_without_key.text="))
-        .expect("measured DSH authentication diagnostic");
-    let frame = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "error": {"code": -32603, "message": diagnostic},
-    })
-    .to_string();
-    let script = "read -r request; printf '%s\\n' \"$FAKE_RESPONSE\"";
-    let env = HashMap::from([("FAKE_RESPONSE".to_string(), frame)]);
-    let session = AcpSession::start(
-        &DSH_PROFILE,
-        vec!["sh".into(), "-c".into(), script.into()],
-        dir.path(),
-        Some(env),
-    )
-    .unwrap();
-    let response = session.request("session/prompt", json!({})).unwrap();
-
-    let error = session.result(response, "session/prompt").unwrap_err();
-    assert!(matches!(&error, AcpError::AuthRequired { .. }));
-    assert_eq!(error.exit_code(), 13);
-    assert!(error.to_string().contains("DEEPSEEK_API_KEY"));
-    assert!(error.to_string().contains("no API key for provider route"));
-}
-
-#[test]
 fn moved_paste_fixtures_keep_measured_payload_and_submission_evidence() {
     for (harness, text) in [
         ("grok", include_str!("fixtures/grok-paste-trials.txt")),

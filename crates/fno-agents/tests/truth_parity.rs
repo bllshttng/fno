@@ -3,8 +3,7 @@
 //!
 //! The truth CLI's human line and `--json` bytes, frozen against goldens
 //! captured from the Python leg before it was deleted. Each golden renders one session_truth fixture payload with no
-//! falsifier, or with each falsifier and with and without a session id. The
-//! reader itself is held by session_truth_parity.rs.
+//! falsifier, or with each falsifier and with and without a session id.
 
 use fno_agents::truth_cli::{cli_payload, truth_line};
 use fno_agents::wake_read::python_json_default;

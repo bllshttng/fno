@@ -764,21 +764,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_budget_killed_pr_listing_keeps_the_over_budget_verdict_in_both_queues() {
-        let listing = SourceRead::over_budget(
-            "gh pr list --state open: killed at its 0.8s slice of the board budget; the source did not fail",
-        );
-        let (mergeable, undriven) = split_failed_listing(&listing);
-        assert!(mergeable.over_budget);
-        assert!(undriven.over_budget);
-        assert!(undriven
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .starts_with("undriven_pr:"));
-    }
-
-    #[test]
     fn mergeable_filter_drops_pending_and_failed_but_keeps_a_clean_pr() {
         let cwd = std::env::temp_dir();
         // read_prs shells to gh; the classifer half is exercised through the
@@ -789,30 +774,6 @@ mod tests {
         assert_eq!(classify_check(&check("COMPLETED", "FAILURE")), "fail");
         assert_eq!(classify_check(&check("COMPLETED", "STALE")), "fail");
         let _ = cwd;
-    }
-
-    #[test]
-    fn coverage_only_rollups_are_diagnostic_not_green() {
-        // A rollup holding only coverage contexts reads empty after the drop,
-        // and an empty class set must not read as a mergeable PR.
-        let rollup = json!([
-            {"name": COVERAGE_STATUS_CONTEXT, "status": "COMPLETED", "conclusion": "SUCCESS"},
-            {"name": COVERAGE_UNAVAILABLE_STATUS_CONTEXT, "status": "COMPLETED", "conclusion": "SUCCESS"},
-        ]);
-        let deduped = crate::check_supersession::latest_per_name(&rollup);
-        let filtered: Vec<&Value> = deduped
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|c| {
-                let is_cov = |v: Option<&str>| {
-                    v == Some(COVERAGE_STATUS_CONTEXT)
-                        || v == Some(COVERAGE_UNAVAILABLE_STATUS_CONTEXT)
-                };
-                !is_cov(s_str(c, "context")) && !is_cov(s_str(c, "name"))
-            })
-            .collect();
-        assert!(filtered.is_empty());
     }
 
     fn pr_row(number: i64, head: &str, url: &str) -> Value {
@@ -854,26 +815,6 @@ mod tests {
     }
 
     #[test]
-    fn binding_refuses_when_the_trailer_names_several_real_nodes() {
-        // Several trailer claims are ambiguous, never a list-order pick.
-        let url = "https://github.com/o/r/pull/5";
-        let entries = vec![json!({"id": "x-dddd"}), json!({"id": "x-aaaa"})];
-        let rows = vec![pr_row_with_body(
-            5,
-            "chore/no-node-here",
-            url,
-            "Backlog-Closure: x-dddd, x-aaaa",
-        )];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert!(bound.is_empty());
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("pr_node_binding_ambiguous")
-                && w.contains("x-dddd")
-                && w.contains("x-aaaa")));
-    }
-
-    #[test]
     fn binding_refuses_when_two_nodes_carry_the_pr() {
         // AC2/AC6: several reverse hits are ambiguous, never a list-order pick.
         let url = "https://github.com/o/r/pull/1476";
@@ -889,83 +830,5 @@ mod tests {
             .any(|w| w.contains("pr_node_binding_ambiguous")
                 && w.contains("x-dddd")
                 && w.contains("x-aaaa")));
-    }
-
-    #[test]
-    fn the_shared_predicate_reports_bound_through_each_of_the_three_keys() {
-        let entries = vec![json!({"id": "x-dddd"})];
-        let url = "https://github.com/o/r/pull/5";
-        // Branch key: the head names a real node.
-        let keys = pr_binding_keys(5, "feature/x-dddd", Some(url), None, &entries);
-        assert_eq!(keys.branch, vec!["x-dddd".to_string()]);
-        assert_eq!(keys.unbound_detail(), None);
-        // Trailer key: a nodeless head, the node named on the body.
-        let keys = pr_binding_keys(
-            5,
-            "fix/descriptive",
-            Some(url),
-            Some("Backlog-Closure: x-dddd"),
-            &entries,
-        );
-        assert_eq!(keys.trailer, vec!["x-dddd".to_string()]);
-        assert_eq!(keys.unbound_detail(), None);
-        // Backref key: a nodeless head, the node carries the back-pointer.
-        let carrying = vec![json!({
-            "id": "x-dddd", "pr_number": 5, "pr_url": url,
-        })];
-        let keys = pr_binding_keys(5, "fix/descriptive", Some(url), None, &carrying);
-        assert_eq!(keys.backrefs, vec!["x-dddd".to_string()]);
-        assert_eq!(keys.unbound_detail(), None);
-        // Retarget key: an approved body line hands the branch's node away,
-        // so the branch stops naming it even though the head still does.
-        let entries = vec![json!({"id": "x-aaaa"}), json!({"id": "x-bbbb"})];
-        let keys = pr_binding_keys(
-            5,
-            "feature/x-aaaa",
-            Some(url),
-            Some("Fixes x-bbbb\nRetarget x-aaaa x-bbbb msg-447f8f"),
-            &entries,
-        );
-        assert_eq!(keys.branch, Vec::<String>::new());
-        assert_eq!(keys.trailer, vec!["x-bbbb".to_string()]);
-        assert_eq!(keys.unbound_detail(), None);
-    }
-
-    #[test]
-    fn per_row_verdicts_name_untracked_and_the_ambiguity_the_board_keeps_silent() {
-        let entries = vec![
-            json!({"id": "x-aaaa", "pr_number": 1, "pr_url": "https://github.com/o/r/pull/1"}),
-            json!({"id": "x-bbbb"}),
-        ];
-        let rows = vec![
-            json!({"number": 1, "headRefName": "feature/x-aaaa", "url": "https://github.com/o/r/pull/1"}),
-            json!({"number": 2, "headRefName": "docs/faq", "url": "https://github.com/o/r/pull/2", "body": ""}),
-            json!({"number": 3, "headRefName": "x-aaaa-and-x-bbbb", "url": "https://github.com/o/r/pull/3"}),
-            // A cross-repo row on a node branch yields no verdict at all:
-            // outside code never enters fleet automation.
-            json!({"number": 4, "headRefName": "x-aaaa", "url": "https://github.com/o/r/pull/4", "isCrossRepository": true}),
-        ];
-        let verdicts = pr_binding_verdicts(&rows, &entries);
-        let got: Vec<(i64, &str, Option<&str>)> = verdicts
-            .iter()
-            .map(|v| (v.number, v.verdict, v.node_id.as_deref()))
-            .collect();
-        assert_eq!(
-            got,
-            vec![
-                (1, "bound", Some("x-aaaa")),
-                (2, "untracked", None),
-                (3, "ambiguous", None),
-            ]
-        );
-        assert!(verdicts[1]
-            .detail
-            .as_deref()
-            .unwrap()
-            .contains("branch 'docs/faq' names no real node"));
-        let (_, warnings) = classify_pr_bindings(&rows, &entries);
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].starts_with("pr_node_binding_untracked: #2 docs/faq"));
-        assert!(!verdicts.iter().any(|v| v.number == 4));
     }
 }

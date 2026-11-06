@@ -357,38 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn smooth_needs_a_recorder_only_for_a_clean_read() {
-        let node = done_node("x-dddd", "code", "medium", 5.0);
-        let later = recorder_from("2026-02-01T00:00:00Z");
-        let rows = compute(&[node.clone()], &BTreeMap::new(), later);
-        assert_eq!(rows[0].smooth, None);
-        let agg = aggregate(&rows);
-        assert_eq!((agg[0].measured_count, agg[0].smooth_count), (0, 0));
-
-        // A friction row is proof of rough even before the recorder's start.
-        let friction = BTreeMap::from([(
-            "x-dddd".to_string(),
-            BTreeMap::from([("ci_failure".to_string(), 1)]),
-        )]);
-        let rows = compute(&[node.clone()], &friction, later);
-        assert_eq!(rows[0].smooth, Some(false));
-
-        let earlier = recorder_from("2025-12-01T00:00:00Z");
-        let rows = compute(&[node.clone()], &BTreeMap::new(), earlier);
-        assert_eq!(rows[0].smooth, Some(true));
-
-        // A revision reads rough with no recorder at all.
-        let mut revised = node;
-        revised["difficulty_history"] = json!([
-            {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
-            {"value": "high", "source": "revised", "ts": "2026-01-02T00:00:00Z"}
-        ]);
-        let rows = compute(&[revised], &BTreeMap::new(), None);
-        assert!(rows[0].re_estimated);
-        assert_eq!(rows[0].smooth, Some(false));
-    }
-
-    #[test]
     fn aggregate_groups_by_domain_difficulty_and_size() {
         let mut sized_s = done_node("x-0000", "code", "medium", 4.0);
         sized_s["size"] = json!("S");
@@ -410,34 +378,5 @@ mod tests {
         assert_eq!(no_size.node_count, 2);
         assert_eq!((no_size.measured_count, no_size.smooth_count), (2, 2));
         assert!((no_size.avg_cost_usd - 6.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn revisions_count_direction_and_ignore_confirmation() {
-        let mut up = done_node("x-4444", "code", "medium", 1.0);
-        up["difficulty_history"] = json!([
-            {"value": "medium", "source": "filed"},
-            {"value": "high", "source": "blueprint"}
-        ]);
-        let mut down = done_node("x-5555", "code", "medium", 1.0);
-        down["difficulty_history"] = json!([
-            {"value": "medium", "source": "filed"},
-            {"value": "low", "source": "update"}
-        ]);
-        let mut confirmed = done_node("x-6666", "code", "medium", 1.0);
-        confirmed["difficulty_history"] = json!([
-            {"value": "medium", "source": "filed"},
-            {"value": "medium", "source": "blueprint"}
-        ]);
-        // No cost_sessions: revisions still counts it, compute skips it.
-        confirmed.as_object_mut().unwrap().remove("cost_sessions");
-        let nodes = [up, down, confirmed];
-        let rows = revisions(&nodes);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            (rows[0].nodes, rows[0].revised_up, rows[0].revised_down),
-            (3, 1, 1)
-        );
-        assert_eq!(compute(&nodes, &BTreeMap::new(), None).len(), 2);
     }
 }

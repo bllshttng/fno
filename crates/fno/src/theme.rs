@@ -405,7 +405,7 @@ pub(crate) fn theme_footnote_paper() -> Theme {
         border: rgb(0x14, 0x14, 0x14), // the dark twin's ground (the mirror pair)
         title: rgb(0x14, 0x14, 0x14),  // text
         brand: rgb(0x14, 0x14, 0x14),  // ink
-        needs_you: rgb(0x79, 0x68, 0x23), // needs-you olive
+        needs_you: rgb(0x65, 0x55, 0x1b), // needs-you olive, readable on surface0
         ok: rgb(0x46, 0x77, 0x48),     // palette green
         warn: rgb(0x79, 0x68, 0x23),   // palette yellow
         error: rgb(0x8f, 0x4d, 0x4b),  // the palette red darkened one step: the
@@ -581,15 +581,18 @@ pub fn claude_theme(t: &Theme) -> Option<&'static str> {
 }
 
 /// The OSC sequences that paint the terminal ground under a footnote theme:
-/// default background (11), default foreground (10), and the 16 palette
-/// slots (4), all from the theme's own tokens. `None` = the theme defines no
+/// default background (11), default foreground (10), the cursor (12, the
+/// foreground, so a host cursor tuned for its own light ground never lands
+/// dark on the dark one), and the 16 palette slots (4), all from the theme's own tokens. `None` = the theme defines no
 /// ground (`terminal`, or any theme whose base is `Default`); the caller
 /// then emits nothing.
 pub fn ground_set(t: &Theme) -> Option<Vec<u8>> {
     let base = color_hex(t.base)?;
     let fg = color_hex(t.stamp).unwrap_or_else(|| base.clone());
     let mut out = Vec::with_capacity(512);
-    out.extend_from_slice(format!("\x1b]11;{base}\x1b\\\x1b]10;{fg}\x1b\\").as_bytes());
+    out.extend_from_slice(
+        format!("\x1b]11;{base}\x1b\\\x1b]10;{fg}\x1b\\\x1b]12;{fg}\x1b\\").as_bytes(),
+    );
     for slot in 0..16u8 {
         if let Some(c) = terminal16_slot(slot, t) {
             let hex = color_hex(c)?;
@@ -599,9 +602,9 @@ pub fn ground_set(t: &Theme) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Reset the terminal's default background (111), foreground (110) and the
-/// palette (104) back to the user's own scheme. Harmless when never set.
-pub const GROUND_RESTORE: &[u8] = b"\x1b]111\x1b\\\x1b]110\x1b\\\x1b]104\x1b\\";
+/// Reset the terminal's default background (111), foreground (110), cursor
+/// color (112) and the palette (104) back to the user's own scheme. Harmless when never set.
+pub const GROUND_RESTORE: &[u8] = b"\x1b]111\x1b\\\x1b]110\x1b\\\x1b]112\x1b\\\x1b]104\x1b\\";
 
 /// The terminal theme files' text for one theme: the same token tables
 /// [`terminal16_slot`] reads, rendered per terminal. `None` = no ground or
@@ -1115,11 +1118,15 @@ mod tests {
             s.contains("\x1b]4;1;#e1a6a3\x1b\\"),
             "OSC 4 slot 1 from the dark table: {s:?}"
         );
+        assert!(
+            s.contains("\x1b]12;#e8e8e8\x1b\\"),
+            "OSC 12 gives the cursor the foreground, never the host's own: {s:?}"
+        );
         assert_eq!(s.matches("\x1b]4;").count(), 16, "all 16 slots");
         // The ground restore resets all three classes.
         assert_eq!(
             GROUND_RESTORE,
-            b"\x1b]111\x1b\\\x1b]110\x1b\\\x1b]104\x1b\\"
+            b"\x1b]111\x1b\\\x1b]110\x1b\\\x1b]112\x1b\\\x1b]104\x1b\\"
         );
         // No ground under terminal: nothing to set, nothing to leak.
         let (term, _) = Theme::from_name("terminal");

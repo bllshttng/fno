@@ -19,6 +19,9 @@ pub struct AgentLaunchRequest {
     pub cwd: String,
     /// Harness name from the launcher catalog (`claude`, `codex`, ...).
     pub harness: String,
+    /// Target machine from the fleet; None launches locally.
+    #[serde(default)]
+    pub host: Option<String>,
     /// Canonical spawn substrate. EMPTY means the door's default (`thread`
     /// where the harness seats one, `headless` where it does not); `pane`
     /// names the pane lane explicitly (the only way `--tab`/`--split` reach

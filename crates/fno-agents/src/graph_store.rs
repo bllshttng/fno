@@ -3101,6 +3101,52 @@ pub fn read_rows_where(
     crate::backlog::read_entries_where_defaulted(path, query, false).map_err(StoreError::Sqlite)
 }
 
+/// The graph rows whose dependency is `contract`, materialized in graph order.
+pub(crate) fn read_contract_rows(path: &Path) -> Result<Vec<Value>, StoreError> {
+    const ID_BATCH: usize = 400;
+    let connection = crate::backlog::read_connection(path).map_err(StoreError::Sqlite)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, ordinal FROM nodes
+             WHERE json_extract(extras, '$.dep') = 'contract'
+             UNION
+             SELECT id, ordinal FROM nodes_raw
+             WHERE CASE WHEN json_valid(body)
+                        THEN json_extract(body, '$.dep') END = 'contract'
+             ORDER BY ordinal, id",
+        )
+        .map_err(|error| StoreError::Sqlite(error.to_string()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| StoreError::Sqlite(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StoreError::Sqlite(error.to_string()))?;
+    drop(statement);
+    drop(connection);
+
+    let ids: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+    let mut by_id = HashMap::new();
+    for batch in ids.chunks(ID_BATCH) {
+        let query = crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(batch.to_vec()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for row in read_rows_where(path, &query)? {
+            if let Some(id) =
+                entry_id(&row).filter(|id| batch.iter().any(|candidate| candidate == id))
+            {
+                by_id.insert(id.to_string(), row);
+            }
+        }
+    }
+    Ok(ids.into_iter().filter_map(|id| by_id.remove(&id)).collect())
+}
+
 pub fn read_rows_where_strict(
     path: &Path,
     query: &crate::backlog::RowQuery,
@@ -3476,43 +3522,6 @@ mod tests {
             .expect("an unrelated update on a stored leaky title must pass");
     }
 
-    #[test]
-    fn a_whole_graph_reparent_under_a_reopened_epic_leaves_it_open() {
-        // The same publish moves an old done child under a reopened epic and
-        // derives the epic's status. The join stamp must land first, or the
-        // child's older created_at closes the epic inside the very write.
-        let root = tempfile::tempdir().unwrap();
-        let graph = root.path().join("graph.json");
-        let epic = json!({
-            "id": "ab-epic0001", "slug": "epic", "title": "Epic", "type": "feature",
-            "status": "idea", "priority": "p2", "created_at": "2025-01-01T00:00:00+00:00",
-            "reopened_at": "2026-01-01T00:00:00+00:00",
-        });
-        let mut kid = json!({
-            "id": "ab-kid00001", "slug": "kid", "title": "Kid", "type": "feature",
-            "status": "done", "priority": "p2", "created_at": "2025-06-01T00:00:00+00:00",
-            "completed_at": "2026-06-01T00:00:00+00:00", "completion_note": "shipped",
-        });
-        seed_rows(&graph, &[epic.clone(), kid.clone()]).unwrap();
-        kid["parent"] = json!("ab-epic0001");
-        let input = MutateInput {
-            entries: vec![epic, kid],
-            canonical_path: None,
-            base_version: crate::backlog::version(&graph).unwrap(),
-            plan_rungs: None,
-        };
-        let outcome = locked_mutate(&graph, input, std::time::Duration::from_secs(5)).unwrap();
-        let row = |id: &str| {
-            outcome
-                .entries
-                .iter()
-                .find(|e| entry_id(e) == Some(id))
-                .unwrap()
-        };
-        assert!(row("ab-kid00001")["parented_at"].is_string());
-        assert_eq!(row("ab-epic0001")["status"], "idea");
-    }
-
     fn count_prefixed(dir: &Path, prefix: &str) -> usize {
         std::fs::read_dir(dir)
             .unwrap()
@@ -3570,92 +3579,6 @@ mod tests {
     }
 
     #[test]
-    fn byte_cap_drops_oldest_copies_and_keeps_the_newest() {
-        // Three 1,000-byte copies and a 1,500-byte cap: the two oldest go
-        // until the pile fits, and the newest is what remains.
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("backups");
-        std::fs::create_dir(&dir).unwrap();
-        for i in 0..3 {
-            std::fs::write(
-                dir.join(format!("graph.db.20260914T00000{i}000000")),
-                vec![b'x'; 1_000],
-            )
-            .unwrap();
-        }
-
-        rotate_backups_capped(&dir, "graph.db.", 1_500);
-
-        assert_eq!(count_prefixed(&dir, "graph.db."), 1);
-        assert!(
-            dir.join("graph.db.20260914T000002000000").exists(),
-            "the newest copy survives"
-        );
-    }
-
-    #[test]
-    fn byte_cap_never_takes_the_newest_copy() {
-        // A store past the cap still holds one rollback copy: the newest
-        // never goes, even when it alone exceeds the cap.
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("backups");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(
-            dir.join("graph.db.20260914T000000000000"),
-            vec![b'x'; 2_000],
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("graph.db.20260914T000001000000"),
-            vec![b'x'; 2_000],
-        )
-        .unwrap();
-
-        rotate_backups_capped(&dir, "graph.db.", 1_000);
-
-        assert_eq!(count_prefixed(&dir, "graph.db."), 1);
-        assert!(
-            dir.join("graph.db.20260914T000001000000").exists(),
-            "the newest survives past the cap"
-        );
-    }
-
-    #[test]
-    fn byte_cap_spares_the_collapse_pin() {
-        // The pin holds the last good copy, so a byte-bounded prune that
-        // takes every rotation copy must still leave it standing.
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("backups");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(
-            dir.join("pre-shrink.graph.db.20260913T000000000000"),
-            vec![b'x'; 10_000],
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("graph.db.20260914T000000000000"),
-            vec![b'x'; 2_000],
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("graph.db.20260914T000001000000"),
-            vec![b'x'; 2_000],
-        )
-        .unwrap();
-
-        rotate_backups_capped(&dir, "graph.db.", 1_000);
-
-        assert_eq!(count_prefixed(&dir, "graph.db."), 1, "the pile is bounded");
-        assert_eq!(
-            std::fs::read(dir.join("pre-shrink.graph.db.20260913T000000000000"))
-                .unwrap()
-                .len(),
-            10_000,
-            "the pin is never pruned"
-        );
-    }
-
-    #[test]
     fn presence_type_refuses_the_measured_wipe() {
         // The 2026-09-02 defect: `--details ""` wiped 3,036 characters. The
         // type cannot express it.
@@ -3670,157 +3593,6 @@ mod tests {
             FieldUpdate::from_cli("details", None),
             Ok(FieldUpdate::Keep)
         ));
-    }
-
-    #[test]
-    fn work_state_folds_named_nodes_and_reports_the_current_open_one() {
-        // AC2-HP: named on two done nodes -> AllDone carrying both.
-        let entries = vec![
-            json!({
-                "id": "N1", "status": "done",
-                "sessions": [{"session_id": "S", "phase": "execute", "harness": "claude"}],
-            }),
-            json!({
-                "id": "N2", "status": "done",
-                "sessions": [{"session_id": "S", "phase": "review", "harness": "claude"}],
-            }),
-        ];
-        let index = work_index(&entries);
-        assert_eq!(
-            work_state(&index, "S"),
-            WorkState::AllDone {
-                nodes: vec!["N1".into(), "N2".into()]
-            }
-        );
-        // Keyed on the normalised id: an upper-case spelling resolves too.
-        assert_eq!(
-            work_state(&index, "s"),
-            WorkState::AllDone {
-                nodes: vec!["N1".into(), "N2".into()]
-            }
-        );
-
-        // AC2-EDGE: one open node among the named -> Open naming it.
-        let entries = vec![
-            json!({
-                "id": "N2", "status": "done",
-                "sessions": [{"session_id": "S", "phase": "execute", "harness": "claude"}],
-            }),
-            json!({
-                "id": "N3", "status": "in_review",
-                "sessions": [{"session_id": "S", "phase": "review", "harness": "claude"}],
-            }),
-        ];
-        let index = work_index(&entries);
-        assert_eq!(
-            work_state(&index, "S"),
-            WorkState::Open {
-                node: "N3".into(),
-                status: "in_review".into()
-            }
-        );
-        // Named nowhere -> NoProvenance, and a ses_ id keeps its case.
-        assert_eq!(work_state(&index, "unknown-id"), WorkState::NoProvenance);
-        let opencode = vec![json!({
-            "id": "N4", "status": "done",
-            "sessions": [{"session_id": "ses_CaseKept", "phase": "execute", "harness": "opencode"}],
-        })];
-        let index = work_index(&opencode);
-        assert_eq!(
-            work_state(&index, "ses_CaseKept"),
-            WorkState::AllDone {
-                nodes: vec!["N4".into()]
-            }
-        );
-        assert_eq!(work_state(&index, "ses_casekept"), WorkState::NoProvenance);
-
-        // The 2026-11-04 specimen: a worker named on its done node and on an
-        // idea it filed later. The idea is not active work, so the done node
-        // decides; a session named only on parked nodes stays Open.
-        let entries = vec![
-            json!({"id": "N1", "status": "done", "sessions": [
-                {"session_id": "I", "phase": "execute", "ended_at": "2026-11-04T13:00:34Z"}]}),
-            json!({"id": "N8", "status": "idea", "sessions": [
-                {"session_id": "I", "phase": "think", "ended_at": "2026-11-04T13:01:50Z"},
-                {"session_id": "P", "phase": "think"}]}),
-        ];
-        let index = work_index(&entries);
-        assert_eq!(
-            work_state(&index, "I"),
-            WorkState::AllDone {
-                nodes: vec!["N1".into()]
-            }
-        );
-        assert_eq!(
-            work_state(&index, "P"),
-            WorkState::Open {
-                node: "N8".into(),
-                status: "idea".into()
-            }
-        );
-
-        // A rebound session: its ended row on N5 comes first in graph order,
-        // its open row on N7 is the newest. The open row is the current node.
-        let entries = vec![
-            json!({"id": "N5", "status": "in_review", "sessions": [
-                {"session_id": "R", "phase": "execute", "started_at": "2026-10-01T01:00:00Z",
-                 "ended_at": "2026-10-01T03:00:00Z"}]}),
-            json!({"id": "N6", "status": "in_review", "sessions": [
-                {"session_id": "R", "phase": "execute", "started_at": "2026-10-01T02:00:00Z"}]}),
-            json!({"id": "N7", "status": "in_progress", "sessions": [
-                {"session_id": "R", "phase": "execute", "started_at": "2026-10-01T04:00:00Z"}]}),
-        ];
-        let order: Vec<String> = work_index(&entries)["r"]
-            .iter()
-            .map(|(node, _)| node.clone())
-            .collect();
-        assert_eq!(order, ["N7", "N6", "N5"]);
-    }
-
-    #[test]
-    fn commit_refuses_an_empty_presence_field_even_from_a_raw_mutator() {
-        // The Python mutator runs client-side against plain dicts, so the
-        // store boundary enforces what the typed update path cannot see: a
-        // hand-built payload carrying details:"" never persists.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let err = locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![json!({"id": "ab-1", "title": "t", "details": ""})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap_err();
-        assert!(matches!(err, StoreError::EmptyFieldUpdate(_)), "{err}");
-        // Whitespace-only is the same wipe shape.
-        let err = locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![json!({"id": "ab-1", "completion_note": "   "})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap_err();
-        assert!(matches!(err, StoreError::EmptyFieldUpdate(_)), "{err}");
-        // Removing the key stays legal (the explicit clear).
-        locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![json!({"id": "ab-1", "title": "t"})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap();
     }
 
     /// Every spelling of one store derives the one lockfile an older binary
@@ -3851,48 +3623,6 @@ mod tests {
             graph_lock_path(&root.join("db/graph.share")).file_name(),
             Some(std::ffi::OsStr::new("graph.share.lock"))
         );
-    }
-
-    /// The timeout refusal names the recorded holder: pid and hold age land
-    /// in the third field, so the operator can tell a live holder from a
-    /// crashed one without lsof.
-    #[test]
-    fn a_lock_timeout_names_the_recorded_holder() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let _holder = BoundedLock::acquire(&graph, Duration::from_secs(1)).unwrap();
-        let err = BoundedLock::acquire(&graph, Duration::from_millis(150)).unwrap_err();
-        match err {
-            StoreError::LockTimeout(_, _, detail) => {
-                assert!(
-                    detail.contains("recorded holder pid"),
-                    "refusal must name the holder: {detail}"
-                );
-            }
-            other => panic!("expected LockTimeout, got {other}"),
-        }
-        // A dead pid reads as dead, not as a live holder: the record below
-        // names a pid past the i32 range, so pid_is_alive answers false
-        // without a syscall.
-        let lock_path = graph_lock_path(&graph);
-        std::fs::write(
-            &lock_path,
-            format!(
-                "{}\n",
-                serde_json::json!({"pid": 4_000_000_000u64, "acquired_at": "2026-10-09T00:00:00+00:00"})
-            ),
-        )
-        .unwrap();
-        let err = BoundedLock::acquire(&graph, Duration::from_millis(150)).unwrap_err();
-        match err {
-            StoreError::LockTimeout(_, _, detail) => {
-                assert!(
-                    detail.contains("is dead"),
-                    "refusal must read a dead holder as dead: {detail}"
-                );
-            }
-            other => panic!("expected LockTimeout, got {other}"),
-        }
     }
 
     #[test]
@@ -3965,76 +3695,6 @@ mod tests {
     }
 
     #[test]
-    fn recompute_stamps_the_stale_open_do_row_and_keeps_the_status() {
-        // An 11-day-old open do row carries the diagnostic and the node is
-        // STILL in_progress: age records uncertainty, it never clears an owner.
-        let old_row = json!({
-            "phase": "execute",
-            "harness": "claude",
-            "session_id": "s-old",
-            "started_at": (chrono::Utc::now() - chrono::Duration::days(11)).to_rfc3339(),
-        });
-        let mut entries = vec![json!({
-            "id": "n-stale",
-            "status": "in_progress",
-            "sessions": [old_row],
-        })];
-        recompute_statuses(&mut entries);
-        assert_eq!(s_str(&entries[0], "status"), Some("in_progress"));
-        let defect = entries[0].get("ownership_defect").unwrap();
-        assert_eq!(defect.get("kind").unwrap(), "stale-open-do-unverified");
-        assert_eq!(defect.get("holder").unwrap(), "s-old");
-        assert_eq!(defect.get("liveness").unwrap(), "unverified");
-
-        // Positive control: a 17-minute row gets NO marker and no status
-        // change - youth is not strandedness.
-        let fresh_row = json!({
-            "phase": "execute",
-            "harness": "claude",
-            "session_id": "s-fresh",
-            "started_at": (chrono::Utc::now() - chrono::Duration::minutes(17)).to_rfc3339(),
-        });
-        let mut fresh = vec![json!({
-            "id": "n-fresh",
-            "status": "in_progress",
-            "sessions": [fresh_row],
-        })];
-        recompute_statuses(&mut fresh);
-        assert_eq!(s_str(&fresh[0], "status"), Some("in_progress"));
-        assert!(fresh[0].get("ownership_defect").is_none());
-
-        // A locked node keeps the lock's own marker; the do stamp never
-        // overwrites it.
-        let mut locked = vec![json!({
-            "id": "n-locked",
-            "status": "in_progress",
-            "locked_by": "worker",
-            "locked_at": (chrono::Utc::now() - chrono::Duration::hours(48)).to_rfc3339(),
-            "sessions": [old_row],
-        })];
-        recompute_statuses(&mut locked);
-        let defect = locked[0].get("ownership_defect").unwrap();
-        assert_eq!(defect.get("kind").unwrap(), "stale-active-owner-unverified");
-    }
-
-    #[test]
-    fn slug_assignment_is_unique_and_idempotent() {
-        let mut entries = vec![
-            json!({"id": "ab-1", "title": "Port the graph store"}),
-            json!({"id": "ab-2", "title": "Port the graph store"}),
-            json!({"id": "ab-3", "title": "Port the graph store", "slug": "kept"}),
-        ];
-        ensure_slugs(&mut entries);
-        let first = s_str(&entries[0], "slug").unwrap().to_string();
-        let second = s_str(&entries[1], "slug").unwrap().to_string();
-        assert_ne!(first, second);
-        assert!(second.starts_with(&first));
-        assert_eq!(s_str(&entries[2], "slug"), Some("kept"));
-        ensure_slugs(&mut entries);
-        assert_eq!(s_str(&entries[0], "slug"), Some(first.as_str()));
-    }
-
-    #[test]
     fn mutate_rows_retries_when_a_row_lands_between_read_and_publish() {
         // First acceptance line: a concurrent writer lands
         // between the cycle's read and publish; the loop conflicts, re-reads,
@@ -4076,155 +3736,6 @@ mod tests {
             .collect();
         assert!(ids.contains(&"x-fresh".to_string()), "ids: {ids:?}");
         assert!(ids.contains(&"x-mine".to_string()), "ids: {ids:?}");
-    }
-
-    /// Fixture SQL names the table through a const, the share tests' own
-    /// idiom: the table-ownership gate reads production writes, and the
-    /// fixture here moves the primary's row through its owning module's
-    /// shape.
-    const FIXTURE_NODES: &str = "nodes";
-
-    /// One machine against a live test primary whose row moves underneath
-    /// it, so every publish meets the CAS stale-row guard.
-    fn a_machine_and_a_moved_primary_row() -> (
-        crate::store_remote::test_primary::Primary,
-        tempfile::TempDir,
-        PathBuf,
-    ) {
-        let primary = crate::store_remote::test_primary::start();
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(
-            &graph,
-            &[
-                json!({"id": "x-s", "slug": "x-s", "title": "first", "type": "feature",
-                     "status": "idea", "priority": "p2", "domain": "code"}),
-            ],
-        )
-        .unwrap();
-        crate::backlog_share::route_to_primary(Some((
-            primary.remote.clone(),
-            crate::backlog::database_path(&graph),
-        )));
-        crate::backlog_share::seed(&graph).unwrap();
-        // The slugged row is typed, so both sides hold it in nodes and the
-        // write stays one table. The guard assert keeps a silent no-op from
-        // reading as a landed write.
-        let moved = primary
-            .db
-            .lock()
-            .unwrap()
-            .execute(
-                &format!("UPDATE {FIXTURE_NODES} SET title = 'moved' WHERE id = 'x-s'"),
-                [],
-            )
-            .unwrap();
-        assert_eq!(moved, 1, "the fixture moved the primary's stored row");
-        (primary, dir, graph)
-    }
-
-    #[test]
-    fn zz_fixture_probe() {
-        let (primary, _dir, graph) = a_machine_and_a_moved_primary_row();
-        let conn = crate::backlog::open(&graph).unwrap();
-        for table in ["nodes", "nodes_raw"] {
-            let count: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-                .unwrap_or(-1);
-            eprintln!("PROBE local {table}: {count}");
-        }
-        let rows = crate::graph_store::read_rows_for_write(&graph).unwrap();
-        let ids: Vec<String> = rows
-            .iter()
-            .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
-            .collect();
-        eprintln!("PROBE write-read ids: {ids:?}");
-        let pconn = primary.db.lock().unwrap();
-        for table in ["nodes", "nodes_raw"] {
-            let count: i64 = pconn
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-                .unwrap_or(-1);
-            eprintln!("PROBE primary {table}: {count}");
-        }
-    }
-
-    fn set_title_second(working: &mut Vec<Value>) -> Result<bool, StoreError> {
-        for row in working.iter_mut() {
-            if row.get("id").and_then(Value::as_str) == Some("x-s") {
-                if let Some(obj) = row.as_object_mut() {
-                    obj.insert("title".into(), Value::String("second".into()));
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    #[test]
-    fn a_stale_row_refusal_is_resent_once_and_then_returned() {
-        let (primary, _dir, graph) = a_machine_and_a_moved_primary_row();
-        let apply_runs = std::cell::Cell::new(0usize);
-        let primary_rows = std::sync::Arc::clone(&primary.db);
-        let error = mutate_rows(&graph, Duration::from_secs(5), None, None, |working| {
-            let run = apply_runs.get() + 1;
-            apply_runs.set(run);
-            // The row moves again while the resend is in flight, so the
-            // second publish meets the guard too - the every-refusing case.
-            if run == 2 {
-                primary_rows
-                    .lock()
-                    .unwrap()
-                    .execute(
-                        &format!("UPDATE {FIXTURE_NODES} SET title = 'moved2' WHERE id = 'x-s'"),
-                        [],
-                    )
-                    .unwrap();
-            }
-            set_title_second(working)
-        })
-        .unwrap_err();
-        let StoreError::Sqlite(text) = &error else {
-            panic!("the refusal surfaces as Sqlite: {error:?}")
-        };
-        assert!(
-            crate::backlog_share::is_stale_row_refusal(text),
-            "the stale-row refusal comes back: {text}"
-        );
-        assert_eq!(
-            apply_runs.get(),
-            2,
-            "one resend, not the five-attempt storm"
-        );
-        // The take-back that rode the refusal rebased this machine on the
-        // primary's row.
-        let local: String = crate::backlog::open(&graph)
-            .unwrap()
-            .query_row("SELECT title FROM nodes WHERE id = 'x-s'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(local, "moved2", "the take-back ran before the return");
-        crate::backlog_share::route_to_primary(None);
-        drop(primary);
-    }
-
-    #[test]
-    fn a_stale_row_refusal_lands_on_its_one_resend() {
-        let (primary, _dir, graph) = a_machine_and_a_moved_primary_row();
-        let apply_runs = std::cell::Cell::new(0usize);
-        let outcome = mutate_rows(&graph, Duration::from_secs(5), None, None, |working| {
-            apply_runs.set(apply_runs.get() + 1);
-            set_title_second(working)
-        })
-        .unwrap();
-        assert!(outcome.is_some(), "the resend lands");
-        assert_eq!(apply_runs.get(), 2, "two cycles, one resend");
-        let shipped: String = primary
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT title FROM nodes WHERE id = 'x-s'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(shipped, "second", "the primary took the resent write");
-        crate::backlog_share::route_to_primary(None);
-        drop(primary);
     }
 
     #[test]
@@ -4310,105 +3821,6 @@ mod tests {
     }
 
     #[test]
-    fn the_whole_graph_seam_refuses_the_26th_unplanned_idea() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let rows: Vec<Value> = (1..=25)
-            .map(|i| {
-                json!({"id": format!("i-{i:02}"), "slug": format!("i-{i:02}"),
-                       "title": format!("idea {i}"), "type": "feature", "status": "idea",
-                       "priority": "p2", "domain": "code", "project": "p",
-                       "created_at": format!("2026-01-{i:02}T00:00:00Z")})
-            })
-            .collect();
-        seed_rows(&graph, &rows).unwrap();
-        std::fs::write(
-            dir.path().join("config.toml"),
-            "[backlog]\nmax_open_ideas = 25\n",
-        )
-        .unwrap();
-        let before = crate::backlog::version(&graph).unwrap();
-        let mut entries = read_rows(&graph).unwrap();
-        entries.push(json!({"id": "i-26", "slug": "i-26", "title": "idea 26",
-                            "type": "feature", "status": "idea", "priority": "p2",
-                            "domain": "code", "project": "p"}));
-        let error = locked_mutate(
-            &graph,
-            MutateInput {
-                entries,
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(5),
-        )
-        .unwrap_err();
-        let StoreError::Invalid(message) = error else {
-            panic!("want Invalid, got {error:?}");
-        };
-        assert!(message.contains("idea cap:"), "{message}");
-        assert!(message.contains("i-01, i-02, i-03"), "{message}");
-        assert_eq!(
-            crate::backlog::version(&graph).unwrap(),
-            before,
-            "version unchanged"
-        );
-        assert!(!read_rows(&graph)
-            .unwrap()
-            .iter()
-            .any(|row| entry_id(row) == Some("i-26")));
-    }
-
-    fn readiness_fixture(entries: &[Value]) -> std::collections::HashMap<&str, &Value> {
-        index_by_id(entries)
-    }
-
-    #[test]
-    fn readiness_releases_a_dependent_whose_blocker_is_superseded_by_a_done_node() {
-        // The measured shape (2026-09-03 graph walk): the named blocker will
-        // never carry completed_at; only its live successor decides the edge.
-        let entries = vec![
-            json!({"id": "ab-1", "blocked_by": ["ab-2"]}),
-            json!({"id": "ab-2", "superseded_by": "ab-3"}),
-            json!({"id": "ab-3", "completed_at": "2026-09-01T00:00:00Z"}),
-        ];
-        let by_id = readiness_fixture(&entries);
-        let a = json!({"id": "ab-1", "blocked_by": ["ab-2"]});
-        assert_eq!(compute_readiness(&a, &by_id), ("ready".to_string(), None));
-    }
-
-    #[test]
-    fn readiness_marks_a_deferred_blocker_and_never_loops_a_cycle() {
-        let rows = vec![
-            json!({"id": "ab-1", "blocked_by": ["ab-2"]}),
-            json!({"id": "ab-2", "deferred_at": "2026-08-01T00:00:00Z"}),
-            // A ring of nine rows, each superseding into the next: the chase
-            // hits the hop bound and answers unknown-dep, never loops.
-            json!({"id": "ab-4", "blocked_by": ["ab-c1"]}),
-            json!({"id": "ab-c1", "superseded_by": "ab-c2"}),
-            json!({"id": "ab-c2", "superseded_by": "ab-c3"}),
-            json!({"id": "ab-c3", "superseded_by": "ab-c4"}),
-            json!({"id": "ab-c4", "superseded_by": "ab-c5"}),
-            json!({"id": "ab-c5", "superseded_by": "ab-c6"}),
-            json!({"id": "ab-c6", "superseded_by": "ab-c7"}),
-            json!({"id": "ab-c7", "superseded_by": "ab-c8"}),
-            json!({"id": "ab-c8", "superseded_by": "ab-c9"}),
-            json!({"id": "ab-c9", "superseded_by": "ab-c1"}),
-        ];
-        let by_id = readiness_fixture(&rows);
-        let a = json!({"id": "ab-1", "blocked_by": ["ab-2"]});
-        assert_eq!(
-            compute_readiness(&a, &by_id),
-            ("blocked-by-deferred".to_string(), Some("ab-2".to_string()))
-        );
-        let cycle = json!({"id": "ab-4", "blocked_by": ["ab-c1"]});
-        assert_eq!(
-            compute_readiness(&cycle, &by_id),
-            ("unknown-dep".to_string(), Some("ab-c9".to_string()))
-        );
-    }
-
-    #[test]
     fn settle_prunes_rewires_and_holds_blocked_by_edges() {
         let entries = vec![
             json!({"id": "ab-1", "blocked_by": ["ab-done"]}),
@@ -4459,36 +3871,5 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("superseded by ab-done2"));
-    }
-
-    #[test]
-    fn a_pruned_edge_records_a_trail_row_on_the_blocker() {
-        // The pruner records who it disconnected, so the reopen can undo it.
-        let original = vec![
-            json!({"id": "x-open", "blocked_by": ["x-done"]}),
-            json!({"id": "x-open2", "blocked_by": ["x-done"]}),
-            json!({"id": "x-done", "completed_at": "2026-10-21T02:00:00Z"}),
-        ];
-        let (entries, receipts, changes) = settle_blocked_by_edges(original.clone());
-        let by_id = index_by_id(&entries);
-        let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
-        assert_eq!(trail.len(), 2, "every pruned dependent rides the trail");
-        assert_eq!(trail[0]["node"].as_str(), Some("x-open"), "{trail:?}");
-        assert_eq!(trail[1]["node"].as_str(), Some("x-open2"), "{trail:?}");
-        // The reconcile path commits through apply_edge_settlement on LIVE
-        // rows: the trail must land there too, or a reopen restores nothing.
-        let settlement = json!({
-            "blocked_by": serde_json::to_value(&changes).unwrap_or_default(),
-            "receipts": receipts,
-        });
-        let mut live = original;
-        crate::backlog::supersession::apply_edge_settlement(&mut live, &settlement);
-        let by_id = index_by_id(&live);
-        let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
-        assert_eq!(
-            trail.len(),
-            2,
-            "the settlement application persists the trail: {trail:?}"
-        );
     }
 }

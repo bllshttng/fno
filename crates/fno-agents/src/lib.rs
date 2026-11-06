@@ -215,7 +215,9 @@ pub mod evals_gate;
 pub mod evals_macro;
 pub mod evals_power;
 pub mod evals_predict;
+pub mod evals_profile;
 pub mod evals_qualification;
+pub mod evals_traces;
 pub mod evals_trend;
 pub mod event_rules;
 pub mod event_store;
@@ -328,6 +330,7 @@ pub mod lead_checkin_blueprint;
 pub mod lead_checkin_evals;
 pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
+pub mod lead_checkin_orders;
 pub mod lead_escalation;
 pub mod lead_eval;
 pub(crate) mod lead_eval_grade;
@@ -567,6 +570,7 @@ pub mod resume_args;
 pub mod resume_gate;
 pub mod resume_pin;
 pub mod resume_receipt;
+pub(crate) mod resume_reroute;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
@@ -1870,6 +1874,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // 24h, marking finished rows handled. Emitted even on a quiet or skipped
     // run, so a quiet run cannot be mistaken for a sweep that never ran.
     "park_sweep",
+    // Evals-gate settle (daemon-emitted): the one-minute arm graded a
+    // finished gate run outside the pr-watch tick, or a run is in flight
+    // under it. A fully idle minute stays silent by design.
+    "evals_settle",
     // A parked PR resumed polling (pr-park-emitted): retries reset, by hand
     // (the lead row's command) or by the sweep.
     "pr_watch_unparked",
@@ -2093,9 +2101,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // active_backlog tick row is an EventEmitter emit (the mission-level rows
     // ride Journal::append and are exempt like the drain decision events).
     "control_plane_tick",
-    // Evals demand (Python-emitted from the pr-watch tick's evals
-    // leg): the scheduled regression-tier run's outcome, and the could-not-
-    // fire row whose journal entries are the operator-notice rate bound.
+    // Evals demand (daemon-scheduled): the regression-tier run's outcome,
+    // and the could-not-fire row whose journal entries rate-bound notices.
     "evals_scheduled_run",
     "evals_stale",
     // Scratch-shape sweep (agents-emitted from the `scratch sweep`

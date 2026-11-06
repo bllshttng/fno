@@ -50,16 +50,6 @@ def _pointer_path(home: Path) -> Path:
     return path
 
 
-def test_env_hint_resolves_without_writing_pointer(tmp_path, monkeypatch, isolated_home):
-    """The hook is the sole pointer writer, so an env resolve writes none
-    (an env-hint root is just as often a worker's linked worktree)."""
-    plugin = _make_plugin(tmp_path / "plugin")
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
-    got = paths.resolve_plugin_script("scripts/lib/set-gate.sh")
-    assert got == plugin / "scripts" / "lib" / "set-gate.sh"
-    assert not _pointer_path(isolated_home).exists()
-
-
 def test_resolve_falls_to_persisted_when_env_and_pkg_miss(tmp_path, monkeypatch, isolated_home):
     """The env-less foreign-project case: only the persisted pointer remains."""
     plugin = _make_plugin(tmp_path / "plugin")

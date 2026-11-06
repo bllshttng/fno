@@ -2,6 +2,50 @@
 
 use super::*;
 
+#[tokio::test]
+async fn rm_refuses_the_registry_row_for_its_own_session_before_teardown() {
+    let _env_lock = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _clear_identity: Vec<_> = crate::claims::AMBIENT_IDENTITY_NAMES
+        .iter()
+        .map(|name| crate::claims::EnvVarGuard::unset(name))
+        .collect();
+    let _harness = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "fno");
+    let _session = crate::claims::EnvVarGuard::set(
+        "FNO_HARNESS_SESSION_ID",
+        "worker-session-123456789012345678901234",
+    );
+
+    let home = short_home("rmself");
+    let mut row = claude_rm_row(
+        "self-worker",
+        "self1234",
+        "worker-session-123456789012345678901234",
+    );
+    row.status = AgentStatus::Live;
+    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+    let request = Request::new(1, "agent.rm", json!({"name": "self-worker"}));
+    let response = handle_rm_with(
+        &ctx,
+        &request,
+        &|| panic!("self-removal refusal returns before reading the Claude roster"),
+        &|_| panic!("self-removal refusal returns before stopping the harness session"),
+        &|_, _| panic!("self-removal refusal returns before the stop leg"),
+        &|_, _| panic!("self-removal refusal returns before killing the mux pane"),
+        &|_, _| panic!("self-removal refusal returns before probing the mux pane"),
+    )
+    .await;
+
+    let error = response.error().expect("self-removal is refused");
+    assert!(error.message.contains("cannot remove its own registry row"));
+    let registry = state::load_registry(&home.registry_json()).unwrap();
+    assert_eq!(registry.entries.len(), 1);
+    assert_eq!(registry.entries[0].name, "self-worker");
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
 /// The Unknown-roster refusal must name the read's own reason. A bare
 /// "the roster read failed" sent the 2026-09-08 operator to retry a
 /// 15s timeout, which reproduces forever.

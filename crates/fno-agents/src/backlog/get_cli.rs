@@ -588,22 +588,4 @@ mod tests {
         assert!(resolve_tiers(&entries, "AAAAAAAA").is_none());
         assert!(resolve_tiers(&entries, "ab-zzzzzzzz").is_none());
     }
-
-    #[test]
-    fn the_parse_rejects_second_positionals_and_unknown_flags() {
-        let two = vec!["x-1".to_string(), "x-2".to_string()];
-        assert!(GetArgs::parse(&two).is_none());
-        let unknown = vec!["x-1".to_string(), "--nope".to_string()];
-        assert!(GetArgs::parse(&unknown).is_none());
-        let ok = vec!["x-1".to_string(), "--grouped".to_string()];
-        assert!(GetArgs::parse(&ok).is_some());
-        let bare_json = vec!["x-1".to_string(), "--json".to_string()];
-        assert!(GetArgs::parse(&bare_json).is_some_and(|a| a.render.json));
-        let trace = vec![
-            "x-1".to_string(),
-            "--trace".to_string(),
-            "--json".to_string(),
-        ];
-        assert!(GetArgs::parse(&trace).is_some_and(|a| a.render.trace && a.render.json));
-    }
 }

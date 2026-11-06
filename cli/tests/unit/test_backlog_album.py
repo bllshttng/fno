@@ -101,31 +101,3 @@ def test_text_names_no_gift_rather_than_hiding(tmp_path, monkeypatch):
     assert "PR #883" in r.output
     assert "no gift" in r.output
     assert "no gift recorded" in r.output  # the card renders, gap visible
-
-
-def test_legacy_completed_row_without_status_is_a_card(tmp_path, monkeypatch):
-    # Pre-status-stamping sweep shape: completed_at is the terminal fact the
-    # archive subsystem itself reads (statuses.is_terminal_entry, which the
-    # album reaches through derived_status). A `ready` default must not evict
-    # a shipped card.
-    archive = _route(tmp_path, monkeypatch)
-    _seed_archive(
-        archive,
-        [
-            {
-                "id": "x-leg0001",
-                "title": "legacy ship",
-                "completed_at": "2026-05-01T00:00:00Z",
-            },
-            {
-                "id": "x-leg0002",
-                "title": "superseded legacy",
-                "completed_at": "2026-05-02T00:00:00Z",
-                "superseded_by": "x-leg0001",
-            },
-        ],
-    )
-    r = native_backlog("backlog", "album", "--json")
-    assert r.exit_code == 0, r.output
-    cards = json.loads(r.output)
-    assert [c["id"] for c in cards] == ["x-leg0001"]

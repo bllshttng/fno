@@ -15,6 +15,8 @@ docker run -d --name fno-sqld-test -p 18080:8080 -e SQLD_NODE=primary \
 
 The primary starts empty. The first claim creates the tables, so no seed step is needed.
 
+Bind the data directory from a filesystem that supports `RENAME_EXCHANGE`. At compaction, sqld swaps the wallog with that flag and aborts on a filesystem that lacks it. ext4 and tmpfs pass. Btrfs on kernels older than 4.7 does not. The two-file check and the full defect are in [the shared-store contention doc](../architecture/shared-store-write-contention.md#the-abort-compaction-cannot-swap-the-wallog).
+
 ## 2. Set the key on both machines
 
 Run this on each machine. Use the primary's tailnet name:
@@ -102,6 +104,8 @@ Remove the `[store]` table on both machines, and restart each daemon. Then copy 
 ```bash
 fno-agents claim export --url http://r2d2:18080 --out ~/fno-primary-export.db
 ```
+
+The export can refuse with `no such table: main.harnesses`. That reads as a schema gap: the primary's stored schema predates a table the export tool expects. When it refuses, take a cold copy instead. Stop the container, then copy the data directory while it is stopped. The copy is complete and consistent, because nothing writes during it.
 
 The receipt names each table and its row count. Read a claim back from the file:
 

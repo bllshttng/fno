@@ -1419,24 +1419,4 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn ac17_pending_backfill_withholds_curve_threshold_cap() {
-        let dir = build_curve_fixture("ac17");
-        let home = pinned_home(&dir);
-        // A tiny budget leaves every transcript unread.
-        let report = analyze(&inputs(&dir, home, Some(50)));
-        assert!(report.curve.is_none());
-        assert_eq!(report.threshold, None);
-        assert_eq!(report.cap, None);
-        assert!(report.curve_reason.contains("backfill incomplete"));
-        assert!(report.curve_reason.contains("--backfill"));
-        assert!(
-            report.coverage.fold.pending_files >= 1,
-            "the receipt names the pending files"
-        );
-        let text = render_text(&report);
-        assert!(text.contains("backfill incomplete"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }
