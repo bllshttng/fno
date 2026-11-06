@@ -1672,6 +1672,59 @@ async fn codex_target_launch_cwd_binds_a_canonical_node_target_to_its_worktree()
     .await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn codex_thread_spawn_birth_event_records_stage_ms() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::quick(), async {
+        let home = tmp_home("codex-stage-ms");
+        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
+        let cwd = home.root().join("worktree");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let req = Request::new(
+            1,
+            "agent.spawn",
+            json!({
+                "name": "t",
+                "provider": "codex",
+                "substrate": "thread",
+                "cwd": cwd.to_string_lossy(),
+                "node": "x-ecf4",
+                "message": "seed turn",
+                "stage_ms": {"seam": 3, "gate": 5, "guard": 7, "queued": 11}
+            }),
+        );
+        let spawned = handle_spawn(&ctx, &req).await;
+        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
+
+        let birth = read_events(&home)
+            .into_iter()
+            .find(|event| event["type"] == "agent_spawned" && event["data"]["name"] == "t")
+            .expect("birth event");
+        let stage = birth["data"]["stage_ms"]
+            .as_object()
+            .expect("birth event stage_ms object");
+        for key in ["seam", "gate", "guard", "launch", "row", "total", "queued"] {
+            assert!(
+                stage.get(key).and_then(serde_json::Value::as_u64).is_some(),
+                "stage_ms.{key} must be a non-negative integer: {stage:?}"
+            );
+        }
+        let total = stage["total"].as_u64().unwrap();
+        let measured = ["seam", "gate", "guard", "launch", "row"]
+            .into_iter()
+            .map(|key| stage[key].as_u64().unwrap())
+            .sum::<u64>();
+        assert_eq!(total, measured, "total excludes queued: {stage:?}");
+        assert_eq!(stage["queued"], 11);
+
+        ctx.codex_threads.lock().await.remove("t");
+        std::fs::remove_dir_all(home.root()).ok();
+    })
+    .await;
+}
+
 /// AC2: a refused ensure refuses the WHOLE spawn - no thread, no registry
 /// row, no birth event, and the error names the node and the failing ensure
 /// condition. Starting on canonical as a fallback would be the exact

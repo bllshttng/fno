@@ -494,6 +494,7 @@ fn ledger_nodes_map() -> BTreeMap<String, String> {
 // The roster reading (`read_roster`, require_live_probe=False)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub(crate) struct RosterReading {
     pub(crate) consulted: bool,
     pub(crate) reason: String,
@@ -508,8 +509,65 @@ pub(crate) struct RosterReading {
 /// Python's `read_roster(require_live_probe=False)`: a registry-only view
 /// is a tolerated degraded probe, not a refusal, so it still carries
 /// attribution (the claim-status crosscheck calls it the same way, see
-/// cli.py's crosscheck read).
+/// cli.py's crosscheck read). Inside a [`RosterScope`] it reads once.
 pub(crate) fn read_roster() -> RosterReading {
+    if let Some(Some(cached)) = ROSTER_SCOPE.with(|s| s.borrow().clone()) {
+        return cached;
+    }
+    let reading = read_roster_fresh();
+    ROSTER_SCOPE.with(|s| {
+        if let Some(cached) = s.borrow_mut().as_mut() {
+            *cached = Some(reading.clone());
+        }
+    });
+    reading
+}
+
+thread_local! {
+    /// `None`: no scope is open. `Some(None)`: a scope is open and has not
+    /// read yet. `Some(Some(r))`: the scope's one reading.
+    static ROSTER_SCOPE: std::cell::RefCell<Option<Option<RosterReading>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// One roster read for one spawn admission. Each read shells
+/// `claude agents --json --all` (0.5-0.8 s under load), and a node-bearing
+/// spawn asked three times: the guard's worked overlay, the gate's admit
+/// arm and the gate's slot-free arm. While the scope is open on this
+/// thread, [`read_roster`] reads once and replays that reading. Close it
+/// before the launch: a later read must see the new worker. A wait that
+/// sleeps calls [`forget_roster_reading`], so a queued spawn re-reads.
+pub struct RosterScope(());
+
+impl RosterScope {
+    pub fn open() -> Self {
+        ROSTER_SCOPE.with(|s| *s.borrow_mut() = Some(None));
+        RosterScope(())
+    }
+}
+
+impl Drop for RosterScope {
+    fn drop(&mut self) {
+        close_roster_scope();
+    }
+}
+
+/// End the open scope on this thread, if any. Idempotent.
+pub fn close_roster_scope() {
+    ROSTER_SCOPE.with(|s| *s.borrow_mut() = None);
+}
+
+/// Drop the open scope's reading so its next read is fresh. A no-op with no
+/// scope open.
+pub fn forget_roster_reading() {
+    ROSTER_SCOPE.with(|s| {
+        if let Some(cached) = s.borrow_mut().as_mut() {
+            *cached = None;
+        }
+    });
+}
+
+fn read_roster_fresh() -> RosterReading {
     let (rows, warnings) = fleet_rows();
     let mut blocking: Vec<String> = Vec::new();
     let mut degraded_reason = String::new();
