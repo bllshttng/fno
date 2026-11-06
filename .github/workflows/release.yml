@@ -409,9 +409,11 @@ jobs:
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
           (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          # x-be9f change 5: the floor ships beside the tarballs; the update
+          # check and the session-start hook read it (rate-limit-free route).
+          printf '{"version": "%s", "min_supported": "%s"}\n' "${{ needs.resolve.outputs.version }}" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
 
       - name: Stamp the plugin version onto the nightly tag
-        # The nightly tag carries ONE commit on top of the released sha whose
         # only change is the plugin manifests' version, so the nightly plugin
         # channel resolves to a version distinct from stable's (both harness
         # marketplaces skip an update when a channel's version is unchanged).
@@ -480,7 +482,7 @@ jobs:
             --target "$stamped" \
             --title "nightly ${version}" \
             --notes "$notes" \
-            dist/*.tar.gz dist/*.whl scripts/install/fno.sh
+            dist/*.tar.gz dist/*.whl scripts/install/fno.sh dist/fno-release.json
 
           echo "nightly ${version} published at ${stamped}"
 
@@ -541,6 +543,9 @@ jobs:
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
           (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          # x-be9f change 5: the floor ships beside the tarballs; the update
+          # check and the session-start hook read it (rate-limit-free route).
+          printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
           echo "publishing:"
           ls -1 dist
 
@@ -659,6 +664,33 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "fno ${VERSION}: bump url + sha256 (auto, x-0afe)"
           git push
+
+  wheel-upgrade-path:
+    name: "container proof: a 0.4.5 wheel reaches the candidate binary"
+    # Runs after the rc publish: leg A resolves the candidate from PyPI
+    # (UV_PRERELEASE=allow), leg B fetches the rc tarball from the release.
+    # The stable promotion reads this job: a red proof holds 0.4.7 (law
+    # d-5c4fc0bd's "check before tagging 0.4.7").
+    needs: [resolve, publish]
+    if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel == 'rc' && inputs.dry_run != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Run the container proof
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash tests/release/wheel-upgrade-path.sh --candidate "$VERSION" --repo "$REPO"
+          grep -o '"legs_on_binary": 2' .fno/tmp/wheel-upgrade-path/*/result.json | tail -1
 
   remind-stable:
     name: remind when a candidate waits on promotion
