@@ -592,7 +592,7 @@ fn mint_node_id_with_prefix(
         let mut bytes = [0u8; 8];
         getrandom::fill(&mut bytes).map_err(|e| format!("mint entropy failed: {e}"))?;
         let candidate = format!("{prefix}{}", &hex_lower(&bytes)[..width]);
-        // An all-digit tail reads as a node number (`x-1234`), so a fresh
+        // An all-digit tail reads as a node number (`x-1111`), so a fresh
         // hash with one could collide with a number the primary mints for a
         // different node before the sync lands. `numbers::node_number_texts`
         // only knows the local cache; the guard removes the class outright.

@@ -592,15 +592,15 @@ mod tests {
 
     #[test]
     fn a_rows_number_prints_in_json_and_tsv() {
-        let row = json!({"id": "x-1", "_number": "x-5166"});
+        let row = json!({"id": "x-1", "_number": "x-5555"});
         let numbered = Hit {
             card: clone_card(),
             row: Some(&row),
             stale: None,
         };
-        assert_eq!(numbered.json_row()["number"], json!("x-5166"));
+        assert_eq!(numbered.json_row()["number"], json!("x-5555"));
         let cols: Vec<&str> = numbered.tsv_row().split('\t').collect();
-        assert_eq!(cols[1], "x-5166");
+        assert_eq!(cols[1], "x-5555");
         let bare = Hit {
             card: clone_card(),
             row: None,

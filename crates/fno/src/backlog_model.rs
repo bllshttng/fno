@@ -152,7 +152,7 @@ pub struct Lead {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Card {
     pub id: String,
-    /// The store-minted short number (`x-5166`), served as `_number`. `None`
+    /// The store-minted short number (`x-5555`), served as `_number`. `None`
     /// while the primary has not numbered the node yet.
     pub number: Option<String>,
     pub slug: Option<String>,

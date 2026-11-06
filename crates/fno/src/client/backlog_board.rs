@@ -986,13 +986,7 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
         " "
     };
     let sel_mark = if sel { "\u{25b8}" } else { " " };
-    // The number leads when the store minted one (`x-5166 (x-6b06)`, the
-    // shape `fno backlog get` prints as `_number`); the hash stays, because
-    // it is the handle every command takes.
-    let id_text = match &card.number {
-        Some(number) => format!("{number} ({})", card.id),
-        None => card.id.clone(),
-    };
+    let id_text = crate::backlog_view::id_label(card.number.as_deref(), &card.id);
     let mut line = TLine::of(&[
         TSeg {
             text: format!("{sel_mark}{glyph} "),

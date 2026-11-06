@@ -389,14 +389,18 @@ pub fn board_scope_from_spawn_env() -> (BoardScope, String) {
 /// command takes, so it leads and the slug reads after it. An empty slug renders
 /// the id alone. Every client paint site folds through this so the rows
 /// cannot drift apart.
+/// The id cell a reader copies: the number leads when the store minted one
+/// (`x-5555 (x-aaaa)`), the hash alone otherwise. One shape for every paint
+/// site, so the rows cannot drift apart.
+pub fn id_label(number: Option<&str>, id: &str) -> String {
+    match number {
+        Some(number) => format!("{number} ({id})"),
+        None => id.to_string(),
+    }
+}
+
 pub fn card_label(c: &crate::proto::BacklogCard) -> String {
-    // The number leads when the store minted one: `x-5166 (x-6b06)`, the
-    // shape `fno backlog get` prints as `_number`. The hash stays; it is the
-    // handle every command takes.
-    let id = match &c.number {
-        Some(number) => format!("{number} ({})", c.id),
-        None => c.id.clone(),
-    };
+    let id = id_label(c.number.as_deref(), &c.id);
     if c.slug.is_empty() {
         id
     } else {
@@ -1325,12 +1329,12 @@ mod tests {
     #[test]
     fn a_numbered_row_leads_the_card_label_with_the_number() {
         let raw = graph(
-            r#"{"id":"x-6b06","slug":"seq","priority":"p2","status":"ready","_number":"x-5166"}"#,
+            r#"{"id":"x-aaaa","slug":"seq","priority":"p2","status":"ready","_number":"x-5555"}"#,
         );
         let queue = derive_queue(&raw, None, &BoardScope::All).unwrap();
-        let card = queue.cards.iter().find(|c| c.id == "x-6b06").unwrap();
-        assert_eq!(card.number.as_deref(), Some("x-5166"));
-        assert_eq!(card_label(card), "x-5166 (x-6b06) seq");
+        let card = queue.cards.iter().find(|c| c.id == "x-aaaa").unwrap();
+        assert_eq!(card.number.as_deref(), Some("x-5555"));
+        assert_eq!(card_label(card), "x-5555 (x-aaaa) seq");
         let bare = graph(r#"{"id":"x-aaaa","slug":"s","priority":"p2","status":"ready"}"#);
         let card = derive_queue(&bare, None, &BoardScope::All)
             .unwrap()

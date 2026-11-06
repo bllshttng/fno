@@ -160,14 +160,22 @@ pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
         "|---|---|---|---|---|---|".to_string(),
     ];
     for row in rows.iter().take(MAX_ORG_ROWS) {
-        // The number leads when the store minted one (`x-5166 (x-6b06)`,
+        // The number leads when the store minted one (`x-5555 (x-aaaa)`,
         // the shape `fno backlog get` prints as `_number`); the hash stays.
         let node = match (
             row.get("node").and_then(Value::as_str),
             row.get("number").and_then(Value::as_str),
         ) {
-            (Some(id), Some(number)) => format!("{number} ({id})"),
-            (Some(id), None) => id.to_string(),
+            // `cell` pipe-escapes every other column; the id path keeps that
+            // guard, since a legacy id is not proven pipe-free.
+            (Some(id), Some(number)) => {
+                format!(
+                    "{} ({})",
+                    number.replace('|', "\\|"),
+                    id.replace('|', "\\|")
+                )
+            }
+            (Some(id), None) => id.replace('|', "\\|"),
             _ => "-".to_string(),
         };
         out.push(format!(
@@ -195,16 +203,16 @@ mod tests {
     #[test]
     fn a_numbered_row_leads_the_node_cell_with_the_number() {
         let rows = json!([
-            {"node": "x-6b06", "number": "x-5166", "status": "in_progress"},
+            {"node": "x-aaaa", "number": "x-5555", "status": "in_progress"},
             {"node": "x-aaaa", "status": "in_progress"},
             {"node": null}
         ]);
         let lines = render_lineup(rows.as_array().unwrap());
         assert!(
-            lines.iter().any(|l| l.contains("| x-5166 (x-6b06) |")),
+            lines.iter().any(|l| l.contains("| x-5555 (x-aaaa) |")),
             "{lines:?}"
         );
-        assert!(lines.iter().any(|l| l.contains("| x-aaaa |")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("| x-bbbb |")), "{lines:?}");
         assert!(lines.iter().any(|l| l.starts_with("| - |")), "{lines:?}");
     }
 

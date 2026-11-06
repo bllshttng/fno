@@ -429,6 +429,9 @@ pub fn labels_at(graph: &Path) -> HashMap<String, String> {
 /// Unnumbered rows stay without the key, so a reader's null falls back to
 /// the hash.
 pub fn attach_numbers(rows: &mut [Value], held: &HashMap<String, String>) {
+    if held.is_empty() {
+        return;
+    }
     for row in rows.iter_mut() {
         let id = row.get("id").and_then(Value::as_str).map(str::to_string);
         let Some(obj) = row.as_object_mut() else {

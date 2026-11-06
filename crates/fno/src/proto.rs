@@ -1506,7 +1506,7 @@ pub struct BacklogCard {
     /// plan (the item renders greyed, never a broken link).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_path: Option<String>,
-    /// The store-minted short number (`x-5166`), served as the row's
+    /// The store-minted short number (`x-5555`), served as the row's
     /// `_number`. `None` while the primary has not numbered the node, so
     /// `card_label` prints the hash alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
