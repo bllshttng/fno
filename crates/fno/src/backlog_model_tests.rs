@@ -48,6 +48,233 @@ fn lanes_query_refuses_unknown_and_parses_known_values() {
 }
 
 #[test]
+fn graph_view_is_a_known_board_view() {
+    let q = Query::from_pairs(&[("view".into(), "graph".into())])
+        .expect("the graph view is a supported board query");
+    assert_eq!(q.view, View::Graph);
+    assert_eq!(serde_json::to_value(q).unwrap()["view"], "graph");
+}
+
+#[test]
+fn graph_board_returns_the_focused_family_and_collapses_done_children() {
+    let inp = fixture(vec![
+        json!({"id": "x-e", "status": "in_progress", "type": "epic"}),
+        json!({"id": "x-a", "status": "ready", "parent": "x-e"}),
+        json!({"id": "x-b", "status": "idea", "parent": "x-e"}),
+        json!({"id": "x-c", "status": "ready", "contained_in": "x-a"}),
+        json!({"id": "x-d", "status": "done", "parent": "x-e"}),
+    ]);
+    let q = Query::from_pairs(&[
+        ("view".into(), "graph".into()),
+        ("focus".into(), "x-a".into()),
+    ])
+    .unwrap();
+    let value = serde_json::to_value(board(&inp, &q)).unwrap();
+    let graph = &value["graph"];
+    assert_eq!(graph["root"], "x-e");
+    for (id, layer) in [("x-e", 0), ("x-a", 1), ("x-b", 1), ("x-c", 2)] {
+        assert!(
+            graph["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|node| { node["card"]["id"] == id && node["layer"] == layer }),
+            "missing node {id} in layer {layer}: {}",
+            graph["nodes"]
+        );
+    }
+    assert!(
+        graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| { node["layer"] == 1 && node["stub"] == json!({"done": {"count": 1}}) }),
+        "done child is folded under its parent: {}",
+        graph["nodes"]
+    );
+    for edge in [
+        json!({"from": "x-e", "to": "x-a", "kind": "parent"}),
+        json!({"from": "x-e", "to": "x-b", "kind": "parent"}),
+        json!({"from": "x-a", "to": "x-c", "kind": "contained"}),
+    ] {
+        assert!(
+            graph["edges"].as_array().unwrap().contains(&edge),
+            "missing {edge}"
+        );
+    }
+}
+
+#[test]
+fn graph_keeps_one_stub_per_outside_node_and_names_unsupported_edges() {
+    let inp = fixture(vec![
+        json!({"id": "x-e", "status": "in_progress", "type": "epic"}),
+        json!({"id": "x-a", "status": "ready", "parent": "x-e",
+              "blocked_by": ["x-out"], "related": ["x-related"]}),
+        json!({"id": "x-b", "status": "ready", "parent": "x-e",
+              "blocked_by": ["x-out"]}),
+        json!({"id": "x-out", "status": "ready", "parent": "x-other"}),
+        json!({"id": "x-related", "status": "idea", "parent": "x-other"}),
+        json!({"id": "x-other", "status": "in_progress", "type": "epic"}),
+    ]);
+    let q = Query::from_pairs(&[
+        ("view".into(), "graph".into()),
+        ("focus".into(), "x-a".into()),
+    ])
+    .unwrap();
+    let graph = board(&inp, &q).graph.unwrap();
+    assert_eq!(
+        graph
+            .nodes
+            .iter()
+            .filter(|node| node.id == "outside:x-out")
+            .count(),
+        1
+    );
+    assert_eq!(
+        graph
+            .nodes
+            .iter()
+            .filter(|node| node.id == "outside:x-related")
+            .count(),
+        1
+    );
+    assert!(!graph
+        .nodes
+        .iter()
+        .any(|node| node.id == "x-other" || node.id == "x-out"));
+    assert!(graph.edges.iter().any(|edge| {
+        edge.from == "x-a"
+            && edge.to == "outside:x-related"
+            && edge.kind == crate::backlog_graph::EdgeKind::Related
+    }));
+    assert_eq!(
+        graph
+            .edges
+            .iter()
+            .filter(|edge| edge.to == "outside:x-out")
+            .count(),
+        2
+    );
+
+    let mut external = fixture(vec![
+        json!({"id": "x-root", "status": "in_progress", "type": "epic"}),
+        json!({"id": "x-child", "status": "ready"}),
+    ]);
+    external.backend = "github".into();
+    let external_graph = board(&external, &q).graph.unwrap();
+    assert!(external_graph.nodes.iter().any(|node| node.id == "x-root"));
+    assert!(!external_graph
+        .edges
+        .iter()
+        .any(|edge| edge.kind == crate::backlog_graph::EdgeKind::Parent));
+    for feature in ["parent edges", "blocked_by edges"] {
+        assert!(external_graph
+            .unavailable
+            .iter()
+            .any(|item| item.feature == feature));
+    }
+}
+
+#[test]
+fn graph_caps_dense_families_and_lays_out_400_rows_under_20ms() {
+    let rows = std::iter::once(json!({
+        "id": "x-root", "status": "in_progress", "type": "epic"
+    }))
+    .chain((0..120).map(|i| {
+        json!({
+            "id": format!("x-c{i:03}"), "status": "ready", "parent": "x-root"
+        })
+    }))
+    .collect();
+    let inp = fixture(rows);
+    let q = Query::from_pairs(&[("view".into(), "graph".into())]).unwrap();
+    let graph = board(&inp, &q).graph.unwrap();
+    assert!(
+        graph.nodes.len() <= 80,
+        "painted nodes: {}",
+        graph.nodes.len()
+    );
+    let more: usize = graph
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.stub {
+            Some(crate::backlog_graph::Stub::More { count }) => Some(*count),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(
+        more, graph.hidden.nodes,
+        "More stubs tally the hidden nodes"
+    );
+    assert!(graph.nodes.iter().any(|node| {
+        matches!(&node.stub, Some(crate::backlog_graph::Stub::More { count }) if *count > 0)
+    }));
+    let repeated = board(&inp, &q).graph.unwrap();
+    assert_eq!(
+        serde_json::to_value(&graph).unwrap(),
+        serde_json::to_value(repeated).unwrap(),
+        "unchanged rows keep node and edge order stable"
+    );
+
+    let rows = std::iter::once(json!({
+        "id": "x-large", "status": "in_progress", "type": "epic"
+    }))
+    .chain((0..400).map(|i| {
+        json!({
+            "id": format!("x-large-{i:03}"), "status": "ready", "parent": "x-large"
+        })
+    }))
+    .collect();
+    let large = fixture(rows);
+    let list = board(
+        &large,
+        &Query {
+            view: View::List,
+            ..Default::default()
+        },
+    );
+    let cards: Vec<Card> = list
+        .lanes
+        .iter()
+        .flat_map(|lane| lane.cells.iter())
+        .flat_map(|cell| cell.cards.iter().cloned())
+        .collect();
+    let start = std::time::Instant::now();
+    let _ = crate::backlog_graph::graph(&large, &cards, Some("x-large"));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(20),
+        "layout took {elapsed:?}"
+    );
+}
+
+#[test]
+fn graph_falls_back_to_first_filtered_card_and_is_absent_on_an_empty_board() {
+    let mut inp = fixture(vec![
+        json!({"id": "x-a", "status": "ready"}),
+        json!({"id": "x-b", "status": "ready"}),
+        json!({"id": "x-done", "status": "done"}),
+    ]);
+    inp.order = vec!["x-b".into(), "x-a".into(), "x-done".into()];
+    let q = Query::from_pairs(&[
+        ("view".into(), "graph".into()),
+        ("focus".into(), "x-done".into()),
+        ("status".into(), "ready".into()),
+    ])
+    .unwrap();
+    assert_eq!(board(&inp, &q).graph.unwrap().focus, "x-b");
+
+    let mut empty = fixture(vec![]);
+    empty.rows_error = Some("store read failed".into());
+    let empty_board = board(
+        &empty,
+        &Query::from_pairs(&[("view".into(), "graph".into())]).unwrap(),
+    );
+    assert!(empty_board.graph.is_none());
+    assert_eq!(empty_board.errors, vec!["store read failed".to_string()]);
+}
+
+#[test]
 fn repeated_filter_pairs_accumulate_any_of_sets() {
     let p = vec![
         ("status".to_string(), "ready".to_string()),

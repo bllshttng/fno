@@ -52,6 +52,8 @@ pub enum View {
     Kanban,
     /// The list: lanes carry every card, uncapped, so no row is hidden.
     List,
+    /// The focus node's family graph.
+    Graph,
 }
 
 /// The board query, parsed from the route's pairs.
@@ -60,6 +62,8 @@ pub struct Query {
     pub lanes: LanesBy,
     #[serde(skip_serializing_if = "View::is_kanban", default)]
     pub view: View,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub focus: Option<String>,
     pub project: Vec<String>,
     epic: Vec<String>,
     status: Vec<String>,
@@ -113,8 +117,12 @@ impl Query {
                 "view" => match val.unwrap_or_default() {
                     "" | "kanban" => q.view = View::Kanban,
                     "list" => q.view = View::List,
-                    other => return Err(format!("unknown view '{other}'; use kanban or list")),
+                    "graph" => q.view = View::Graph,
+                    other => {
+                        return Err(format!("unknown view '{other}'; use kanban, list or graph"))
+                    }
                 },
+                "focus" => q.focus = val.map(str::to_string),
                 "project" => push_unique(&mut q.project, val),
                 "epic" => push_unique(&mut q.epic, val),
                 "status" => push_unique(&mut q.status, val),
@@ -400,6 +408,9 @@ pub struct Board {
     pub hidden: Hidden,
     pub facets: Facets,
     pub unavailable: Vec<Unavailable>,
+    /// The family graph, present only for `view=graph` with at least one card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::backlog_graph::Graph>,
     pub errors: Vec<String>,
     /// The page's key table, served once when the request asks `keys=1`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -850,6 +861,7 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
                 tags: vec![],
             },
             unavailable: unavailable(inp),
+            graph: None,
             errors: {
                 let mut e = inp.errors.clone();
                 e.push(err.clone());
@@ -941,6 +953,9 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
             )
         })
         .collect();
+    let graph = (q.view == View::Graph)
+        .then(|| crate::backlog_graph::graph(inp, &filtered, q.focus.as_deref()))
+        .flatten();
     let mut hidden = Hidden::default();
     for c in &off_board_cards {
         match off_board_bucket(c) {
@@ -1006,6 +1021,7 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
         hidden,
         facets,
         unavailable: unavailable(inp),
+        graph,
         errors: inp.errors.clone(),
         search_keys: None,
     }

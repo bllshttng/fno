@@ -1301,7 +1301,7 @@ fn memo_rebuilds_only_when_the_key_moves() {
         col: 0,
         row,
         w: 120,
-        list: false,
+        view: backlog_model::View::Kanban,
         query: None,
         errors: 0,
         columns: vec!["ready".into()],
@@ -1401,6 +1401,61 @@ fn board_remembers_filters_search_view_and_selection_across_reopen() {
         cursor_card_id(b).as_deref(),
         Some("x-2"),
         "selection restored"
+    );
+}
+
+#[test]
+fn tab_cycles_kanban_list_and_graph_views() {
+    let mut inputs = board_inputs();
+    inputs.rows[1]["parent"] = json!("x-1");
+    inputs.rows.push(json!({
+        "id": "x-4", "status": "ready", "priority": "p2",
+        "title": "graph child", "project": "fno", "parent": "x-1"
+    }));
+    inputs.order.push("x-4".into());
+    let mut view = key_view(board_with(inputs));
+    toggle_view(&mut view);
+    assert_eq!(
+        view.backlog_board.as_ref().unwrap().query.view,
+        backlog_model::View::List
+    );
+    toggle_view(&mut view);
+    assert_eq!(
+        serde_json::to_value(view.backlog_board.as_ref().unwrap().query.view).unwrap(),
+        "graph"
+    );
+    let b = view.backlog_board.as_ref().unwrap();
+    let (lines, _) = render(b, 120);
+    let painted = lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        painted.contains("family"),
+        "graph header missing: {painted}"
+    );
+    assert!(
+        painted.contains("x-1") && painted.contains("x-2"),
+        "family nodes missing: {painted}"
+    );
+    assert!(painted.contains("─"), "graph connectors missing: {painted}");
+    assert_eq!(
+        cursor_card_id(b).as_deref(),
+        Some("x-2"),
+        "Tab keeps the focused card"
+    );
+    move_row(&mut view, true);
+    assert_eq!(
+        cursor_card_id(view.backlog_board.as_ref().unwrap()).as_deref(),
+        Some("x-4"),
+        "j moves to the next node in the layer"
+    );
+    move_col(&mut view, false);
+    assert_eq!(
+        edit_target(view.backlog_board.as_ref().unwrap()).as_deref(),
+        Some("x-1"),
+        "h moves to the parent layer and keeps actions on its node"
     );
 }
 

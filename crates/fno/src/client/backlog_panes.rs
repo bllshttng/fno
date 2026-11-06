@@ -151,7 +151,7 @@ pub(crate) fn paint(
         col: b.col,
         row: b.row,
         w: board_inner_w,
-        list: b.query.view == crate::backlog_model::View::List,
+        view: b.query.view,
         query: b.query.q.clone(),
         errors: b.errors.len(),
         columns: b.layout.columns.clone(),
@@ -177,10 +177,10 @@ pub(crate) fn paint(
         board_rect.3,
         &format!(
             "backlog \u{b7} {}",
-            if b.query.view == crate::backlog_model::View::List {
-                "list"
-            } else {
-                "kanban"
+            match b.query.view {
+                crate::backlog_model::View::List => "list",
+                crate::backlog_model::View::Graph => "graph",
+                crate::backlog_model::View::Kanban => "kanban",
             }
         ),
         band_on,
@@ -702,9 +702,10 @@ pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<TLi
             "j/k scroll \u{b7} tab link \u{b7} enter {} \u{b7} y copy id \u{b7} Y copy cmd \u{b7} PgUp/PgDn scroll \u{b7} esc board \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} c comment \u{b7} ? keys",
             enter_word(b)
         )
+    } else if b.query.view == crate::backlog_model::View::Graph {
+        "h/l layers \u{b7} j/k nodes \u{b7} Tab kanban/list/graph \u{b7} / search \u{b7} f filter \u{b7} enter details \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} T/K/J rank \u{b7} F full \u{b7} esc close \u{b7} ? keys".to_string()
     } else {
-        "hjkl move \u{b7} [ ] lane \u{b7} L lanes \u{b7} Tab list/kanban \u{b7} / search \u{b7} f filter \u{b7} enter details \u{b7} c cols \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} T/K/J rank \u{b7} F full \u{b7} esc close \u{b7} ? keys"
-        .to_string()
+        "hjkl move \u{b7} [ ] lane \u{b7} L lanes \u{b7} Tab kanban/list/graph \u{b7} / search \u{b7} f filter \u{b7} enter details \u{b7} c cols \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} T/K/J rank \u{b7} F full \u{b7} esc close \u{b7} ? keys".to_string()
     };
     let mut sheet = TLine {
         text: String::new(),
