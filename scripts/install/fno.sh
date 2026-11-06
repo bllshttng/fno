@@ -173,11 +173,31 @@ install_tarball() {
 	tar -xzf "$_tar" -C "$_stage" || { rm -rf "$_stage"; die "the tarball did not unpack."; }
 	[ -x "$_stage/fno" ] || { rm -rf "$_stage"; die "the tarball carries no executable fno front door."; }
 	say "installing the binaries into $FNO_BIN and linking them into $FNO_LINK_DIR..."
-	if ! FNO_INSTALL_DIR="$FNO_LINK_DIR" "$_stage/fno" update --adopt "$_stage" >&2; then
-		rm -rf "$_stage"
+	_log="$_stage.adopt.log"
+	if FNO_INSTALL_DIR="$FNO_LINK_DIR" "$_stage/fno" update --adopt "$_stage" >"$_log" 2>&1; then
+		cat "$_log" >&2
+	elif grep -q 'unknown flag: --adopt' "$_log"; then
+		# A front door released before --adopt existed: place it the same way.
+		place_binaries "$_stage" || { rm -rf "$_stage" "$_log"; die "could not place the binaries into $FNO_BIN and $FNO_LINK_DIR."; }
+	else
+		cat "$_log" >&2
+		rm -rf "$_stage" "$_log"
 		die "the staged front door's --adopt run failed (its error is above)."
 	fi
-	rm -rf "$_stage"
+	rm -rf "$_stage" "$_log"
+}
+
+# place_binaries <dir>: what `fno update --adopt` does, for a front door that
+# predates it: each binary and each PATH link lands as a temp file renamed
+# over the old one, then the channel marker reads binary.
+place_binaries() {
+	mkdir -p "$FNO_BIN" "$FNO_LINK_DIR" || return 1
+	for _b in fno fno-agents fno-agents-daemon fno-agents-worker; do
+		[ -x "$1/$_b" ] || { say "the tarball carries no $_b."; return 1; }
+		cp "$1/$_b" "$FNO_BIN/.$_b.new" && chmod 755 "$FNO_BIN/.$_b.new" && mv -f "$FNO_BIN/.$_b.new" "$FNO_BIN/$_b" || return 1
+		ln -sf "$FNO_BIN/$_b" "$FNO_LINK_DIR/.$_b.new" && mv -f "$FNO_LINK_DIR/.$_b.new" "$FNO_LINK_DIR/$_b" || return 1
+	done
+	printf 'binary\n' >"$FNO_STATE/install/channel"
 }
 
 # Prove the installed binaries answer before declaring success.

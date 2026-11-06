@@ -142,11 +142,19 @@ try_binary_install() {
   door="$stage/fno"
   [[ -x "$door" ]] || { err "the tarball carries no executable fno front door."; rm -rf "$stage"; return 1; }
   log "installing the binaries into $FNO_BINARY_DIR and linking them into $FNO_LINK_DIR..."
-  if ! FNO_INSTALL_DIR="$FNO_LINK_DIR" "$door" update --adopt "$stage" >&2; then
-    err "the staged front door's --adopt run failed."
-    rm -rf "$stage"
+  if ! FNO_INSTALL_DIR="$FNO_LINK_DIR" "$door" update --adopt "$stage" >"$stage.adopt.log" 2>&1; then
+    # A release older than --adopt: fno.sh places its binaries by hand.
+    if grep -q 'unknown flag: --adopt' "$stage.adopt.log"; then
+      log "fno $SRC_VERSION predates update --adopt; fno.sh places it instead."
+    else
+      cat "$stage.adopt.log" >&2
+      err "the staged front door's --adopt run failed."
+    fi
+    rm -rf "$stage" "$stage.adopt.log"
     return 1
   fi
+  cat "$stage.adopt.log" >&2
+  rm -f "$stage.adopt.log"
   rm -rf "$stage"
   return 0
 }
