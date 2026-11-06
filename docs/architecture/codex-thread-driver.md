@@ -35,7 +35,7 @@ agy --conversation <uuid> --input-format stream-json --output-format stream-json
 
 That is the boot-once, drive-many property `codex exec resume` lacks, and it is the same shape as `provider.rs`'s `claude_stream_json_resume_argv`. So agy's lane can reuse machinery fno already ships for claude. Its `agent_response` steps also carry `text_delta` and a per-step `duration_seconds`, so a driver can attribute latency, which `codex exec resume` does not permit.
 
-When a harness has a native spawn claim, `harness_map.py`'s `substrate_default` returns `thread`. Opencode's `true` now has an honest steering path. This routes opencode to the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, steering, readback, and session liveness. It does not prove server-kill survival, review, or viewport selection.
+When `spawn_state` reads `native`, `crates/fno-agents/src/backlog/dispatch_resolve.rs::substrate_default` returns `thread`. Opencode's `features.spawn = native` claim now has an honest steering path. This routes opencode to the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, steering, readback, and session liveness. It does not prove server-kill survival, review, or viewport selection.
 
 The serve lane does not use opencode's general store-lookup identity path. `POST /session` returns the full session id, and each later turn binds that id to the shared serve. `GET /session/<id>` provides liveness. The detached writer's pid is capture metadata only. A completed writer does not make the session dead.
 
