@@ -15,6 +15,8 @@ docker run -d --name fno-sqld-test -p 18080:8080 -e SQLD_NODE=primary \
 
 The primary starts empty. The first claim creates the tables, so no seed step is needed.
 
+Bind the data directory from a filesystem that supports `RENAME_EXCHANGE`, because sqld swaps the wallog at compaction with that flag and aborts on a filesystem that lacks it. ext4 and tmpfs pass. Btrfs on kernels older than 4.7 does not. The two-file check and the full defect are in [the shared-store contention doc](../architecture/shared-store-write-contention.md#the-abort-compaction-cannot-swap-the-wallog).
+
 ## 2. Set the key on both machines
 
 Run this on each machine. Use the primary's tailnet name:
