@@ -439,10 +439,17 @@ mod tests {
         let held = try_acquire_lock(&path)
             .expect("lock file opens")
             .expect("an unheld lock is taken");
-        let stamp = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            stamp.contains(&format!("\"pid\": {}", std::process::id())),
-            "the holder must be stamped for a waiter to name: {stamp:?}"
+        let stamp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            stamp.get("pid"),
+            Some(&serde_json::json!(std::process::id())),
+            "the holder must be stamped for a waiter to name: {stamp}"
+        );
+        assert_eq!(
+            stamp.get("name"),
+            Some(&serde_json::json!("codex-daemon-upgrade")),
+            "the stamp names the op that held it: {stamp}"
         );
         drop(held);
         let stamp = std::fs::read_to_string(&path).unwrap();
