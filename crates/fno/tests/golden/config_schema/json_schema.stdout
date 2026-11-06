@@ -632,12 +632,6 @@
           "default": 4,
           "title": "Max Prs Per Epic",
           "type": "integer"
-        },
-        "python_repair_added_lines": {
-          "default": 30,
-          "minimum": 0,
-          "title": "Python Repair Added Lines",
-          "type": "integer"
         }
       },
       "title": "BlueprintBlock",

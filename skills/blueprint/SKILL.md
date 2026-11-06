@@ -41,7 +41,6 @@ Each gate loads only when its trigger fires. The bodies (with verbatim scripts) 
 | Answerer Enumeration Gate | the plan changes a read, write, or feed - step 2b-bis |
 | Consolidation Gate | always, between discovery grounding (2b) and the write (3) - step 2d |
 | Five questions and the judge | every plan - answered at 2a-bis, judged at step 3 after finalize |
-| No new Python | a Files to Modify row, File Ownership Map row, or task surface names `cli/src/fno/**.py` |
 | Code Index Audit | every plan - step 2-index |
 | Executor Lock Transcription | a design doc supplies a Locked Decision (executor) |
 | Model Pin / Model Routing | the plan frontmatter sets `model:`, or always for `difficulty:` |

@@ -90,8 +90,7 @@
     {
      "name": "blueprint",
      "default": {
-      "max_prs_per_epic": 4,
-      "python_repair_added_lines": 30
+      "max_prs_per_epic": 4
      }
     },
     {
@@ -912,10 +911,6 @@
     {
      "name": "max_prs_per_epic",
      "default": 4
-    },
-    {
-     "name": "python_repair_added_lines",
-     "default": 30
     }
    ]
   },
@@ -3154,7 +3149,6 @@
   "project.id",
   "project.vision",
   "blueprint.max_prs_per_epic",
-  "blueprint.python_repair_added_lines",
   "plan.default_diff_budget",
   "backlog.page_reload_s",
   "backlog.maintain.staleness_days",

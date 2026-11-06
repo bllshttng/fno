@@ -84,24 +84,6 @@ about the claim - `fno backlog intake` reads the frontmatter directly. When you
 want to override the frontmatter at intake time (e.g. repairing a past
 mistake), use `fno backlog intake <plan>.md --claims ab-XXX`.
 
-## No new Python (plans that write cli/src/fno Python)
-
-Trigger: a Files to Modify row, a File Ownership Map row, or a task `surface` names a path under `cli/src/fno` ending `.py`.
-
-All new code lands in Rust under `crates/`. No new Python goes into `cli/src/fno`. A Python edit is a port or a deletion.
-
-Start the row's Action cell with one of three words:
-
-- `Port` - the behavior moves to `crates/`. The same table names the `crates/` row it lands in.
-- `Delete` - the row removes Python and adds none.
-- `Grant d-XXXXXXXX +N` - cite a live approval. Its subject must be the plan's node, or its decision text must name this row's path. General laws, including the Python repair law, do not approve a change by themselves. A row can cite a general law with its approval. The gate reads every cited id. Use `+N` for added lines. The gate sums Grant rows against `config.blueprint.python_repair_added_lines` (default 30). A Grant without `+N` is a finding.
-
-Before writing a Grant row, run `fno backlog decisions <node>` and find the approval. If none exists, ask the lead with `fno inbox outstanding ask "<question>" --node <node>`. Stop before validation. The scope gate warns on plans created on or before its gate date.
-
-Any other action, such as `Modify` or `Create`, plans new Python. Move that change to `crates/` before you write the plan. A path cited only in prose writes nothing, so it does not trigger the gate.
-
-`scripts/validate-plan.sh` refuses a plan that breaks this rule. A plan created before the gate shipped gets a warning. `scripts/ci/check-file-budget.sh` stays as the push-time backstop. It refuses a change that adds more Python lines than the budget allows, and deletions do not offset the count. The budget is a backstop, not a budget to plan against. Never state a net delta under it as the reason a Python row is fine.
-
 ## Code Index Audit (every plan - step 2-index)
 
 A plan built on node text can send a worker after work that already shipped. The gate checks that the planner asked the code indexes a repo holds. It never checks what an index answered. Detection is the validator's bundled sibling `lib/code-index-detect.sh`. The gate audits the checkout of the plan's node. It reads the node with `fno backlog get <id> --strict --field _resolved_cwd`. A plan saved in a notes vault is checked against the code it plans. A plan with no readable node falls back to the git root of its own directory. A repo with no provider prints nothing, and a plan with `providers: []` plus the audit section is clean. No index is not a refusal.
@@ -130,7 +112,7 @@ Existence audit row <n> has no verdict cell - start one cell with exists, absent
 Existence audit row <n> reads absent but its evidence names no confirming search - an index never makes a zero trustworthy, so the evidence cell states 'after <exact command>'
 ```
 
-Graduated like the No New Python gate. A plan created after 2026-09-17 errors. An older plan, or one with no readable date, warns. Quick plans are not exempt: the node asked for a gate, not advice. Why the confirmation rule exists: [graph-search.md](../../../docs/graph-search.md). The provider manifests a user can add: [code-index-providers.md](../../../docs/code-index-providers.md).
+The gate is graduated. A plan created after 2026-09-17 errors. An older plan, or one with no readable date, warns. Quick plans are not exempt: the node asked for a gate, not advice. Why the confirmation rule exists: [graph-search.md](../../../docs/graph-search.md). The provider manifests a user can add: [code-index-providers.md](../../../docs/code-index-providers.md).
 
 ## Answerer Enumeration Gate (graduated, every plan that changes a read, write, or feed)
 
