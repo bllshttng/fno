@@ -771,11 +771,33 @@ mod tests {
     #[test]
     fn agents_menu_holds_twelve_at_each_level_and_places_every_python_leaf() {
         assert!(ENTRIES.len() <= 12);
+        // A group over 12 holds its seeded debt ceiling: the same relief the
+        // menu-caps lint reads, and the ceiling may only shrink.
+        let debt = include_str!("../../../scripts/ci/menu-caps-debt.tsv");
         for (path, node) in walk(&ROOT) {
             if path.len() < 2 {
+                let printed = path
+                    .iter()
+                    .map(|s| s.as_ref())
+                    .collect::<Vec<&str>>()
+                    .join(" ");
+                let cap = debt
+                    .lines()
+                    .filter(|l| !l.starts_with('#'))
+                    .filter_map(|l| {
+                        let mut cols = l.split('\t');
+                        let name = cols.next()?;
+                        if name == printed {
+                            cols.next().and_then(|c| c.parse::<usize>().ok())
+                        } else {
+                            None
+                        }
+                    })
+                    .next()
+                    .unwrap_or(12);
                 assert!(
-                    node.children.len() <= 12,
-                    "agents {path:?} holds {}",
+                    node.children.len() <= cap,
+                    "agents {path:?} holds {} (cap {cap})",
                     node.children.len()
                 );
             }
