@@ -1286,6 +1286,7 @@ pub fn run_session_cost(args: &[String]) -> i32 {
     let mut dry_run = false;
     let mut branch_filter: Option<String> = None;
     let mut since: Option<f64> = None;
+    let mut team_session: Option<String> = None;
     let mut session_ids: Vec<String> = Vec::new();
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -1309,6 +1310,10 @@ pub fn run_session_cost(args: &[String]) -> i32 {
                 },
                 None => return usage_error("--since needs a value"),
             },
+            "--team" => match rest.next() {
+                Some(value) => team_session = Some(value.to_string()),
+                None => return usage_error("--team needs a harness session ID"),
+            },
             "-h" | "--help" => {
                 print_usage();
                 return 0;
@@ -1327,6 +1332,34 @@ pub fn run_session_cost(args: &[String]) -> i32 {
     }
     if by_provider {
         return print_by_provider();
+    }
+    if let Some(root) = team_session {
+        match crate::team_spend::team_spend(&root) {
+            Ok(spend) if as_json => println!(
+                "{}",
+                serde_json::to_string(&spend).unwrap_or_else(|_| "{}".into())
+            ),
+            Ok(spend) => {
+                println!(
+                    "team spend: ${:.2} metered; {} unmetered",
+                    spend.metered_usd,
+                    spend.unmetered.len()
+                );
+                for member in &spend.members {
+                    let kind = if spend.unmetered.contains(member) {
+                        "unmetered"
+                    } else {
+                        "metered"
+                    };
+                    println!("  {member}: {kind}");
+                }
+            }
+            Err(error) => {
+                eprintln!("team spend unavailable: {error}");
+                return 1;
+            }
+        }
+        return 0;
     }
     if session_ids.is_empty() {
         return usage_error("provide at least one session ID");
@@ -1383,7 +1416,7 @@ fn usage_error(message: &str) -> i32 {
 
 fn print_usage() {
     println!(
-        "usage: fno-agents context-run --session-cost [--json] [--branch BRANCH] [--since ISO8601] [--branches] [--by-provider] [--backfill [--dry-run]] [SESSION_ID ...]"
+        "usage: fno-agents context-run --session-cost [--json] [--team HARNESS_SESSION_ID] [--branch BRANCH] [--since ISO8601] [--branches] [--by-provider] [--backfill [--dry-run]] [SESSION_ID ...]"
     );
 }
 

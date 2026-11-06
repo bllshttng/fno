@@ -177,6 +177,8 @@ pub(crate) struct Settings {
     pub(super) unattended_wall_cap_minutes: Option<Result<u64, String>>,
     /// config.budget.unattended.cost_cap_usd
     pub(super) unattended_cost_cap_usd: Option<Result<f64, String>>,
+    /// config.budget.team.cost_cap_usd
+    pub(super) team_cost_cap_usd: Option<Result<f64, String>>,
     /// flat budget_cap: (folds in ) - applies as cost cap for both modes
     pub(super) flat_budget_cap: Option<Result<f64, String>>,
     /// config.ci.declared_none: true
@@ -662,6 +664,14 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             if let Some(v) = un.get("cost_cap_usd") {
                 s.unattended_cost_cap_usd = read_f64_cap(v, "unattended.cost_cap_usd");
             }
+        }
+        if let Some(team) = budget.get("team") {
+            s.team_cost_cap_usd = match team.as_table() {
+                Some(team) => team
+                    .get("cost_cap_usd")
+                    .and_then(|v| read_f64_cap(v, "team.cost_cap_usd")),
+                None => Some(Err("budget.team must be a table".into())),
+            };
         }
     }
 

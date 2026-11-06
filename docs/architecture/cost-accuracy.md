@@ -93,6 +93,12 @@ Ground truth at ship time: the fixed parser reproduced the reference tool's $31.
    catalog prices is priced on the next refresh. A model it does not stays
    unpriced - never add a hand tier.
 
+## Team spend
+
+`fno whoami cost --team <harness-session-id> --json` folds the lead and its child lineage, including retries and retired members. The meter uses live daemon measurements when available, then priced OTel request totals, then numeric ledger estimates. A member with no numeric measurement is listed as unmetered; it is never presented as a measured `$0` and does not add a guessed amount to the metered sum.
+
+Set `budget.team.cost_cap_usd` in project config to refuse new child spawns and stop team members after the known metered total reaches the ceiling. Unmetered members stay visible and the cap applies to the measured total. Only the project owner or operator may raise this key through project config; after it changes, the next admission or loop-check reads the new value.
+
 ## Reported request cost and local OTel ingest
 
 With `[telemetry] claude_otel = true` (the default), the daemon serves OTLP/http-json logs on localhost. Its `~/.fno/agents/otel/port` record survives shutdown, and the next daemon uses the same port. A first start uses port 4318. A bind conflict or invalid port record reports an error and does not choose a different endpoint. Supervisor birth injects telemetry only after a receiver has published the port record. With no record, the port may belong to another collector, so the supervisor injects nothing. Daemon restarts keep the exporter destination stable. Explicit operator telemetry settings take precedence.

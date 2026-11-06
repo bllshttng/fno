@@ -47,7 +47,7 @@ pub(crate) fn session_meter(
     SessionMeter::Unmetered
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, serde::Serialize)]
 pub struct TeamSpend {
     pub metered_usd: f64,
     pub unmetered: Vec<String>,
@@ -205,7 +205,7 @@ fn team_spend_at(
         );
     }
 
-    let root_key = session_key(root_harness_session);
+    let mut root_key = session_key(root_harness_session);
     if root_key.is_empty() {
         return Err("team root harness session is empty".into());
     }
@@ -213,6 +213,26 @@ fn team_spend_at(
         session_id: root_harness_session.trim().to_string(),
         ..Default::default()
     });
+
+    // A member querying its team resolves upward to the lead, so both the
+    // spawn gate and loop-check measure the same complete lineage.
+    let mut ancestor_seen = HashSet::new();
+    while ancestor_seen.insert(root_key.clone()) {
+        let Some(member) = members.get(&root_key) else {
+            break;
+        };
+        if member.role_level == Some(0) {
+            break;
+        }
+        let Some(parent_id) = member.parent_session_id.as_deref() else {
+            break;
+        };
+        let parent_key = session_key(parent_id);
+        if !members.contains_key(&parent_key) {
+            break;
+        }
+        root_key = parent_key;
+    }
 
     let mut included = HashSet::from([root_key.clone()]);
     let mut pending = VecDeque::from([root_key]);

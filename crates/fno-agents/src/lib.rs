@@ -656,6 +656,7 @@ pub(crate) mod spawn_gate_probe;
 pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
 pub(crate) mod spawn_gate_slots;
+mod spawn_gate_spend;
 pub mod spawn_guard;
 pub mod spawn_lineage;
 pub mod spawn_overlay;
