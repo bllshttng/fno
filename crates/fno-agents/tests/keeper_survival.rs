@@ -517,28 +517,43 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
     // orphan road. A held subscriber seat keeps it alive past the bound;
     // dropping the seat ends it inside the bound plus one poll. The exit
     // unlinks the socket the normal way, since the dir is still standing.
+    // The bound is 3 s and the hold 3.5 s: a connect that lands inside the
+    // bound needs headroom against a loaded runner, so the seat cannot lose
+    // the race to the self-end clock.
+    fn connect_seat(sock: &PathBuf, secs: u64) -> std::os::unix::net::UnixStream {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            match std::os::unix::net::UnixStream::connect(sock) {
+                Ok(stream) => return stream,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Err(e) => panic!("seat never connected: {e}"),
+            }
+        }
+    }
     let dir_c = scratch.join("c/panes");
     std::fs::create_dir_all(&dir_c).unwrap();
     let sock_c = dir_c.join("k.sock");
-    let mut c = spawn_blocked_keeper(&sock_c, 33, Some("600"));
+    let mut c = spawn_blocked_keeper(&sock_c, 33, Some("3000"));
     // Seat first, then probe: a probe racing the seat could itself be
     // seated, and its own clear would start the bound clock early.
-    let seat = std::os::unix::net::UnixStream::connect(&sock_c).expect("seat connects");
+    let seat = connect_seat(&sock_c, 10);
     let child_c = identify(&sock_c)["child_pid"].as_u64().unwrap() as u32;
     let _child_c = KillGuard(child_c);
     let _keeper_c = KillGuard(c.id());
-    std::thread::sleep(Duration::from_millis(900));
+    std::thread::sleep(Duration::from_millis(3500));
     assert!(
         c.try_wait().expect("try_wait").is_none(),
         "a seated subscriber holds the keeper past the idle bound"
     );
     drop(seat);
     assert!(
-        wait_exit(&mut c, 10),
+        wait_exit(&mut c, 15),
         "keeper C must end itself once the seat sits empty past the bound"
     );
     assert!(
-        wait_child_gone(child_c, 10),
+        wait_child_gone(child_c, 15),
         "keeper C must end its child on the idle bound"
     );
     assert!(
