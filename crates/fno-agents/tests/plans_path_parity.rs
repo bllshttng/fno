@@ -193,7 +193,7 @@ fn build(config: &str, settings: Option<&str>) -> Fixture {
 #[test]
 fn local_absolute() {
     let fx = build("", None);
-    let dir = fx.tmp.path().join("local-abs-plans");
+    let dir = fx.tmp.path().join("abs").join("plans");
     std::fs::write(
         fx.tmp.path().join("proj/.claude/settings.local.json"),
         format!(r#"{{"plansDirectory": "{}"}}"#, dir.display()),
