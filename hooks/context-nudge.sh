@@ -178,11 +178,15 @@ CONTEXT_RUNNER="${FNO_AGENTS_FRONT:-fno-agents}"
 # inside the window is served in milliseconds, a served copy past two thirds
 # of its life arms a DETACHED refresher for the next boundary, and a live
 # read that skipped or expired under load serves the stale copy rather than
-# nothing. The fingerprint (size + mtime) rides in the key: a GROWN
-# transcript always re-measures, because pressure truth is the one thing a
-# compaction gate may not serve stale by choice. Keyed by the transcript
-# basename the payload handed us.
-TSTATS="$(stat -c %s,%Y "$TRANSCRIPT" 2>/dev/null || stat -f %z,%m "$TRANSCRIPT" 2>/dev/null || true)"
+# nothing. The fingerprint is a cksum of the transcript bytes, so ANY changed
+# transcript re-measures, because pressure truth is the one thing a
+# compaction gate may not serve stale by choice. The old size+mtime
+# fingerprint served a same-length rewrite stale when both writes landed in
+# one stat second (equal-length fixture pairs measured red on main
+# 2026-10-30 and 2026-11-01); production transcripts append, but the fixture
+# shape is the honest contract. Keyed by the transcript basename the payload
+# handed us.
+TSTATS="$(cksum < "$TRANSCRIPT" 2>/dev/null || true)"
 TSTATS="$(printf '%s' "$TSTATS" | tr -c '0-9' '-')"
 if command -v jq >/dev/null 2>&1 && command -v "$CONTEXT_RUNNER" >/dev/null 2>&1; then
     PROBE_OUT=$(hook_cache_serve "ctxprobe-$TBASE" 300 "$TSTATS" -- \
