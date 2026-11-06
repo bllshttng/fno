@@ -25,6 +25,10 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     if args.first().map(String::as_str) != Some("spawn") {
         return Ok(args);
     }
+    let args = crate::spawn_admission::resolve_prompt_file(args).map_err(|(reason, code)| {
+        eprintln!("{reason}");
+        code
+    })?;
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     refuse_codex_without_git_grant(&args, &here)?;
 
