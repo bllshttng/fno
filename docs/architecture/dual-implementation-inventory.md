@@ -83,7 +83,7 @@ The spawn surface keeps `parse_short_id`, the session registry keeps the reply r
 
 **The company contract and turn_attribution.** RETIRED by the residue port (2026-11-03). `fno.company`'s contract owners are `crates/fno-agents/src/delivery_eval.rs` and `plan_schema.rs` (the two test importers and the function-agnosticism gate deleted with the package; the boundary map carries one platform layer). `turn_attribution.py` deleted with no replacement: no writer or reader since the Python dispatch layer retired.
 
-**Handed to the runtime port (not this PR's deletes):** `cli/src/fno/paths.py` (the paths hub; six runtime modules and two config modules import it), `cli/src/fno/test_env_door.py` (the pytest env door `cli/src/fno/conftest.py` loads), `cli/src/fno/events/__init__.py` and `store_client.py` (the events store client: `config/status_sinks.py` and thirty test files import it).
+**Handed to the runtime port (not this PR's deletes):** `cli/src/fno/paths.py` (the paths hub; six runtime modules and two config modules import it), `cli/src/fno/env_door.py` (the pytest env door `cli/src/fno/conftest.py` loads), `cli/src/fno/events/__init__.py` and `store_client.py` (the events store client: `config/status_sinks.py` and thirty test files import it).
 
 **The codemap.** RETIRED by the codemap, db-schema and Schema Citation Gate deletion (2026-10-29), which filed no inventory row of its own. The command answers natively through the front door's name table (`crates/fno/src/command_names.rs`). When the row was filed, no Python residue remained in the tree.
 
