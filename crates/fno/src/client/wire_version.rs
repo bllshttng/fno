@@ -30,14 +30,3 @@ pub(super) fn server_has_pane_scroll(server_proto: Option<u32>) -> bool {
 pub(super) fn server_has_remote_reach(server_proto: Option<u32>) -> bool {
     server_proto.is_some_and(|proto| proto >= 121)
 }
-
-/// The refusal line a move or an Add folder shows against an older server.
-pub(super) fn workspace_pins_skew_notice() -> String {
-    "update the mux server to move a session".into()
-}
-
-/// The one refusal line both SplitDir entry points (the `%` family and the
-/// tab menu) show against a server that cannot parse the command.
-pub(super) fn split_skew_notice() -> String {
-    "this mux server is older than directional splits; restart the mux server to use them".into()
-}

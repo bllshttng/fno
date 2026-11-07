@@ -664,19 +664,26 @@ pub(crate) async fn open_pr(view: &mut View, url: String) {
     }
 }
 
-/// Run `fno agents restart --mux` in the FOREGROUND with inherited stdio:
-/// the caller has already restored the terminal, so the receipts print
-/// live and are their own verdict - a captured run cannot carry them (the
-/// mux leg kills this client's server out from under the TUI). Never
-/// --force. Returns the command's exit code.
-pub(crate) async fn run_restart_foreground() -> i32 {
+/// Run `fno agents restart --mux --json` in the FOREGROUND: the caller has
+/// already restored the terminal, so the receipts (all on stderr in `--json`
+/// mode) print live; stdout carries the one machine line, which the caller
+/// folds into the session's restart receipt. The mux leg kills this client's
+/// server out from under the TUI. Never --force. Returns the exit code and
+/// the captured stdout.
+pub(crate) async fn run_restart_foreground() -> (i32, Option<String>) {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    command.args(["agents", "restart", "--mux"]);
-    match command.status().await {
-        Ok(s) => s.code().unwrap_or(1),
+    command
+        .args(["agents", "restart", "--mux", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit());
+    match command.output().await {
+        Ok(out) => (
+            out.status.code().unwrap_or(1),
+            Some(String::from_utf8_lossy(&out.stdout).into_owned()),
+        ),
         Err(e) => {
             eprintln!("fno: restart spawn failed: {e}");
-            1
+            (1, None)
         }
     }
 }
@@ -731,7 +738,10 @@ pub(crate) async fn maybe_reattach(code: i32, view: &mut View) -> Option<String>
     if code != RESTART_REATTACH_EXIT {
         return None;
     }
-    run_restart_foreground().await;
+    let (exit_code, stdout) = run_restart_foreground().await;
+    // The receipt is the only thing the fresh client cannot reconstruct: the
+    // exec'd process never saw this run. Write it before the exec.
+    super::server_skew::write_restart_receipt(&view.session, exit_code, stdout.as_deref());
     // The restart ran once; drop the arm so this process can never unwind
     // into a second reattach.
     view.restart_pending = false;

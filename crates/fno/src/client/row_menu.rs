@@ -803,7 +803,7 @@ pub(super) async fn execute_row_menu_action(
                 return Ok(());
             }
             if !server_has_splitdir(view.server_proto) {
-                view.set_notice(split_skew_notice());
+                server_skew::offer_server_restart(view, "split panes in a direction");
                 return Ok(());
             }
             write_msg(sock_w, &ClientMsg::Command(Command::SplitDir(dir)))

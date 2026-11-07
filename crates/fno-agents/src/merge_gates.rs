@@ -1393,13 +1393,19 @@ fn declining_pages(root: &Path, pr: u64) -> Vec<String> {
 /// Does a recorded answer pick the approve option? A numbered answer
 /// approves only as option 1 (the filed page's "Merge as painted"). A bare
 /// answer approves when it opens with an approve word. Anything else holds.
+/// The approve words an answer may open with: `Merge as painted`, the label
+/// the ask templates generate, and the CLI's own ship word that a reworded
+/// page label uses. Anything else reads as a decline in the carry path, so
+/// the list must carry every approve label the pages actually produce.
 fn answer_approves(answer: &str) -> bool {
     let a = answer.trim().to_ascii_lowercase();
     let digits: String = a.chars().take_while(char::is_ascii_digit).collect();
     if !digits.is_empty() {
         return digits == "1";
     }
-    ["merge", "approve", "yes"].iter().any(|w| a.starts_with(w))
+    ["merge", "approve", "yes", "ship"]
+        .iter()
+        .any(|w| a.starts_with(w))
 }
 
 /// The page text names the PR: a word-start `pr` (any case), an optional
@@ -2072,6 +2078,10 @@ mod tests {
         ));
         assert!(board_decline_text(&board("Approve"), 9).is_none());
         assert!(board_decline_text(&board("Hold for changes"), 8).is_none());
+        // A reworded option label reads as an approval, so it never voids
+        // the carry, and the gate reads the board answer it came from.
+        assert!(answer_approves("Ship as painted"));
+        assert!(board_decline_text(&board("Ship as painted"), 9).is_none());
     }
 
     #[test]

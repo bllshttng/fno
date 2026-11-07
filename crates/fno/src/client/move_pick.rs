@@ -2,7 +2,8 @@
 //! command the picked destination names. Moved out of `client.rs` (file
 //! budget) when a session pin and a folder add joined the tab and pane moves.
 
-use super::wire_version::{server_has_workspace_pins, workspace_pins_skew_notice};
+use super::server_skew::offer_server_restart;
+use super::wire_version::server_has_workspace_pins;
 use super::*;
 
 /// Send the command that destination `idx` of `squads` names. A destination
@@ -21,7 +22,7 @@ pub(super) async fn commit(
         let path = squads.get(idx).and_then(|&i| folders.get(i as usize));
         match path {
             Some(_) if !server_has_workspace_pins(view.server_proto) => {
-                view.set_notice(workspace_pins_skew_notice())
+                offer_server_restart(view, "add a folder to a workspace")
             }
             Some(path) => write_msg(
                 sock_w,
@@ -108,7 +109,7 @@ pub(super) async fn commit(
                     .await
                     .map_err(|e| format!("pin-thread send failed: {e}"))?;
                 } else {
-                    view.set_notice(workspace_pins_skew_notice());
+                    offer_server_restart(view, "pin a session to a workspace");
                 }
             }
             MoveSrc::Folder { .. } => {}

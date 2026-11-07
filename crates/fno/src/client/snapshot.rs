@@ -163,6 +163,9 @@ pub enum ViewKind {
     UpdateWheel,
     /// The update modal on a binary install with a newer release.
     UpdateBinary,
+    /// The server-skew popup against the pair the 2026-11-03 repro named:
+    /// server v120, client v122.
+    ServerSkew,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -323,6 +326,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
         "update-binary" => Some(ViewKind::UpdateBinary),
+        "server-skew" => Some(ViewKind::ServerSkew),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
         "connections-add" => Some(ViewKind::ConnectionsAdd),
@@ -1236,6 +1240,15 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
             view.aux_esc.clear();
         }
+        Some(ViewKind::ServerSkew) => {
+            // The pair the 2026-11-03 repro named: the client spoke v121 then,
+            // so the gate refused and the operator had no in-mux restart.
+            view.aux = Some(super::server_skew::build_skew_popup(
+                Some(120),
+                "open a row from another machine",
+            ));
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
@@ -1730,6 +1743,7 @@ mod tests {
             ("sweep", ViewKind::Sweep),
             ("update-wheel", ViewKind::UpdateWheel),
             ("update-binary", ViewKind::UpdateBinary),
+            ("server-skew", ViewKind::ServerSkew),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
             ("connections-add", ViewKind::ConnectionsAdd),

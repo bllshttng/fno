@@ -943,3 +943,125 @@ fn update_modal_keeper_count_prints_once() {
     ));
     assert!(!row_labels(&degraded_modal).contains(&"up to date".to_string()));
 }
+
+/// AC1-HP: the skew popup's only action is the update modal's restart, and
+/// its rows name the refused command and both wire versions.
+#[test]
+fn skew_popup_names_the_command_and_versions_and_offers_one_restart() {
+    let aux = super::server_skew::build_skew_popup(Some(120), "open a row from another machine");
+    assert_eq!(aux.actions, vec![AuxAction::RestartAgents]);
+    let labels = row_labels(&aux).join("\n");
+    assert!(
+        labels.contains("open a row from another machine"),
+        "the refused command renders: {labels}"
+    );
+    assert!(
+        labels.contains("v120"),
+        "the server's version renders: {labels}"
+    );
+    let client_v = format!("v{}", crate::proto::PROTO_VERSION);
+    assert!(
+        labels.contains(&client_v),
+        "the client's version renders: {labels}"
+    );
+}
+
+/// AC2-HP: the tap runs the update modal's restart path - the popup closes,
+/// the reattach arm sets, and the client unwinds to detach.
+#[tokio::test]
+async fn skew_popup_tap_detaches_like_the_update_restart() {
+    let mut v = super::tests::view_with_agents(vec![]);
+    v.server_proto = Some(120);
+    super::server_skew::offer_server_restart(&mut v, "split panes in a direction");
+    assert!(v.aux.is_some());
+    let mut buf: Vec<u8> = Vec::new();
+    let flow = execute_aux_action(&mut v, AuxAction::RestartAgents, &mut buf)
+        .await
+        .unwrap();
+    assert!(matches!(flow, DispatchFlow::Detach));
+    assert!(v.restart_pending, "the reattach exec arms");
+    assert!(v.aux.is_none(), "the tap closes the popup");
+}
+
+/// AC4-HP: on a current server the far-row reach writes its command and
+/// opens no popup - the popup is the refusal path only.
+#[tokio::test]
+async fn far_row_opens_on_a_current_server_without_a_popup() {
+    let mut v = super::tests::view_with_agents(vec![]);
+    v.server_proto = Some(crate::proto::PROTO_VERSION);
+    let mut buf: Vec<u8> = Vec::new();
+    super::machine_tree::reach(&mut v, Default::default(), Default::default(), &mut buf)
+        .await
+        .unwrap();
+    assert!(!buf.is_empty(), "ReachRemote is written");
+    assert!(v.aux.is_none(), "no skew popup on a current server");
+}
+
+/// AC5-HP: the report says what came back and names each pane that did not.
+#[test]
+fn restart_report_names_missing_panes_and_the_count() {
+    let pane = |id: u64| super::server_skew::PreservedPane {
+        pane_id: id,
+        name: Some("archer".into()),
+    };
+    let receipt = super::server_skew::RestartReceipt {
+        exit_code: 0,
+        verdict: "restarted".into(),
+        preserved: vec![pane(3), pane(5), pane(9)],
+    };
+    let report = super::server_skew::restart_report(&receipt, &[3, 9]);
+    assert!(
+        report.contains("2 of 3 kept panes came back"),
+        "the count renders: {report}"
+    );
+    assert!(
+        report.contains("pane 5 (archer) did not come back"),
+        "the missing pane is named: {report}"
+    );
+}
+
+/// AC6-EDGE: a refused restart (the unkept-pane refusal) reads as refused.
+#[test]
+fn refused_receipt_reads_as_refused() {
+    let receipt = super::server_skew::RestartReceipt {
+        exit_code: 1,
+        verdict: "session \"main\" hosts 1 unkept pane(s)".into(),
+        preserved: vec![],
+    };
+    let report = super::server_skew::restart_report(&receipt, &[]);
+    assert!(
+        report.starts_with("restart refused:"),
+        "the refusal names itself: {report}"
+    );
+}
+
+/// The receipt lifecycle: the fresh attach reads it once (the notice posts),
+/// and the file is gone after the read (AC6's exactly-once).
+#[test]
+fn receipt_reads_once_and_is_deleted() {
+    let mut v = super::tests::view_with_agents(vec![]);
+    v.session = "receipt-lifecycle-test".into();
+    let dir = crate::proto::mux_dir().join("restart-receipts");
+    std::fs::create_dir_all(&dir).unwrap();
+    let receipt = super::server_skew::RestartReceipt {
+        exit_code: 0,
+        verdict: "restarted".into(),
+        preserved: vec![super::server_skew::PreservedPane {
+            pane_id: 10,
+            name: Some("archer".into()),
+        }],
+    };
+    let path = dir.join("receipt-lifecycle-test.json");
+    std::fs::write(&path, serde_json::to_string(&receipt).unwrap()).unwrap();
+
+    // two_pane_view holds panes 10 and 11, so pane 10 came back.
+    super::server_skew::report_restart_receipt(&mut v);
+    let notice = v.notice.as_ref().map(|(s, _)| s.clone());
+    assert!(
+        notice
+            .as_deref()
+            .is_some_and(|s| s.contains("1 of 1 kept panes came back")),
+        "the report posts: {notice:?}"
+    );
+    assert!(!path.exists(), "the receipt is gone after the read");
+}

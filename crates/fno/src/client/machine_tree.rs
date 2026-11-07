@@ -487,7 +487,7 @@ pub(super) async fn reach(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
     if !super::wire_version::server_has_remote_reach(view.server_proto) {
-        view.set_notice("update the mux server to open a row from another machine".into());
+        super::server_skew::offer_server_restart(view, "open a row from another machine");
         return Ok(());
     }
     let command = Command::ReachRemote { remote, placement };
