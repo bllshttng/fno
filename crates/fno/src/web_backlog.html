@@ -1373,7 +1373,8 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     statsEl.appendChild(cl);
     const prs = flow.open_prs || {};
     const pr = document.createElement("span");
-    pr.textContent = "open PRs " + (prs.count || 0);
+    const prCount = prs.count || 0;
+    pr.textContent = prCount === 1 ? "1 open PR" : "open PRs " + prCount;
     statsEl.appendChild(pr);
     const waiting = flow.waiting || {};
     const w = document.createElement("span");

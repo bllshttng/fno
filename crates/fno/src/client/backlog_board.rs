@@ -659,8 +659,13 @@ fn focus_graph_card(b: &mut BoardView, id: Option<&str>) {
     let Some(index) = index else {
         return;
     };
-    let node = &graph.nodes[index];
-    let row = graph.nodes[..index]
+    let Some(node) = graph.nodes.get(index) else {
+        return;
+    };
+    let row = graph
+        .nodes
+        .get(..index)
+        .unwrap_or(&[])
         .iter()
         .filter(|candidate| candidate.layer == node.layer)
         .count();
@@ -905,7 +910,12 @@ fn flow_line(flow: &Value) -> String {
         .and_then(|p| p.get("count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    format!("{delivered} · {cycle} · {prs} open PRs")
+    let prs = if prs == 1 {
+        "1 open PR".to_string()
+    } else {
+        format!("{prs} open PRs")
+    };
+    format!("{delivered} · {cycle} · {prs}")
 }
 
 /// The persistent filter bar's cells: Search, Status, Type, Priority,
@@ -1684,11 +1694,14 @@ fn move_graph_layer(b: &mut BoardView, right: bool) {
         .position(|layer| *layer == b.lane as u16)
         .unwrap_or(0);
     let next = if right {
-        (current + 1).min(layers.len() - 1)
+        (current + 1).min(layers.len().saturating_sub(1))
     } else {
         current.saturating_sub(1)
     };
-    b.lane = layers[next] as usize;
+    let Some(&layer) = layers.get(next) else {
+        return;
+    };
+    b.lane = layer as usize;
     b.col = 0;
     let count = b
         .body
@@ -1698,7 +1711,7 @@ fn move_graph_layer(b: &mut BoardView, right: bool) {
             graph
                 .nodes
                 .iter()
-                .filter(|node| node.layer == layers[next])
+                .filter(|node| node.layer == layer)
                 .count()
         })
         .unwrap_or(0);
@@ -2020,7 +2033,7 @@ fn same_parent_anchor(b: &BoardView, up: bool) -> Option<String> {
             .collect();
         let index = siblings.iter().position(|node| node.id == current.id)?;
         return if up {
-            siblings[..index].last()
+            siblings.get(..index).and_then(|prefix| prefix.last())
         } else {
             siblings.get(index + 1)
         }

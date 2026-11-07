@@ -89,10 +89,13 @@ pub(crate) fn graph_with_done_context(
 
     let mut visible_order: Vec<&Card> = cards.iter().collect();
     visible_order.sort_by_key(|card| card.order);
-    let focus = requested_focus
-        .filter(|id| visible_ids.contains(id))
-        .unwrap_or(&visible_order[0].id)
-        .to_string();
+    let focus = match requested_focus {
+        Some(id) if visible_ids.contains(id) => id.to_string(),
+        _ => visible_order
+            .first()
+            .map(|card| card.id.clone())
+            .unwrap_or_default(),
+    };
     let mut ordered: Vec<&Card> = all_cards.iter().collect();
     ordered.sort_by_key(|card| card.order);
 
@@ -151,7 +154,11 @@ pub(crate) fn graph_with_done_context(
                 else {
                     break;
                 };
-                if parent == root || card_by_id[parent].column != "Done" {
+                let not_done = card_by_id
+                    .get(parent)
+                    .map(|card| card.column != "Done")
+                    .unwrap_or(true);
+                if parent == root || not_done {
                     owner = Some(parent);
                     break;
                 }
@@ -320,8 +327,12 @@ pub(crate) fn graph_with_done_context(
         }
     }
     if overflow_layers {
-        let layer = keys[retained_layers];
-        let omitted = keys[retained_layers..]
+        let Some(&layer) = keys.get(retained_layers) else {
+            return None;
+        };
+        let omitted = keys
+            .get(retained_layers..)
+            .unwrap_or(&[])
             .iter()
             .filter_map(|key| by_layer.get(key))
             .map(Vec::len)

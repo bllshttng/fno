@@ -51,7 +51,10 @@ fn graph_view_is_a_known_board_view() {
     let q = Query::from_pairs(&[("view".into(), "graph".into())])
         .expect("the graph view is a supported board query");
     assert_eq!(q.view, View::Graph);
-    assert_eq!(serde_json::to_value(q).unwrap()["view"], "graph");
+    assert_eq!(
+        serde_json::to_value(q).unwrap().get("view"),
+        Some(&json!("graph"))
+    );
 }
 
 #[test]
@@ -69,15 +72,16 @@ fn graph_board_returns_the_focused_family_and_collapses_done_children() {
     ])
     .unwrap();
     let value = serde_json::to_value(board(&inp, &q)).unwrap();
-    let graph = &value["graph"];
+    let Some(graph) = value.get("graph") else {
+        panic!("the board carries a graph");
+    };
     assert_eq!(graph["root"], "x-e");
     for (id, layer) in [("x-e", 0), ("x-a", 1), ("x-b", 1), ("x-c", 2)] {
         assert!(
-            graph["nodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|node| { node["card"]["id"] == id && node["layer"] == layer }),
+            graph["nodes"].as_array().unwrap().iter().any(|node| {
+                node.get("card").and_then(|card| card.get("id")) == Some(&json!(id))
+                    && node.get("layer") == Some(&json!(layer))
+            }),
             "missing node {id} in layer {layer}: {}",
             graph["nodes"]
         );

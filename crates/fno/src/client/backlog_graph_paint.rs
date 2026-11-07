@@ -95,13 +95,28 @@ pub(crate) fn lines(
     let bands = layer_ids.len().div_ceil(cols);
     let mut band_h = vec![1usize; bands];
     for (index, layer) in layer_ids.iter().enumerate() {
-        band_h[index / cols] = band_h[index / cols].max(layers[layer].len());
+        let height = layers.get(layer).map(Vec::len).unwrap_or(0);
+        if let Some(slot) = band_h.get_mut(index / cols) {
+            *slot = (*slot).max(height);
+        }
     }
     let mut band_y = vec![2usize; bands];
     for band in 1..bands {
-        band_y[band] = band_y[band - 1] + band_h[band - 1] * NODE_STEP + 2;
+        let prev = band_y
+            .get(band - 1)
+            .zip(band_h.get(band - 1))
+            .map(|(&y, &h)| y + h * NODE_STEP + 2)
+            .unwrap_or(4);
+        if let Some(slot) = band_y.get_mut(band) {
+            *slot = prev;
+        }
     }
-    let height = band_y[bands - 1] + band_h[bands - 1] * NODE_STEP + 1;
+    let last = bands
+        .checked_sub(1)
+        .and_then(|band| band_y.get(band).zip(band_h.get(band)))
+        .map(|(&y, &h)| y + h * NODE_STEP + 1)
+        .unwrap_or(1);
+    let height = last;
     let mut grid = Grid::new(width, height);
     let mut positions = HashMap::new();
     let mut selected_y = None;
@@ -110,8 +125,10 @@ pub(crate) fn lines(
         let band = index / cols;
         let col = index % cols;
         let x = col * col_w + 1;
-        for (slot, node) in layers[layer].iter().enumerate() {
-            let y = band_y[band] + slot * NODE_STEP;
+        let band_top = band_y.get(band).copied().unwrap_or(2);
+        let layer_nodes = layers.get(layer).map(Vec::as_slice).unwrap_or(&[]);
+        for (slot, node) in layer_nodes.iter().enumerate() {
+            let y = band_top + slot * NODE_STEP;
             let is_selected = selected == Some(node.id.as_str());
             positions.insert(node.id.as_str(), Pos { x, y, w: node_w });
             if is_selected {
@@ -124,8 +141,10 @@ pub(crate) fn lines(
         let band = index / cols;
         let col = index % cols;
         let x = col * col_w + 1;
-        for (slot, node) in layers[layer].iter().enumerate() {
-            let y = band_y[band] + slot * NODE_STEP;
+        let band_top = band_y.get(band).copied().unwrap_or(2);
+        let layer_nodes = layers.get(layer).map(Vec::as_slice).unwrap_or(&[]);
+        for (slot, node) in layer_nodes.iter().enumerate() {
+            let y = band_top + slot * NODE_STEP;
             let role = node_role(node, selected);
             // The cursor rides the border, in the one inverse role no other
             // board surface uses, so the focused box reads at a glance and
@@ -144,10 +163,11 @@ pub(crate) fn lines(
         let col = index % cols;
         let x = col * col_w;
         let label = format!("layer {}", layer);
+        let band_top = band_y.get(band).copied().unwrap_or(2);
         for (offset, ch) in label.chars().enumerate().take(col_w) {
             grid.put(
                 x + offset,
-                band_y[band].saturating_sub(1),
+                band_top.saturating_sub(1),
                 ch,
                 TextStyle::Section,
             );

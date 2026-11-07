@@ -94,14 +94,18 @@ fn board_render_rows() {
     let b = board_with(inp);
     let (lines, _) = render(&b, 200);
     assert!(
-        lines[0].contains("No deliveries this week"),
+        lines
+            .first()
+            .is_some_and(|line| line.contains("No deliveries this week")),
         "{:?}",
-        lines[0]
+        lines.first()
     );
     assert!(
-        lines[0].contains("cycle unavailable: no merged PR dates in window"),
+        lines.first().is_some_and(|line| {
+            line.contains("cycle unavailable: no merged PR dates in window")
+        }),
         "{:?}",
-        lines[0]
+        lines.first()
     );
 
     let b = board_with(board_inputs());
@@ -1048,7 +1052,11 @@ fn board_remembers_filters_search_view_and_selection_across_reopen() {
 #[test]
 fn tab_cycles_kanban_list_and_graph_views() {
     let mut inputs = board_inputs();
-    inputs.rows[1]["parent"] = json!("x-1");
+    if let Some(row) = inputs.rows.get_mut(1) {
+        if let Some(obj) = row.as_object_mut() {
+            obj.insert("parent".into(), json!("x-1"));
+        }
+    }
     inputs.rows.push(json!({
         "id": "x-4", "status": "ready", "priority": "p2",
         "title": "Rate limit the checkout api per key", "project": "fno", "parent": "x-1"
@@ -1072,7 +1080,7 @@ fn tab_cycles_kanban_list_and_graph_views() {
     let b = view.backlog_board.as_ref().unwrap();
     let (lines, follow) = render(b, 120);
     assert!(
-        follow.is_some_and(|line| !lines[line].band),
+        follow.is_some_and(|line| lines.get(line).is_some_and(|row| !row.band)),
         "the graph cursor uses its node border, not a stripe across other nodes"
     );
     let painted = lines
