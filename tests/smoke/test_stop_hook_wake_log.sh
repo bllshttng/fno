@@ -5,7 +5,7 @@
 # AC4-EDGE: two question signals -> two wake_signal_observed lines, both signals remain
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOOK="$REPO_ROOT/hooks/target-stop-hook.sh"
 # Phase 1 of stop-hook refactor: _observe_wake_signals lives in
 # scripts/lib/wake-signals.sh; the hook sources it. Sourcing the lib

@@ -28,7 +28,7 @@ _reconcile_resolve_fno() {
         return 0
     fi
     local bin
-    for bin in "$HOME/.fno/install/bin/fno" "$HOME/.local/bin/fno"; do
+    for bin in "${FNO_STATE_DIR:-$HOME/.fno}/install/bin/fno" "$HOME/.local/bin/fno"; do
         if [[ -x "$bin" ]]; then
             echo "$bin"
             return 0

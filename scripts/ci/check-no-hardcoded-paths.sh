@@ -4,7 +4,7 @@
 #
 # After Phase 03 of the path-config migration (plan 2026-05-14-path-config-impl),
 # all path resolution must go through:
-#   Python: from fno import paths  (paths.state_dir(), paths.graph_json(), ...)
+#   Rust: crates/fno-agents/src/paths.rs (state_dir, graph_json, ...)
 #   Bash: source "$(fno config paths shell-stub)"  then use $STATE_DIR and its emitted paths.
 #
 # Run: bash scripts/ci/check-no-hardcoded-paths.sh
@@ -193,8 +193,8 @@ fi
     echo "check-no-hardcoded-paths: $VIOLATIONS violation(s) found"
     echo "$REPORT"
     echo
-    echo "To fix: route paths through 'from fno import paths' (Python)"
+    echo "To fix: route paths through crates/fno-agents/src/paths.rs (Rust)"
     echo "        or source \"\$(fno config paths shell-stub)\" + \${STATE_DIR} (Bash)."
-    echo "See: scripts/lib/paths.sh, cli/src/fno/paths.py"
+    echo "See: scripts/lib/paths.sh, crates/fno-agents/src/paths.rs"
 } >&2
 exit 1
