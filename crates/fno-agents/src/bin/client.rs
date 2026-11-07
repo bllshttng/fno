@@ -1621,7 +1621,8 @@ async fn run(
         if !relayed {
             // A --machine pin decides without the fleet read; a duplicate,
             // empty, or @-bearing pin is the caller's typo and refuses.
-            let pinned = match fno_agents::spawn_place::pinned_host(&args[1..]) {
+            let spawn_tail = args.get(1..).unwrap_or(&[]);
+            let pinned = match fno_agents::spawn_place::pinned_host(spawn_tail) {
                 Ok(p) => p,
                 Err(line) => {
                     eprintln!("{line}");
@@ -1646,7 +1647,7 @@ async fn run(
             let was_pinned = pinned.is_some();
             if let Some(t) = &target {
                 let tail =
-                    fno_agents::spawn_place::relay_args(&args[1..], &t.host, name_to_carry, strip);
+                    fno_agents::spawn_place::relay_args(spawn_tail, &t.host, name_to_carry, strip);
                 eprintln!(
                     "spawn relays to {}{}",
                     t.host,
