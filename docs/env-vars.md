@@ -280,6 +280,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_FULL` | rs | The whole-suite lane mark: the guard reads it typed on the command, and the test-run door stamps it into a whole run's cargo env, so its slot asks queue instead of try-locking. |
 | `FNO_TEST_HERMETIC` | py+rs | unclear: cli/src/fno/hermetic.py:557 |
 | `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
+| `FNO_TEST_LAUNCHD_SUFFIX` | rs | Test seam: pins the HOME-derived launchd label suffix the derivation returns (`launchd_labels.rs` and its `setup_services.rs` twin), so the parity goldens and receipts stay machine-independent. Production code never sets it. |
 | `FNO_TEST_LIVE_CARGO_CWDS` | rs | Test seam: colon-separated cwd paths that stand in for a live `lsof` scan of running cargo processes, so cargo_build_dirs tests can drive the tree-to-shard mapping without a real cargo process. |
 | `FNO_TEST_MARKER_HOLD_MS` | rs | unclear: crates/fno/src/proto/startup_guard.rs:97 |
 | `FNO_TEST_MODE` | rs | `1` makes `fno config doctor` skip the claim-store write probe and the temp-dir path patterns (crates/fno/src/config_doctor/checks.rs). |
