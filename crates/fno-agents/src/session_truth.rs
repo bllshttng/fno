@@ -311,7 +311,7 @@ fn parse_stamp(ts: &str) -> Option<f64> {
 /// the window did not carry: codex stamps its model once per turn, which a
 /// tool-heavy turn pushes megabytes back.
 const CLAUDE_MODEL_SCAN_LIMIT: u64 = 4 << 20;
-const CODEX_MODEL_SCAN_LIMIT: u64 = 32 << 20;
+pub(crate) const CODEX_MODEL_SCAN_LIMIT: u64 = 32 << 20;
 const TITLE_SCAN_LIMIT: u64 = 1 << 20;
 
 fn fold_claude(s: &mut TailSummary, line: &str) {
