@@ -7,7 +7,6 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use fno_agents::backlog::RowQuery;
 use fno_agents::graph_store::{self, BoundedLock, MutateInput, DEFAULT_LOCK_TIMEOUT};
 use serde_json::{json, Value};
 
@@ -95,8 +94,7 @@ fn a_foreground_writer_lands_behind_a_reconcile_shaped_loop() {
     let mut landed = false;
     for attempt in 0..5 {
         let base = graph_store::base_version(&path).expect("version reads");
-        let mut rows =
-            graph_store::read_rows_strict(&path, &RowQuery::default()).expect("rows read");
+        let mut rows = graph_store::read_rows_strict(&path).expect("rows read");
         bump_first_row(&mut rows).expect("apply runs");
         match graph_store::locked_mutate(
             &path,
