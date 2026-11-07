@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::pr_watch::status::{LABEL, PLIST_FILENAME};
+use crate::pr_watch::status::{label as status_label, PLIST_FILENAME};
 
 const BOUNCE_SIDECAR: &str = "pr-watch-bounce.json";
 // A wedged job's `launchctl kickstart` was observed to HANG indefinitely; every
@@ -165,7 +165,7 @@ pub(crate) fn render_plist(
             "{plist_path}",
             &xml_escape(&launch_agents_dir.join(PLIST_FILENAME).display().to_string()),
         )
-        .replace("{label}", &xml_escape(LABEL))
+        .replace("{label}", &xml_escape(&status_label()))
         .replace("{fno_binary}", &xml_escape(fno_binary))
         .replace("{path}", &xml_escape(&augmented))
         .replace("{home}", &xml_escape(&home.display().to_string()))
@@ -263,7 +263,7 @@ fn tick_in_flight() -> Option<i32> {
     if let Ok(pin) = std::env::var("FNO_TEST_PR_WATCH_TICK_PID") {
         return pin.parse().ok().filter(|pid| *pid > 0);
     }
-    let listing = stdout_of(&["launchctl", "list", LABEL], LAUNCHCTL_TIMEOUT_S);
+    let listing = stdout_of(&["launchctl", "list", &status_label()], LAUNCHCTL_TIMEOUT_S);
     let pid: i32 = {
         let idx = listing.find("\"PID\" = ")? + "\"PID\" = ".len();
         let digits: String = listing[idx..]
@@ -421,7 +421,7 @@ pub(crate) fn bounce(
     let timeout_s = LAUNCHCTL_TIMEOUT_S as f64;
     if defer_when_ticking {
         if let Some(pid) = tick_in_flight() {
-            if label == LABEL {
+            if label == status_label() {
                 record_bounce(caller, true, state_root);
             }
             return (format!("tick in flight (pid {pid}); bounce deferred"), 0);
@@ -431,7 +431,7 @@ pub(crate) fn bounce(
     let target = format!("{domain}/{label}");
 
     // Receipt before bootout: only this sidecar joins the SIGTERM back to its sender.
-    if label == LABEL {
+    if label == status_label() {
         record_bounce(caller, false, state_root);
     }
 
@@ -537,7 +537,7 @@ pub(crate) fn refresh_watcher(
     }
     bounce(
         &plist_path,
-        LABEL,
+        &status_label(),
         true,
         defer_when_ticking,
         caller,

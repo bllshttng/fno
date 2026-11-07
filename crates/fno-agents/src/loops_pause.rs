@@ -1161,8 +1161,11 @@ fn markdown_doc() -> String {
                 .unwrap_or_else(|| "`fno agents loops table`".to_string()),
         ));
     }
-    out.push_str("\nThe launchd labels the pr-watch installer owns, as the table reports them: `");
-    out.push_str(&crate::tick_ledger::LAUNCHD_LABELS.join("`, `"));
+    // The markdown doc is a committed generated artifact (generated-artifacts.tsv),
+    // so the two derived labels print as stems here: a real suffix would be
+    // machine-specific and drift the file on every generator run. The live
+    // `fno agents loops table` keeps the real labels.
+    out.push_str("\nThe launchd labels the pr-watch installer owns, as the table reports them: `sh.fno.pr-watcher.<home-suffix>`, `sh.fno.groom.<home-suffix>`, `sh.fno.autocontinue`, `sh.fno.sync-backlog`, `sh.fno.board-server");
     out.push_str(
         "`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.\n",
     );

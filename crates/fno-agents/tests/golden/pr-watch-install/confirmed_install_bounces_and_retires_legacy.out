@@ -11,7 +11,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>sh.fno.pr-watcher</string>
+  <string>sh.fno.pr-watcher.testhome</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -59,7 +59,7 @@
 </plist>
 
 Write plist to <CASE>/home/Library/LaunchAgents/sh.fno.pr-watcher.plist? [y/N]: Written: <CASE>/home/Library/LaunchAgents/sh.fno.pr-watcher.plist
-Activated: bounced gui/<UID>/sh.fno.pr-watcher; awaiting first tick
+Activated: bounced gui/<UID>/sh.fno.pr-watcher.testhome; awaiting first tick
 retired legacy post-merge watcher: com.fno.postmerge-old
 The canonical pr-watch daemon now owns merge detection; no per-repo watcher install is needed.
 Heal: unarmed (auto_heal.enabled=false; arm with: fno config set auto_heal.enabled true)

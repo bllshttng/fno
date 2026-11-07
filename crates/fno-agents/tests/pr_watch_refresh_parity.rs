@@ -78,6 +78,12 @@ fn write_case(root: &Path, case: &Case) -> PathBuf {
 /// injected tick-in-flight answer, and the scripted launchctl steps.
 fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
     let mut pins = vec![
+        // Pin the launchd-label suffix so receipts and rendered plists stay
+        // byte-for-byte across machines (x-781d).
+        (
+            fno_agents::launchd_labels::FNO_TEST_LAUNCHD_SUFFIX.into(),
+            "testhome".into(),
+        ),
         (
             "FNO_CONFIG".into(),
             dir.join("config.toml").display().to_string(),
@@ -169,6 +175,14 @@ fn cases() -> Vec<Case> {
 
 #[test]
 fn pr_watch_refresh_goldens() {
+    // The prerendered fixture plists render in THIS process, so the seam
+    // must hold here too: without it the in-process label (real-HOME hash)
+    // never matches the subprocess's pinned label and every plist reads
+    // "changed".
+    std::env::set_var(
+        fno_agents::launchd_labels::FNO_TEST_LAUNCHD_SUFFIX,
+        "testhome",
+    );
     let tmp = tempfile::TempDir::new().unwrap();
     for case in cases() {
         let dir = write_case(tmp.path(), &case);

@@ -316,6 +316,7 @@ pub mod launch_exec;
 pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
+pub mod launchd_labels;
 pub mod law_filters;
 pub mod law_firings;
 pub mod law_match;

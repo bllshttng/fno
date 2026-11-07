@@ -249,10 +249,12 @@ fn detect_tools() -> Value {
     })
 }
 
-const SERVICE_LABELS: [&str; 2] = [
-    crate::setup_services::PR_WATCHER_LABEL,
-    crate::setup_services::GROOM_LABEL,
-];
+fn service_labels() -> [String; 2] {
+    [
+        crate::setup_services::pr_watcher_label(),
+        crate::setup_services::groom_label(),
+    ]
+}
 
 /// The launchd services and the daemon, one pass: plists are file reads,
 /// `launchctl list` is one bounded call for every label (the label is the
@@ -291,7 +293,7 @@ fn detect_services() -> Value {
             })
             .unwrap_or(false)
     };
-    let rows: Vec<Value> = SERVICE_LABELS
+    let rows: Vec<Value> = service_labels()
         .iter()
         .map(|label| {
             json!({

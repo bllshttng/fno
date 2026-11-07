@@ -895,8 +895,9 @@ fn emit_groom(rep: &Value, err: bool) {
         );
     } else if gr.get("stale") == Some(&Value::Bool(true)) {
         emit(err, &format!(
-            "fno doctor: backlog grooming last ran {}h ago (the daily pass is not running); check `launchctl list | grep sh.fno.groom` and ~/.fno/logs/groom.err.log.",
-            gr.get("hours").and_then(Value::as_f64).unwrap_or(0.0) as i64
+            "fno doctor: backlog grooming last ran {}h ago (the daily pass is not running); check `launchctl list | grep {}` and ~/.fno/logs/groom.err.log.",
+            gr.get("hours").and_then(Value::as_f64).unwrap_or(0.0) as i64,
+            crate::setup_services::groom_label()
         ));
     }
 }
@@ -972,7 +973,7 @@ fn emit_launch_agents(rep: &Value, err: bool) {
         .unwrap_or_default()
     {
         let label = entry.get("label").and_then(Value::as_str).unwrap_or("?");
-        let remedy = if label == "sh.fno.pr-watcher" {
+        let remedy = if label == crate::setup_services::pr_watcher_label() {
             "run `fno do pr watch refresh`"
         } else {
             "re-run `fno doctor update` if the entry point moved"

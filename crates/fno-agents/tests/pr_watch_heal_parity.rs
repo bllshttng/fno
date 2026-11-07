@@ -97,6 +97,12 @@ fn write_case(root: &Path, case: &Case) -> PathBuf {
 /// and the scripted launchctl steps.
 fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
     let mut pins = vec![
+        // Pin the launchd-label suffix so receipts and rendered plists stay
+        // byte-for-byte across machines (x-781d).
+        (
+            fno_agents::launchd_labels::FNO_TEST_LAUNCHD_SUFFIX.into(),
+            "testhome".into(),
+        ),
         (
             "FNO_CONFIG".into(),
             dir.join("config.toml").display().to_string(),

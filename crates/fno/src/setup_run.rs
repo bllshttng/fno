@@ -1102,7 +1102,7 @@ fn step_pr_watcher(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
         service_platform("pr-watcher", COMMAND, rep);
         return;
     }
-    if crate::setup_services::is_loaded(crate::setup_services::PR_WATCHER_LABEL) {
+    if crate::setup_services::is_loaded(&crate::setup_services::pr_watcher_label()) {
         rep.skipped
             .push("pr-watcher: agent already loaded, restarting nothing".into());
         service_key_set(exe, "pr-watcher", "pr_watch.enabled", "true", rep);
@@ -1123,7 +1123,7 @@ fn step_pr_watcher(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
         Ok(_) => {
             rep.done
                 .push("pr-watcher: agent installed and loaded".into());
-            loaded.push(crate::setup_services::PR_WATCHER_LABEL.into());
+            loaded.push(crate::setup_services::pr_watcher_label());
             service_key_set(exe, "pr-watcher", "pr_watch.enabled", "true", rep);
         }
         Err(e) => {
@@ -1148,7 +1148,7 @@ fn step_auto_heal(exe: &Path, rep: &mut Report) {
         );
         return;
     }
-    if !crate::setup_services::is_loaded(crate::setup_services::PR_WATCHER_LABEL) {
+    if !crate::setup_services::is_loaded(&crate::setup_services::pr_watcher_label()) {
         let message = "auto-heal: the pr-watcher agent is not loaded, install it first".to_string();
         rep.rows
             .push(row("needs_human", "service_dependency", message.clone()));
@@ -1165,7 +1165,7 @@ fn step_groom_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
         service_platform("groom-agent", "fno backlog groom --install-agent", rep);
         return;
     }
-    if crate::setup_services::is_loaded(crate::setup_services::GROOM_LABEL) {
+    if crate::setup_services::is_loaded(&crate::setup_services::groom_label()) {
         rep.skipped
             .push("groom-agent: agent already loaded, restarting nothing".into());
         return;
@@ -1178,7 +1178,7 @@ fn step_groom_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
         Ok(_) => {
             rep.done
                 .push("groom-agent: agent installed and loaded".into());
-            loaded.push(crate::setup_services::GROOM_LABEL.into());
+            loaded.push(crate::setup_services::groom_label());
         }
         Err(e) => {
             let message = format!("groom-agent: {e}");
@@ -1773,14 +1773,14 @@ fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposa
             (
                 "pr-watcher",
                 "pr_watch.enabled",
-                crate::setup_services::PR_WATCHER_LABEL,
+                crate::setup_services::pr_watcher_label(),
             ),
             (
                 "auto-heal",
                 "auto_heal.enabled",
-                crate::setup_services::PR_WATCHER_LABEL,
+                crate::setup_services::pr_watcher_label(),
             ),
-            ("groom-agent", "", crate::setup_services::GROOM_LABEL),
+            ("groom-agent", "", crate::setup_services::groom_label()),
         ];
         for (id, key, label) in services {
             if !steps.iter().any(|s| s.id == id) {
@@ -1794,7 +1794,7 @@ fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposa
                 drift.push(format!(
                     "drift: {id} is not enabled - fix: fno config setup run --yes --only {id}"
                 ));
-            } else if !crate::setup_services::is_loaded(label) {
+            } else if !crate::setup_services::is_loaded(&label) {
                 drift.push(format!(
                     "drift: {label} is not loaded - fix: fno config setup run --yes --only {id}"
                 ));
