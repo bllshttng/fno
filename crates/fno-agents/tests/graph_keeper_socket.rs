@@ -5,6 +5,7 @@
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
