@@ -98,7 +98,6 @@ tests/py/_native_event_cli.py	keep	dev-only live-contract test, run by the tests
 tests/py/conftest.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/events/test_ephemeral_set_parity.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/events/test_event_find.py	keep	dev-only live-contract test, run by the tests-py job
-tests/py/events/test_migration.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/events/test_rust_events_documented.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/events/test_schema_files.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/events/test_schema_manifest.py	keep	dev-only live-contract test, run by the tests-py job
