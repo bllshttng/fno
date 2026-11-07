@@ -180,6 +180,10 @@ When a person runs the wizard, a preset sets the pace. The preset screen opens w
 | balanced | the safe middle | the detected ones with credentials | each harness keeps its current model | the PR watcher and the groom | off |
 | user-reviewed | nothing without you | none ticked | each harness keeps its current model | none | off |
 
+## Keeping fno on the machine: codesign and updates
+
+On macOS, `fno update` signs each binary it places with the Developer ID identity in your keychain. The identifiers are fixed (dev.fno.fno, dev.fno.fno-agents, and so on), so your macOS permission grants survive every update. Login Items then stops reporting fno as an item from an unidentified developer. Without a Developer ID certificate, fno skips the signing and says so. The real identity checks are `codesign --verify --strict` and the Authority chain in `codesign -dv`. An `spctl -a` rejection on a bare CLI binary comments on the file shape, never on the identity. The Python `fno` console script cannot carry this signature: it is a script, not a Mach-O binary. The binaries are not notarized. That matters only the day binaries ship as downloads.
+
 ## Keeping fno up to date
 
 On a release install, run `fno update`. On a wheel install (`uv tool install fno`), it moves fno to the binary install in `~/.fno/install/bin`. It downloads the release tarball for your version, checks its `.sha256`, and points the `fno` command there. After the move, `fno update` installs the newest GitHub release. A wheel older than the release that carries the move needs `fno update` twice: the first run upgrades the wheel, and the second run moves it. On fno 0.4.4 and older, `fno update` stops with "Could not locate the fno CLI source", so run `uv tool upgrade fno` yourself first. Plugin updates are separate: in Claude Code, run `/plugin update`.

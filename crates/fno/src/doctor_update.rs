@@ -25,7 +25,7 @@ use crate::model_catalog::state_dir;
 /// They MUST stay a coherent same-build set in every install location; a
 /// mixed-version pair is the worse bug, so update syncs all three or none
 /// per location.
-const TRIAD_STEMS: [&str; 3] = ["fno-agents", "fno-agents-daemon", "fno-agents-worker"];
+pub(crate) const TRIAD_STEMS: [&str; 3] = ["fno-agents", "fno-agents-daemon", "fno-agents-worker"];
 
 const GUARD_MSG: &str = "[fno doctor update] refused: target-state.md shows status: IN_PROGRESS. Updating mid-loop risks binary skew across subprocesses. Pass --force to override.";
 
@@ -41,7 +41,7 @@ const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UV_INSTALL_ATTEMPTS: u32 = 3;
 const UPDATE_BUDGET_SECS: u64 = 60;
 
-fn exe_suffix() -> &'static str {
+pub(crate) fn exe_suffix() -> &'static str {
     if cfg!(windows) {
         ".exe"
     } else {
@@ -433,6 +433,7 @@ fn install_newest_published_arm(
             "the newest published build failed to deploy ({why})"
         ));
     }
+    crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_triad(&bin_dir, false) {
         eprintln!("{e}");
         failed.push("triad sync".into());
@@ -1761,6 +1762,7 @@ fn refresh_rust_bins(
     if prebuilt.is_err() {
         install_mux_front_door(source, &install_root, false);
     }
+    crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_triad(&bin_dir, false) {
         eprintln!("{e}");
         failed.push("triad sync".into());
@@ -1871,6 +1873,9 @@ fn refresh_fresh_path(
         for line in component_lines(report.as_ref(), "fno doctor update") {
             println!("{line}");
         }
+    }
+    if !mux_fresh {
+        crate::codesign::sign_placed(installed_bin.parent().unwrap_or(installed_bin), dry_run);
     }
     if let Err(e) = sync_triad(installed_bin.parent().unwrap_or(installed_bin), dry_run) {
         eprintln!("{e}");
