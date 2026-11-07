@@ -2600,7 +2600,9 @@ impl Drop for BoundedLock {
                 "graph_lock_held",
                 serde_json::json!({
                     "pid": std::process::id(),
-                    "command": crate::chokepoint::process_command(std::process::id()),
+                    "command": crate::chokepoint::process_command(u64::from(
+                        std::process::id(),
+                    )),
                     "lock": self.path.display().to_string(),
                     "hold_ms": held.as_millis() as u64,
                     "phases_ms": serde_json::Value::Object(self.phases.borrow().clone()),
@@ -2923,7 +2925,7 @@ fn prepare_mutate(
     stored_statuses: bool,
 ) -> Result<PreparedMutate, StoreError> {
     let MutateInput {
-        entries: mut working_entries,
+        entries: working_entries,
         canonical_path,
         base_version,
         plan_rungs,
