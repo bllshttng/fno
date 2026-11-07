@@ -636,13 +636,16 @@ pub(crate) fn message_sender_at(chats_dir: &Path, db: &Path, id: &str) -> Option
         })();
         // A remote sender's name is the same ledger lookup the delivered header
         // ran (mail_envelope::render: row name, remote label, from_name, from).
-        let remote = crate::team_names::remote_fleet_label(
-            &crate::team_names::store_beside(&crate::paths::AgentsHome::shared_registry_json()),
-            handle,
-            session,
-        );
         named
-            .or(remote)
+            .or_else(|| {
+                crate::team_names::remote_fleet_label(
+                    &crate::team_names::store_beside(
+                        &crate::paths::AgentsHome::shared_registry_json(),
+                    ),
+                    handle,
+                    session,
+                )
+            })
             .or_else(|| from_name.map(str::to_string))
             .or_else(|| (!handle.is_empty()).then(|| handle.to_string()))
     }
