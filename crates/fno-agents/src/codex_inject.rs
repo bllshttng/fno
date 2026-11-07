@@ -2693,9 +2693,6 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let _guard = crate::path_test_guard();
-        let store = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(store.path().join("sessions")).unwrap();
-        let _codeux = crate::claims::EnvVarGuard::set("CODEX_HOME", store.path().to_str().unwrap());
         let _add_dirs =
             crate::claims::EnvVarGuard::set("FNO_WORKER_ADD_DIRS", "/tmp/fno-t13-a:/tmp/fno-t13-b");
         let daemon = crate::codex_fake_daemon::FakeDaemon::start(
@@ -2809,11 +2806,6 @@ mod tests {
         let _guard = crate::path_test_guard();
         let home = tempfile::tempdir().unwrap();
         let state_root = tempfile::tempdir().unwrap();
-        let _codeux = crate::claims::EnvVarGuard::set(
-            "CODEX_HOME",
-            home.path().join("codex").to_str().unwrap(),
-        );
-        std::fs::create_dir_all(home.path().join("codex/sessions")).unwrap();
         let grant = state_root.path().to_string_lossy().into_owned();
         crate::state::update_registry(
             &crate::paths::AgentsHome::at(home.path()).registry_json(),
@@ -2865,11 +2857,21 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let _guard = crate::path_test_guard();
-        let home = tempfile::tempdir().unwrap();
-        let sessions = home.path().join("sessions/2026/11/06");
+        // The fake daemon repoints CODEX_HOME at its own home for the socket,
+        // so the rollout must live under THAT home for the lane's read to
+        // find it; resolve it the way deliver() resolves the socket.
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let daemon_home = codex_app_server_socket_path()
+            .parent()
+            .and_then(|socket_dir| socket_dir.parent())
+            .expect("daemon home resolves from the control socket")
+            .to_path_buf();
+        let sessions = daemon_home.join("sessions/2026/11/06");
         std::fs::create_dir_all(&sessions).unwrap();
-        let _agents_home =
-            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
         let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-full.jsonl");
         std::fs::write(
             &rollout,
@@ -2881,12 +2883,6 @@ mod tests {
             ),
         )
         .unwrap();
-        let _codeux = crate::claims::EnvVarGuard::set("CODEX_HOME", home.path().to_str().unwrap());
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
-                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
-            })),
-        );
         let result = deliver_via_codex_daemon("thread-full", "hello FULL").await;
         assert!(result.is_ok(), "delivery must succeed: {result:?}");
         let turn = daemon.first_params("turn/start").expect("turn ran");
@@ -2914,11 +2910,6 @@ mod tests {
         let _guard = crate::path_test_guard();
         let home = tempfile::tempdir().unwrap();
         let state_root = tempfile::tempdir().unwrap();
-        let _codeux = crate::claims::EnvVarGuard::set(
-            "CODEX_HOME",
-            home.path().join("codex").to_str().unwrap(),
-        );
-        std::fs::create_dir_all(home.path().join("codex/sessions")).unwrap();
         let grant = state_root.path().to_string_lossy().into_owned();
         crate::state::update_registry(
             &crate::paths::AgentsHome::at(home.path()).registry_json(),
@@ -2979,11 +2970,21 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let _guard = crate::path_test_guard();
-        let home = tempfile::tempdir().unwrap();
-        let sessions = home.path().join("sessions/2026/11/06");
+        // The fake daemon repoints CODEX_HOME at its own home for the socket,
+        // so the rollout must live under THAT home for the lane's read to
+        // find it; resolve it the way deliver() resolves the socket.
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let daemon_home = codex_app_server_socket_path()
+            .parent()
+            .and_then(|socket_dir| socket_dir.parent())
+            .expect("daemon home resolves from the control socket")
+            .to_path_buf();
+        let sessions = daemon_home.join("sessions/2026/11/06");
         std::fs::create_dir_all(&sessions).unwrap();
-        let _agents_home =
-            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
         let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-unreadable.jsonl");
         std::fs::write(
             &rollout,
@@ -2995,12 +2996,6 @@ mod tests {
             ),
         )
         .unwrap();
-        let _codeux = crate::claims::EnvVarGuard::set("CODEX_HOME", home.path().to_str().unwrap());
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
-                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
-            })),
-        );
         let result = deliver_via_codex_daemon("thread-unreadable", "hello FALLBACK").await;
         assert!(result.is_ok(), "delivery must succeed: {result:?}");
         let turn = daemon.first_params("turn/start").expect("turn ran");
