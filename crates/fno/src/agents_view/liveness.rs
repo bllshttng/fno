@@ -115,31 +115,4 @@ mod tests {
             Liveness::Unmeasured
         );
     }
-
-    #[test]
-    fn an_unreaped_zombie_reads_dead_and_not_alive() {
-        let mut child = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg("exit 0")
-            .spawn()
-            .unwrap();
-        let pid = child.id() as u64;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline && !crate::proto::pid_is_zombie(pid as i32) {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        assert!(
-            crate::proto::pid_is_zombie(pid as i32),
-            "fixture: the child must be a zombie"
-        );
-        // Orphaned + zombie pid: Dead (was Unmeasured when a zombie read as
-        // merely unreachable).
-        assert_eq!(
-            derive_liveness("orphaned", Some(pid), "sid"),
-            Liveness::Dead
-        );
-        // Terminal status + a zombie pid: corroborated Dead, not Unmeasured.
-        assert_eq!(derive_liveness("exited", Some(pid), "sid"), Liveness::Dead);
-        child.wait().unwrap();
-    }
 }

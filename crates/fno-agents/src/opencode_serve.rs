@@ -54,7 +54,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::claude_ask::{emit_event, validate_spawn_inputs};
-use crate::opencode_ask::{apply_opencode_variant, AskOutcome, OPENCODE_DEFAULT_MODEL};
+use crate::opencode_ask::{
+    apply_opencode_variant, require_qualified_model, AskOutcome, OPENCODE_DEFAULT_MODEL,
+};
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
 
@@ -94,9 +96,10 @@ fn serve_config_json(bin: &str) -> &'static str {
 }
 
 /// Budgets: how long to wait for a fresh serve to print its port, and the
-/// per-call HTTP timeouts. A serve boot is a node CLI start (~1-2s measured);
-/// 15s leaves room for a cold JS runtime without wedging a spawn.
-const SERVE_BOOT_BUDGET: Duration = Duration::from_secs(15);
+/// per-call HTTP timeouts. A serve boot is a node CLI start (~1-2s idle) that
+/// reached a healthy port at ~40s wall on a machine pinned at 98.9% CPU, so
+/// 60s absorbs a loaded host while a wedged binary still fails fast enough.
+const SERVE_BOOT_BUDGET: Duration = Duration::from_secs(60);
 const HTTP_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const STEER_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -449,6 +452,12 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
                 }
             }
             if std::time::Instant::now() >= deadline {
+                // The serve was setsid'd into its own group: without this kill
+                // every boot timeout leaks one serve, and the next spawn boots
+                // another beside it (measured: two orphans after two refusals).
+                unsafe {
+                    libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+                }
                 return Err(format!(
                 "opencode serve did not report a healthy port within {}s (log: {:?}, pid {pid})",
                 SERVE_BOOT_BUDGET.as_secs(),
@@ -602,6 +611,9 @@ fn dispatch_opencode_serve_inner(
     opencode_bin: &str,
 ) -> AskOutcome {
     if let Err(msg) = validate_spawn_inputs(name, from_name) {
+        return AskOutcome::err(msg, 2);
+    }
+    if let Err(msg) = require_qualified_model(model) {
         return AskOutcome::err(msg, 2);
     }
     let events = home.events_jsonl();
@@ -927,6 +939,7 @@ pub fn steer_existing_session(
     model: Option<&str>,
     timeout: Duration,
 ) -> Result<String, String> {
+    require_qualified_model(model)?;
     steer_existing_session_with_binary(home, session_id, message, cwd, model, timeout, "opencode")
 }
 
@@ -1390,6 +1403,56 @@ mod tests {
 
     fn home(dir: &Path) -> AgentsHome {
         AgentsHome::at(dir.to_path_buf())
+    }
+
+    // A registry row for the name would produce the "already exists" refusal
+    // if the model gate ran after the lookup; the bare-model refusal must win
+    // so no serve ever starts for a launch that cannot run a turn.
+    #[test]
+    fn bare_model_refuses_before_the_registry_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = home(dir.path());
+        let reg = serde_json::json!({
+            "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+            "agents": [{
+                "name": "oc",
+                "harness": "opencode",
+                "provider": "opencode",
+                "cwd": "/x",
+                "status": "live",
+                "created_at": "2026-01-01T00:00:00Z",
+            }],
+        });
+        crate::registry_store::seed_raw(&h.registry_json(), reg.to_string());
+        let out = dispatch_opencode_serve_inner(
+            &h,
+            "oc",
+            "hi",
+            "fno/test",
+            dir.path(),
+            Some("glm-5.3-flash"),
+            None,
+            None,
+            "opencode",
+        );
+        assert_eq!(out.exit_code, 2);
+        assert!(
+            out.stderr.contains("provider/model"),
+            "names the shape: {}",
+            out.stderr
+        );
+        assert!(
+            out.stderr.contains("zai-coding-plan/glm-5.3-flash"),
+            "names the remedy: {}",
+            out.stderr
+        );
+    }
+
+    // A serve boot reached a healthy port at ~40s wall on a machine pinned at
+    // 98.9% CPU; anything under 30s wedges spawns on loaded hosts again.
+    #[test]
+    fn boot_budget_absorbs_a_loaded_machine() {
+        assert!(SERVE_BOOT_BUDGET.as_secs() >= 30);
     }
 
     #[test]

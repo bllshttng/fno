@@ -263,7 +263,12 @@ The consequence is an integrity hazard, not a capability gap. `review/start` nam
 
 A driver-hosted thread closes this by construction. It appears in `thread/loaded/list`, and `review/start` against it returns a receipt.
 
+### Worker threads start without the rea MCP
+
+Every thread the lane spawns sends `mcp_servers.rea.enabled=false` in its `thread/start` config map, and again on `thread/resume`. The daemon starts one MCP server process per loaded thread and never reaps it (measured 2026-11-06: 15 children against 9 loaded threads). A spawn that carries its own `mcp_servers.rea.` pair keeps its value. The disable only fills the absent names. The user's own interactive codex sessions are untouched: the disable rides the lane's frames, never `~/.codex/config.toml`.
+
 ## What the fno side holds now
+
 
 `crates/fno-agents/src/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens at startup only the rows whose last real turn is recent (row stamps within the rollout-freshness window). An older row stays unhosted and reads resumable, and every ask still resumes it on demand through `ensure_codex_thread_handle`. Recovery refuses a row whose cwd no longer exists and stamps it Orphaned. A resumed thread with no cwd reads alive and can never run a turn.
 

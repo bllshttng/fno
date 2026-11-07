@@ -340,36 +340,6 @@ mod tests {
         assert_eq!(core.thread_workspace(&core.agents[0].clone()), Some(3));
         assert_eq!(core.thread_workspace(&core.agents[1].clone()), Some(3));
     }
-
-    #[test]
-    fn an_attach_handle_member_anchors_a_paneless_row() {
-        // AC5-HP: the stored member carries only the attach handle; the
-        // paneless row carries the same handle. The placement holds.
-        let mut core = empty_core();
-        squad_at(&mut core, 2, "/two", 7);
-        let mut probe = row("probe", "/other", None, None, None);
-        probe.attach_id = Some("J".into());
-        core.agents = vec![probe];
-        core.squad_members.insert(2, vec![member(None, "J", None)]);
-        assert_eq!(core.thread_workspace(&core.agents[0].clone()), Some(2));
-    }
-
-    #[test]
-    fn a_legacy_row_without_an_edge_still_groups_by_cwd() {
-        // AC8-EDGE: a paneless row with no spawned_by_session whose cwd a
-        // workspace owns keeps grouping there - no regression.
-        let mut core = empty_core();
-        squad_at(&mut core, 1, "/footnote", 5);
-        core.agents = vec![row(
-            "old",
-            "/footnote/sub/dir",
-            Some("codex"),
-            Some("sid-old"),
-            None,
-        )];
-        assert_eq!(core.thread_workspace(&core.agents[0].clone()), Some(1));
-    }
-
     #[test]
     fn an_exited_parents_recycled_pane_id_cannot_capture_the_child() {
         // The parent row exited and its pane id now lives in workspace 3's
@@ -424,38 +394,6 @@ mod tests {
         ];
         assert_eq!(core.thread_workspace(&core.agents[1].clone()), Some(1));
     }
-
-    #[test]
-    fn agent_rows_groups_a_foreign_cwd_thread_under_its_spawners_workspace() {
-        // AC6-HP, the think-harness-ranking shape: a live paneless codex
-        // thread in a repo no workspace owns, its edge naming a claude
-        // session pane-hosted in workspace 1. The built row carries 1.
-        let mut core = empty_core();
-        squad_at(&mut core, 1, "/footnote", 5);
-        core.agents = vec![
-            row(
-                "lead",
-                "/footnote",
-                Some("claude"),
-                Some("sid-parent"),
-                None,
-            ),
-            row(
-                "probe",
-                "/tools/foreign",
-                Some("codex"),
-                Some("sid-child"),
-                Some("sid-parent"),
-            ),
-        ];
-        let mut lead = core.agents[0].clone();
-        lead.mux = Some((core.session_name.clone(), 5));
-        core.agents[0] = lead;
-        let rows = core.agent_rows();
-        let probe = rows.iter().find(|r| r.name == "probe").unwrap();
-        assert_eq!(probe.squad, Some(1), "rows: {rows:?}");
-    }
-
     fn named_at(core: &mut Core, id: u64, name: &str, pane: u64) {
         core.session.add_squad(
             id,

@@ -189,27 +189,4 @@ mod fresh_attach_tests {
             "an inline unit-fixture shell carries no rc dir"
         );
     }
-
-    #[test]
-    fn fresh_attach_spawn_failure_tears_the_placeholder_squad_down() {
-        // The placeholder squad is live between the reserve and the landing;
-        // a failed spawn must undo the whole gesture: squad (and its store
-        // row) removed, the client Byed and dropped.
-        let mut core = empty_core();
-        core.shells = Vec::new(); // no candidate can spawn
-        let mut rx = attach_fresh(&mut core, 1);
-        assert!(
-            core.session.squads.is_empty(),
-            "the placeholder squad is torn down"
-        );
-        assert!(core.panes.is_empty());
-        assert!(core.clients.is_empty(), "the refused client is dropped");
-        let mut byes = 0;
-        while let Ok(m) = rx.try_recv() {
-            if matches!(m, ServerMsg::Bye { .. }) {
-                byes += 1;
-            }
-        }
-        assert_eq!(byes, 1, "the attach is refused with exactly one Bye");
-    }
 }

@@ -153,6 +153,107 @@ pub(crate) fn spare_claimed(command: &str) -> bool {
     sock.ends_with(".claim.sock") && !Path::new(sock).exists()
 }
 
+/// One MCP-server group: the parent process and how many `mcp`-shaped
+/// children it holds. A naming row only; nothing gates on it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct McpServerGroup {
+    pub parent_pid: u32,
+    pub parent: String,
+    pub servers: u64,
+    pub cpu_cores: f64,
+}
+
+/// One parentless test-rig binary (a `footnote`/`fno` binary under /tmp with
+/// ppid 1): nobody is left to reap it, the deps-binary rule at another layer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct OrphanRigBinary {
+    pub pid: u32,
+    pub elapsed_seconds: u64,
+    pub command: String,
+}
+
+/// True when a process row is an MCP server child. The measured shape is a
+/// package runner whose LAST argv token is the standalone word `mcp`
+/// (`npm exec rea-agents@6.4.0 mcp`, `npx -y rea-agents@6.4.0 mcp`); a
+/// hyphenated `mcp-server-*` argv0 or a `--mcp` flag does not match.
+pub(crate) fn is_mcp_server(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next_back()
+        .is_some_and(|last| last == "mcp")
+}
+
+/// The MCP-server groups of one snapshot: children matching
+/// [`is_mcp_server`], grouped by their parent row. A parent missing from the
+/// table (exited between rows) groups under the label `gone`.
+pub(crate) fn mcp_server_groups(table: &[ProcRow]) -> Vec<McpServerGroup> {
+    let by_pid: BTreeMap<u32, &ProcRow> = table.iter().map(|r| (r.pid, r)).collect();
+    let mut groups: BTreeMap<u32, (String, u64, f64)> = BTreeMap::new();
+    for row in table {
+        if !is_mcp_server(&row.command) {
+            continue;
+        }
+        let parent_label = by_pid
+            .get(&row.ppid)
+            .map(|parent| {
+                basename(parent.command.split_whitespace().next().unwrap_or("")).to_string()
+            })
+            .unwrap_or_else(|| "gone".to_string());
+        let entry = groups.entry(row.ppid).or_insert((parent_label, 0, 0.0));
+        entry.1 += 1;
+        entry.2 += row.cpu_pct / 100.0;
+    }
+    let mut out: Vec<McpServerGroup> = groups
+        .into_iter()
+        .map(
+            |(parent_pid, (parent, servers, cpu_cores))| McpServerGroup {
+                parent_pid,
+                parent,
+                servers,
+                cpu_cores,
+            },
+        )
+        .collect();
+    out.sort_by(|a, b| {
+        b.servers
+            .cmp(&a.servers)
+            .then(a.parent_pid.cmp(&b.parent_pid))
+    });
+    out
+}
+
+/// True when a row is a parentless test-rig binary: an fno/footnote binary
+/// whose argv[0] sits under /tmp with ppid 1. Measured specimen: `footnote`
+/// from /tmp/fn-47ea-rig/b2 holding 91 percent CPU at ppid 1. A path-shape
+/// match stays a naming row; nothing is ever signalled from it.
+pub(crate) fn is_orphan_rig_binary(row: &ProcRow) -> bool {
+    if row.ppid != 1 {
+        return false;
+    }
+    let argv0 = row.command.split_whitespace().next().unwrap_or("");
+    let base = basename(argv0);
+    matches!(base, "footnote" | "fno" | "fno-agents") && argv0.starts_with("/tmp/")
+}
+
+/// The orphaned test-rig binaries of one snapshot, oldest first.
+pub(crate) fn orphan_rig_binaries(table: &[ProcRow]) -> Vec<OrphanRigBinary> {
+    let mut out: Vec<OrphanRigBinary> = table
+        .iter()
+        .filter(|row| is_orphan_rig_binary(row))
+        .map(|row| OrphanRigBinary {
+            pid: row.pid,
+            elapsed_seconds: row.elapsed_s,
+            command: row.command.clone(),
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.elapsed_seconds
+            .cmp(&a.elapsed_seconds)
+            .then(a.pid.cmp(&b.pid))
+    });
+    out
+}
+
 fn attributed_command(command: &str) -> bool {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     let Some(first) = tokens.first() else {
@@ -273,6 +374,10 @@ pub(crate) struct Footprint {
     pub spare_pool_cpu_cores: f64,
     pub machine_process_count: u64,
     pub runnable_count: u64,
+    /// MCP-server children grouped by parent (a naming row, never a gate).
+    pub mcp_servers: Vec<McpServerGroup>,
+    /// Parentless test-rig binaries under /tmp (a naming row, never a gate).
+    pub orphan_rig_binaries: Vec<OrphanRigBinary>,
     pub memory: Option<Value>,
 }
 
@@ -425,6 +530,8 @@ pub(crate) fn parse_footprint(
     });
     out.top = sustained;
     out.fleet_cpu_cores = out.sustained_cpu_cores + out.descendant_cpu_cores;
+    out.mcp_servers = mcp_server_groups(table);
+    out.orphan_rig_binaries = orphan_rig_binaries(table);
     out
 }
 
@@ -1641,6 +1748,11 @@ pub(crate) fn cause_payload(
         "spare_pool_cpu_cores".into(),
         json!(footprint.spare_pool_cpu_cores),
     );
+    p.insert("mcp_servers".into(), json!(footprint.mcp_servers));
+    p.insert(
+        "orphan_rig_binaries".into(),
+        json!(footprint.orphan_rig_binaries),
+    );
     let top: Vec<Value> = footprint
         .top
         .iter()
@@ -1944,6 +2056,22 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
             fp.spare_pool_cpu_cores
         );
     }
+    if !fp.mcp_servers.is_empty() {
+        let total: u64 = fp.mcp_servers.iter().map(|g| g.servers).sum();
+        println!(
+            "mcp servers: {total} across {} parent(s), largest: {} (pid {}) holds {}",
+            fp.mcp_servers.len(),
+            fp.mcp_servers[0].parent,
+            fp.mcp_servers[0].parent_pid,
+            fp.mcp_servers[0].servers,
+        );
+    }
+    for rig in fp.orphan_rig_binaries.iter().take(3) {
+        println!(
+            "orphan rig binary: pid {}, up {}s: {}",
+            rig.pid, rig.elapsed_seconds, rig.command
+        );
+    }
     if let Some(mem) = &fp.memory {
         if let Some(line) = mem.get("line").and_then(Value::as_str) {
             println!("{line}");
@@ -2050,7 +2178,74 @@ mod tests {
         );
     }
 
+    /// The naming rows the leak investigation asked for: MCP-server children
+    /// group by parent, and a parentless fno binary under /tmp names as an
+    /// orphan rig binary. Neither row ever gates; both ride the payload.
     #[test]
+    fn mcp_servers_group_by_parent_and_rig_binaries_name() {
+        let rows = vec![
+            row(
+                300,
+                1,
+                10800,
+                78.0,
+                "/codex/packages/app-server-daemon/bin/codex app-server --remote",
+            ),
+            row(400, 300, 7200, 0.0, "npm exec rea-agents@6.4.0 mcp"),
+            row(401, 300, 7200, 0.0, "npm exec rea-agents@6.4.0 mcp"),
+            row(402, 300, 3600, 0.0, "npx -y rea-agents@6.4.0 mcp"),
+            row(500, 299, 7200, 0.0, "npm exec rea-agents@6.4.0 mcp"),
+            row(
+                600,
+                1,
+                43600,
+                91.0,
+                "/tmp/fn-47ea-rig/b2/footnote doctor test",
+            ),
+            row(
+                601,
+                1,
+                43600,
+                0.0,
+                "/Applications/Claude.app/Contents/MacOS/Claude",
+            ),
+            row(602, 1, 60, 0.0, "cargo build"),
+        ];
+        let fp = parse_footprint(
+            &rows,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            30,
+        );
+        let groups = &fp.mcp_servers;
+        assert_eq!(groups.len(), 2, "two parents hold mcp children: {groups:?}");
+        assert_eq!(groups[0].parent_pid, 300);
+        assert_eq!(groups[0].servers, 3);
+        assert_eq!(groups[0].parent, "codex");
+        assert_eq!(groups[1].parent_pid, 299);
+        assert_eq!(groups[1].servers, 1);
+        assert_eq!(groups[1].parent, "gone");
+        let rigs = &fp.orphan_rig_binaries;
+        assert_eq!(rigs.len(), 1, "one parentless /tmp fno binary: {rigs:?}");
+        assert_eq!(rigs[0].pid, 600);
+        assert_eq!(rigs[0].elapsed_seconds, 43600);
+        // A hyphenated argv0 or a flag never reads as an mcp server.
+        assert!(!is_mcp_server("node mcp-server-rea.js --port 9"));
+        assert!(!is_mcp_server("fno doctor --mcp list"));
+        assert!(is_mcp_server("npx -y rea-agents@6.4.0 mcp"));
+        // A path-shape name match outside /tmp is not a rig binary.
+        assert!(!is_orphan_rig_binary(&row(
+            700,
+            1,
+            10,
+            0.0,
+            "/Users/bb16/code/footnote/footnote/target/debug/footnote serve"
+        )));
+    }
+
+    #[test]
+
     fn ac1_attributes_transitive_build_descendants() {
         let rows = vec![
             row(100, 1, 3600, 20.0, "fno-agents-worker --run"),

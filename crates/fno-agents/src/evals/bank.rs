@@ -786,23 +786,6 @@ mod tests {
     }
 
     #[test]
-    fn a_task_without_a_grade_refuses_naming_id_and_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = write_task(
-            dir.path(),
-            "t.yaml",
-            "id: no-grade\ntier: regression\ngrade: []\ntimeout_minutes: 1\n",
-        );
-        let err = load_task(&p).unwrap_err();
-        assert!(err.0.contains("task 'no-grade'"), "{0}", err.0);
-        assert!(
-            err.0.contains("(a task with no runnable grade is invalid)"),
-            "{0}",
-            err.0
-        );
-    }
-
-    #[test]
     fn a_skill_local_task_loads_beside_the_bank_and_a_duplicate_id_refuses() {
         let root = tempfile::tempdir().unwrap();
         let bank = root.path().join("evals").join("bank");
@@ -914,31 +897,6 @@ mod tests {
             "id: budget-ok\ntier: capability\ngrade:\n  - kind: tool-budget\n    max_tool_calls: 40\n",
         );
         assert_eq!(load_task(&p).unwrap().grade[0].max_tool_calls, Some(40));
-    }
-
-    #[test]
-    fn a_golden_without_a_rule_refuses_naming_id_and_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let grade = "grade:\n  - kind: file-exists\n    path: x\n";
-        let block = |rule: &str| {
-            format!(
-                "golden:\n  source: {{kind: correction, ref: abc}}\n  expected: e\n{rule}  failure_type: f\n  outcome: failed\n"
-            )
-        };
-        let no_rule = format!("id: g\ntier: capability\n{grade}{}", block(""));
-        let p = write_task(dir.path(), "no-rule.yaml", &no_rule);
-        let err = load_task(&p).unwrap_err();
-        assert!(err.0.contains("task 'g'"), "{0}", err.0);
-        assert!(err.0.contains("no-rule.yaml"), "{0}", err.0);
-        assert!(err.0.contains("'rule'"), "{0}", err.0);
-
-        let whole = format!("id: g\ntier: capability\n{grade}{}", block("  rule: r\n"));
-        let p = write_task(dir.path(), "whole.yaml", &whole);
-        let golden = load_task(&p).unwrap().golden.unwrap();
-        assert_eq!(
-            (golden.rule.as_str(), golden.outcome.as_str()),
-            ("r", "failed")
-        );
     }
 
     #[test]

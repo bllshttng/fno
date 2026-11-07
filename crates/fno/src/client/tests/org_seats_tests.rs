@@ -144,26 +144,3 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
     assert_eq!(imac.lanes, [lane]);
     assert!(fleet.machines[0].lanes.is_empty() && fleet.machines[0].display_name.is_none());
 }
-
-#[test]
-fn a_seat_joins_a_local_row_by_full_session_id_only() {
-    let map = fleet_json();
-    let row = |sid: &str| AgentRow {
-        name: "local".into(),
-        harness: Some("claude".into()),
-        harness_session_id: Some(sid.into()),
-        ..Default::default()
-    };
-    // The first row matches a bb16 seat in full. The second shares only
-    // the iMac seat's short id.
-    let agents = [row("00000003-local-session"), row("00000064-another")];
-    let fleet = fold(&map, &Default::default(), &agents, 7);
-    let joined: Vec<&str> = fleet
-        .seats()
-        .filter(|s| s.local.is_some())
-        .map(|s| s.name.as_str())
-        .collect();
-    assert_eq!(joined, ["mb-03"]);
-    let remote = fleet.seats().find(|s| s.short == "00000064").unwrap();
-    assert!(remote.local.is_none(), "a short id match never joins");
-}

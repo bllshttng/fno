@@ -787,7 +787,23 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                 "run `fno-agents visual critique-prep {node}`, then the `design-critic` skill on \
                  {node}-critique.json, fix every high finding, and re-read status at the new head"
             );
-            match visual_screen::read_critique(&mux, node, head, &headings) {
+            match {
+                // The critique may live in the asking session's vault
+                // project: a Ready one wins, else the own dir's verdict
+                // names the remedy.
+                let mut verdict = visual_screen::CritiqueRead::Missing;
+                for d in shot_candidates(&mux) {
+                    match visual_screen::read_critique(&d, node, head, &headings) {
+                        r @ visual_screen::CritiqueRead::Ready(_) => {
+                            verdict = r;
+                            break;
+                        }
+                        visual_screen::CritiqueRead::Missing => {}
+                        r => verdict = r,
+                    }
+                }
+                verdict
+            } {
                 visual_screen::CritiqueRead::Missing => detail.push_str(&format!(
                     "; no design critique at this head, so the gate files no page: {remedy}"
                 )),
@@ -801,8 +817,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                     high.join("; ")
                 )),
                 visual_screen::CritiqueRead::Ready(c) => {
-                    let mut images: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
-                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| mux.join(b)));
+                    let mut images: Vec<PathBuf> = shots.iter().map(|s| resolve_shot(&mux, s)).collect();
+                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| resolve_shot(&mux, b)));
                     detail.push_str(&file_visual_question(
                         &root,
                         pr,
@@ -995,6 +1011,68 @@ fn vault_root(cwd: &Path) -> PathBuf {
 /// embed names. Sorted, so the embedded list is stable.
 pub(crate) fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
     let dir = crate::escalation::vault_dir_with_home(root, home, "mux");
+    let mut out = shots_in_dir(&dir, node);
+    for s in sibling_mux_dirs(&dir) {
+        out.extend(shots_in_dir(&s.join("mux"), node));
+    }
+    out.sort();
+    out
+}
+
+/// The sibling vault projects' mux dirs for a mux dir whose project folder
+/// sits under a vault `internal/` root: shots filed where the asking session
+/// lived, found by node id, which is unique across the vault. Empty for a
+/// mux dir outside that layout (the space fallback).
+pub(crate) fn sibling_mux_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
+    let internal = dir.parent().and_then(|p| p.parent());
+    let Some(internal) = internal else {
+        return Vec::new();
+    };
+    if internal.file_name().and_then(|n| n.to_str()) != Some("internal") {
+        return Vec::new();
+    }
+    let own = dir.parent().unwrap_or(internal);
+    let mut siblings: Vec<std::path::PathBuf> = std::fs::read_dir(internal)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && p != own)
+                .collect()
+        })
+        .unwrap_or_default();
+    siblings.sort();
+    siblings
+}
+
+/// The mux dirs a critique or shot may live in: the own project's mux dir
+/// first, then any sibling vault project's.
+pub(crate) fn shot_candidates(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut v = vec![dir.to_path_buf()];
+    v.extend(sibling_mux_dirs(dir));
+    v
+}
+
+/// Resolve a mux-relative shot or boxed-critique name to its file: the own
+/// project's mux dir first, then any sibling vault project's. Falls back to
+/// the own-dir join so a missing shot keeps its own path in error text.
+pub(crate) fn resolve_shot(dir: &Path, name: &str) -> std::path::PathBuf {
+    let direct = dir.join(name);
+    if direct.exists() {
+        return direct;
+    }
+    for s in sibling_mux_dirs(dir) {
+        let p = s.join("mux").join(name);
+        if p.exists() {
+            return p;
+        }
+    }
+    direct
+}
+
+/// The node-prefixed captures in one mux folder: top-level `<node>*.png`
+/// plus files inside a `<node>-shots/` folder, as mux-relative embed
+/// names, sorted.
+fn shots_in_dir(dir: &Path, node: &str) -> Vec<String> {
     let Ok(read) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -1027,14 +1105,19 @@ pub(crate) fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<Str
 /// head: the once-per-head dedup. An open page keeps the hold; it only stops
 /// a second identical page.
 fn visual_page_filed(root: &Path, pr: u64, head: &str) -> bool {
-    let dir = crate::escalation::questions_dir(root);
-    let dirs = [dir.clone(), dir.join("done")];
-    dirs.iter().any(|d| {
-        crate::lead_answers::read_question_pages(d).is_ok_and(|pages| {
-            pages
-                .iter()
-                .any(|(_stem, text)| page_names_pr(text, pr) && text.contains(head))
-        })
+    question_read_dirs(root, true).iter().any(|(dir, stamp)| {
+        crate::lead_answers::read_question_pages(dir)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_stem, text)| text)
+            .filter(|text| {
+                crate::attention_file::parse_page(text)
+                    .is_some_and(|(front, _)| stamp_allows(&front.project, stamp))
+                    && page_names_pr(text, pr)
+                    && text.contains(head)
+            })
+            .next()
+            .is_some()
     })
 }
 
@@ -1193,21 +1276,65 @@ fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
             .any(|(_, text)| text_names_head(text, head))
 }
 
+/// The question dirs this repo's gate reads: the PR repo's own project
+/// folder plus the attention arm's published one, each with its done/
+/// archive when `with_done`. The daemon files every ask into ONE published
+/// folder regardless of which repo's PR the question concerns, so an
+/// approval can land outside the PR repo's own folder. A page from the own
+/// folder is trusted as filed; a page from the published folder counts only
+/// when its stamped `project` names this repo's project: PR numbers collide
+/// across repos, so an unstamped or foreign-stamped page never clears this
+/// gate. Each entry is `(dir, Option<required stamp>)`.
+fn question_read_dirs(root: &Path, with_done: bool) -> Vec<(PathBuf, Option<String>)> {
+    let own = crate::escalation::questions_dir(root);
+    let project = own
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+    let mut out = vec![(own.clone(), None)];
+    if with_done {
+        out.push((own.join("done"), None));
+    }
+    if let Some(published) = crate::attention_arm::published_questions_dir() {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if canon(&published) != canon(&own) {
+            out.push((published.clone(), project.clone()));
+            if with_done {
+                out.push((published.join("done"), project));
+            }
+        }
+    }
+    out
+}
+
+/// The page's stamped project clears the folder's stamp rule: `None` (the
+/// own folder) accepts anything, `Some(project)` only a matching stamp.
+fn stamp_allows(front_project: &str, stamp: &Option<String>) -> bool {
+    stamp
+        .as_ref()
+        .map_or(true, |want| front_project.trim() == want)
+}
+
 /// Every ANSWERED question page that picks the approve option and names the
 /// PR, as `(question id, page text)`, at any head.
 fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
-    let dir = crate::escalation::questions_dir(root);
     // Answered pages are archived into done/ after the fact; an approval
     // must not lapse because its page moved there.
-    [dir.clone(), dir.join("done")]
+    question_read_dirs(root, true)
         .iter()
-        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
-        .filter_map(|(_stem, text)| {
-            let (front, _) = crate::attention_file::parse_page(&text)?;
-            (front.status == "answered"
-                && front.answer.as_deref().is_some_and(answer_approves)
-                && page_names_pr(&text, pr))
-            .then_some((front.question_id, text))
+        .flat_map(|(dir, stamp)| {
+            crate::lead_answers::read_question_pages(dir)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(_stem, text)| {
+                    let (front, _) = crate::attention_file::parse_page(&text)?;
+                    let stamped_ok = stamp_allows(&front.project, stamp);
+                    (front.status == "answered"
+                        && stamped_ok
+                        && front.answer.as_deref().is_some_and(answer_approves)
+                        && page_names_pr(&text, pr))
+                    .then_some((front.question_id, text))
+                })
         })
         .collect()
 }
@@ -1216,9 +1343,18 @@ fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
 /// has been asked to look at this commit and has not answered. A carried
 /// approval of an earlier commit must not clear it.
 fn open_look_names_head(root: &Path, pr: u64, head: &str) -> bool {
-    let pages = crate::lead_answers::read_question_pages(&crate::escalation::questions_dir(root))
-        .unwrap_or_default();
-    open_page_names_head(pages.iter().map(|(_stem, text)| text.as_str()), pr, head)
+    question_read_dirs(root, false).iter().any(|(dir, stamp)| {
+        let pages: Vec<String> = crate::lead_answers::read_question_pages(dir)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_stem, text)| {
+                crate::attention_file::parse_page(text)
+                    .is_some_and(|(front, _)| stamp_allows(&front.project, stamp))
+            })
+            .map(|(_stem, text)| text)
+            .collect();
+        open_page_names_head(pages.iter().map(String::as_str), pr, head)
+    })
 }
 
 fn open_page_names_head<'a>(pages: impl Iterator<Item = &'a str>, pr: u64, head: &str) -> bool {
@@ -1234,16 +1370,22 @@ fn open_page_names_head<'a>(pages: impl Iterator<Item = &'a str>, pr: u64, head:
 /// Every ANSWERED question page that names the PR and does not pick the
 /// approve option (hold for changes): the page text.
 fn declining_pages(root: &Path, pr: u64) -> Vec<String> {
-    let dir = crate::escalation::questions_dir(root);
-    [dir.clone(), dir.join("done")]
+    question_read_dirs(root, true)
         .iter()
-        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
-        .filter_map(|(_stem, text)| {
-            let (front, _) = crate::attention_file::parse_page(&text)?;
-            (front.status == "answered"
-                && front.answer.as_deref().is_some_and(|a| !answer_approves(a))
-                && page_names_pr(&text, pr))
-            .then_some(text)
+        .flat_map(|(dir, stamp)| {
+            crate::lead_answers::read_question_pages(dir)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(_stem, text)| text)
+                .filter_map(|text| {
+                    let (front, _) = crate::attention_file::parse_page(&text)?;
+                    let stamped_ok = stamp_allows(&front.project, stamp);
+                    (front.status == "answered"
+                        && stamped_ok
+                        && front.answer.as_deref().is_some_and(|a| !answer_approves(a))
+                        && page_names_pr(&text, pr))
+                    .then_some(text)
+                })
         })
         .collect()
 }
@@ -1627,6 +1769,53 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A vault with two project folders and a repo in one of them, plus the
+    /// arm home whose items.json publishes the OTHER project's questions
+    /// folder: the fixture for approvals filed where the daemon wrote them.
+    fn cross_vault_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let tmp = std::env::temp_dir().join(format!(
+            "mg-pub-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let vault = tmp.join("vault");
+        let repo = vault.join("internal").join("fno-web").join("repo");
+        std::fs::create_dir_all(repo.join(".fno")).unwrap();
+        std::fs::create_dir_all(tmp.join("fno")).unwrap();
+        std::fs::create_dir_all(tmp.join("empty-home")).unwrap();
+        std::fs::write(
+            repo.join(".fno").join("config.toml"),
+            format!(
+                "[project]\nid = \"fno-web\"\n\n[obsidian]\nenabled = true\nvault = \"{}\"\n",
+                vault.display()
+            ),
+        )
+        .unwrap();
+        (tmp, repo)
+    }
+
+    /// Publish `dir` as the arm's questions folder via items.json in the
+    /// attention dir the arm home resolves.
+    fn write_published_items_json(dir: &std::path::Path) {
+        let attention = crate::attention_arm::attention_dir().unwrap();
+        std::fs::create_dir_all(&attention).unwrap();
+        std::fs::write(
+            attention.join("items.json"),
+            json!({
+                "as_of": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                "questions_dir": dir.display().to_string(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn readme_and_doc_images_are_public_copy_and_other_docs_are_not() {
         assert!(is_public_copy("README.md"));
@@ -1661,41 +1850,107 @@ mod tests {
 
     #[test]
     fn mux_shots_scans_node_prefix_and_shots_folder() {
-        let tmp = std::env::temp_dir().join(format!("mg-shots-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        // The space fallback resolves from the state root; under test that
-        // must be declared, or the hermetic guard refuses.
         let lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let spaces = tmp.join("spaces");
-        std::fs::create_dir_all(&spaces).unwrap();
-        let saved = std::env::var("FNO_SPACES_DIR").ok();
-        std::env::set_var("FNO_SPACES_DIR", &spaces);
-        let mux = crate::escalation::vault_dir_with_home(&tmp, None, "mux");
+        let (tmp, repo) = cross_vault_fixture("shots");
+        // The shots land in THIS project's mux folder...
+        let mux = crate::escalation::vault_dir_with_home(&repo, None, "mux");
         std::fs::create_dir_all(mux.join("x-aaaa-shots")).unwrap();
         std::fs::write(mux.join("x-aaaa-bell-dark.png"), "x").unwrap();
-        std::fs::write(mux.join("x-aaaa-bell-light.png"), "x").unwrap();
-        std::fs::write(mux.join("x-other-dark.png"), "x").unwrap();
+        std::fs::write(mux.join("fno-webmux-not-x.png"), "x").unwrap();
         std::fs::write(mux.join("x-aaaa-shots/one-after.png"), "x").unwrap();
         std::fs::write(mux.join("x-aaaa-shots/notes.txt"), "png-noted.txt").unwrap();
-        let shots = mux_shots(&tmp, None, "x-aaaa");
+        // ...and one shot filed where the asking session lived: a sibling
+        // vault project's mux folder. The node id is unique across the vault.
+        let sibling = tmp.join("vault").join("internal").join("fno").join("mux");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("x-aaaa-remote-shot.png"), "x").unwrap();
+        let shots = mux_shots(&repo, None, "x-aaaa");
         assert_eq!(
             shots,
             vec![
                 "x-aaaa-bell-dark.png".to_string(),
-                "x-aaaa-bell-light.png".to_string(),
+                "x-aaaa-remote-shot.png".to_string(),
                 "x-aaaa-shots/one-after.png".to_string(),
             ]
         );
-        match saved {
-            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
-            None => std::env::remove_var("FNO_SPACES_DIR"),
+        drop(lock);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_approval_filed_in_the_published_folder_clears_when_the_stamp_matches() {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tmp, repo) = cross_vault_fixture("stamp");
+        let saved_home = std::env::var("HOME").ok();
+        let saved_arm = std::env::var("FNO_AGENTS_HOME").ok();
+        std::env::set_var("HOME", tmp.join("empty-home"));
+        std::env::set_var("FNO_AGENTS_HOME", tmp.join("fno"));
+        let published = tmp
+            .join("vault")
+            .join("internal")
+            .join("fno")
+            .join("questions");
+        std::fs::create_dir_all(published.join("done")).unwrap();
+        let page = |project: &str| {
+            format!(
+                "---\nquestion_id: q-c0bdce8f\nstatus: answered\nanswer: \"1\"\nproject: {project}\nasked_at: 2026-11-06T10:00:00Z\n---\n# PR 81 paint approval\n\nhead a5daa9c4f00dcafe\n\nMerge as painted.\n"
+            )
+        };
+        std::fs::write(published.join("q-c0bdce8f.md"), page("fno-web")).unwrap();
+        write_published_items_json(&published);
+        let head = "a5daa9c4f00dcafe";
+        assert!(
+            answered_question_names_pr(&repo, 81, head),
+            "matching stamp approves across projects"
+        );
+        // A page stamped with the asker's own repo names THAT repo's PR 81;
+        // the numbers collide across repos, so it must not clear this gate.
+        std::fs::write(published.join("q-c0bdce8f.md"), page("fno")).unwrap();
+        assert!(
+            !answered_question_names_pr(&repo, 81, head),
+            "a foreign-stamp page must not approve"
+        );
+        match saved_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match saved_arm {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
         drop(lock);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    #[test]
+    fn a_shot_filed_in_a_sibling_project_resolves_to_its_file() {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tmp, repo) = cross_vault_fixture("resolve");
+        let mux = crate::escalation::vault_dir_with_home(&repo, None, "mux");
+        std::fs::create_dir_all(&mux).unwrap();
+        let sibling = tmp.join("vault").join("internal").join("fno").join("mux");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("x-aaaa-dark.png"), "x").unwrap();
+        let got = resolve_shot(&mux, "x-aaaa-dark.png");
+        assert_eq!(got, sibling.join("x-aaaa-dark.png"));
+        std::fs::write(mux.join("x-aaaa-dark.png"), "own").unwrap();
+        assert_eq!(
+            resolve_shot(&mux, "x-aaaa-dark.png"),
+            mux.join("x-aaaa-dark.png")
+        );
+        assert_eq!(
+            resolve_shot(&mux, "x-never-shot.png"),
+            mux.join("x-never-shot.png")
+        );
+        drop(lock);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
     #[test]
     fn an_unreconciled_manifest_of_a_contract_node_holds() {
         // AC6's gate half: mocks would ship; the merge holds by code.
@@ -2049,53 +2304,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ledger_plan_path(sibling.path(), 70), None);
-    }
-
-    /// The graph twin of the ledger scoping rule: the store is global, so a
-    /// contract node whose pr_url names another repo never answers a shared
-    /// number. A url-less node keeps the fail-open answer.
-    #[test]
-    fn a_contract_node_of_another_repo_never_answers_a_shared_pr_number() {
-        let ours = json!({
-            "id": "x-bbbb",
-            "dep": "contract",
-            "pr_number": 70,
-            "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
-        });
-        let foreign = json!({
-            "id": "x-aaaa",
-            "dep": "contract",
-            "pr_number": 70,
-            "pr_url": "https://github.com/fnodotdev/fnh/pull/70",
-        });
-        let slug = "fnodotdev/fno-web";
-
-        // Only the foreign node: silent.
-        assert_eq!(
-            contract_node_for_pr(&[foreign.clone()], 70, slug),
-            None,
-            "a foreign repo's contract node never answers"
-        );
-
-        // Ours answers, whatever order the rows hold.
-        assert_eq!(
-            contract_node_for_pr(&[foreign.clone(), ours.clone()], 70, slug).as_deref(),
-            Some("x-bbbb")
-        );
-        assert_eq!(
-            contract_node_for_pr(&[ours, foreign], 70, slug).as_deref(),
-            Some("x-bbbb")
-        );
-
-        // A url-less node keeps the fail-open answer.
-        let bare = json!({
-            "id": "x-cccc",
-            "dep": "contract",
-            "pr_number": 70,
-        });
-        assert_eq!(
-            contract_node_for_pr(&[bare], 70, slug).as_deref(),
-            Some("x-cccc")
-        );
     }
 }

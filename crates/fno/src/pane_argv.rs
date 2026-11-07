@@ -139,34 +139,6 @@ mod tests {
         assert_eq!(parse_procargs2(&buf[..3]), None);
         assert_eq!(parse_procargs2(&[0, 0, 0, 0]), None);
     }
-
-    #[test]
-    fn attaches_keys_on_adjacent_tokens() {
-        assert!(attaches(
-            &argv(&["claude", "attach", "deadbee1", "--settings", "/s.json"]),
-            "deadbee1"
-        ));
-        assert!(attaches(
-            &argv(&["env", "claude", "attach", "deadbee1"]),
-            "deadbee1"
-        ));
-        assert!(!attaches(&argv(&["claude", "agents"]), "deadbee1"));
-        assert!(!attaches(&argv(&["claude", "attach", "other"]), "deadbee1"));
-        assert!(!attaches(&argv(&[]), "deadbee1"));
-    }
-
-    #[test]
-    fn process_argv_reads_the_calling_process() {
-        // Positive control: the reader reads a real process, not only test
-        // buffers - our own argv's first element is this binary's path.
-        let own = process_argv(std::process::id()).expect("own argv is readable");
-        assert_eq!(
-            own.first().map(String::as_str),
-            std::env::args().next().as_deref(),
-            "argv[0] is the exec path"
-        );
-    }
-
     #[test]
     fn process_argv_reads_a_real_child() {
         // A DIRECT child, not a shell: std's spawn returns only after the

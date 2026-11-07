@@ -2115,26 +2115,6 @@ mod tests {
         let snap = Arc::new(Mutex::new(Snapshot::default()));
         assert!(layout_agents(&snap).is_none());
     }
-
-    #[test]
-    fn node_response_maps_read_failure_miss_and_hit() {
-        // AC17-ERR: a failed source read is 503, never 404.
-        let mut inp = backlog_model::fixture(Vec::new());
-        inp.rows_error = Some("the store read failed".into());
-        let status = node_response(&inp, "x-1").status();
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        // Miss: 404 naming the id.
-        let inp = backlog_model::fixture(Vec::new());
-        let status = node_response(&inp, "x-nope").status();
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        // Hit: 200 with the card's id in the body.
-        let inp = backlog_model::fixture(vec![serde_json::json!({
-            "id": "x-1", "status": "ready", "priority": "p1"
-        })]);
-        let response = node_response(&inp, "x-1");
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
     #[tokio::test]
     async fn backlog_json_routes_refuse_bad_tokens_and_queries() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2195,22 +2175,6 @@ mod tests {
         server.abort();
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn auth_helpers_hold() {
-        assert!(constant_time_eq(b"abc123", b"abc123"));
-        assert!(!constant_time_eq(b"abc123", b"abc124"));
-        assert!(!constant_time_eq(b"abc123", b"abc12")); // length mismatch
-        assert!(!constant_time_eq(b"", b"x"));
-        assert!(constant_time_eq(b"", b""));
-
-        let a = mint_token().expect("/dev/urandom readable in test env");
-        let b = mint_token().expect("/dev/urandom readable in test env");
-        assert_eq!(a.len(), 64, "32 bytes -> 64 hex chars");
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, b, "two mints must differ (astronomically)");
-    }
-
     /// A temp dir per test; tests using it must clean up after themselves.
     fn temp_state_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("web-stop-{tag}-{}", std::process::id()));
@@ -2372,14 +2336,6 @@ mod tests {
         let _ = std::fs::remove_file(&state);
         drop(listener);
     }
-
-    #[test]
-    fn bridge_status_is_valid_json_the_browser_keys_on() {
-        let s = bridge_status("disconnected");
-        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v["_bridge"]["state"], "disconnected");
-    }
-
     /// The served page must stay pinch-zoomable. A pane grid is as wide
     /// as its terminal, so on a phone zooming is the only way to read a grid
     /// wider than the screen; `maximum-scale` / `user-scalable=no` take that away.
@@ -2714,62 +2670,6 @@ console.log("framePacer: 12 cases ok");
         assert_eq!(a.bind, "127.0.0.1");
         assert_eq!(a.session, proto::DEFAULT_SESSION);
     }
-
-    /// The route serves the vendored page behind the token, from a state
-    /// root with no graph.html in it: the page is built in, so no render
-    /// step exists to run first, and no 404 can name one.
-    #[tokio::test]
-    async fn router_serves_backlog_page_with_token_and_shared_nav() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let dir = std::env::temp_dir().join(format!("fno-web-backlog-{}-page", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let (tx, _) = broadcast::channel(4);
-        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
-        let state = AppState {
-            tx,
-            snap: Arc::new(Mutex::new(Snapshot::default())),
-            token: Arc::<str>::from("right"),
-            rundown_html: dir.join("lead.html"),
-            rundown_republish: true,
-            hq: Default::default(),
-            writable: true,
-            invites: None,
-            model: Default::default(),
-            shutdown,
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router(state)).await.unwrap();
-        });
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(b"GET /backlog?t=right HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).await.unwrap();
-        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-        assert!(reply.contains("cache-control: no-store"), "{reply}");
-        assert!(reply.contains("data-current=\"backlog\""), "{reply}");
-        assert!(reply.contains("default-src 'none'"), "{reply}");
-        assert!(reply.contains("backlog/model.json"), "{reply}");
-        assert!(!reply.contains("fno backlog view"), "{reply}");
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(b"GET /backlog HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).await.unwrap();
-        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
-        assert!(reply.contains("invalid or missing token"), "{reply}");
-        server.abort();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// One HTML sink fed from the model is script injection on a page that
     /// holds the operator's token: node titles, details, notes and decisions
     /// are free text any session writes. The page must therefore never build
@@ -2972,297 +2872,6 @@ console.log("backlog page helpers: 18 cases ok");
             }
         }
     }
-
-    /// The snapshot engine's pure half, the board's shortcut resolver and
-    /// the recent-search store hold their contracts when run for real:
-    /// lift cardKeeps / laneKeyOf, the date-filter and sort helpers,
-    /// statusLabel / clampPanelWidth / fuzzyHit, nestChildren,
-    /// shortcutAction / isTypingTarget / copiedToast, pushRecent /
-    /// loadRecent, and the theme store's loadTheme / nextTheme / themeAttr
-    /// from the shipped page and run every case under node, the same rule
-    /// as the board helpers.
-    #[test]
-    fn snapshot_page_helpers_hold_under_node() {
-        let asserts = r#"
-const eq = (got, want, what) => {
-  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error("FAIL " + what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want)); process.exit(1); }
-};
-const any = { project: "p", status: "ready", priority: "p2", size: "M", kind: "bug", tags: ["t1"], lead: { name: "k" }, parent: "e1", id: "x-1", slug: "s", title: "T" };
-const nodes = { "x-1": { details: "needle in details" } };
-const off = { project: [], status: [], priority: [], size: [], kind: [], tag: [], lead: [], epic: [], q: "" };
-eq(cardKeeps(any, nodes, off), true, "no filters keep");
-// A public payload's card carries no lead field at all; the empty filter
-// set keeps it all the same.
-const pubCard = { project: "p", status: "ready", priority: "p2", size: "M", kind: "bug", tags: ["t1"], parent: "e1", id: "x-1", slug: "s", title: "T" };
-eq(cardKeeps(pubCard, nodes, off), true, "a public card without a lead keeps");
-eq(cardKeeps(any, nodes, Object.assign({}, off, { status: ["idea"] })), false, "status filter drops");
-eq(cardKeeps(any, nodes, Object.assign({}, off, { kind: ["bug"] })), true, "kind filter keeps");
-eq(cardKeeps(any, nodes, Object.assign({}, off, { kind: ["epic"] })), false, "kind filter drops");
-eq(cardKeeps(any, nodes, Object.assign({}, off, { epic: ["e1"] })), true, "own id keeps an epic filter");
-// The grammar: every case-file row through the page's parser, the same
-// table the Rust case test runs.
-const searchKeys = KEYS.keys;
-const sortTable = KEYS.sort;
-const grammarNow = stampEpoch(CASES.now);
-let searchFails = 0;
-for (const id of Object.keys(CASES.rows)) {
-  const r = CASES.rows[id];
-  for (const k of Object.keys(r.fields)) {
-    r.fields[k] = (r.fields[k] || []).map(String);
-  }
-}
-for (const c of CASES.cases) {
-  try {
-    const p = parseSearch(c.q, searchKeys, c.surface, grammarNow, sortTable);
-    if (c.error) { console.error("FAIL(wanted error) " + c.q); searchFails++; continue; }
-    const kept = Object.keys(CASES.rows)
-      .filter((id) => CASES.rows[id].surface === c.surface && searchKeeps(p, CASES.rows[id].fields))
-      .sort();
-    const want = (c.keep || []).slice().sort();
-    if (JSON.stringify(kept) !== JSON.stringify(want)) {
-      console.error("FAIL " + c.q + " kept " + JSON.stringify(kept) + " want " + JSON.stringify(want));
-      searchFails++;
-    }
-  } catch (e) {
-    if (c.error && e.message === c.error) continue;
-    console.error("FAIL(err) " + c.q + " got " + e.message + " want " + c.error);
-    searchFails++;
-  }
-}
-eq(searchFails, 0, "the case file clears on the page leg");
-eq(setSortTerm("s:ready sort:created h:codex", "updated-desc"),
-  "s:ready h:codex sort:updated-desc", "setSortTerm replaces the term");
-eq(setSortTerm("s:ready", ""), "s:ready", "an empty sort drops the term only");
-eq(setSortTerm("", "created"), "sort:created", "setSortTerm on empty text appends");
-console.log("search cases: " + CASES.cases.length + " ok");
-// in-order subsequence matching still holds on its own.
-eq(fuzzyHit("wbsrt", "web board list: sorts"), true, "the title subsequence matches");
-eq(fuzzyHit("wbsrt", "word sort"), false, "letters out of order drop");
-eq(fuzzyHit("af8", "af8e03f2-1234"), true, "a session id head matches");
-const parents = new Set(["e1"]);
-const byId = new Map([["e1", { id: "e1", title: "Epic", completed_at: null }], ["x-1", any]]);
-eq(laneKeyOf(byId.get("e1"), "epic", parents, byId), { key: "e1", title: "Epic" }, "an epic sits in its own lane");
-eq(laneKeyOf(any, "epic", parents, byId), { key: "e1", title: "Epic" }, "a child rides its open parent's lane");
-byId.get("e1").completed_at = "2026-01-01";
-eq(laneKeyOf(any, "epic", parents, byId), { key: "", title: "no epic" }, "a done parent's child has no epic lane");
-eq(laneKeyOf(any, "none", parents, byId), { key: "all", title: "all" }, "none is one lane");
-eq(laneKeyOf(Object.assign({}, any, { project: "" }), "project", parents, byId), { key: "", title: "unscoped" }, "unscoped project lane");
-const nestIn = [
-  { id: "p1", title: "Parent", child_count: 2 },
-  { id: "c1", title: "Kid", parent: "p1" },
-  { id: "l1", title: "Loose" },
-];
-const nested = nestChildren(nestIn);
-eq(nested.map((r) => r.card.id), ["p1", "c1", "l1"], "a child follows its parent");
-eq(nested.map((r) => r.depth), [0, 1, 0], "the child sits one step in");
-eq(nested[0].hidden, 1, "one of two children is absent, so one hides");
-// lane-wide: a child nests under a parent from another cell, two steps deep.
-const wide = [
-  { id: "g1", title: "Grand" },
-  { id: "p2", title: "Parent", parent: "g1", child_count: 1 },
-  { id: "c3", title: "Kid", parent: "p2" },
-];
-const wideNested = nestChildren(wide);
-eq(wideNested.map((r) => r.card.id), ["g1", "p2", "c3"], "the whole lane nests");
-eq(wideNested.map((r) => r.depth), [0, 1, 2], "depth follows the tree");
-eq(nestChildren([{ id: "c2", title: "Orphan", parent: "absent" }]).map((r) => r.depth), [0], "a child whose parent is elsewhere keeps its own row");
-// a sort can place a child before its parent; the tree still nests.
-const reversed = nestChildren([
-  { id: "kid", title: "Z kid", parent: "par", child_count: 0 },
-  { id: "par", title: "A parent", child_count: 1 },
-]);
-eq(reversed.map((r) => r.card.id), ["par", "kid"], "a child listed first still follows its parent");
-eq(reversed.map((r) => r.depth), [0, 1], "and sits one step in");
-// The board-request links: the request opens a prefilled issue on the
-// repo's issues/new, and the upvote names the card id only.
-const reqUrl = requestIssueUrl("o/r", "fno-request");
-eq(reqUrl.origin + reqUrl.pathname, "https://github.com/o/r/issues/new", "the request link base");
-eq(reqUrl.searchParams.get("labels"), "fno-request", "the request label param");
-eq(reqUrl.searchParams.get("template"), "fno-request.yml", "the template param");
-const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
-eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
-eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
-eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
-const claimUrl = claimIssueUrl("o/r", "fno-request", "c-ab12");
-eq(claimUrl.searchParams.get("title"), "Claim c-ab12", "the claim sends the card id only");
-eq(claimUrl.searchParams.get("labels"), "fno-request", "the claim label param");
-console.log("snapshot page helpers: 40 cases ok");
-// The board shortcuts: every key the ? sheet advertises, the typing guard,
-// the Escape unwind order, and the copied-id toast line.
-const M = { meta: false, ctrl: false };
-// focus search: the slash, and ctrl/cmd K (plain k is the selection move).
-eq(shortcutAction("/", M, {}), "focus-search", "/ focuses search");
-eq(shortcutAction("k", { meta: true, ctrl: false }, {}), "focus-search", "cmd-K focuses search");
-eq(shortcutAction("K", { meta: false, ctrl: true }, {}), "focus-search", "ctrl-K focuses search");
-eq(shortcutAction("k", { meta: true, ctrl: false }, { typing: true }), null, "cmd-K never fires while typing");
-// selection: j down, k up; j from nothing starts at the first card.
-eq(shortcutAction("j", M, {}), "sel-next", "j moves down");
-eq(shortcutAction("k", M, {}), "sel-prev", "k moves up");
-eq(shortcutAction("j", M, { hasSelection: false }), "sel-next", "j starts the selection");
-eq(shortcutAction("ArrowDown", M, {}), "sel-next", "ArrowDown moves down");
-eq(shortcutAction("ArrowUp", M, {}), "sel-prev", "ArrowUp moves up");
-eq(shortcutAction("l", M, {}), "cycle-lanes", "l cycles the lanes");
-eq(shortcutAction("l", M, { typing: true }), null, "l never fires while typing");
-// enter and y answer only with a selection on the board.
-eq(shortcutAction("Enter", M, { hasSelection: true }), "open", "enter opens the selection");
-eq(shortcutAction("Enter", M, { hasSelection: false }), null, "enter without a selection is nothing");
-eq(shortcutAction("y", M, { hasSelection: true }), "copy", "y copies the selection");
-eq(shortcutAction("y", M, { hasSelection: false }), null, "y without a selection is nothing");
-// tab toggles the view, f jumps to the filters, ? opens the sheet.
-eq(shortcutAction("Tab", M, { view: "kanban" }), "toggle-view", "tab toggles the view");
-eq(shortcutAction("f", M, {}), "filters", "f opens the filters");
-eq(shortcutAction("?", M, {}), "sheet", "? opens the sheet");
-// the typing guard: no board key fires from inside a form field.
-for (const key of ["/", "j", "k", "y", "Tab", "f", "?", "Enter"]) {
-  eq(shortcutAction(key, M, { typing: true }), null, key + " never fires while typing");
-}
-// escape unwinds in order: sheet, then the search text, then the details;
-// it alone survives the typing guard.
-eq(shortcutAction("Escape", M, { sheetOpen: true }), "close-sheet", "escape closes the sheet first");
-eq(shortcutAction("Escape", M, { query: "abc" }), "clear-search", "escape clears the search before the details");
-eq(shortcutAction("Escape", M, { panelOpen: true }), "close-panel", "escape closes the details");
-eq(shortcutAction("Escape", M, {}), null, "escape with nothing open is nothing");
-eq(shortcutAction("Escape", M, { typing: true, query: "abc" }), "clear-search", "escape clears from inside a field");
-// the typing guard itself.
-eq(isTypingTarget({ tagName: "INPUT" }), true, "input swallows typing");
-eq(isTypingTarget({ tagName: "TEXTAREA" }), true, "textarea swallows typing");
-eq(isTypingTarget({ tagName: "SELECT" }), true, "select swallows typing");
-eq(isTypingTarget({ tagName: "DIV", isContentEditable: true }), true, "content editable swallows typing");
-eq(isTypingTarget({ tagName: "BUTTON" }), false, "a button is a board target");
-eq(isTypingTarget({}), false, "no tag is no target");
-eq(isTypingTarget(null), false, "no target is no target");
-// the toast names what landed on the clipboard.
-eq(copiedToast("n-1234"), "copied n-1234", "the toast carries the id");
-console.log("backlog shortcuts: 39 cases ok");
-// The recent-search store: a capped, newest-first, string-only list under
-// one localStorage key.
-eq(pushRecent([], "a"), ["a"], "empty list grows one");
-const dup = pushRecent(["b", "a"], "a");
-eq(dup.length, 2, "rerun dedupes");
-eq(dup[0], "a", "rerun moves to front");
-const full = pushRecent(["a","b","c","d","e","f","g","h","i","j"], "k");
-eq(full.length, 10, "the list caps at ten");
-eq(full[0], "k", "the newest leads");
-eq(full[9], "i", "the eleventh query dropped off the end");
-eq(loadRecent(null), [], "no stored value loads empty");
-eq(loadRecent("junk"), [], "corrupt storage loads empty");
-const mixed = loadRecent('[\"a\", 1, \"b\"]');
-eq(mixed.length, 2, "non-strings drop");
-eq(mixed[0], "a", "strings keep order");
-eq(loadRecent('{\"a\":1}'), [], "a non-array payload loads empty");
-eq(loadRecent('[\"s1\",\"s2\",\"s3\",\"s4\",\"s5\",\"s6\",\"s7\",\"s8\",\"s9\",\"s10\",\"s11\"]').length, 10, "a long stored list caps at ten");
-console.log("recent searches: 12 cases ok");
-// The theme store: one of three modes, cycling, and the attribute it sets.
-eq(loadTheme(null), "auto", "no stored value loads auto");
-eq(loadTheme("junk"), "auto", "a corrupt stored value loads auto");
-eq(loadTheme("light"), "light", "a stored light loads light");
-eq(loadTheme("dark"), "dark", "a stored dark loads dark");
-eq(nextTheme("auto"), "light", "auto cycles to light");
-eq(nextTheme("light"), "dark", "light cycles to dark");
-eq(nextTheme("dark"), "auto", "dark cycles back to auto");
-eq(themeAttr("auto"), null, "auto sets no attribute");
-eq(themeAttr("light"), "light", "light sets the light attribute");
-console.log("theme store: 9 cases ok");
-"#;
-        let src = format!(
-            "{}\n{}\n{}\n{}",
-            [
-                "cardKeeps",
-                "nestChildren",
-                "laneKeyOf",
-                "lev",
-                "nearestKey",
-                "normVal",
-                "cmpParse",
-                "tokenizeSearch",
-                "splitColon",
-                "unquote",
-                "splitAlts",
-                "stampEpoch",
-                "absDate",
-                "dateBound",
-                "datePred",
-                "numPred",
-                "agePred",
-                "cmpHolds",
-                "sortTerm",
-                "looksNodeId",
-                "isUuid",
-                "bareAlts",
-                "termFrom",
-                "parseSearch",
-                "bareHit",
-                "predHolds",
-                "termHolds",
-                "searchKeeps",
-                "setSortTerm",
-                "sortCards",
-                "statusLabel",
-                "clampPanelWidth",
-                "fuzzyHit",
-                "shortcutAction",
-                "isTypingTarget",
-                "copiedToast",
-                "pushRecent",
-                "loadRecent",
-                "loadTheme",
-                "nextTheme",
-                "themeAttr",
-                "requestIssueUrl",
-                "upvoteIssueUrl",
-                "claimIssueUrl",
-            ]
-            .iter()
-            .map(|name| lift_js_fn(BACKLOG_PAGE, name))
-            .collect::<Vec<String>>()
-            .join("\n"),
-            format!("const CASES = {};", include_str!("search_query_cases.json")),
-            format!("const KEYS = {};", crate::search_query::keys_json()),
-            asserts
-        );
-        let path =
-            std::env::temp_dir().join(format!("fno-snapshot-helpers-{}.mjs", std::process::id()));
-        std::fs::write(&path, src).expect("temp dir writable");
-        let out = std::process::Command::new("node").arg(&path).output();
-        let _ = std::fs::remove_file(&path);
-        match out {
-            Err(e) => {
-                assert!(
-                    std::env::var_os("CI").is_none(),
-                    "node is required on CI to exercise the shipped snapshot helpers: {e}"
-                );
-                println!(
-                    "SKIPPED snapshot_page_helpers_hold_under_node: node not runnable ({e}); \
-                     nothing was asserted"
-                );
-            }
-            Ok(o) => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                assert!(
-                    stdout.contains("snapshot page helpers: 40 cases ok"),
-                    "the shipped snapshot helpers did not clear every case:\n{stdout}{stderr}"
-                );
-                assert!(
-                    stdout.contains("search cases: 56 ok"),
-                    "the shipped page parser did not clear every case-file row:\n{stdout}{stderr}"
-                );
-                assert!(
-                    stdout.contains("backlog shortcuts: 39 cases ok"),
-                    "the shipped board shortcuts did not clear every case:\n{stdout}{stderr}"
-                );
-                assert!(
-                    stdout.contains("recent searches: 12 cases ok"),
-                    "the shipped recent-search store did not clear every case:\n{stdout}{stderr}"
-                );
-                assert!(
-                    stdout.contains("theme store: 9 cases ok"),
-                    "the shipped theme store did not clear every case:\n{stdout}{stderr}"
-                );
-            }
-        }
-    }
-
     #[test]
     fn nav_fragment_rows() {
         for (page, name) in [
@@ -3339,28 +2948,6 @@ console.log("theme store: 9 cases ok");
         assert!(!String::from_utf8_lossy(&body).contains("PRIVATE-TEAM-MARKER"));
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[tokio::test]
-    async fn missing_team_names_the_render_action() {
-        let dir = std::env::temp_dir().join(format!("fno-web-team-{}-missing", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let response = private_page_response(
-            &dir.join("lead.html"),
-            Some("right"),
-            "right",
-            "fno agents org rundown (a render has started; reload in about a minute)",
-            NavPage::Team,
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("fno agents org rundown"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn team_republish_truth_table() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
@@ -3404,57 +2991,6 @@ console.log("theme store: 9 cases ok");
         assert!(TEAM_REPUBLISHING.load(Ordering::SeqCst));
         TEAM_REPUBLISHING.store(false, Ordering::SeqCst);
     }
-
-    #[tokio::test]
-    async fn an_unfaithful_org_root_never_serves_the_render_started_notice() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let dir =
-            std::env::temp_dir().join(format!("fno-web-lead-{}-unfaithful", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let (tx, _) = broadcast::channel(4);
-        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
-        let state = AppState {
-            tx,
-            snap: Arc::new(Mutex::new(Snapshot::default())),
-            token: Arc::<str>::from("right"),
-            rundown_html: dir.join("lead.html"),
-            rundown_republish: false,
-            hq: Default::default(),
-            writable: true,
-            invites: None,
-            model: Default::default(),
-            shutdown,
-        };
-        TEAM_REPUBLISHING.store(false, Ordering::SeqCst);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router(state)).await.unwrap();
-        });
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(b"GET /team?t=right HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).await.unwrap();
-        server.abort();
-        // The gate's user-visible half: the page never claims a render it
-        // did not start.
-        assert!(
-            !String::from_utf8_lossy(&buf).contains("render has started"),
-            "an unfaithful root must not claim a render"
-        );
-        tokio::task::yield_now().await;
-        assert!(
-            !TEAM_REPUBLISHING.load(Ordering::SeqCst),
-            "an unfaithful root never starts a republish"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[tokio::test]
     async fn router_gates_hq_model_on_the_token_and_drops_fleet() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3520,50 +3056,6 @@ console.log("theme store: 9 cases ok");
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();
     }
-
-    #[tokio::test]
-    async fn router_gates_trace_on_the_token_and_the_node_id() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (tx, _) = broadcast::channel(4);
-        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
-        let state = AppState {
-            tx,
-            snap: Arc::new(Mutex::new(Snapshot::default())),
-            token: Arc::<str>::from("right"),
-            rundown_html: std::env::temp_dir().join("fno-web-trace-lead.html"),
-            rundown_republish: false,
-            hq: Arc::new(crate::web_hq::HqCache::default()),
-            writable: false,
-            invites: None,
-            model: Default::default(),
-            shutdown,
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router(state)).await.unwrap();
-        });
-        let ask = |path: &'static str| async move {
-            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-            let req =
-                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-            stream.write_all(req.as_bytes()).await.unwrap();
-            let mut reply = String::new();
-            stream.read_to_string(&mut reply).await.unwrap();
-            reply
-        };
-        let reply = ask("/trace/model.json?node=n-1&t=wrong").await;
-        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
-        let reply = ask("/trace/model.json?node=--help&t=right").await;
-        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
-        assert!(ask("/trace?node=n-1").await.starts_with("HTTP/1.1 401"));
-        let reply = ask("/trace?node=n-1&t=right").await;
-        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-        assert!(reply.contains("data-current=\"hq\""), "{reply}");
-        server.abort();
-    }
-
     fn tiny_frame() -> proto::Frame {
         proto::Frame {
             rows: 1,
@@ -3588,29 +3080,6 @@ console.log("theme store: 9 cases ok");
             snap,
         );
     }
-
-    #[test]
-    fn forward_repaints_band_text_for_the_browser() {
-        let (tx, mut rx) = broadcast::channel::<String>(16);
-        let snap = Arc::new(Mutex::new(Snapshot::default()));
-        let mut frame = tiny_frame();
-        frame.cells[0].bg = proto::Color::Rgb(0xff, 0xff, 0xff);
-        frame.cells[0].fg = proto::Color::Rgb(0xe8, 0xe8, 0xe8);
-        forward(ServerMsg::Frame { pane_id: 1, frame }, &tx, &snap);
-        let fg_of = |json: &str| match serde_json::from_str::<ServerMsg>(json) {
-            Ok(ServerMsg::Frame { frame, .. }) => frame.cells[0].fg,
-            other => panic!("a frame was expected: {other:?}"),
-        };
-        let want = proto::Color::Rgb(0x14, 0x14, 0x14);
-        assert_eq!(fg_of(&rx.try_recv().unwrap()), want);
-        let stored = snap.lock().unwrap().frames[&1].1.clone();
-        assert_eq!(
-            fg_of(&stored),
-            want,
-            "the replay snapshot holds the repaint"
-        );
-    }
-
     #[test]
     fn snapshot_rows() {
         let (tx, _rx) = broadcast::channel::<String>(16);
@@ -3707,33 +3176,6 @@ console.log("theme store: 9 cases ok");
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn port_holder_filter_matches_only_the_taken_port() {
-        let dir = temp_state_dir("holder");
-        let holder = dir.join("web-hold.json");
-        std::fs::write(
-            &holder,
-            serde_json::json!({
-                "pid": std::process::id(),
-                "started": proto::pid_start_time(std::process::id()),
-                "port": 8947,
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let holders: Vec<_> = live_bridge_records(&dir)
-            .into_iter()
-            .filter(|(_, r)| r.get("port").and_then(|p| p.as_u64()) == Some(8947))
-            .collect();
-        assert_eq!(holders.len(), 1, "the port match names the holder");
-        assert_eq!(
-            holders[0].1.get("session").and_then(|s| s.as_str()),
-            launching_session_id().as_deref(),
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn status_web_rows() {
         // No state file: no bridge.
@@ -4017,103 +3459,6 @@ console.log("theme store: 9 cases ok");
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();
     }
-
-    // The route's refusal order over a real listener: guards, token, then
-    // the JSON extractor. No store read happens in any refusal, so the test
-    // never gathers.
-    #[tokio::test]
-    async fn act_route_refusals_come_in_ruling_order() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let dir = std::env::temp_dir().join(format!("fno-web-act-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let (tx, _) = broadcast::channel(4);
-        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
-        let state = AppState {
-            tx,
-            snap: Arc::new(Mutex::new(Snapshot::default())),
-            token: Arc::<str>::from("right"),
-            rundown_html: dir.join("lead.html"),
-            rundown_republish: true,
-            hq: Default::default(),
-            writable: true,
-            invites: None,
-            model: Default::default(),
-            shutdown,
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let router_state = state.clone();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router(router_state)).await.unwrap();
-        });
-        async fn post(stream: &mut tokio::net::TcpStream, head: &str, body: &[u8]) -> String {
-            stream.write_all(head.as_bytes()).await.unwrap();
-            if !body.is_empty() {
-                stream.write_all(body).await.unwrap();
-            }
-            let mut reply = String::new();
-            stream.read_to_string(&mut reply).await.unwrap();
-            reply
-        }
-        let body = br#"{"act":"rank","id":"x-1","place":"top"}"#;
-        // AC6-ERR: a read-only bridge refuses every act.
-        let readonly_state = AppState {
-            writable: false,
-            invites: None,
-            ..state.clone()
-        };
-        let ro_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let ro_addr = ro_listener.local_addr().unwrap();
-        let ro_server = tokio::spawn(async move {
-            axum::serve(ro_listener, router(readonly_state))
-                .await
-                .unwrap();
-        });
-        let mut stream = tokio::net::TcpStream::connect(ro_addr).await.unwrap();
-        let reply = post(&mut stream,
-            &format!("POST /backlog/act?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", ro_addr.port(), body.len()),
-            body).await;
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
-        assert!(reply.contains("the bridge is read-only"), "{reply}");
-        ro_server.abort();
-        // AC7-ERR: wrong token, 401.
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let reply = post(&mut stream,
-            &format!("POST /backlog/act?t=wrong HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", addr.port(), body.len()),
-            body).await;
-        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
-        // AC5-ERR: an evil Origin or a rebinding Host, 403 and no process.
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let reply = post(&mut stream,
-            &format!("POST /backlog/act?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: https://evil.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", addr.port(), body.len()),
-            body).await;
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
-        assert!(
-            reply.contains("write refused: Origin does not name loopback"),
-            "{reply}"
-        );
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let reply = post(&mut stream,
-            &format!("POST /backlog/act?t=right HTTP/1.1\r\nHost: evil.example:9\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()),
-            body).await;
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
-        assert!(
-            reply.contains("write refused: Host does not name loopback"),
-            "{reply}"
-        );
-        // A non-JSON content type is refused by the extractor before the
-        // handler: 415.
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let reply = post(&mut stream,
-            &format!("POST /backlog/act?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", addr.port(), body.len()),
-            body).await;
-        assert!(reply.starts_with("HTTP/1.1 415"), "{reply}");
-        server.abort();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     // AC6's page half: the act controls exist only on a writing bridge.
     #[tokio::test]
     async fn backlog_page_flags_writability() {

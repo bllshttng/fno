@@ -1,6 +1,6 @@
 # Mux keybindings: the sideline surfaces
 
-The three sideline-adjacent actions sit on three different keys, and their names do not always match what they do. This table is the map. The in-app `prefix+?` modal is the live authority. It renders the same table the scanner dispatches from.
+These keys open the mux tools beside your sessions. The in-app `prefix+?` modal is the live authority. It renders the same table the scanner dispatches from.
 
 | Key | Action id | Event | What opens |
 |---|---|---|---|
@@ -8,7 +8,43 @@ The three sideline-adjacent actions sit on three different keys, and their names
 | `prefix+w` | `selector` | OpenSelector | The sideline row selector: cursor over the sideline's own rows. |
 | `prefix+b` | `toggle-sideline` | TogglePanel | Sideline panel visibility. |
 | `prefix+q` | `notifications-bell` | ToggleBell | Questions and fleet announcements in the notifications panel. |
+| `prefix+!` | `report` | Report | A problem report with the current screen and recent logs. |
 | `prefix+I` | `review-pr` | OpenReview | The PR review as a right split beside the focused chat pane. The chat stays live. |
+
+## Report a problem
+
+The default prefix is `Ctrl-b`. Press it, release it, then press `!` to open the report form.
+
+1. Press `prefix+!`. If you changed `mux.prefix`, use your configured prefix.
+2. Describe the problem. The form starts with the bug type. Press `Tab` to switch between bug and idea.
+3. Press `Enter` to prepare the redacted issue. Nothing is sent yet. The preview names the destination, `fnodotdev/fno`, and shows the issue title and complete body.
+4. Use `Up` and `Down` to scroll through the body. Use `Left` and `Right` to pan wide frame or log lines without wrapping them. `Home` returns to the first row and resets horizontal panning. `End` jumps to the final row. Press `Esc` to return to your description before sending.
+5. Press `Enter` again to create the public GitHub issue and keep a backlog node. The form uses GitHub CLI (`gh`) authentication. It shows both receipts after a successful submission.
+
+If `gh` is not authenticated, the form says so. If needed, install the [GitHub CLI](https://cli.github.com/). Run `gh auth login` in a terminal, then reopen the form to check authentication again. Closing and reopening discards the current draft, so copy your description first. When the preview footer says `Enter backlog only`, press `Enter` to file without signing in. That creates a backlog node and does not create a GitHub issue.
+
+Press `Esc` in the description form to cancel. If a submission fails, the preview keeps your report and shows the reason at the top. A successful GitHub or backlog receipt is kept, so pressing `Enter` to retry in the same preview sends only to the destination that failed. After a partial submission, `Esc` closes the preview. It cannot undo the issue or node already created.
+
+Each command has a 10-second limit. A timeout can happen after a write landed. Check [the repository issues](https://github.com/fnodotdev/fno/issues) and the local backlog before retrying. Before creating an issue, the form searches for the feedback reference shown at the end of the preview. You can also copy that reference into the repository issue search box. To search the backlog, replace `<REPORT_WORDS>` with words from your description:
+
+```bash
+fno backlog find "<REPORT_WORDS>"
+```
+
+A match shows its title and node ID. Read it with `fno backlog get <REPORT_ID>` before filing again. The [backlog reference](backlog-usage.md#finding-work) explains the search.
+
+The report captures your description, build version and revision, and the focused pane’s text from before the form opened. It adds the focused agent's name and node, plus up to 40 lines from each log. The frame excludes other panes and mux chrome. Diagnostic logs can describe other mux events. The row metadata belongs to the focused pane. If no row matches, it names the pane instead. Both destinations receive the same reviewed, redacted body. Before the issue preview is shown, the native feedback drafter redacts home paths, session IDs, the local hostname and secrets. The exact body you review is the body sent to GitHub and stored in the backlog. Inspect it before sending because other private text can remain in the screen or logs.
+
+Reports enter the backlog as `operator_request`. The optional `mux.report_parent` setting names their parent epic. By default, reports have no parent. Add `report_parent` to the existing `[mux]` table in your project's `.fno/config.toml`. If that table is absent, add this block. Replace `<EPIC_ID>` with your epic's ID:
+
+```toml
+[mux]
+report_parent = "<EPIC_ID>"
+```
+
+The default log directory is `~/.fno/mux/`. A configured mux directory changes these paths. Clients share `client.log`. Each server writes `<SERVER>.log`, such as `main.log`. Each file stays below 2 MiB and keeps one older generation at `<FILE>.1`, such as `client.log.1`. Repeated messages become a repeat count. Older generations are replaced.
+
+See the [configuration reference](configuration-guide.md) for the mux settings. Use `prefix+?` to check the keys currently installed.
 
 ## Inside the notifications panel
 
@@ -107,7 +143,7 @@ This audit compares the table with `tmux list-keys -T prefix` from tmux 3.8, run
 | `o`, `;` | next pane, last pane | Differs: `o` sorts agents. No next-pane or last-pane command |
 | `l` | last window | Differs: `l` focuses right. No last-window command |
 | `{` and `}` | swap pane | Missing: no swap command |
-| `!` | break pane | Missing as a chord |
+| `!` | break pane | Differs: files a problem report |
 | `s` | session tree | Differs: `s` toggles the status row |
 | `[` and `]` | copy mode, paste | Differs: they jump between command blocks |
 | `r` | refresh client | Differs: `r` reruns a block |

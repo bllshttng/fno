@@ -333,6 +333,22 @@ fn server_spine_losing_contender_emits_no_raise_receipt() {
     let scratch = Scratch::new("loser-receipt");
     let _winner = spawn_server(&scratch.sock(), "/bin/sh");
     let _probe = connect_with_retry(&scratch.sock());
+    let log_path = scratch.sock().with_extension("log");
+    let serving = format!("fno mux: serving {}", scratch.sock().display());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let log_start = loop {
+        let log = std::fs::read_to_string(&log_path);
+        if let Ok(text) = &log {
+            if text.lines().any(|line| line.ends_with(serving.as_str())) {
+                break text.len();
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "winner did not publish its ready record: {log:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
 
     let mut loser = server_command(&scratch.sock(), "/bin/sh", &[]);
     cap_child_nofile(&mut loser, 256, false);
@@ -340,8 +356,16 @@ fn server_spine_losing_contender_emits_no_raise_receipt() {
     let output = loser.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains("a server is already running"), "{stderr}");
-    assert!(!stderr.contains("open-file limit raised"), "{stderr}");
+    let log = std::fs::read(&log_path).unwrap();
+    let diagnostics = format!("{stderr}\n{}", String::from_utf8_lossy(&log[log_start..]));
+    assert!(
+        diagnostics.contains("a server is already running"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("open-file limit raised"),
+        "{diagnostics}"
+    );
 }
 
 #[test]

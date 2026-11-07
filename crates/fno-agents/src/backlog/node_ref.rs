@@ -38,6 +38,12 @@ fn valid_prefix(prefix: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
+/// The word gate a per-create `--prefix` passes: the same shape the
+/// configured prefix must satisfy.
+pub(crate) fn valid_prefix_word(word: &str) -> bool {
+    valid_prefix(word)
+}
+
 fn valid_hex_suffix(suffix: &str) -> bool {
     (4..=8).contains(&suffix.len())
         && suffix

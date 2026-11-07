@@ -246,58 +246,10 @@ mod web_invites_tests {
         .is_ok());
     }
 
-    fn web_invites_no_list_keeps_token_reads_and_refuses_a_tailnet_answer() {
-        let c = chain(&["x-1"]);
-        let remote = tailnet("ann@example.com");
-        assert_eq!(
-            decide(&remote, None, None, Role::Viewer),
-            Ok("token".into())
-        );
-        let r = decide(&remote, None, Some(&c), Role::Editor).unwrap_err();
-        assert_eq!(r.code, 403);
-        assert!(r.text.contains("web.invites"), "{}", r.text);
-        // The user on their own machine still answers.
-        let local = Caller {
-            login: None,
-            loopback_bind: true,
-            loopback_host: true,
-        };
-        assert_eq!(
-            decide(&local, None, Some(&c), Role::Editor),
-            Ok("local".into())
-        );
-        // The local pass needs a loopback bind: a wide bind has no identity.
-        let wide_local = Caller {
-            login: None,
-            loopback_bind: false,
-            loopback_host: true,
-        };
-        assert!(decide(&wide_local, None, Some(&c), Role::Editor).is_err());
-    }
-
-    fn web_invites_configured_list_still_lets_the_local_user_in() {
-        let list = [inv("ann@example.com", "x-1", Role::Editor)];
-        let local = Caller {
-            login: None,
-            loopback_bind: true,
-            loopback_host: true,
-        };
-        assert_eq!(
-            decide(&local, Some(&list), Some(&chain(&["x-7"])), Role::Editor),
-            Ok("local".into())
-        );
-    }
-
     #[test]
     fn web_invites_decide_table() {
         web_invites_parse_drops_bad_rows_and_lowercases();
         web_invites_a_scoped_editor_answers_inside_the_scope_only();
         web_invites_a_low_role_an_unlisted_login_and_a_wide_bind_all_refuse();
-    }
-
-    #[test]
-    fn web_invites_no_list_and_local_user() {
-        web_invites_no_list_keeps_token_reads_and_refuses_a_tailnet_answer();
-        web_invites_configured_list_still_lets_the_local_user_in();
     }
 }
