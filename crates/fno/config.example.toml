@@ -809,6 +809,8 @@ viewer = "panel"
 wheel_lines = 1
 # Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops.
 wheel_passthrough_rate = 3
+# ssh names the mux probes and lists on its Remote Hosts page: a tailnet name, a host or user@host. Added from the mux with + host. Default empty.
+remote_hosts = []
 
 [mux.restore]
 # Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on).

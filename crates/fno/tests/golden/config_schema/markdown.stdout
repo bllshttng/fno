@@ -18,7 +18,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.fleet_dir` | str (optional) | _(none)_ | never | Override path to the megatron fleet dir. |
 | `paths.postmortems_dir` | str (optional) | _(none)_ | never | Override path to the postmortems dir. |
 | `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
-| `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
+| `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
@@ -325,6 +325,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `mux.viewer` | typing.Literal['panel', 'modal'] | `panel` | advanced | Shape of the in-mux file viewer: panel (default, docks at the right edge) \| modal. Read by the Rust client. |
 | `mux.wheel_lines` | int | `1` | advanced | Lines one wheel notch scrolls a pane whose app does NOT own the mouse (default 1). A notch here is one cell of trackpad travel; a wheel-mouse user wanting the classic 3-detent step sets 3. Read once at mux server birth. |
 | `mux.wheel_passthrough_rate` | int | `3` | advanced | Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops. |
+| `mux.remote_hosts` | list[str] | `[]` | never | ssh names the mux probes and lists on its Remote Hosts page: a tailnet name, a host or user@host. Added from the mux with + host. Default empty. |
 | `dev.source` | str | `` | never | Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default). |
 | `loops` | dict[str, LoopEntry] | `{}` | advanced | Per-loop level overrides: {<name>: {level: report\|assisted\|unattended}} (default report). |
 | `status_sinks` | list[StatusSinkConfig] | `[]` | advanced | Status-fanout subscribers: list of {name, type (json-webhook\|text-webhook\|backlog-progress), events, match, url\|url_env, template, field, cloudevents, enabled}. |
