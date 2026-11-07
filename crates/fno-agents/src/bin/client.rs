@@ -1607,6 +1607,62 @@ async fn run(
             Ok(planned) => planned,
             Err(code) => return code,
         };
+        // Cross-host placement: a --machine pin relays to that host; with
+        // no pin, the fleet map's least-loaded host takes the worker when it beats
+        // this machine's free slots. A relayed or forwarded spawn never re-places:
+        // --spawned-by marks the ssh leg, and FNO_MAIL_LOCAL_FORWARD marks the
+        // same-host forward. Node-bound spawns stay local: the remote graph
+        // resolution is unmeasured.
+        let relayed = std::env::var_os("FNO_MAIL_LOCAL_FORWARD").is_some()
+            || params.get("spawned_by_session").is_some()
+            || params.get("node").is_some()
+            || params.get("slug").is_some()
+            || params.get("plan").is_some();
+        if !relayed {
+            // A --machine pin decides without the fleet read; a duplicate,
+            // empty, or @-bearing pin is the caller's typo and refuses.
+            let spawn_tail = args.get(1..).unwrap_or(&[]);
+            let pinned = match fno_agents::spawn_place::pinned_host(spawn_tail) {
+                Ok(p) => p,
+                Err(line) => {
+                    eprintln!("{line}");
+                    return 2;
+                }
+            };
+            let target = match pinned.as_deref() {
+                // A same-host pin never relays: the local gate takes it.
+                Some(host) if fno_agents::spawn_place::same_host_pin(host) => None,
+                Some(host) => Some(fno_agents::spawn_place::pinned_pick(host.to_string())),
+                None => {
+                    fno_agents::spawn_place::best_remote_host(&home, chrono::Utc::now().timestamp())
+                        .unwrap_or(None)
+                }
+            };
+            let strip = if substrate == "pane" {
+                fno_agents::spawn_place::PANE_STRIP
+            } else {
+                fno_agents::spawn_place::THREAD_STRIP
+            };
+            let name_to_carry = &agent_name;
+            let was_pinned = pinned.is_some();
+            if let Some(t) = &target {
+                let tail =
+                    fno_agents::spawn_place::relay_args(spawn_tail, &t.host, name_to_carry, strip);
+                eprintln!(
+                    "spawn relays to {}{}",
+                    t.host,
+                    if was_pinned { "" } else { " (least-loaded)" }
+                );
+                let code = fno_agents::spawn_remote::run(&tail);
+                if code == 0 && substrate == "bg" {
+                    if let Err(detail) = place_thread_portal_after_spawn(&params, &agent_name) {
+                        eprintln!("{detail}");
+                    }
+                }
+                fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name);
+                return code;
+            }
+        }
         // A DEFAULT never opens a view: a bare spawn is a paneless thread,
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
@@ -3670,6 +3726,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--split",
         "--portal",
         "--tab",
+        "--machine",
         "--at",
         "--permission-mode",
         "--effort",
@@ -3794,6 +3851,13 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             "--tab" => {
                 params.insert("tab".into(), str_arg(&mut it, "--tab")?);
             }
+            "--machine" if command == "spawn" => {
+                // The cross-host pin: the placement intercept reads
+                // the raw argv; parsed here so the flag is known and its
+                // value never reads as the prompt.
+                params.insert("machine_host".into(), str_arg(&mut it, "--machine")?);
+            }
+
             "--pane" if command == "spawn" => {
                 // The existing-pane attach: the spine resolves, checks and
                 // starts inside the named pristine shell.

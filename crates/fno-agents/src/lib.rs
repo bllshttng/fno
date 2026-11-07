@@ -666,6 +666,7 @@ pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
+pub mod spawn_place;
 pub mod spawn_promote;
 pub mod spawn_remote;
 pub mod spawn_role;

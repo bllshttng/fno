@@ -83,6 +83,7 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--take-over",
     "--at",
     "--portal",
+    "--machine",
     "--session-phase",
     "--sandbox-write-policy",
     "--wait",

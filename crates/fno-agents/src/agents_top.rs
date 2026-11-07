@@ -16,7 +16,7 @@ use std::time::SystemTime;
 
 /// The registry statuses that mean "this run holds a process", the census's
 /// `LIVE_STATUSES`. Every other status is terminal.
-const LIVE_STATUSES: &[&str] = &["spawning", "ready", "idle", "busy", "live", "restarting"];
+pub const LIVE_STATUSES: &[&str] = &["spawning", "ready", "idle", "busy", "live", "restarting"];
 
 /// Twelve-minute reconcile runs are measured (`FLIGHT_TTL_MS` in
 /// flight_gate.rs); a single-flight hold older than this shows here.
