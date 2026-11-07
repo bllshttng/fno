@@ -1935,7 +1935,9 @@ fn rollout_policy_to_wire(policy: &serde_json::Value) -> Option<serde_json::Valu
 /// codex turn/start policy is per-turn on the deployed server, so a turn that
 /// carries none runs under the thread-START posture; echoing the last policy
 /// is what keeps a steered thread where it was. `None` when no rollout
-/// resolves or the newest `turn_context` lies past the scan bound.
+/// resolves, the newest `turn_context` lies past the scan bound, or its
+/// policy is unreadable: an unreadable newest record stops the scan and the
+/// caller falls back to the probe, never echoes an older turn's policy.
 async fn last_rollout_policy(thread_id: &str) -> Option<serde_json::Value> {
     let thread_id = thread_id.to_string();
     tokio::task::spawn_blocking(move || {
@@ -1951,12 +1953,20 @@ async fn last_rollout_policy(thread_id: &str) -> Option<serde_json::Value> {
                 if rec.get("type")?.as_str()? != "turn_context" {
                     return None;
                 }
-                rollout_policy_to_wire(rec.get("payload")?.get("sandbox_policy")?)
+                // The newest turn_context stops the scan whatever its policy
+                // reads: a missing or unrecognized policy is Some(None), and
+                // an older turn's policy never echoes through it.
+                Some(
+                    rec.get("payload")
+                        .and_then(|payload| payload.get("sandbox_policy"))
+                        .and_then(rollout_policy_to_wire),
+                )
             },
         )
     })
     .await
     .unwrap_or(None)
+    .flatten()
 }
 
 fn policy_type(policy: &serde_json::Value) -> Option<&str> {
@@ -1985,7 +1995,13 @@ async fn inject(
     cwd_hint: Option<&Path>,
 ) -> Result<(), ReviewStartError> {
     let record = recorded_thread(thread_id).await;
-    let last = last_rollout_policy(thread_id).await;
+    // A full-access row decides the posture alone: the rollout read buys
+    // nothing and is skipped outright.
+    let last = if record.as_ref().is_some_and(|r| r.full_access) {
+        None
+    } else {
+        last_rollout_policy(thread_id).await
+    };
     let (mut sink, mut stream) = connect_app_server(sock)
         .await
         .map_err(ReviewStartError::Reason)?;
@@ -2833,9 +2849,9 @@ mod tests {
         );
     }
 
-    /// x-1434's case: the row says nothing about full access, but the
-    /// thread's newest turn ran it. The rollout read answers the posture and
-    /// re-asserts it, probe answer aside; the probe is skipped outright.
+    /// The superseded twin case: the row says nothing about full access, but
+    /// the thread's newest turn ran it. The rollout read answers the posture
+    /// and re-asserts it, probe answer aside; the probe is skipped outright.
     #[tokio::test]
     async fn mail_turn_keeps_last_full_access() {
         let _env = crate::claims::test_env_lock()
@@ -2942,6 +2958,56 @@ mod tests {
             !roots.contains(&"/tmp/fno-foreign-a".to_string())
                 && !roots.contains(&"/tmp/fno-foreign-b".to_string()),
             "the sender env grants nothing on a registered thread: {roots:?}"
+        );
+    }
+
+    /// A newest `turn_context` whose policy is unreadable stops the rollout
+    /// read: the lane falls back to the probe instead of echoing an older
+    /// turn's policy, so the older policy's own roots never ride.
+    #[tokio::test]
+    async fn mail_turn_falls_back_to_probe_when_newest_policy_unreadable() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions/2026/11/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let _agents_home =
+            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
+        let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-unreadable.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                r#"{"timestamp":"2026-11-06T11:19:30Z","type":"turn_context","payload":{"sandbox_policy":{"type":"workspace-write","writable_roots":["/repo/.git"]}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-11-06T13:20:44Z","type":"turn_context","payload":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let _codeux = crate::claims::EnvVarGuard::set("CODEX_HOME", home.path().to_str().unwrap());
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-unreadable", "hello FALLBACK").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&"/tmp/fno-t13-own".to_string()),
+            "the probe answered and its own roots ride: {roots:?}"
+        );
+        assert!(
+            !roots.contains(&"/repo/.git".to_string()),
+            "the older policy's roots must not ride past an unreadable newest: {roots:?}"
         );
     }
 }
