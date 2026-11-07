@@ -208,7 +208,8 @@ for name in ("smoke-pytest", "smoke-rest"):
           and "!cancelled()" in job_if,
           f"{name} follows the Python full-suite selector over the implicit success gate",
           f"{name} has if: {jobs[name].get('if')!r}")
-for name in ("hook-latency", "test-agents", "test-agents-integration", "test-mux"):
+for name in ("hook-latency", "test-agents", "test-agents-integration", "test-mux",
+             "test-mux-integration"):
     job = jobs[name]
     needs = job.get("needs")
     needs = [needs] if isinstance(needs, str) else list(needs or [])

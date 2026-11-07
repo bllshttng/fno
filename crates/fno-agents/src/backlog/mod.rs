@@ -1185,6 +1185,7 @@ fn mutate_single_row_once(
     crate::backlog::done_evidence::enforce(&rows, &working)?;
     let now_iso = crate::graph_store::now_isoformat();
     crate::graph_store::stamp_parent_edges(&rows, &mut working, &now_iso);
+    let rows_by_id = crate::graph_store::index_by_id(&rows);
     for row in working.iter_mut() {
         let (Some(id), true) = (
             crate::graph_store::entry_id(row).map(str::to_string),
@@ -1192,10 +1193,7 @@ fn mutate_single_row_once(
         ) else {
             continue;
         };
-        let Some(before) = rows
-            .iter()
-            .find(|r| crate::graph_store::entry_id(r) == Some(id.as_str()))
-        else {
+        let Some(before) = rows_by_id.get(id.as_str()).copied() else {
             continue; // absent from the pre-image: new node, created_at carries it
         };
         // curation_key reads the curation fields only, so a stamped

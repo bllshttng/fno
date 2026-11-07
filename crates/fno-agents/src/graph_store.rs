@@ -765,11 +765,6 @@ pub fn is_dict(v: &Value) -> bool {
 /// through the same readiness overlay every live read applies. Mirrors
 /// store._compute_children.
 pub fn compute_children(entries: &mut [Value]) {
-    let ids: Vec<String> = entries
-        .iter()
-        .filter(|e| is_dict(e))
-        .filter_map(|e| entry_id(e).map(str::to_string))
-        .collect();
     let id_to_entry = index_by_id(entries);
     let mut kids: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
     for e in entries.iter() {
@@ -784,7 +779,7 @@ pub fn compute_children(entries: &mut [Value]) {
         };
         // A self-parented node must not become its own child: that would
         // accumulate on every write with no self-healing path.
-        if !ids.iter().any(|i| i == parent) || cid == parent {
+        if !id_to_entry.contains_key(parent) || cid == parent {
             continue;
         }
         let mut summary = Map::new();
@@ -2799,9 +2794,6 @@ pub fn base_version(path: &Path) -> Result<String, StoreError> {
 /// because unchanged prose fields are skipped.
 pub fn enforce_node_state_policy(pre: &[Value], entries: &[Value]) -> Result<(), StoreError> {
     use crate::backlog::node_state;
-    // One borrowed index over the pre-image, built once: a linear find per
-    // entry is quadratic over the whole graph, and one publish held the
-    // store lock for 28 minutes spinning here.
     let pre_by_id = index_by_id(pre);
     for cand in entries {
         let Some(id) = entry_id(cand) else {

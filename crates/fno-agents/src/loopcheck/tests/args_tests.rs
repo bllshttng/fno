@@ -90,6 +90,30 @@ fn budget_flat_key_enforces_cost_cap_ab41b13d9d() {
 }
 
 #[test]
+fn cost_cap_does_not_trip_when_session_is_unmetered() {
+    let manifest = Manifest {
+        session_id: Some("unmetered".into()),
+        budget_cost_cap_usd: Some(Ok(0.0)),
+        ..Default::default()
+    };
+    let settings = Settings::default();
+    let now: DateTime<Utc> = "2026-06-05T01:00:00Z".parse().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let ledger = tmp.path().join("ledger.json");
+    std::fs::write(
+        &ledger,
+        r#"{"entries":[{"session_id":"unmetered","cost_usd":null}]}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        check_budget(&manifest, &settings, &now, &ledger),
+        None,
+        "an absent meter is unknown, not $0 against a zero cap"
+    );
+}
+
+#[test]
 fn check_budget_malformed_cost_cap_trips_budget() {
     // Fix 2: malformed cap in manifest -> Budget termination (fail-closed)
     let m = Manifest {

@@ -7,10 +7,11 @@ use fno_agents::accounts::binding::{self, SlotProbe};
 use fno_agents::accounts::reconcile;
 use fno_agents::accounts::records::Record;
 use fno_agents::accounts::store::{self, CodexRun, Host, ProcInfo, SecurityRun, StoreError};
+use fno_agents::accounts::usage_probe::{self, Ctx};
 use fno_agents::accounts::use_switch::{self, Outside, VaultAnswer};
 use fno_agents::claude_vault::{ExternalFailure, Principal};
 use serde_json::{Map, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -344,7 +345,13 @@ impl SlotProbe for Probe {
                 organization_uuid: "org-1".to_string(),
                 email: Some("makers@x".to_string()),
             }),
+            "t-ready2" => Ok(Principal {
+                account_uuid: "acc-ready".to_string(),
+                organization_uuid: "org-r".to_string(),
+                email: Some("ready@x".to_string()),
+            }),
             "t-old" => Err(ExternalFailure::Rejected),
+            "t-ready" => Err(ExternalFailure::Rejected),
             _ => Err(ExternalFailure::Unavailable),
         }
     }
@@ -468,4 +475,186 @@ fn reconcile_proves_the_slot_while_twenty_writers_are_alive() {
         std::fs::read_to_string(lab.store.join("makers/blob")).unwrap(),
         MAKERS
     );
+}
+
+/// The expired blob a switch materialized: byte-equal to the record's stored
+/// blob, proofed by no token cache.
+const READYRULE_EXPIRED: &str =
+    r#"{"claudeAiOauth": {"accessToken": "t-ready", "refreshToken": "r-ready", "expiresAt": 1}}"#;
+/// The same account's live item, served by the slot's other reader.
+const READYRULE_LIVE: &str = r#"{"claudeAiOauth": {"accessToken": "t-ready2", "refreshToken": "r2", "expiresAt": 99999999999999}}"#;
+const READYRULE_META: &str = r#"{"harness": "claude", "account_id": "readyrule", "captured_at": "2026-01-01T00:00:00Z", "kind": "keychain", "principal": {"account_uuid": "acc-ready", "organization_uuid": "org-r", "email": "ready@x"}, "principal_at": "2026-01-01T00:00:00Z"}"#;
+const MAKERS_META_PRINCIPAL: &str = r#"{"harness": "claude", "account_id": "makers", "captured_at": "2026-01-01T00:00:00Z", "kind": "keychain", "principal": {"account_uuid": "acc-makers", "organization_uuid": "org-1", "email": "makers@x"}, "principal_at": "2026-01-01T00:00:00Z"}"#;
+
+fn claude_record(id: &str) -> Record {
+    Record {
+        id: id.to_string(),
+        name: id.to_string(),
+        harness: "claude".to_string(),
+        auth: "managed".to_string(),
+        priority: 100,
+        route_provider_id: None,
+        model_name: None,
+        credentials_source: None,
+        env: None,
+        route: None,
+        reset_timezone: None,
+        window_minutes: None,
+        account_id: id.to_string(),
+        tags: Vec::new(),
+        description: None,
+        config_dir: None,
+        pricing: None,
+        cost_cap_usd_per_session: None,
+        extra: Map::new(),
+    }
+}
+
+fn seed_record(store: &Path, id: &str, blob: &str, meta: &str) {
+    std::fs::create_dir_all(store.join(id)).unwrap();
+    std::fs::write(store.join(id).join("blob"), blob).unwrap();
+    std::fs::write(store.join(id).join("meta.json"), meta).unwrap();
+}
+
+fn readyrule_slot(scoped: &str) -> Probe {
+    let slot: Map<String, Value> = [
+        (
+            "unscoped".to_string(),
+            Value::String(READYRULE_LIVE.to_string()),
+        ),
+        (
+            "scoped:slot".to_string(),
+            Value::String(READYRULE_EXPIRED.to_string()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    Probe {
+        keychain: RefCell::new(slot),
+        scoped: scoped.to_string(),
+    }
+}
+
+fn readyrule_lab() -> Lab {
+    let lab = Lab::new(&[], &[], MAKERS);
+    seed_record(&lab.store, "readyrule", READYRULE_EXPIRED, READYRULE_META);
+    std::fs::write(lab.store.join(".active-claude"), "readyrule").unwrap();
+    lab
+}
+
+#[test]
+fn resolve_names_the_stamped_record_from_its_materialized_expired_blob() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let lab = readyrule_lab();
+    let probe = readyrule_slot(&binding::keychain_service(&lab.home.join(".claude")).unwrap());
+    let records = [claude_record("makers"), claude_record("readyrule")];
+    let got = binding::resolve(
+        &binding::BindingRequest {
+            record: records.iter().find(|r| r.id == "readyrule"),
+            harness: "claude",
+            bearer: None,
+            root: &lab.store,
+            records: &records,
+            now: 1_800_000_000.0,
+            ttl: binding::PRINCIPAL_TTL_S,
+        },
+        &probe,
+    );
+    assert_eq!(got.status, binding::MATCHED);
+    assert_eq!(got.matched_record.as_deref(), Some("readyrule"));
+}
+
+#[test]
+fn a_stored_blob_match_never_hides_a_second_identity() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let lab = readyrule_lab();
+    let scoped = binding::keychain_service(&lab.home.join(".claude")).unwrap();
+    let slot: Map<String, Value> = [
+        ("unscoped".to_string(), Value::String(MAKERS.to_string())),
+        (
+            "scoped:slot".to_string(),
+            Value::String(READYRULE_EXPIRED.to_string()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let probe = Probe {
+        keychain: RefCell::new(slot),
+        scoped,
+    };
+    let records = [claude_record("makers"), claude_record("readyrule")];
+    let got = binding::resolve(
+        &binding::BindingRequest {
+            record: None,
+            harness: "claude",
+            bearer: None,
+            root: &lab.store,
+            records: &records,
+            now: 1_800_000_000.0,
+            ttl: binding::PRINCIPAL_TTL_S,
+        },
+        &probe,
+    );
+    assert_eq!(got.status, binding::AMBIGUOUS);
+}
+
+#[test]
+fn reconcile_names_the_record_whose_stored_blob_the_slot_holds() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let lab = readyrule_lab();
+    let probe = readyrule_slot(&binding::keychain_service(&lab.home.join(".claude")).unwrap());
+    let records = vec![claude_record("makers"), claude_record("readyrule")];
+    let got = reconcile::reconcile_slot(
+        "claude",
+        &records,
+        &lab.store,
+        &probe,
+        &BusyHost { pids: Vec::new() },
+        Duration::from_millis(200),
+        1_800_000_000.0,
+    );
+    assert_eq!(got.outcome, "matched");
+    assert_eq!(got.record_id.as_deref(), Some("readyrule"));
+    assert_eq!(lab.stamp(), "readyrule");
+    // The snapshot rotates the stored blob to the live item.
+    assert_eq!(
+        std::fs::read_to_string(lab.store.join("readyrule/blob")).unwrap(),
+        READYRULE_LIVE
+    );
+}
+
+#[test]
+fn a_record_s_own_stored_bearer_is_attributed_before_the_endpoint() {
+    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let lab = Lab::new(&[], &[], MAKERS);
+    // makers holds a dead token no endpoint can prove, but the record binds
+    // its own principal, so its stored bearer files without an endpoint.
+    seed_record(&lab.store, "makers", MAKERS_EXPIRED, MAKERS_META_PRINCIPAL);
+    let scoped = binding::keychain_service(&lab.home.join(".claude")).unwrap();
+    let probe = Probe {
+        keychain: RefCell::new(Map::new()),
+        scoped,
+    };
+    let records = [claude_record("makers")];
+    let http_calls = Cell::new(0u32);
+    let http = |_: &str| {
+        http_calls.set(http_calls.get() + 1);
+        Ok((401u16, "{}".to_string()))
+    };
+    let ctx = Ctx {
+        cwd: &lab.repo,
+        repo_root: None,
+        store: Some(lab.store.clone()),
+        records: &records,
+        slot: &probe,
+        host: &BusyHost { pids: Vec::new() },
+        http: &http,
+        route_env: &|_: &str| None,
+        codex_home: lab.repo.join(".codex"),
+    };
+    let (snap, reason) = usage_probe::probe_detail(&ctx, &records[0], 1_800_000_000.0);
+    assert!(snap.is_none());
+    assert_eq!(reason, Some("credential-rejected"));
+    // The record's own dead token was trusted enough to be tried.
+    assert_eq!(http_calls.get(), 1);
 }

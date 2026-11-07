@@ -158,9 +158,10 @@ hook_run_optional() {
 # Prints CMD's output, from a cached copy when one is young enough AND its
 # input is unchanged, so a repeated context read costs milliseconds instead
 # of a live query. FINGERPRINT names the input state (for a transcript read:
-# size and mtime); the cache file's first line carries the fingerprint a copy
-# was built from, and a fingerprint mismatch forces the live read, because a
-# changed input must re-measure. A live read that skipped or expired under
+# a cksum of the bytes, so an equal-length rewrite still moves it); the cache
+# file's first line carries the fingerprint a copy was built from, and a
+# fingerprint mismatch forces the live read, because a changed input must
+# re-measure. A live read that skipped or expired under
 # load serves the STALE copy rather than nothing - context survives the
 # moments a live query would not. The cache is refreshed OFF the turn path:
 # a copy served past two thirds of its life arms a detached refresher for

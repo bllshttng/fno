@@ -163,7 +163,10 @@ pub(crate) fn lane_with_room(
 /// The lane a run moves to when it cannot ride its own: the main lane's
 /// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
 /// never the first claude inventory row, which can be opus, and opus never
-/// runs target work.
+/// runs target work. The name is a shipped roster model id, and
+/// model_tiers.toml carries the builtin row of the same name, so a virgin
+/// install resolves it too; a rename sweep moves the id, the roster and the
+/// row together (the roster test pins the pairing).
 const FALLBACK_LANE: &str = "claude-sonnet-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 

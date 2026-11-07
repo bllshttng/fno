@@ -30,7 +30,7 @@ use std::time::{Duration, SystemTime};
 /// a cap reap.
 const FRESH_SECS: u64 = 6 * 3600;
 /// An owned build quiet for 3 days is reaped by the age lane.
-const AGE_SECS: u64 = 3 * 24 * 3600;
+const AGE_SECS: u64 = crate::state_layout::LEGACY_DRAIN_AGE_SECS;
 /// The cap lane's own floor, far short of `FRESH_SECS` so a busy fleet's rows
 /// still clear it: a row touched within this window never goes under cap
 /// pressure, live-cargo detection or not. A held `.cargo-lock` and a live
@@ -48,10 +48,17 @@ const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
 
 // --- base resolution ---------------------------------------------------------
 
+fn build_state_root(root: &Path) -> PathBuf {
+    std::env::var_os("FNO_RECLAIM_STATE_ROOT")
+        .map(PathBuf::from)
+        .or_else(|| crate::agents_config::state_dir(root))
+        .unwrap_or_else(|| home().unwrap_or_else(|| PathBuf::from("/.fno")))
+}
+
 /// The fno build base: `FNO_CARGO_TARGETS_BASE`, else
-/// `paths.cargo_targets_base`, else the state root's `cargo-build`. Same
-/// precedence as `fno config build-dir`; the `FNO_RECLAIM_STATE_ROOT` seam
-/// keeps the reclaim tests pointing at sandboxes.
+/// `paths.cargo_targets_base`, else `cache/cargo-build` under the state root.
+/// Same precedence as `fno config build-dir`; the `FNO_RECLAIM_STATE_ROOT`
+/// seam keeps the reclaim tests pointing at sandboxes.
 pub fn fno_build_base(root: &Path) -> PathBuf {
     if let Some(raw) = std::env::var_os("FNO_CARGO_TARGETS_BASE") {
         return expand_home(&PathBuf::from(raw));
@@ -61,11 +68,8 @@ pub fn fno_build_base(root: &Path) -> PathBuf {
     {
         return expand_home(&PathBuf::from(raw));
     }
-    let state = std::env::var_os("FNO_RECLAIM_STATE_ROOT")
-        .map(PathBuf::from)
-        .or_else(|| crate::agents_config::state_dir(root))
-        .unwrap_or_else(|| home().unwrap_or_else(|| PathBuf::from("/.fno")));
-    state.join("cargo-build")
+    crate::state_layout::place_dir(&build_state_root(root), "cargo-build")
+        .expect("cargo-build must have a state-root layout row")
 }
 
 /// The CARGO_BUILD_BUILD_DIR value: `<fno base>/{workspace-path-hash}`.
@@ -570,8 +574,30 @@ fn repo_root_for(tree: &Path) -> PathBuf {
 pub(crate) fn managed_bases(root: &Path, trees: &[PathBuf]) -> Vec<PathBuf> {
     let fno_base = fno_build_base(root);
     let mut bases = vec![fno_base.clone()];
+    let override_base = std::env::var_os("FNO_CARGO_TARGETS_BASE").is_some()
+        || crate::agents_config::config_lookup(root, &["paths", "cargo_targets_base"])
+            .and_then(|v| v.as_str().map(str::to_string))
+            .is_some();
+    if !override_base {
+        let legacy = build_state_root(root).join("cargo-build");
+        let safe = std::fs::symlink_metadata(&legacy).is_ok_and(|metadata| metadata.is_dir())
+            && legacy != fno_base
+            && legacy
+                .components()
+                .filter(|c| !matches!(c, std::path::Component::RootDir))
+                .count()
+                >= 3
+            && home().is_none_or(|home| phys(&legacy) != phys(&home))
+            && !trees
+                .iter()
+                .any(|tree| phys(&legacy).starts_with(phys(tree)));
+        if safe {
+            bases.push(legacy);
+        }
+    }
+    let retained = bases.len();
     let reject = |bases: &mut Vec<PathBuf>| {
-        bases.truncate(1);
+        bases.truncate(retained);
         bases.to_vec()
     };
     let Some(manifest) = workspace_manifests(root).into_iter().next() else {
@@ -601,7 +627,7 @@ pub(crate) fn managed_bases(root: &Path, trees: &[PathBuf]) -> Vec<PathBuf> {
             return reject(&mut bases);
         }
     }
-    if base == fno_base {
+    if base == fno_base || bases.iter().any(|managed| phys(managed) == phys(&base)) {
         return reject(&mut bases);
     }
     if trees.iter().any(|tree| phys(base).starts_with(phys(tree))) {
@@ -609,6 +635,38 @@ pub(crate) fn managed_bases(root: &Path, trees: &[PathBuf]) -> Vec<PathBuf> {
     }
     bases.push(base.to_path_buf());
     bases
+}
+
+fn carry_legacy_spotlight_marker(new_base: &Path, legacy_base: &Path) {
+    let source = legacy_base.join(".metadata_never_index");
+    let target = new_base.join(".metadata_never_index");
+    if !std::fs::symlink_metadata(&source).is_ok_and(|meta| meta.is_file())
+        || std::fs::symlink_metadata(&target).is_ok()
+    {
+        return;
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(new_base) {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            eprintln!(
+                "cargo-build-dirs: cannot copy Spotlight marker into non-directory {}",
+                new_base.display()
+            );
+            return;
+        }
+    } else if let Err(error) = std::fs::create_dir_all(new_base) {
+        eprintln!(
+            "cargo-build-dirs: cannot create {} for the Spotlight marker: {error}",
+            new_base.display()
+        );
+        return;
+    }
+    if let Err(error) = std::fs::copy(&source, &target) {
+        std::fs::remove_file(&target).ok();
+        eprintln!(
+            "cargo-build-dirs: cannot copy the legacy Spotlight marker to {}: {error}",
+            target.display()
+        );
+    }
 }
 
 /// `<2-hex shard>/<hex hash>`: the shape the build-dir template produces.
@@ -1122,6 +1180,11 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
     }
     rep.bases = bases.len();
     let fno_base = fno_build_base(root);
+    let legacy_base = build_state_root(root).join("cargo-build");
+    if apply && fno_base != legacy_base && bases.iter().any(|base| phys(base) == phys(&legacy_base))
+    {
+        carry_legacy_spotlight_marker(&fno_base, &legacy_base);
+    }
     rep.effective_cap_bytes = effective_cap_bytes(root);
 
     let mut names: BTreeSet<String> = BTreeSet::new();
@@ -1961,6 +2024,135 @@ mod tests {
 
     fn seven_h() -> u64 {
         7 * 3600
+    }
+
+    #[test]
+    fn default_base_uses_cache_layout_manages_legacy_and_copies_marker() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                for (key, value) in self.0.drain(..) {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+
+        let keys = [
+            "CARGO",
+            "CARGO_BUILD_BUILD_DIR",
+            "CBD_FNO_ANSWER",
+            "CBD_FB_ANSWER",
+            "CBD_TARGET_ANSWER",
+            "FNO_CONFIG",
+            "FNO_NO_CANONICAL_CONFIG",
+            "FNO_RECLAIM_STATE_ROOT",
+            "FNO_CARGO_TARGETS_BASE",
+            "FNO_CARGO_FREE_BYTES",
+            "FNO_TEST_LIVE_CARGO_CWDS",
+        ];
+        let _restore = RestoreEnv(
+            keys.into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        let env = setup("state-layout-base", "never-broken");
+        let root = env.root.clone();
+        let state = temp_root("state-layout-root");
+        let config = root.join("config.toml");
+        std::fs::write(&config, "\n").unwrap();
+        std::env::set_var("FNO_CONFIG", &config);
+        std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
+        std::env::remove_var("FNO_CARGO_TARGETS_BASE");
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        std::env::set_var("FNO_TEST_LIVE_CARGO_CWDS", "/tmp/no-live-cargo");
+        init_git_repo(&root);
+
+        let new_base = state.join("cache/cargo-build");
+        let legacy_base = state.join("cargo-build");
+        std::env::set_var("CBD_FNO_ANSWER", new_base.join("00/aaaa11"));
+        assert_eq!(fno_build_base(&root), new_base);
+        std::fs::create_dir_all(&legacy_base).unwrap();
+        std::fs::write(legacy_base.join(".metadata_never_index"), b"marker\n").unwrap();
+        let legacy_tree = plant(&legacy_base, "00", "aaaa11", 4 * 24 * 3600, true);
+        let lock_path = legacy_tree.join("debug/.cargo-lock");
+        std::fs::write(&lock_path, b"").unwrap();
+        age_every(&legacy_tree, 4 * 24 * 3600);
+        std::env::set_var("FNO_CARGO_FREE_BYTES", (1u64 << 50).to_string());
+        let bases = managed_bases(&root, &[]);
+        assert!(
+            bases.contains(&new_base),
+            "new base must remain managed: {bases:?}"
+        );
+        assert!(
+            bases.contains(&legacy_base),
+            "legacy base must drain under the same reclaim guards: {bases:?}"
+        );
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&lock_path)
+            .unwrap();
+        let rc = unsafe {
+            libc::flock(
+                std::os::unix::io::AsRawFd::as_raw_fd(&lock),
+                libc::LOCK_EX | libc::LOCK_NB,
+            )
+        };
+        assert_eq!(rc, 0, "test setup holds the legacy cargo lock");
+        let held = sweep_roots(&[root.clone()], true, SystemTime::now());
+        assert!(
+            legacy_tree.exists(),
+            "a held legacy lock keeps the hash tree"
+        );
+        let legacy_line = held
+            .lines
+            .iter()
+            .find(|line| line.contains(&format!("path={}", legacy_tree.display())))
+            .unwrap_or_else(|| panic!("legacy hash tree has no receipt line: {:?}", held.lines));
+        assert!(
+            legacy_line.contains("lane=build-in-progress"),
+            "the legacy base shares the lock guard: {legacy_line}"
+        );
+        drop(lock);
+        let reaped = sweep_roots(&[root.clone()], true, SystemTime::now());
+        assert!(
+            !legacy_tree.exists(),
+            "an old unlocked legacy tree reaps: {reaped:?}"
+        );
+        assert_eq!(
+            std::fs::read(new_base.join(".metadata_never_index")).unwrap(),
+            b"marker\n",
+            "the first sweep carries the old Spotlight marker to the new base"
+        );
+
+        let custom = root.join("custom-build");
+        std::env::set_var("FNO_CARGO_TARGETS_BASE", &custom);
+        assert_eq!(fno_build_base(&root), custom);
+        assert!(
+            !managed_bases(&root, &[]).contains(&legacy_base),
+            "an explicit override owns the base and does not add legacy"
+        );
+
+        std::env::remove_var("FNO_CARGO_TARGETS_BASE");
+        std::fs::write(
+            &config,
+            format!(
+                "[paths]\ncargo_targets_base = {:?}\n",
+                custom.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        assert_eq!(fno_build_base(&root), custom);
+        assert!(
+            !managed_bases(&root, &[]).contains(&legacy_base),
+            "a paths.cargo_targets_base override also excludes legacy"
+        );
+
+        let _ = std::fs::remove_dir_all(&state);
     }
 
     fn init_git_repo(root: &Path) {

@@ -165,6 +165,25 @@ out="$(hook_cache_serve k1 300 newinput -- bash -c "echo remeasured")"
 [[ "$out" == "remeasured" ]] && pass "changed fingerprint forces the live read" \
     || fail "fingerprint: out='$out'"
 
+# An equal-length rewrite inside one stat second must still re-measure: the
+# fingerprint the transcript probe passes is a content checksum, because
+# size+mtime reads identical for two same-length writes that share a second
+# (equal-length fixture pairs measured red on main 2026-10-30 and 2026-11-01).
+fpfile="$TMP/fp-input"
+printf 'aaaaaaaaaa' > "$fpfile"
+fp1="$(cksum < "$fpfile")"
+fp1="$(printf '%s' "$fp1" | tr -c '0-9' '-')"
+out="$(hook_cache_serve k3 300 "$fp1" -- bash -c 'echo first')"
+printf 'bbbbbbbbbb' > "$fpfile"
+fp2="$(cksum < "$fpfile")"
+fp2="$(printf '%s' "$fp2" | tr -c '0-9' '-')"
+[[ -n "$fp1" && "$fp1" != "$fp2" ]] \
+    && pass "checksum fingerprint moves on a same-length rewrite" \
+    || fail "same-length rewrite: fp1='$fp1' fp2='$fp2'"
+out="$(hook_cache_serve k3 300 "$fp2" -- bash -c 'echo remeasured')"
+[[ "$out" == "remeasured" ]] && pass "same-second equal-length rewrite re-measures" \
+    || fail "same-second re-measure: out='$out'"
+
 # A served copy past two thirds of its life arms the detached refresher; the
 # refresher replaces the file for the NEXT boundary. Fresh key: seed it, age
 # it, serve it.

@@ -380,6 +380,13 @@ pub const STEPS: &[Step] = &[
         effect: "prints the Bash(fno:*) permissions.allow example; never edits a harness settings file",
     },
     Step {
+        id: "claude-auto-mode",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Add Footnote's Auto Mode rules to Claude Code user settings?",
+        effect: "merges narrow state and role rules into the active Claude Code user settings file (CLAUDE_CONFIG_DIR/settings.json or ~/.claude/settings.json), preserving $defaults and all other settings; does not change permissions, credentials, or sandbox settings",
+    },
+    Step {
         id: "worktree-policy",
         layer: Layer::Project,
         kind: Kind::Act,
@@ -1302,6 +1309,26 @@ fn step_permission_rules(rep: &mut Report) {
     );
 }
 
+fn step_claude_auto_mode(rep: &mut Report) {
+    let path = crate::cli_hooks::user_claude_settings_path();
+    let result = crate::cli_hooks::install_claude_auto_mode_allow(&path);
+    if let Some(error) = result.error {
+        let message = format!("claude-auto-mode: {error}");
+        rep.rows
+            .push(row("needs_human", "config_set_refused", message.clone()));
+        rep.needs_human.push(message);
+    } else if result.changed {
+        rep.done.push(format!(
+            "claude-auto-mode: merged Footnote rules into {}",
+            path.display()
+        ));
+        rep.paths.push(path.display().to_string());
+    } else {
+        rep.skipped
+            .push("claude-auto-mode: required rules are already present".into());
+    }
+}
+
 /// Why a verify read failed, in one short clause: the timeout as
 /// bounded_for words it, else the first line naming a problem and the line
 /// after it (a doctor prints its header lines first), else the command to
@@ -1495,7 +1522,8 @@ fn dry_run(
     let mut skips: Vec<String> = Vec::new();
     let mut rows: Vec<Row> = pending.into_iter().collect();
     let mut needs_human: Vec<String> = Vec::new();
-    let mut proposed = compute_proposals(steps, root, &mut skips);
+    let settings = crate::cli_hooks::user_claude_settings_path();
+    let mut proposed = compute_proposals(steps, root, &settings, &mut skips);
     proposed.extend_from_slice(join_proposed);
     match detected
         .get("gh")
@@ -1540,7 +1568,12 @@ fn dry_run(
 /// The proposal half of a dry run, shared with `--check`: the same rows a
 /// dry run offers, computed with nothing printed. `skips` collects the
 /// "why not" lines `--dry-run` prints.
-fn compute_proposals(steps: &[&Step], root: &Path, skips: &mut Vec<String>) -> Vec<Proposal> {
+fn compute_proposals(
+    steps: &[&Step],
+    root: &Path,
+    settings: &Path,
+    skips: &mut Vec<String>,
+) -> Vec<Proposal> {
     let mut proposed: Vec<Proposal> = Vec::new();
     for step in steps {
         match step.id {
@@ -1566,6 +1599,24 @@ fn compute_proposals(steps: &[&Step], root: &Path, skips: &mut Vec<String>) -> V
             "backlog-prefix" => {
                 if let Some(p) = propose_backlog_prefix(root, skips) {
                     proposed.push(p);
+                }
+            }
+            "claude-auto-mode" => {
+                if matches!(
+                    crate::cli_hooks::claude_auto_mode_allow_status(settings),
+                    Ok(false)
+                ) {
+                    proposed.push(Proposal {
+                        id: step.id,
+                        key: String::new(),
+                        value: String::new(),
+                        scope: layer_name(step.layer),
+                        reason: format!(
+                            "{}; apply with `fno config setup run --only {}` after explicit approval",
+                            step.effect, step.id
+                        ),
+                        source: "default",
+                    });
                 }
             }
             _ => {}
@@ -1685,7 +1736,8 @@ pub(crate) fn append_setup_event(kind: &str, data: serde_json::Value) {
 /// nothing; its exit code is the verdict.
 fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposal]) -> i32 {
     let mut skips: Vec<String> = Vec::new();
-    let mut proposed = compute_proposals(steps, root, &mut skips);
+    let settings = crate::cli_hooks::user_claude_settings_path();
+    let mut proposed = compute_proposals(steps, root, &settings, &mut skips);
     proposed.extend_from_slice(join_proposed);
     let global = crate::config_defaults::global_config_path();
     let project = root.join(".fno").join("config.toml");
@@ -2114,6 +2166,7 @@ pub(crate) fn apply_wizard_pending(
             "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
             "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
+            "claude-auto-mode" => step_claude_auto_mode(&mut rep),
             _ => rep.skipped.push(format!("{}: no runner", p.id)),
         }
         let outcome = step_outcome(p.id, &rep.done[done_len..], &rep.skipped[skipped_len..]);
@@ -2486,6 +2539,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "messaging") => step_messaging(&exe, prompting, None, &mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
+            (Layer::Global, "claude-auto-mode") => step_claude_auto_mode(&mut rep),
             (Layer::Global, "join") => {
                 if let Some(p) = &profile {
                     step_join(&exe, p, &diff_rows, &mut rep);

@@ -267,7 +267,7 @@ For each item line under that heading, in order:
 
 ### 7. Add the exact Fixes closure line
 
-**Purpose:** a PR body naming several nodes in prose only ever closed the ONE node stamped in the bind step. Every other named node stayed open forever. The exact closure line (`Fixes <id> [<id>...]`) is what the merge-time reconcile binds. Free-text mentions never count.
+**Purpose:** a PR body naming several nodes in prose only ever closed the ONE node stamped in the bind step. Every other named node stayed open forever. The exact closure line (`Fixes <id> [<id>...]`) is what the merge-time reconcile binds. When the node holds a short number, the renderer writes each id as `number (hash)`. Free-text mentions never count.
 
 Reuse `$NODE_ID` from the previous step (or read it fresh the same way). Render the trailer - the node plus every `contained_in` descendant already in the graph - and separate the two failures by exit code:
 
