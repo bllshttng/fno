@@ -1020,22 +1020,20 @@ impl CodexThread {
     /// Resume an existing thread by its app-server id.
     ///
     /// The state-root grant cannot be reconstructed on this path, and
-    /// the loss is announced rather than taken quietly. The roots reach a
-    /// spawn from the Python seam's `FNO_WORKER_ADD_DIRS`, which the long-lived
-    /// shared daemon does not have, and Rust deliberately runs no second copy
-    /// of the resolver (`writable_dirs.published_worker_writable_dirs`: one
-    /// published value, two readers). Reading the daemon's own env instead
-    /// would grant whatever shell started it, which is wrong in a more
-    /// dangerous direction.
+    /// the loss is announced rather than taken quietly. The roots resolve in
+    /// Rust now (`spawn_seam::granted_dirs`: state root, claims root,
+    /// registry dirs, plans dir) and the registry row carries the spawn-time
+    /// grant as `granted_writable_roots`, which this lane re-applies. Reading
+    /// the daemon's own env instead would grant whatever shell started it,
+    /// which is wrong in a more dangerous direction.
     ///
-    /// In practice the grant usually survives: a turn-level `sandboxPolicy`
-    /// becomes the thread's default server-side, so a thread still loaded by
-    /// the codex app-server keeps it across an `fno-agents-daemon` restart. It
-    /// is lost only when the app-server itself restarted and reloaded the
-    /// thread from its rollout. That worker is then mute again, so the caller
-    /// gets an event instead of silence. The durable fix is a granted-roots
-    /// receipt on the registry row, which belongs to the sibling node that
-    /// owns that schema.
+    /// In practice the grant usually survives the daemon restart; it is lost
+    /// only when the app-server itself restarted and reloaded the thread from
+    /// its rollout. Note a turn-level `sandboxPolicy` is per-turn on the
+    /// deployed app-server: a policy-less turn inherits the thread-START
+    /// posture, which is why `codex_inject::inject` echoes the rollout's last
+    /// `turn_context` on the mail and resume lanes. That worker is then mute
+    /// again, so the caller gets an event instead of silence.
     ///
     /// Emitted only for a thread that COULD have lost something. A yolo thread
     /// is `danger-full-access` and needs no grant, and a resume that succeeds
