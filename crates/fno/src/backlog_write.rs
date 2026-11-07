@@ -130,7 +130,7 @@ pub(crate) async fn run_command_in(
 /// so the web bridge can answer `{"ok": false, ...}` without re-reading the
 /// text. Sibling of the foreground restart runner
 /// ([`crate::client::update_menu::run_restart_foreground`]), which instead
-/// inherits stdio so the operator watches the receipts.
+/// inherits stderr so the operator watches the receipts live.
 async fn run_built(
     command: &mut tokio::process::Command,
     args: &[String],
