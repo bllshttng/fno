@@ -967,9 +967,9 @@ pub(crate) fn authoritative_sync_prepared(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let _report = write_changed_ids(&transaction, before, after, true, changed)?;
+    let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, version)?;
-    confirm_ids_landed_in(&transaction, after, changed)?;
+    confirm_ids_landed_in(&transaction, after, &report.present_ids)?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(version.to_string())
 }
@@ -1013,13 +1013,16 @@ pub(crate) struct WriteReport {
     deleted_ids: Vec<String>,
 }
 
-/// The read-back the publish trusts, over exactly the ids `changed` names:
-/// the store must still hold every row of `after` (the count check), and
-/// each changed id must be present in the typed table or the raw carry.
+/// The read-back the publish trusts, over exactly the ids `changed_present`
+/// names (the changed ids that survive in `after`; a deletion is a changed
+/// id that must NOT be present, and the count check catches one that
+/// failed to land): the store must still hold every row of `after` by
+/// count, and each surviving changed id must be present in the typed table
+/// or the raw carry.
 fn confirm_ids_landed_in(
     connection: &Connection,
     after: &[Value],
-    changed: &[String],
+    changed_present: &[String],
 ) -> Result<(), String> {
     const SQLITE_BIND_BATCH: usize = 900;
     let stored_count: i64 = connection
@@ -1031,7 +1034,7 @@ fn confirm_ids_landed_in(
         .map_err(|error| error.to_string())?;
 
     let mut stored = std::collections::BTreeSet::new();
-    let ids: Vec<&str> = changed.iter().map(String::as_str).collect();
+    let ids: Vec<&str> = changed_present.iter().map(String::as_str).collect();
     for batch in ids.chunks(SQLITE_BIND_BATCH) {
         let placeholders = std::iter::repeat_n("?", batch.len())
             .collect::<Vec<_>>()
@@ -1067,7 +1070,7 @@ fn confirm_ids_landed_in(
             stored.insert(row.map_err(|error| error.to_string())?);
         }
     }
-    let missing: Vec<&str> = changed
+    let missing: Vec<&str> = changed_present
         .iter()
         .map(String::as_str)
         .filter(|id| !stored.contains(*id))
@@ -1077,7 +1080,7 @@ fn confirm_ids_landed_in(
     }
     Err(format!(
         "publish read-back mismatch: expected {} ids, stored {stored_count}; missing ids {missing:?}",
-        changed.len()
+        changed_present.len()
     ))
 }
 
