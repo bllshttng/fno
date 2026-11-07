@@ -1104,7 +1104,7 @@ mod tests {
             assistant_row("Relay ack text.", "2026-10-27T00:00:08Z"),
         ]
         .join("\n");
-        let items = walk(&raw, 0, &bus, "sess", None).items;
+        let items = walk(&raw, 0, 0, &bus, "sess", None).items;
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].typed_text, "before the digest");
         assert_eq!(items[0].reply_text, "");
@@ -1241,9 +1241,11 @@ mod tests {
 
     /// AC2: a codex rollout with a user message, commentary and a
     /// final_answer opens one item whose end_reply is the final_answer text;
-    /// the commentary never reads as the end.
+    /// the commentary never reads as the end. The rollout's harness context
+    /// payload opens no item either: the machine's instructions block is
+    /// nobody's ask, and a real ask after it still opens.
     #[test]
-    fn ac2_codex_item_pairs_user_message_with_final_answer() {
+    fn ac2_codex_pairs_final_answer_and_context_opens_nothing() {
         let payload_row = |role: &str, phase: Option<&str>, text: &str| {
             let mut p = json!({
                 "type": "message",
@@ -1280,27 +1282,17 @@ mod tests {
             out.items[0].reply_text,
             "Checking the rollout shape.\n\nThe id sat at payload.id."
         );
-    }
-
-    /// A codex rollout's harness context payload opens no item: the
-    /// machine's instructions block is nobody's ask, and a real ask after
-    /// it still opens.
-    #[test]
-    fn codex_context_payload_opens_no_item() {
-        let payload_row = |role: &str, text: &str| {
-            json!({"timestamp": "2026-11-05T01:55:00Z", "type": "response_item",
-                   "payload": {"type": "message", "role": role,
-                               "content": [{"type": "text", "text": text}]}})
-            .to_string()
-        };
+        // The context shape: the instructions payload opens nothing, and the
+        // real ask after it still pairs with its final answer.
         let raw = [
             payload_row(
                 "user",
+                None,
                 "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nwork here\n</INSTRUCTIONS>",
             ),
-            payload_row("assistant", "Understood the instructions."),
-            payload_row("user", "status on the gate?"),
-            payload_row("assistant", "Green."),
+            payload_row("assistant", None, "Understood the instructions."),
+            payload_row("user", None, "status on the gate?"),
+            payload_row("assistant", None, "Green."),
         ]
         .join("\n");
         let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);

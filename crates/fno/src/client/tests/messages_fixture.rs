@@ -742,11 +742,12 @@ fn messages_paint_reads_rows_built_once_per_projection() {
     );
 }
 
-/// AC7: the asks row flattens two sessions' `you` rows, pending first even
-/// when the answered ask is newer, and column 3 paints the state mark, the
-/// session name and both texts.
+/// AC7+AC8: the asks row flattens two sessions' `you` rows, pending first
+/// even when the answered ask is newer, column 3 paints the state mark, the
+/// session name and both texts, and an empty projection paints one
+/// empty-state line and no error.
 #[tokio::test]
-async fn ac7_asks_paint_pending_first_across_two_sessions() {
+async fn ac7_ac8_asks_paint_pending_first_and_the_empty_state() {
     use serde_json::json;
     let mut view = View::new(
         (24, 100),
@@ -805,30 +806,8 @@ async fn ac7_asks_paint_pending_first_across_two_sessions() {
         text.contains("Shipped; the PR is open."),
         "reply paints under its ask"
     );
-}
-
-/// AC8: with no `you` rows the asks column paints one empty-state line and
-/// no error.
-#[tokio::test]
-async fn ac8_asks_empty_projection_paints_one_line() {
-    use serde_json::json;
-    let mut view = View::new(
-        (24, 100),
-        "main".into(),
-        super::super::LayoutView {
-            squads: Vec::new(),
-            active_squad: 0,
-            panes: Vec::new(),
-            focus: 0,
-            area: (0, 0),
-            agents: Vec::new(),
-            focus_node: None,
-        },
-    );
-    check_fixture(&mut view);
-    let prefs = tempfile::tempdir().unwrap();
-    crate::view_store::set_test_path(prefs.path());
-    let b = view.messages_board.as_mut().expect("open");
+    // AC8: an empty projection paints the title and one empty-state line,
+    // no error.
     b.snapshot.apply(json!({
         "participants": [],
         "threads": [],
