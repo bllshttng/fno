@@ -1088,11 +1088,9 @@ fn sample_session(
     }
 }
 
-/// OTel rows are exact cost; the transcript-parsed ledger estimate answers
-/// only when no row exists for the session.
+/// Exact OTel cost, a live estimate, or a ledger estimate for this session.
 pub(crate) fn session_cost_exact(otel_db: &Path, ledger: &Path, sid: &str) -> Option<f64> {
-    crate::otel_ingest::session_cost_usd(otel_db, sid)
-        .or_else(|| Some(crate::loopcheck::session_cost_from_ledger(ledger, sid)))
+    crate::team_spend::session_meter(otel_db, ledger, None, Some(sid)).usd()
 }
 
 /// The pass body, behind `maybe_tick`'s cadence gate. `runner` and

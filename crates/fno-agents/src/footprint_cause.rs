@@ -153,6 +153,107 @@ pub(crate) fn spare_claimed(command: &str) -> bool {
     sock.ends_with(".claim.sock") && !Path::new(sock).exists()
 }
 
+/// One MCP-server group: the parent process and how many `mcp`-shaped
+/// children it holds. A naming row only; nothing gates on it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct McpServerGroup {
+    pub parent_pid: u32,
+    pub parent: String,
+    pub servers: u64,
+    pub cpu_cores: f64,
+}
+
+/// One parentless test-rig binary (a `footnote`/`fno` binary under /tmp with
+/// ppid 1): nobody is left to reap it, the deps-binary rule at another layer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct OrphanRigBinary {
+    pub pid: u32,
+    pub elapsed_seconds: u64,
+    pub command: String,
+}
+
+/// True when a process row is an MCP server child. The measured shape is a
+/// package runner whose LAST argv token is the standalone word `mcp`
+/// (`npm exec rea-agents@6.4.0 mcp`, `npx -y rea-agents@6.4.0 mcp`); a
+/// hyphenated `mcp-server-*` argv0 or a `--mcp` flag does not match.
+pub(crate) fn is_mcp_server(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next_back()
+        .is_some_and(|last| last == "mcp")
+}
+
+/// The MCP-server groups of one snapshot: children matching
+/// [`is_mcp_server`], grouped by their parent row. A parent missing from the
+/// table (exited between rows) groups under the label `gone`.
+pub(crate) fn mcp_server_groups(table: &[ProcRow]) -> Vec<McpServerGroup> {
+    let by_pid: BTreeMap<u32, &ProcRow> = table.iter().map(|r| (r.pid, r)).collect();
+    let mut groups: BTreeMap<u32, (String, u64, f64)> = BTreeMap::new();
+    for row in table {
+        if !is_mcp_server(&row.command) {
+            continue;
+        }
+        let parent_label = by_pid
+            .get(&row.ppid)
+            .map(|parent| {
+                basename(parent.command.split_whitespace().next().unwrap_or("")).to_string()
+            })
+            .unwrap_or_else(|| "gone".to_string());
+        let entry = groups.entry(row.ppid).or_insert((parent_label, 0, 0.0));
+        entry.1 += 1;
+        entry.2 += row.cpu_pct / 100.0;
+    }
+    let mut out: Vec<McpServerGroup> = groups
+        .into_iter()
+        .map(
+            |(parent_pid, (parent, servers, cpu_cores))| McpServerGroup {
+                parent_pid,
+                parent,
+                servers,
+                cpu_cores,
+            },
+        )
+        .collect();
+    out.sort_by(|a, b| {
+        b.servers
+            .cmp(&a.servers)
+            .then(a.parent_pid.cmp(&b.parent_pid))
+    });
+    out
+}
+
+/// True when a row is a parentless test-rig binary: an fno/footnote binary
+/// whose argv[0] sits under /tmp with ppid 1. Measured specimen: `footnote`
+/// from /tmp/fn-47ea-rig/b2 holding 91 percent CPU at ppid 1. A path-shape
+/// match stays a naming row; nothing is ever signalled from it.
+pub(crate) fn is_orphan_rig_binary(row: &ProcRow) -> bool {
+    if row.ppid != 1 {
+        return false;
+    }
+    let argv0 = row.command.split_whitespace().next().unwrap_or("");
+    let base = basename(argv0);
+    matches!(base, "footnote" | "fno" | "fno-agents") && argv0.starts_with("/tmp/")
+}
+
+/// The orphaned test-rig binaries of one snapshot, oldest first.
+pub(crate) fn orphan_rig_binaries(table: &[ProcRow]) -> Vec<OrphanRigBinary> {
+    let mut out: Vec<OrphanRigBinary> = table
+        .iter()
+        .filter(|row| is_orphan_rig_binary(row))
+        .map(|row| OrphanRigBinary {
+            pid: row.pid,
+            elapsed_seconds: row.elapsed_s,
+            command: row.command.clone(),
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.elapsed_seconds
+            .cmp(&a.elapsed_seconds)
+            .then(a.pid.cmp(&b.pid))
+    });
+    out
+}
+
 fn attributed_command(command: &str) -> bool {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     let Some(first) = tokens.first() else {
@@ -273,6 +374,10 @@ pub(crate) struct Footprint {
     pub spare_pool_cpu_cores: f64,
     pub machine_process_count: u64,
     pub runnable_count: u64,
+    /// MCP-server children grouped by parent (a naming row, never a gate).
+    pub mcp_servers: Vec<McpServerGroup>,
+    /// Parentless test-rig binaries under /tmp (a naming row, never a gate).
+    pub orphan_rig_binaries: Vec<OrphanRigBinary>,
     pub memory: Option<Value>,
 }
 
@@ -425,6 +530,8 @@ pub(crate) fn parse_footprint(
     });
     out.top = sustained;
     out.fleet_cpu_cores = out.sustained_cpu_cores + out.descendant_cpu_cores;
+    out.mcp_servers = mcp_server_groups(table);
+    out.orphan_rig_binaries = orphan_rig_binaries(table);
     out
 }
 
@@ -1641,6 +1748,11 @@ pub(crate) fn cause_payload(
         "spare_pool_cpu_cores".into(),
         json!(footprint.spare_pool_cpu_cores),
     );
+    p.insert("mcp_servers".into(), json!(footprint.mcp_servers));
+    p.insert(
+        "orphan_rig_binaries".into(),
+        json!(footprint.orphan_rig_binaries),
+    );
     let top: Vec<Value> = footprint
         .top
         .iter()
@@ -1762,6 +1874,52 @@ pub fn sorted_json(value: &Value) -> String {
 
 /// `fno doctor footprint`: the reading, the payload, the human text and the
 /// exit code, in one command body (the deleted `footprint_command`).
+/// Live fleet processes at parent pid 1: the shape a dead driver leaves
+/// behind (the fn-47ea rig: a footnote binary at 91% CPU, parent pid 1, its
+/// driver killed only the parent). Listed so `fno doctor footprint` names
+/// them instead of folding them into the fleet share.
+pub fn ppid1_fleet_processes(table: &[ProcRow]) -> Vec<serde_json::Value> {
+    table
+        .iter()
+        .filter(|row| row.ppid == 1 && row.state != 'Z' && is_fleet_binary(&row.command))
+        .map(|row| {
+            serde_json::json!({
+                "pid": row.pid,
+                "command": row.command,
+                "elapsed_s": row.elapsed_s,
+                "cpu_pct": row.cpu_pct,
+            })
+        })
+        .collect()
+}
+
+/// True when the row's argv0 basename names a fleet binary: the fno runtime
+/// or a harness the fleet launches.
+fn is_fleet_binary(command: &str) -> bool {
+    let argv0 = command.split_whitespace().next().unwrap_or("");
+    let name = std::path::Path::new(argv0)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    matches!(
+        name,
+        "fno"
+            | "fno-agents"
+            | "fno-agents-daemon"
+            | "fno-agents-worker"
+            | "codex"
+            | "claude"
+            | "opencode"
+            | "pi"
+            | "agy"
+            | "cursor-agent"
+            | "grok"
+            | "kimi"
+            | "dsh"
+            | "codegraph"
+    )
+}
+
 pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
     let reading = match cause_reading(!cause_only, Duration::from_secs(5)) {
         Ok(reading) => reading,
@@ -1791,7 +1949,9 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let payload = cause_payload(&reading, cause_only, threshold, degraded, &cwd);
+    let mut payload = cause_payload(&reading, cause_only, threshold, degraded, &cwd);
+    payload["ppid1_fleet_processes"] =
+        serde_json::Value::Array(ppid1_fleet_processes(&crate::census::process_table().0));
     if json_output {
         println!("{}", sorted_json(&payload));
         return payload["exit_code"].as_i64().map(|c| c as i32).unwrap_or(0);
@@ -1861,6 +2021,24 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
         "transient calls: {}",
         payload["transient_call_count"].as_u64().unwrap_or(0)
     );
+    let ppid1 = payload["ppid1_fleet_processes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if ppid1.is_empty() {
+        println!("parent-pid-1 fleet processes: none");
+    } else {
+        println!("parent-pid-1 fleet processes: {}", ppid1.len());
+        for row in &ppid1 {
+            println!(
+                "  pid {} elapsed {}s cpu {:.1}%: {}",
+                row["pid"].as_u64().unwrap_or(0),
+                row["elapsed_s"].as_u64().unwrap_or(0),
+                row["cpu_pct"].as_f64().unwrap_or(0.0),
+                row["command"].as_str().unwrap_or("?"),
+            );
+        }
+    }
     match reading.sccache_server_pid {
         Some(pid) => println!(
             "sccache server: pid {pid}, restarts last hour: {}",
@@ -1876,6 +2054,22 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
             "claude spare pool: {} processes, {:.2} cores (idle pre-warm, not fleet; never sweep it - a bg spawn is claimed from it)",
             fp.spare_pool_process_count,
             fp.spare_pool_cpu_cores
+        );
+    }
+    if !fp.mcp_servers.is_empty() {
+        let total: u64 = fp.mcp_servers.iter().map(|g| g.servers).sum();
+        println!(
+            "mcp servers: {total} across {} parent(s), largest: {} (pid {}) holds {}",
+            fp.mcp_servers.len(),
+            fp.mcp_servers[0].parent,
+            fp.mcp_servers[0].parent_pid,
+            fp.mcp_servers[0].servers,
+        );
+    }
+    for rig in fp.orphan_rig_binaries.iter().take(3) {
+        println!(
+            "orphan rig binary: pid {}, up {}s: {}",
+            rig.pid, rig.elapsed_seconds, rig.command
         );
     }
     if let Some(mem) = &fp.memory {
@@ -1955,7 +2149,103 @@ mod tests {
         }
     }
 
+    /// ppid-1 fleet rows are named; zombies and non-fleet argv0 are not.
     #[test]
+    fn ppid1_fleet_listing_names_fleet_binaries_at_parent_pid_1() {
+        let table = vec![
+            row(300, 1, 7200, 91.0, "/tmp/fn-47ea-rig/bin/footnote"),
+            row(301, 1, 700, 91.0, "fno-agents-daemon --serve"),
+            row(302, 1, 700, 0.0, "claude --bg"),
+            row(303, 1, 700, 0.0, "/bin/sh -c yes"),
+        ];
+        let listed = ppid1_fleet_processes(&table);
+        let pids: Vec<u32> = listed
+            .iter()
+            .map(|r| r["pid"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(
+            pids,
+            vec![301, 302],
+            "fleet rows only; non-fleet argv0 excluded"
+        );
+        assert_eq!(
+            ppid1_fleet_processes(&[row(310, 1, 700, 0.0, "/bin/ls")]).len(),
+            0
+        );
+        assert_eq!(
+            ppid1_fleet_processes(&[row(311, 4321, 700, 0.0, "claude --bg")]).len(),
+            0
+        );
+    }
+
+    /// The naming rows the leak investigation asked for: MCP-server children
+    /// group by parent, and a parentless fno binary under /tmp names as an
+    /// orphan rig binary. Neither row ever gates; both ride the payload.
+    #[test]
+    fn mcp_servers_group_by_parent_and_rig_binaries_name() {
+        let rows = vec![
+            row(
+                300,
+                1,
+                10800,
+                78.0,
+                "/codex/packages/app-server-daemon/bin/codex app-server --remote",
+            ),
+            row(400, 300, 7200, 0.0, "npm exec rea-agents@6.4.0 mcp"),
+            row(401, 300, 7200, 0.0, "npm exec rea-agents@6.4.0 mcp"),
+            row(402, 300, 3600, 0.0, "npx -y rea-agents@6.4.0 mcp"),
+            row(500, 299, 7200, 0.0, "npm exec rea-agents@6.4.0 mcp"),
+            row(
+                600,
+                1,
+                43600,
+                91.0,
+                "/tmp/fn-47ea-rig/b2/footnote doctor test",
+            ),
+            row(
+                601,
+                1,
+                43600,
+                0.0,
+                "/Applications/Claude.app/Contents/MacOS/Claude",
+            ),
+            row(602, 1, 60, 0.0, "cargo build"),
+        ];
+        let fp = parse_footprint(
+            &rows,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            30,
+        );
+        let groups = &fp.mcp_servers;
+        assert_eq!(groups.len(), 2, "two parents hold mcp children: {groups:?}");
+        assert_eq!(groups[0].parent_pid, 300);
+        assert_eq!(groups[0].servers, 3);
+        assert_eq!(groups[0].parent, "codex");
+        assert_eq!(groups[1].parent_pid, 299);
+        assert_eq!(groups[1].servers, 1);
+        assert_eq!(groups[1].parent, "gone");
+        let rigs = &fp.orphan_rig_binaries;
+        assert_eq!(rigs.len(), 1, "one parentless /tmp fno binary: {rigs:?}");
+        assert_eq!(rigs[0].pid, 600);
+        assert_eq!(rigs[0].elapsed_seconds, 43600);
+        // A hyphenated argv0 or a flag never reads as an mcp server.
+        assert!(!is_mcp_server("node mcp-server-rea.js --port 9"));
+        assert!(!is_mcp_server("fno doctor --mcp list"));
+        assert!(is_mcp_server("npx -y rea-agents@6.4.0 mcp"));
+        // A path-shape name match outside /tmp is not a rig binary.
+        assert!(!is_orphan_rig_binary(&row(
+            700,
+            1,
+            10,
+            0.0,
+            "/Users/bb16/code/footnote/footnote/target/debug/footnote serve"
+        )));
+    }
+
+    #[test]
+
     fn ac1_attributes_transitive_build_descendants() {
         let rows = vec![
             row(100, 1, 3600, 20.0, "fno-agents-worker --run"),

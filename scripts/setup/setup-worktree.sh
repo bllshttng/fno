@@ -86,6 +86,23 @@ if [[ ! -d "$WORKTREE" ]]; then
   exit 1
 fi
 
+# Refuse a WORKTREE that sits INSIDE the canonical checkout. The destination
+# defaults to $(pwd), and CANONICAL still resolves to the repo root from any
+# directory inside the checkout (git-common-dir), so running this script from
+# a subdirectory of the canonical checkout links canonical state into that
+# subdirectory. Measured 2026-10-30: a run from crates/fno-agents landed
+# .agents, .codex, .codex-plugin and .claude/ symlinks inside the crate. The
+# -ef guard above only fires when the two roots are the SAME directory, so a
+# subdirectory slipped past it. A real worktree's show-toplevel is itself,
+# never the canonical root, so this guard only fires on the litter shape.
+# Non-zero, like the missing-dir refusal: a caller bug.
+TOPLEVEL="$(git -C "$WORKTREE" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -n "$TOPLEVEL" ]] && [[ "$TOPLEVEL" -ef "$CANONICAL" ]]; then
+  echo "setup-worktree: refusing to link into the canonical checkout itself: $WORKTREE" >&2
+  echo "setup-worktree: cd into the worktree first (git -C <worktree> rev-parse --show-toplevel names it), or pass WORKTREE=<worktree path>" >&2
+  exit 1
+fi
+
 mkdir -p "$WORKTREE/.claude"
 
 # Link a single file. Skips if target is already a non-symlink real file.
@@ -300,8 +317,6 @@ _salvage_dispatcher_body='toplevel="$(git rev-parse --show-toplevel 2>/dev/null)
 if [ -n "$toplevel" ]; then
   _fno_salvage_script="$toplevel/hooks/'"$_salvage_marker"'"
   [ -x "$_fno_salvage_script" ] && "$_fno_salvage_script"
-  _fno_corrections_hook="$toplevel/hooks/corrections-git-postcommit.sh"
-  [ -x "$_fno_corrections_hook" ] && "$_fno_corrections_hook"
 fi'
 _common_hooks_dir="$(git -C "$WORKTREE" rev-parse --git-common-dir 2>/dev/null)" || _common_hooks_dir=""
 if [[ -n "$_common_hooks_dir" ]]; then

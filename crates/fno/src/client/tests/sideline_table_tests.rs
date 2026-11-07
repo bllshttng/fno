@@ -1045,7 +1045,11 @@ fn agents_tab_strip_counts_rows_that_need_input() {
             mk("d1", 5, AgentBadge::Done),
         ]);
         let row = top_row(&v);
-        assert!(row.starts_with(" 2 need input"), "{harness}: {row:?}");
+        // The mark turns on the spin clock, so only the count and words are pinned.
+        assert!(
+            row[row.chars().next().map_or(0, char::len_utf8)..].starts_with("2 need input"),
+            "{harness}: {row:?}"
+        );
         let rollup = section_rollup(v.layout.agents.iter().map(agent_lattice_state));
         assert_eq!(rollup.first(), Some(&(LatticeState::Blocked, 2)));
         v.needs_open = true;
@@ -1410,7 +1414,10 @@ fn a_filed_question_stamps_the_asking_row_blocked() {
     assert_eq!(v.layout.agents[1].reason, None);
     assert_eq!(v.need_input_count(), 1, "the strip count reads the stamp");
     let row = top_row(&v);
-    assert!(row.starts_with(" 1 need input"), "{row:?}");
+    assert!(
+        row[row.chars().next().map_or(0, char::len_utf8)..].starts_with("1 need input"),
+        "{row:?}"
+    );
 
     // The stamped row sits in the pinned section and stays in its group.
     v.needs_open = true;

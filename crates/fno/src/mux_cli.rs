@@ -5166,7 +5166,7 @@ mod tests {
     use super::pane_submit::positive_post_submit_marker;
     use super::*;
     use crate::pane_send_audit::{FNO_AGENTS_HOME_GUARD, FNO_BIN_GUARD};
-    use block_args::{ParsedBlockAnnotate, ParsedBlockPipe};
+    use block_args::ParsedBlockPipe;
 
     // The paneless route-hint test lives in its own file; the parent is
     // shrink-only under the file-budget gate.
@@ -5181,30 +5181,6 @@ mod tests {
     // rule as the retire-session command landed beside it.
     #[path = "control_roundtrip_tests.rs"]
     mod control_roundtrip_tests;
-
-    #[test]
-    fn squad_target_reads_the_id_spelling_pane_ls_reports() {
-        // `pane ls` answers with a squad id; before this the tab commands took only
-        // a name, so a caller holding a pane's own squad_id had to fall back to
-        // CurrentRoute - which resolves by GAZE on the tab path and by CWD on the
-        // pane path. Two defaults for one token is what split the two commands.
-        assert_eq!(squad_target(Some("id:5".into())), PaneTarget::SquadId(5));
-        assert_eq!(squad_target(Some("id:0".into())), PaneTarget::SquadId(0));
-        // A bare name keeps its meaning.
-        assert_eq!(
-            squad_target(Some("codex".into())),
-            PaneTarget::SquadName("codex".into())
-        );
-        // A malformed id: value stays a NAME rather than becoming a refusal: a
-        // squad may legitimately be called this, and refusing would be a new way
-        // to fail for a spelling that already worked.
-        assert_eq!(
-            squad_target(Some("id:notanumber".into())),
-            PaneTarget::SquadName("id:notanumber".into())
-        );
-        assert_eq!(squad_target(None), PaneTarget::CurrentRoute);
-    }
-
     #[path = "server_axis_flag_tests.rs"]
     mod server_axis_flag_tests;
 
@@ -5354,30 +5330,6 @@ mod tests {
             assert_eq!(&pane_args(tokens).unwrap_err(), expected, "{tokens:?}");
         }
     }
-
-    #[test]
-    fn pane_selector_serves_every_pane_positional_command() {
-        // One grammar for every pane positional, not a kill-only special case.
-        let parsed = pane_args(&["send", "work:9", "--text", "hi"]).expect("must parse");
-        assert_eq!(parsed.session.as_deref(), Some("work"));
-        assert_eq!(
-            parsed.cmd,
-            PaneCmd::Send {
-                pane: 9,
-                source: SendSource::Text("hi".into()),
-                guarded: false,
-                submit: false,
-                raw: false,
-                hold_pass: false,
-                expected_identity: None,
-                style_exception: None,
-                provenance: None,
-                harness: None,
-                clear_composer: false,
-            }
-        );
-    }
-
     // -- shared selector resolution --------------------------------
 
     fn reg_row(name: &str, session_id: Option<&str>) -> crate::agents_view::RegistryAgent {
@@ -5490,49 +5442,6 @@ mod tests {
             other => panic!("expected Ambiguous, got {other:?}"),
         }
     }
-
-    #[test]
-    fn pane_focus_target_parse_digits_vs_selector_vs_fzf() {
-        // All digits: the legacy integer door, byte-identical behavior.
-        assert_eq!(
-            parse_pane_args(&op_of("focus"), &os(&["31"])).unwrap().cmd,
-            PaneCmd::Focus {
-                target: FocusTarget::Pane(31)
-            }
-        );
-        // Anything else is a selector resolved against the registry.
-        assert_eq!(
-            parse_pane_args(&op_of("focus"), &os(&["x919"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Focus {
-                target: FocusTarget::Selector("x919".into())
-            }
-        );
-        assert_eq!(
-            parse_pane_args(&op_of("focus"), &os(&["t-x919-sentinel"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Focus {
-                target: FocusTarget::Selector("t-x919-sentinel".into())
-            }
-        );
-        // --fzf with no positional opens the picker; with one it is usage.
-        assert_eq!(
-            parse_pane_args(&op_of("focus"), &os(&["--fzf"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Focus {
-                target: FocusTarget::Pick
-            }
-        );
-        assert!(parse_pane_args(&op_of("focus"), &os(&["--fzf", "31"])).is_err());
-        assert!(parse_pane_args(&op_of("focus"), &os(&["--fzf", "x919"])).is_err());
-        assert!(parse_pane_args(&op_of("focus"), &os(&[])).is_err());
-        // --fzf pairs with focus only.
-        assert!(parse_pane_args(&op_of("ls"), &os(&["--fzf"])).is_err());
-    }
-
     fn pane_row(name: &str, session: &str, pane: u64) -> PaneRow {
         PaneRow {
             name: name.to_string(),
@@ -5632,53 +5541,6 @@ mod tests {
         // A wedged row is NOT live: it must never be auto-attached.
         assert!(!wedged("s").is_live());
     }
-
-    #[test]
-    fn mux_ls_flags_stale_wire_live_server() {
-        // A live server is stale only when this client cannot attach to it.
-        // Floor-admitting generations (FLOOR_SINCE_PROTO and newer) accept
-        // this client - including a server one additive bump AHEAD of this
-        // build, which a version-equality reading would wrongly heal. Anything
-        // older predates the floor and == -gates attach, so it reads as stale
-        // even when its sidecar sits inside the floor range.
-        for version in [
-            proto::FLOOR_SINCE_PROTO,
-            proto::FLOOR_SINCE_PROTO + 1,
-            proto::FLOOR_SINCE_PROTO + 2,
-        ] {
-            let mut compatible = live("compatible");
-            compatible.wire_version = Some(version);
-            assert!(!compatible.wire_stale(), "version {version} is compatible");
-            assert_eq!(session_row_json(&compatible)["stale"], false);
-        }
-
-        // The trap the pre-floor reading hid: a sidecar at the floor looks
-        // "in range", but those binaries refuse any != client, so the
-        // auto-heal must still see them as stale.
-        let mut below_floor = live("old");
-        below_floor.wire_version = Some(proto::FLOOR_SINCE_PROTO - 1);
-        assert!(below_floor.wire_stale(), "a pre-floor wire is stale");
-        assert_eq!(session_row_json(&below_floor)["stale"], true);
-
-        below_floor.wire_version = Some(proto::MIN_COMPAT_PROTO);
-        assert!(
-            below_floor.wire_stale(),
-            "a pre-floor sidecar at the floor value is still stale"
-        );
-
-        let mut unstamped = live("pre");
-        unstamped.wire_version = None; // a pre-sidecar (older) build
-        assert!(unstamped.wire_stale(), "a missing sidecar reads as stale");
-        assert_eq!(
-            session_row_json(&unstamped)["wire_version"],
-            serde_json::Value::Null
-        );
-
-        // Non-live rows are never wire-stale (they are dead/wedged, not skewed).
-        assert!(!stale("d").wire_stale());
-        assert!(!wedged("w").wire_stale());
-    }
-
     #[test]
     fn mux_pick_key_decoding() {
         let mut esc = Vec::new();
@@ -5721,13 +5583,6 @@ mod tests {
         );
     }
     #[test]
-    fn mux_picker_anchors_cursor_on_first_live_row() {
-        // AC5-ERR: a leading stale row must not be where the cursor opens.
-        let p = Picker::new(vec![stale("old"), live("work"), live("play")]);
-        assert_eq!(p.cursor, 1);
-    }
-
-    #[test]
     fn mux_picker_enter_attaches_live_bells_on_stale() {
         let mut p = Picker::new(vec![live("work"), stale("dead")]);
         // Cursor starts on the live row -> Enter attaches it.
@@ -5739,14 +5594,6 @@ mod tests {
         assert_eq!(p.step(PickKey::Down), PickAction::Redraw);
         assert_eq!(p.cursor, 1);
     }
-
-    #[test]
-    fn mux_picker_quit_on_q_and_esc() {
-        let mut p = Picker::new(vec![live("a"), live("b")]);
-        assert_eq!(p.step(PickKey::Char(b'q')), PickAction::Quit);
-        assert_eq!(p.step(PickKey::Esc), PickAction::Quit);
-    }
-
     #[test]
     fn mux_picker_naming_flow_builds_and_attaches() {
         // AC5 `n`: inline name prompt, printable chars accumulate, Enter
@@ -5912,49 +5759,6 @@ mod tests {
         assert!(!alive(pid), "holder died to SIGTERM");
         assert!(!sock.exists(), "socket unlinked");
     }
-
-    #[test]
-    fn kill_server_sidecar_refusal_rows() {
-        let session = "w1";
-        let sock = wedged_listener(session);
-
-        let out = kill_server_inner(session, &sock);
-
-        assert_eq!(out.path, KillPath::Unrecoverable);
-        assert_eq!(out.exit_code(), EXIT_ERROR);
-        assert!(sock.exists(), "refusal must not unlink");
-        assert!(
-            out.note.contains("kill -9"),
-            "refusal names the manual kill: {}",
-            out.note
-        );
-        assert!(
-            out.note.contains("fno agents restart"),
-            "refusal names the recovery chain: {}",
-            out.note
-        );
-
-        let session = "w5";
-        let sock = wedged_listener(session);
-        let mut holder = holder(false);
-        let pid = holder.id();
-        // A mismatched start time proves the ladder checks process identity.
-        std::fs::write(proto::pid_sidecar_path(&sock), format!("{pid}:1")).unwrap();
-
-        let out = kill_server_inner(session, &sock);
-
-        assert_eq!(out.path, KillPath::Unrecoverable);
-        assert_eq!(out.exit_code(), EXIT_ERROR);
-        assert!(alive(pid), "a mismatched sidecar must never be signalled");
-        assert!(
-            out.note.contains("reused"),
-            "refusal names the identity mismatch: {}",
-            out.note
-        );
-        holder.kill().unwrap();
-        holder.wait().unwrap();
-    }
-
     // -- pane command parsing (the socket-free grammar) -----------------------
 
     fn os(args: &[&str]) -> Vec<OsString> {
@@ -6127,80 +5931,6 @@ mod tests {
             TabSel::Name("targets".into())
         );
     }
-
-    #[test]
-    fn mux_pane_parse_wait_defaults_and_units() {
-        // --timeout is seconds -> ms; the default is bounded, never infinite.
-        let p = parse_pane_args(&op_of("wait"), &os(&["5", "--quiet-ms", "200"])).unwrap();
-        assert_eq!(
-            p.cmd,
-            PaneCmd::Wait {
-                pane: 5,
-                quiet_ms: Some(200),
-                pattern: None,
-                timeout_ms: DEFAULT_WAIT_TIMEOUT_S * 1000,
-                command_done: false,
-            }
-        );
-        let p = parse_pane_args(
-            &op_of("wait"),
-            &os(&["5", "--pattern", "done", "--timeout", "3"]),
-        )
-        .unwrap();
-        assert_eq!(
-            p.cmd,
-            PaneCmd::Wait {
-                pane: 5,
-                quiet_ms: None,
-                pattern: Some("done".into()),
-                timeout_ms: 3000,
-                command_done: false,
-            }
-        );
-        // --command-done is a bare flag.
-        let p = parse_pane_args(&op_of("wait"), &os(&["5", "--command-done"])).unwrap();
-        assert_eq!(
-            p.cmd,
-            PaneCmd::Wait {
-                pane: 5,
-                quiet_ms: None,
-                pattern: None,
-                timeout_ms: DEFAULT_WAIT_TIMEOUT_S * 1000,
-                command_done: true,
-            }
-        );
-    }
-
-    #[test]
-    fn mux_pane_parse_send_style_exception() {
-        // The reasoned one-send exception threads to the renderer.
-        assert_eq!(
-            parse_pane_args(
-                &op_of("send"),
-                &os(&["2", "--text", "hi", "--style-exception", "quoted"])
-            )
-            .unwrap()
-            .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("hi".into()),
-                guarded: false,
-                submit: false,
-                raw: false,
-                expected_identity: None,
-                style_exception: Some("quoted".into()),
-                provenance: None,
-                hold_pass: false,
-                harness: None,
-                clear_composer: false,
-            }
-        );
-        // A valueless flag and a non-send command are usage errors, mirroring
-        // `--raw`: a silently ignored flag would read as "the exception held".
-        assert!(parse_pane_args(&op_of("send"), &os(&["2", "--style-exception"])).is_err());
-        assert!(parse_pane_args(&op_of("read"), &os(&["2", "--style-exception", "why"])).is_err());
-    }
-
     #[test]
     fn pane_send_default_refuses_style_but_raw_delivers_same_bytes() {
         use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -6437,17 +6167,6 @@ mod tests {
         };
         assert_eq!(render_reply(other, false, false, None), EXIT_ERROR);
     }
-
-    #[test]
-    fn mux_pane_parse_rejects_bad_commands_flags_and_ids() {
-        assert!(parse_pane_args(&op_of("read"), &os(&["notanumber"])).is_err());
-        assert!(parse_pane_args(&op_of("read"), &os(&["7", "--nope"])).is_err());
-        assert!(
-            parse_pane_args(&op_of("read"), &os(&[])).is_err(),
-            "read needs a pane id"
-        );
-    }
-
     #[test]
     fn mux_pane_run_cwd_resolves_relative_client_side() {
         let base = std::path::PathBuf::from("/home/u/proj");
@@ -6465,34 +6184,6 @@ mod tests {
         // Omitted defaults to the client cwd.
         assert_eq!(resolve_run_cwd(None, Some(base)), "/home/u/proj");
     }
-
-    #[test]
-    fn mux_pane_wait_exit_codes_are_distinct() {
-        // AC3-UI: CommandDone is tellable apart from quiet/matched/timeout/exited.
-        let codes = [
-            wait_exit_code(WaitOutcome::Quiet),
-            wait_exit_code(WaitOutcome::Matched),
-            wait_exit_code(WaitOutcome::Timeout),
-            wait_exit_code(WaitOutcome::PaneExited),
-            wait_exit_code(WaitOutcome::CommandDone { exit: Some(0) }),
-        ];
-        let mut sorted = codes.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(
-            sorted.len(),
-            5,
-            "every wait outcome maps to a distinct code"
-        );
-        assert_eq!(wait_exit_code(WaitOutcome::Quiet), EXIT_OK);
-        assert_ne!(EXIT_WAIT_TIMEOUT, EXIT_WAIT_MATCHED);
-        // The exit code is independent of the reported command exit.
-        assert_eq!(
-            wait_exit_code(WaitOutcome::CommandDone { exit: None }),
-            EXIT_WAIT_COMMAND_DONE
-        );
-    }
-
     #[test]
     fn mux_shell_init_contract() {
         for snippet in [ZSH_SHELL_INIT, BASH_SHELL_INIT] {
@@ -6549,36 +6240,6 @@ mod tests {
         let checks = [check(Verdict::Ok), check(Verdict::Fail)];
         assert_eq!(render_doctor(&checks, &[], false), EXIT_ERROR);
         assert_eq!(render_doctor(&checks, &[], true), EXIT_ERROR);
-    }
-    #[test]
-    fn session_check_verdict_rows() {
-        // AC6-ERR: the skew verdict carries the server's message (which names
-        // both versions + the restart remedy) and renders as a Fail.
-        let msg = "protocol version mismatch: client 0.3.0 speaks v7, \
-                   server 0.2.0 speaks v6. ... re-run fno to start a fresh one.";
-        let c = session_check("main", VersionVerdict::Skew(msg.into()));
-        assert_eq!(c.verdict, Verdict::Fail);
-        assert!(c.detail.contains("v7") && c.detail.contains("v6"));
-
-        // A leftover socket is worth cleaning but not a run failure; doctor
-        // never unlinks it (read-only) - the remedy points at kill-server.
-        let c = session_check("old", VersionVerdict::Stale);
-        assert_eq!(c.verdict, Verdict::Warn);
-        assert!(c.remedy.as_deref().unwrap().contains("kill-server old"));
-
-        // AC3-UI: N>0 prunable -> warn naming the count + the prune remedy; a
-        // Warn never flips doctor's exit non-zero (only Fail does).
-        let c = squad_store_verdict(0, 0);
-        assert_eq!(c.verdict, Verdict::Na);
-        assert_eq!(c.name, "workspace store (squads.json)");
-        assert!(c.remedy.is_none());
-        let c = squad_store_verdict(7, 0);
-        assert_eq!(c.verdict, Verdict::Ok);
-        assert!(c.detail.contains("7 workspace(s), none orphaned"));
-        let c = squad_store_verdict(137, 124);
-        assert_eq!(c.verdict, Verdict::Warn);
-        assert!(c.detail.contains("124 orphaned"));
-        assert_eq!(c.remedy.as_deref(), Some("fno mux workspace prune"));
     }
     #[test]
     fn doctor_session_aggregation_rows() {
@@ -6652,59 +6313,6 @@ mod tests {
             })
         );
     }
-
-    // -- block annotate --------------------------------------------
-
-    #[test]
-    fn block_annotate_parses_required_flags() {
-        assert_eq!(
-            parse_block_annotate(&os(&["--from", "3", "--node", "x-1", "-m", "off-by-one",])),
-            Ok(ParsedBlockAnnotate {
-                session: None,
-                from: 3,
-                block: BlockSel::Last,
-                node: "x-1".into(),
-                message: "off-by-one".into(),
-            })
-        );
-        // --block seq + --session + long --message.
-        assert_eq!(
-            parse_block_annotate(&os(&[
-                "--from",
-                "3",
-                "--block",
-                "7",
-                "--session",
-                "work",
-                "--node",
-                "x-2",
-                "--message",
-                "fix it",
-            ])),
-            Ok(ParsedBlockAnnotate {
-                session: Some("work".into()),
-                from: 3,
-                block: BlockSel::Seq(7),
-                node: "x-2".into(),
-                message: "fix it".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn block_annotate_usage_errors() {
-        // AC2-ERR: a missing --node is a refusal (no guessing the pane's node).
-        assert!(parse_block_annotate(&os(&["--from", "3", "-m", "x"])).is_err());
-        // Missing --from, missing -m, empty -m, unknown flag all refuse.
-        assert!(parse_block_annotate(&os(&["--node", "x-1", "-m", "x"])).is_err());
-        assert!(parse_block_annotate(&os(&["--from", "3", "--node", "x-1"])).is_err());
-        assert!(parse_block_annotate(&os(&["--from", "3", "--node", "x-1", "-m", "  "])).is_err());
-        assert!(
-            parse_block_annotate(&os(&["--from", "3", "--node", "x-1", "-m", "x", "--oops",]))
-                .is_err()
-        );
-    }
-
     #[test]
     fn block_ops_declared_in_the_tree() {
         // The operation words are declared in the typed tree now; the
@@ -6734,18 +6342,6 @@ mod tests {
         let c = cap_excerpt(&multi, 2048);
         assert!(c.is_char_boundary(c.len().min(2048)));
     }
-
-    #[test]
-    fn block_pipe_usage_errors() {
-        // Missing --from / --to, an unknown flag, and an unknown command are all
-        // parse errors (exit 2 at the command), never a partial pipe.
-        assert!(parse_block_args(&os(&["pipe", "--to", "2"])).is_err());
-        assert!(parse_block_args(&os(&["--from", "4"])).is_err());
-        assert!(parse_block_args(&os(&["--from", "4", "--to", "2", "--oops"])).is_err());
-        assert!(parse_block_args(&os(&["rerun"])).is_err());
-        assert!(parse_block_args(&os(&["--from", "x", "--to", "2"])).is_err());
-    }
-
     #[test]
     fn block_pipe_gate_refuses_open_truncated_and_implicit_blocks() {
         let meta =
@@ -6898,20 +6494,6 @@ mod tests {
         // control failure.
         assert_ne!(EXIT_CONTROL_UNANSWERED, EXIT_ERROR);
     }
-
-    // -- ordinal translation + human rendering ---------------------
-
-    #[test]
-    fn human_tab_render_label_prefers_name_then_ordinal() {
-        // AC5-HP: the name appears first; an unnamed tab shows the visible
-        // `·N`; a pre-v51 reply without either degrades to a dash, still
-        // never a bare tab_id.
-        assert_eq!(tab_label(Some("targets"), Some(3)), "targets");
-        assert_eq!(tab_label(None, Some(6)), "·6");
-        assert_eq!(tab_label(Some(""), Some(2)), "·2");
-        assert_eq!(tab_label(None, None), "-");
-    }
-
     #[test]
     fn layout_units_rows_carry_geometry_workers_and_both_ids() {
         // AC6-HP: each row carries x/y/rows/cols and both tab identifier

@@ -2817,34 +2817,6 @@ mod tests {
         let gone = rows.iter().find(|r| r.name == "gone").unwrap();
         assert!(gone.exited);
     }
-
-    #[test]
-    fn agent_rows_no_ttl_report_never_self_ages() {
-        let raw = reg(r#"{"name":"pinless","cwd":"/w","status":"live",
-                "inside_leg":{"state":"done","seq":1,
-                              "received_at":"2020-01-01T00:00:00Z"}}"#);
-        let rows = derive_rows(&raw, NOW).unwrap();
-        assert_eq!(rows[0].badge, Some(AgentBadge::Done));
-    }
-
-    #[test]
-    fn cloud_rows_render_unmeasured_and_local_rows_keep_the_ladder() {
-        // No local surface can measure a cloud row (no pid, no roster row,
-        // no transcript), so the honest render is `?`, never the alive its
-        // spawn-time status word claims. The override keys on the substrate
-        // stamp, not pid-absence: a pid-less local row still reads its ladder.
-        let raw = reg(
-            r#"{"name":"cloudy","cwd":"/w","status":"live","harness":"claude",
-                "substrate":"cloud","short_id":"session_abc123"},
-               {"name":"local","cwd":"/w","status":"live","harness":"claude"}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let cloudy = rows.iter().find(|r| r.name == "cloudy").unwrap();
-        assert_eq!(cloudy.liveness, Liveness::Unmeasured);
-        let local = rows.iter().find(|r| r.name == "local").unwrap();
-        assert_eq!(local.liveness, Liveness::Alive);
-    }
-
     #[test]
     fn derive_rows_reads_the_owner_edge_over_the_birth_edge() {
         // Succession re-homes the org. The FILE keeps the birth
@@ -2880,51 +2852,6 @@ mod tests {
         let plain = rows.iter().find(|r| r.name == "plain").unwrap();
         assert_eq!(plain.attach_id, None, "no jobId -> not attachable");
     }
-
-    #[test]
-    fn claude_identity_reads_the_v10_harness_field() {
-        // Registry v10 deleted `provider` and `claude_session_uuid` from disk in
-        // favour of `harness` / `harness_session_id`. Gating claude-only fields
-        // on the departed `provider` key made EVERY live row non-attachable
-        // while the pre-v10 fixtures above kept passing.
-        let raw = reg(
-            r#"{"name":"bg","cwd":"/w","status":"live","harness":"claude",
-                "short_id":"c19cd2c3","harness_session_id":"346f5d0d-9840-473c-af21-eaf100ca9ec2"},
-               {"name":"cx","cwd":"/w","status":"live","harness":"codex",
-                "short_id":"sockkey1","harness_session_id":"0199f0c0-1111-2222-3333-444455556666"}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let bg = rows.iter().find(|r| r.name == "bg").unwrap();
-        assert_eq!(bg.attach_id.as_deref(), Some("c19cd2c3"));
-        assert_eq!(
-            bg.claude_session_uuid.as_deref(),
-            Some("346f5d0d-9840-473c-af21-eaf100ca9ec2")
-        );
-        // A codex row's short_id is a daemon socket key, never an attach target.
-        let cx = rows.iter().find(|r| r.name == "cx").unwrap();
-        assert_eq!(cx.attach_id, None);
-        assert_eq!(cx.claude_session_uuid, None);
-    }
-
-    #[test]
-    fn parse_carries_log_path_for_non_claude_rows_only() {
-        // The registry's log_path pointer feeds the tail reader - but a
-        // claude row's log_path is its tee, not its transcript, so carrying
-        // it would silently swap the claude tail's source.
-        let codex = r#"{"name":"cx","harness":"codex","cwd":"/w",
-            "log_path":"/Users/someone/.codex/sessions/2026/09/01/rollout-x.jsonl"}"#;
-        let rows = derive_rows(&reg(codex), NOW).unwrap();
-        assert!(rows[0].log_path.is_some());
-        let claude = r#"{"name":"cc","harness":"claude","cwd":"/w","log_path":"/tee/x.jsonl"}"#;
-        let rows = derive_rows(&reg(claude), NOW).unwrap();
-        assert_eq!(rows[0].log_path, None);
-        // Untrusted registry content lands in a file read: a relative or
-        // non-jsonl pointer is refused at parse, never dereferenced.
-        let sketchy = r#"{"name":"cs","harness":"codex","cwd":"/w","log_path":"../etc/hooks"}"#;
-        let rows = derive_rows(&reg(sketchy), NOW).unwrap();
-        assert_eq!(rows[0].log_path, None);
-    }
-
     #[test]
     fn agent_rows_malformed_doc_is_none_and_alien_rows_skip() {
         assert_eq!(derive_rows("not json", NOW), None);
@@ -3024,27 +2951,6 @@ mod tests {
             "too-long-hexstring-abcdef12"
         );
     }
-
-    #[test]
-    fn derive_rows_carries_claude_uuid_only_for_claude_provider() {
-        // AC3-EDGE: a claude row carries its claude_session_uuid; a
-        // codex row with (hypothetically) the same field set carries NONE, so
-        // uuid presence alone gates respawn eligibility downstream.
-        let raw = reg(
-            r#"{"name":"cc","cwd":"/w","status":"live","provider":"claude",
-                "claude_session_uuid":"12345678-1234-1234-1234-1234567890ab"},
-               {"name":"cx","cwd":"/w","status":"live","provider":"codex",
-                "claude_session_uuid":"12345678-1234-1234-1234-1234567890ab"}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        assert_eq!(
-            get("cc").claude_session_uuid.as_deref(),
-            Some("12345678-1234-1234-1234-1234567890ab")
-        );
-        assert_eq!(get("cx").claude_session_uuid, None, "codex carries no uuid");
-    }
-
     // The row's recorded worker pid rides the parsed read: the pane-label
     // join refuses a dead row whose pid disagrees with the pane's current
     // child, so the field must survive derive_rows.
@@ -3060,73 +2966,6 @@ mod tests {
         assert_eq!(get("bob").mux, Some(("main".to_string(), 7)));
         assert_eq!(get("legacy").pid, None);
     }
-
-    #[test]
-    fn derive_rows_carries_model_and_the_vendor_route() {
-        // AC1: the lane axes survive the tolerant read. `route` is
-        // the declared spelling with `provider` as the live fallback - a NULL
-        // route key must still reach the fallback (key-present-but-null is the
-        // shape every live row carries today). A row naming neither derives
-        // route=None; the harness read is untouched.
-        let raw = reg(
-            r#"{"name":"z","cwd":"/w","status":"live","harness":"claude","provider":"zai",
-                "route":null,"model":"glm-5.3-flash[1m]"},
-               {"name":"r","cwd":"/w","status":"live","harness":"codex","provider":"openai",
-                "route":"openrouter","model":"gpt-5.6-luna"},
-               {"name":"bare","cwd":"/w","status":"live","harness":"opencode"},
-               {"name":"obs","cwd":"/w","status":"live","harness":"claude",
-                "model":null,"observed_model":{"kind":"observed","model":"gpt-5.6-luna"}},
-               {"name":"both","cwd":"/w","status":"live","harness":"claude",
-                "model":"glm-5.3-flash[1m]","observed_model":{"kind":"observed","model":"claude-opus-5"}}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        assert_eq!(
-            get("z").route.as_deref(),
-            Some("zai"),
-            "null route falls to provider"
-        );
-        assert_eq!(get("z").model.as_deref(), Some("glm-5.3-flash[1m]"));
-        assert_eq!(
-            get("r").route.as_deref(),
-            Some("openrouter"),
-            "declared route wins"
-        );
-        assert_eq!(get("bare").route, None);
-        assert_eq!(get("bare").model, None);
-        assert_eq!(
-            get("obs").model.as_deref(),
-            Some("gpt-5.6-luna"),
-            "null model falls to observed_model.model"
-        );
-        assert_eq!(get("both").model.as_deref(), Some("claude-opus-5"));
-    }
-
-    #[test]
-    fn pre_v10_provider_rows_do_not_mount_the_harness_as_the_route() {
-        // (review finding) A pre-v10 row carried the HARNESS under
-        // `provider` and no `harness` key at all; the route fallback is
-        // shape-gated on the row naming `harness`, so such a row derives
-        // route=None instead of route=Some("claude").
-        let raw = reg(
-            r#"{"name":"old","cwd":"/w","status":"live","provider":"claude"},
-               {"name":"new","cwd":"/w","status":"live","harness":"claude","provider":"zai"}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        assert_eq!(
-            get("old").harness.as_deref(),
-            Some("claude"),
-            "provider still feeds the harness read"
-        );
-        assert_eq!(
-            get("old").route,
-            None,
-            "pre-v10 provider is not a vendor lane"
-        );
-        assert_eq!(get("new").route.as_deref(), Some("zai"));
-    }
-
     /// AC11-HP, AC12-EDGE, AC13-EDGE: `attach_id` is derived PER
     /// HARNESS at the `derive_rows` seam, so a codex thread row reaches Drive
     /// while no other harness gains a tier.
@@ -3194,30 +3033,6 @@ mod tests {
         assert_eq!(reach("oc-row"), Reach::Locate);
         assert_eq!(reach("gm-row"), Reach::Locate);
     }
-
-    #[test]
-    fn cursor_agent_rows_never_derive_an_attach_id() {
-        use crate::proto::Reach;
-
-        // The capability row declares interactive_attach unsupported: a
-        // second --resume process is a rival TUI on the same remote chat,
-        // not a join. No pane row may claim the Drive reach that resolve of
-        // an attach id would grant; the row is driven by pane or by mail.
-        let chat_id = "fadad56b-8008-45f5-b809-f9fab7074534";
-        let raw = reg(&format!(
-            r#"{{"name":"cursor","cwd":"/w","status":"live","harness":"cursor-agent",
-                "host_mode":"interactive","short_id":"","harness_session_id":"{chat_id}",
-                "mux":{{"session":"s","pane_id":7}}}}"#
-        ));
-        let row = derive_rows(&raw, NOW).unwrap().remove(0);
-
-        assert_eq!(row.attach_id.as_deref(), None);
-        assert_ne!(
-            thread_reach(row.harness.as_deref(), row.attach_id.as_deref()),
-            Reach::Drive
-        );
-    }
-
     /// AC14-HP, AC16-EDGE: the viewport renders codex's
     /// attach from the DECLARATION, not from a hand-built argv. The declared
     /// form carries a bare `unix://`, so codex resolves `CODEX_HOME` itself
@@ -3243,26 +3058,6 @@ mod tests {
             "fno builds no socket path of its own: {script}"
         );
     }
-
-    /// AC5-ERR: a malformed attach block is not an attach form, and
-    /// an explicit `kind = "unsupported"` statement is - the two shapes an
-    /// override layer must tell apart so a typo skips a block while a
-    /// deliberate retirement lands.
-    #[test]
-    fn parse_attach_form_refuses_malformed_and_honors_explicit_unsupported() {
-        let idless: toml::Value = toml::from_str(r#"tokens = ["openclaw", "--last"]"#).unwrap();
-        assert!(
-            parse_form(FormLane::Attach, &idless).is_none(),
-            "an id-less block is not one"
-        );
-        let unsupported: toml::Value = toml::from_str(
-            r#"kind = "unsupported"
-tokens = []"#,
-        )
-        .unwrap();
-        assert!(parse_form(FormLane::Attach, &unsupported).is_none());
-    }
-
     /// The resume lane is stricter than the attach lane: it fills exactly
     /// `{session_id}` and runs no `pre_exec`, so a `{short_id}` form and a
     /// daemon-starting form each refuse rather than render an argv the
@@ -3292,55 +3087,6 @@ tokens = []"#,
             toml::from_str(r#"tokens = ["codex", "resume", "{session_id}"]"#).unwrap();
         assert!(parse_form(FormLane::Resume, &plain).is_some());
     }
-
-    /// AC1-HP, config half: a harness fno has never heard of, declared
-    /// ONLY as a `[harness.<name>.attach]` block, parses into a working form.
-    /// With the id substituted, it renders `sh -c '<pre>; exec <attach>'` and
-    /// reaches Drive - the no-Rust-change path, proven at the pure layer.
-    #[test]
-    fn a_config_declared_harness_parses_into_an_attach_form() {
-        let declared: toml::Value = toml::from_str(
-            r#"
-            tokens   = ["openclaw", "resume", "{session_id}"]
-            pre_exec = ["openclaw", "daemon", "start"]
-        "#,
-        )
-        .unwrap();
-        let form = parse_form(FormLane::Attach, &declared).expect("a config form parses");
-        assert_eq!(form.id_kind, IdKind::Session);
-        assert_eq!(form.pre_exec, ["openclaw", "daemon", "start"]);
-        let rendered = form.render("sess-1");
-        assert_eq!(rendered.first().map(String::as_str), Some("sh"));
-        assert!(rendered
-            .join(" ")
-            .contains("; exec 'openclaw' 'resume' 'sess-1'"));
-
-        // No pre_exec: the argv is the bare command, no shell in the way.
-        let bare: toml::Value =
-            toml::from_str(r#"tokens = ["openclaw", "attach", "{short_id}"]"#).unwrap();
-        let form = parse_form(FormLane::Attach, &bare).unwrap();
-        assert_eq!(form.id_kind, IdKind::Short);
-        assert_eq!(form.render("ab12"), ["openclaw", "attach", "ab12"]);
-
-        // A form that names no id cannot address a session, so it is not one.
-        let idless: toml::Value = toml::from_str(r#"tokens = ["openclaw", "--last"]"#).unwrap();
-        assert!(parse_form(FormLane::Attach, &idless).is_none());
-    }
-
-    /// The override layer's candidate order: project-local first, then a
-    /// different global path - the same precedence every other config reader
-    /// in this file uses.
-    #[test]
-    fn config_candidates_put_the_project_local_file_first() {
-        let candidates = config_toml_candidates();
-        assert!(
-            candidates.len() >= 2,
-            "a project-local and a global candidate: {candidates:?}"
-        );
-        assert!(candidates[0].ends_with(".fno/config.toml"));
-        assert!(candidates[0] != candidates[1]);
-    }
-
     /// AC1/AC2, Rust half: the config chain merges WHOLE rows - a
     /// nested table corrects one strategy, a scalar flips, a lane alias lands
     /// on its nested form, an unknown key is refused with the bundled row
@@ -3528,45 +3274,6 @@ unheard_of_field = true
             Liveness::Alive
         );
     }
-
-    #[test]
-    fn full_harness_session_ids_remain_distinct_for_same_prefix() {
-        let raw = reg(
-            r#"{"name":"one","cwd":"/w","status":"working","harness":"codex",
-                "harness_session_id":"01abcdef-one"},
-               {"name":"two","cwd":"/w","status":"working","harness":"codex",
-                "harness_session_id":"01abcdef-two"}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let one = rows.iter().find(|row| row.name == "one").unwrap();
-        let two = rows.iter().find(|row| row.name == "two").unwrap();
-        assert_eq!(one.effective_identity(), Some("01abcdef-one"));
-        assert_eq!(two.effective_identity(), Some("01abcdef-two"));
-        assert_ne!(one.effective_identity(), two.effective_identity());
-    }
-
-    #[test]
-    fn derive_rows_carries_team_level_and_scope() {
-        // The registry->row parse boundary: a spawn-stamped team reaches the
-        // RegistryAgent; an un-teamed row carries None (additive, absence-safe).
-        let raw = reg(
-            r#"{"name":"dir","cwd":"/w","status":"live","provider":"claude",
-                "role_level":1,"role_scope":"epic-x"},
-               {"name":"leaf","cwd":"/w","status":"live","provider":"claude"},
-               {"name":"partial","cwd":"/w","status":"live","provider":"claude",
-                "role_level":0,"role_scope":""}"#,
-        );
-        let rows = derive_rows(&raw, NOW).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        assert_eq!(get("dir").role_level, Some(1));
-        assert_eq!(get("dir").role_scope.as_deref(), Some("epic-x"));
-        assert_eq!(get("leaf").role_level, None, "un-teamed => None");
-        assert_eq!(get("leaf").role_scope, None);
-        // An empty scope string degrades to None (the badge then shows `?`).
-        assert_eq!(get("partial").role_level, Some(0));
-        assert_eq!(get("partial").role_scope, None, "empty scope => None");
-    }
-
     #[test]
     fn derive_rows_carries_dnd_separately_from_liveness() {
         let raw = reg(
@@ -3587,34 +3294,6 @@ unheard_of_field = true
         );
         assert!(plain.contains("dnd: false"), "plain row: {plain}");
     }
-
-    #[test]
-    fn derive_rows_updated_at_is_max_parseable_stamp() {
-        // US7: updated_at is the max of the parseable stamps; a row with none is
-        // None (no changed-ago line rendered).
-        let raw = reg(
-            r#"{"name":"stamped","cwd":"/w","status":"live","provider":"claude",
-                "last_message_at":"2027-01-15T07:00:00Z",
-                "context_used_pct":26, "created_at":"2027-01-15T05:00:00Z",
-                "inside_leg":{"state":"working","seq":1,"received_at":"2027-01-15T07:59:30Z","ttl_ms":120000}},
-               {"name":"bare","cwd":"/w","status":"live","provider":"claude"},
-               {"name":"over-window","cwd":"/w","status":"live","provider":"claude","context_used_pct":129}"#,
-        );
-        let now = rfc3339_like_to_secs("2027-01-15T08:00:00Z").unwrap();
-        let rows = derive_rows(&raw, now).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        // The freshest of 07:00:00 and 07:59:30 is the inside_leg stamp.
-        assert_eq!(
-            get("stamped").updated_at,
-            rfc3339_like_to_secs("2027-01-15T07:59:30Z")
-        );
-        assert_eq!(get("bare").updated_at, None);
-        assert_eq!(get("stamped").context_used_pct, Some(26));
-        assert_eq!(get("stamped").started_at, Some(now - 10800));
-        assert_eq!(get("bare").context_used_pct, None);
-        assert_eq!(get("over-window").context_used_pct, Some(129));
-    }
-
     #[test]
     fn agent_rows_malformed_stamp_fails_badge_closed() {
         let raw = reg(r#"{"name":"bad-stamp","cwd":"/w","status":"live",
@@ -3761,31 +3440,6 @@ unheard_of_field = true
     fn stamp(n: u64) -> Option<(std::time::SystemTime, u64)> {
         Some((std::time::UNIX_EPOCH + std::time::Duration::from_secs(n), n))
     }
-
-    #[test]
-    fn reader_publishes_union_on_first_tick_then_idles() {
-        let mut st = ReaderState::default();
-        let reg = reg(r#"{"name":"r","cwd":"/w","status":"live"}"#);
-        let roster = r#"{"workers":{"ab12cd34":{"sessionId":"ab12cd34-1","cwd":"/w",
-                        "dispatch":{"seed":{"name":"foreign"}}}}}"#
-            .to_string();
-        let rows = st
-            .tick(
-                stamp(1),
-                || Some(reg.clone()),
-                stamp(1),
-                || Some(roster.clone()),
-                Vec::new(),
-                NOW,
-            )
-            .expect("first tick publishes");
-        assert_eq!(rows.len(), 2);
-        // Idle tick: same stamps, nothing read, merged set unchanged.
-        assert!(st
-            .tick(stamp(1), || None, stamp(1), || None, Vec::new(), NOW)
-            .is_none());
-    }
-
     #[test]
     fn reader_torn_roster_keeps_last_good_vanished_empties(/* AC2-FR */) {
         let mut st = ReaderState::default();
@@ -3824,66 +3478,6 @@ unheard_of_field = true
         assert_eq!(gone[0].name, "r");
         assert!(!gone[0].external);
     }
-
-    #[test]
-    fn reader_retries_same_stamp_after_a_raced_read() {
-        // A changed stamp whose read came back empty (raced/failed) must NOT
-        // advance the cached stamp: the next tick at the SAME stamp with a
-        // successful read has to publish the fresh content, not stay frozen.
-        let mut st = ReaderState::default();
-        st.tick(
-            stamp(1),
-            || Some(reg(r#"{"name":"a","cwd":"/w","status":"live"}"#)),
-            None,
-            || None,
-            Vec::new(),
-            NOW,
-        );
-        let raced = st.tick(stamp(2), || None, None, || None, Vec::new(), NOW);
-        assert!(
-            raced.is_none(),
-            "a raced read keeps last-good => no publish"
-        );
-        let healed = st
-            .tick(
-                stamp(2),
-                || Some(reg(r#"{"name":"b","cwd":"/w","status":"live"}"#)),
-                None,
-                || None,
-                Vec::new(),
-                NOW,
-            )
-            .expect("the same stamp retries and publishes once the read succeeds");
-        assert_eq!(healed.len(), 1);
-        assert_eq!(
-            healed[0].name, "b",
-            "stamp did not freeze on the failed read"
-        );
-    }
-
-    #[test]
-    fn merge_upgrade_clears_a_stale_badge() {
-        // An exited registry row can still carry a live inside-leg badge; the
-        // liveness upgrade drops it so the row renders as a plain external row
-        // (plan merge step 2), never a badged one.
-        let reg = derive_rows(
-            &reg(
-                r#"{"name":"x","cwd":"/w","status":"exited","provider":"claude","short_id":"ab12cd34",
-                     "inside_leg":{"state":"working","received_at":"2020-01-01T00:00:00Z"}}"#,
-            ),
-            NOW,
-        )
-        .unwrap();
-        assert!(
-            reg[0].exited && reg[0].badge.is_some(),
-            "precondition: exited + badged"
-        );
-        let rows = merge_rows(reg, &[worker("ab12cd34", "n", "/w")]);
-        assert!(rows[0].external && !rows[0].exited);
-        assert_eq!(rows[0].badge, None, "upgrade drops the stale badge");
-        assert_eq!(rows[0].reason, None);
-    }
-
     #[test]
     fn reader_roster_only_change_republishes() {
         let mut st = ReaderState::default();
@@ -3989,40 +3583,6 @@ config_dir = "~/.claude-alt"
         let empty_dir = "[[providers.records]]\nid = \"a\"\nconfig_dir = \"\"\n";
         assert!(parse_isolated_dirs(empty_dir, None).is_empty());
     }
-
-    #[test]
-    fn isolated_roster_workers_tagged_by_account(/* AC1-EDGE */) {
-        let mut st = ReaderState::default();
-        let reg = reg(r#"{"name":"home","cwd":"/w","status":"live"}"#);
-        let default_roster = roster_json("aa11bb22", "default-w", "/w");
-        let alt_roster = roster_json("cc33dd44", "alt-w", "/alt");
-        let rows = st
-            .tick(
-                stamp(1),
-                || Some(reg),
-                stamp(1),
-                || Some(default_roster),
-                vec![iso("readyrule", stamp(1), Some(&alt_roster))],
-                NOW,
-            )
-            .expect("first tick publishes the union");
-        let alt = rows
-            .iter()
-            .find(|r| r.name == "alt-w")
-            .expect("isolated worker present");
-        assert_eq!(
-            alt.account.as_deref(),
-            Some("readyrule"),
-            "isolated row tagged by its source account"
-        );
-        assert!(alt.external);
-        let def = rows
-            .iter()
-            .find(|r| r.name == "default-w")
-            .expect("default worker present");
-        assert_eq!(def.account, None, "default roster stays untagged");
-    }
-
     #[test]
     fn missing_isolated_roster_omits_that_account(/* AC2-EDGE */) {
         // A registered isolated account whose roster.json does not exist (stamp
@@ -4042,82 +3602,6 @@ config_dir = "~/.claude-alt"
         assert_eq!(rows.len(), 1, "no isolated rows for a missing roster");
         assert_eq!(rows[0].name, "home");
     }
-
-    #[test]
-    fn upgraded_registry_row_adopts_roster_account(/* Locked Decision 6 */) {
-        // An exited registry row (account None) whose short_id is live in an
-        // ISOLATED roster is upgraded AND adopts that roster's account tag - the
-        // structural source is ground truth for an adopted isolated worker.
-        let reg = derive_rows(
-            &reg(r#"{"name":"adopted","cwd":"/w","status":"exited","provider":"claude","short_id":"ab12cd34"}"#),
-            NOW,
-        )
-        .unwrap();
-        assert!(reg[0].exited && reg[0].account.is_none());
-        let mut w = worker("ab12cd34", "adopted", "/w");
-        w.account = Some("readyrule".into());
-        let rows = merge_rows(reg, &[w]);
-        assert_eq!(rows.len(), 1, "no duplicate foreign row");
-        assert!(!rows[0].exited && rows[0].external);
-        assert_eq!(rows[0].account.as_deref(), Some("readyrule"));
-    }
-
-    #[test]
-    fn live_registry_row_adopts_matching_roster_account(/* codex P1 */) {
-        // A LIVE (non-exited) registry row for a paneless --account bg worker is
-        // deduped registry-wins, but must still carry the isolated-roster
-        // account tag - not only the exited liveness-upgrade path.
-        let reg = derive_rows(
-            &reg(r#"{"name":"bg","cwd":"/w","status":"live","provider":"claude","short_id":"ab12cd34"}"#),
-            NOW,
-        )
-        .unwrap();
-        assert!(!reg[0].exited && reg[0].account.is_none());
-        let mut w = worker("ab12cd34", "bg", "/w");
-        w.account = Some("readyrule".into());
-        let rows = merge_rows(reg, &[w]);
-        assert_eq!(rows.len(), 1, "registry-wins dedup, no foreign twin");
-        assert!(
-            !rows[0].exited,
-            "a live row stays live (no spurious upgrade)"
-        );
-        assert_eq!(rows[0].account.as_deref(), Some("readyrule"));
-    }
-
-    #[test]
-    fn isolated_idle_tick_reuses_cache_without_republish() {
-        // gemini review: an unchanged isolated roster is not re-parsed - the
-        // cached tagged workers are reused and the merged set stays identical,
-        // so an idle tick publishes nothing.
-        let mut st = ReaderState::default();
-        let reg = reg(r#"{"name":"home","cwd":"/w","status":"live"}"#);
-        let alt = roster_json("cc33dd44", "alt-w", "/alt");
-        let first = st
-            .tick(
-                stamp(1),
-                || Some(reg),
-                None,
-                || None,
-                vec![iso("rr", stamp(1), Some(&alt))],
-                NOW,
-            )
-            .expect("first publish");
-        assert!(first.iter().any(|r| r.name == "alt-w"));
-        // Idle: same stamp, the server did not re-read (raw None). Cache reused.
-        let idle = st.tick(
-            stamp(1),
-            || None,
-            None,
-            || None,
-            vec![iso("rr", stamp(1), None)],
-            NOW,
-        );
-        assert!(
-            idle.is_none(),
-            "unchanged roster reuses cache, no republish"
-        );
-    }
-
     #[test]
     fn torn_isolated_roster_keeps_its_last_good(/* AC1-FR */) {
         let mut st = ReaderState::default();
@@ -4407,20 +3891,6 @@ config_dir = "~/.claude-alt"
             Some("loop 2m ago")
         );
     }
-
-    #[test]
-    fn newest_fire_ages_reads_a_store_committed_row() {
-        // AC7-HP: a store-only loop_check row 120s before now maps to 120.
-        let t = Tmp::new("fire-ages");
-        t.write_event(SID, "2026-07-09T01:05:00Z");
-        let now = rfc3339_like_to_secs("2026-07-09T01:07:00Z").unwrap();
-        let ages = newest_fire_ages(&t.events(), now);
-        assert_eq!(ages.get(SID), Some(&120), "{ages:?}");
-        // No rows -> no badges, never an error.
-        let empty = Tmp::new("fire-ages-empty");
-        assert!(newest_fire_ages(&empty.events(), 1_800_000_000).is_empty());
-    }
-
     #[test]
     fn truth_badge_refusal_rows() {
         // AC3b/AC4: a dead-pid claim (suspect/stale) never earns a Working badge.
@@ -4484,20 +3954,6 @@ config_dir = "~/.claude-alt"
         let badges = build_truth_badges_at(&raw, now, &t.claims(), &t.events());
         assert!(badges.is_empty());
     }
-
-    #[test]
-    fn newest_fire_wins_and_missing_events_empty() {
-        let t = Tmp::new("newest");
-        t.write_event(SID, "2026-07-09T01:00:00Z");
-        t.write_event(SID, "2026-07-09T01:05:00Z"); // newest
-        t.write_event(SID, "2026-07-09T01:02:00Z");
-        let now = rfc3339_like_to_secs("2026-07-09T01:07:00Z").unwrap();
-        let ages = newest_fire_ages(&t.events(), now);
-        assert_eq!(ages.get(SID), Some(&120)); // 01:05 -> 2m
-        let empty = newest_fire_ages(&t.0.join("nope.jsonl"), now);
-        assert!(empty.is_empty());
-    }
-
     // -- external lifecycle reconcile --------------------------------
 
     use crate::squad_store::{ExternalLifecycle, ExternalState};

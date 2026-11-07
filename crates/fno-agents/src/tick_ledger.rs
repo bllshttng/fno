@@ -1688,8 +1688,6 @@ pub const LAUNCHD_LABELS: &[&str] = &[
     "sh.fno.autocontinue",
     "sh.fno.sync-backlog",
     "sh.fno.board-server",
-    "com.user.autocorrect",
-    "com.user.autocorrect-watcher",
 ];
 
 /// One label's facts from the fold. Serialized with the `exit` key doctor's
@@ -1703,7 +1701,7 @@ pub struct LaunchdLabelFacts {
 }
 
 /// The launchd fold: every label the table lists with its loaded/last-exit
-/// facts, plus the dead list any ``sh.fno.*`` or autocorrect label with a
+/// facts, plus the dead list any ``sh.fno.*`` label with a
 /// nonzero last exit - the same shape doctor's deleted Python reader built,
 /// widened to the labels its `sh.fno.` prefix filter missed. Not-applicable
 /// off macOS or when launchctl cannot run: it fabricates no alarm.
@@ -1762,10 +1760,7 @@ pub(crate) fn parse_launchctl_list(text: &str) -> LaunchdFold {
                 return None;
             }
             let label = cols[2].trim();
-            if !label.starts_with("sh.fno.")
-                && label != "com.user.autocorrect"
-                && label != "com.user.autocorrect-watcher"
-            {
+            if !label.starts_with("sh.fno.") {
                 return None;
             }
             let exit: i64 = cols[1].trim().parse().ok()?;

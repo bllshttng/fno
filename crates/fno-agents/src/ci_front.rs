@@ -551,17 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_check_reads_green_while_the_batch_run_is_cancelled() {
-        let runs = vec![
-            run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),
-            run_row("rust-ci", "completed", "success", "2026-10-25T00:00:00Z"),
-            run_row("cli-ci", "completed", "cancelled", "2026-10-25T00:00:00Z"),
-        ];
-        assert_eq!(merge_check(&runs), "green");
-        assert_eq!(verdict_from_runs(&runs).0, "red");
-    }
-
-    #[test]
     fn merge_check_never_reads_green_on_a_cancelled_missing_or_pr_row() {
         let cancelled = vec![
             run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),

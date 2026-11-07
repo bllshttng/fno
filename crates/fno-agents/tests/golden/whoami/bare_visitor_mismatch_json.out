@@ -10,7 +10,6 @@
   "project_root": "<FIXTURE>/project",
   "session": null,
   "visitor": "manifest names session resident-session, not this one",
-  "walker": null,
   "warnings": [
     "not a git repo, using cwd"
   ],

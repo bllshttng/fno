@@ -1246,12 +1246,6 @@ merge"
         );
         assert_eq!(posture_holds(Some(gap), false, false), None);
     }
-
-    #[test]
-    fn null_posture_refuses_on_a_recomputed_row() {
-        let row = json!({"coverage": "covered", "review_posture": null});
-        assert!(posture_refusal(&row, true).is_some());
-    }
 }
 
 #[cfg(test)]

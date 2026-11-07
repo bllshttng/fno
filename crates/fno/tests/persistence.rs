@@ -64,6 +64,7 @@ const LOSER_EXIT_BOUND: Duration = Duration::from_secs(25);
 /// inside the bound.
 fn one_owner(scratch: &Scratch, bound: Duration) -> Result<u32, String> {
     let started = std::time::Instant::now();
+    let serving_record = format!("fno mux: serving {}", scratch.main_sock().display());
     loop {
         let processes = server_processes(scratch);
         let sidecar = std::fs::read_to_string(scratch.0.join("main.pid"));
@@ -73,7 +74,7 @@ fn one_owner(scratch: &Scratch, bound: Duration) -> Result<u32, String> {
                 if let Some(owner_pid) = sidecar_pid_field(sidecar) {
                     let serving = log
                         .lines()
-                        .filter(|l| l.starts_with("fno mux: serving "))
+                        .filter(|l| l.ends_with(serving_record.as_str()))
                         .count();
                     let refused = log.lines().any(|l| l.contains("cannot bind"));
                     let lone_pid = processes[0]

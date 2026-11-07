@@ -99,6 +99,19 @@ use std::time::Duration;
 pub(crate) const DEFAULT_ONE_SHOT_TIMEOUT: Duration = Duration::from_secs(600);
 pub(crate) const OPENCODE_DEFAULT_MODEL: &str = "zai-coding-plan/glm-5.3";
 
+/// v2's `--model` parses `provider/model`; a bare name reads as a provider
+/// with an empty model and the turn dies mid-flight inside the server
+/// (measured: `Model not found: glm-5.3-flash/.`). Refuse at the door and
+/// name the qualified id the lane expects.
+pub(crate) fn require_qualified_model(model: Option<&str>) -> Result<(), String> {
+    match model {
+        Some(m) if !m.is_empty() && !m.contains('/') => Err(format!(
+            "opencode spells its model provider/model (e.g. zai-coding-plan/glm-5.3-flash); got bare {m:?}. Pass the qualified id."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Stdout/stderr/exit triple returned to the client (mirror of the sibling
 /// provider `AskOutcome`s; each module owns its own nominal type).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,6 +423,9 @@ pub fn dispatch_opencode_once(
     if let Err(msg) = validate_spawn_inputs(name, from_name) {
         return AskOutcome::err(msg, 2);
     }
+    if let Err(msg) = require_qualified_model(model) {
+        return AskOutcome::err(msg, 2);
+    }
     let events = home.events_jsonl();
 
     // Authoritative registry read, fail-closed (the caller's collision check is
@@ -523,6 +539,30 @@ mod tests {
             }],
         });
         crate::registry_store::seed_raw(&home.registry_json(), body.to_string());
+    }
+
+    // v2's --model parses provider/model; a bare name lands as a provider with
+    // an empty model and the turn dies mid-flight deep in the server. The door
+    // refuses and names the qualified id instead of failing late.
+    #[test]
+    fn bare_opencode_model_refuses_naming_the_qualified_form() {
+        let error = require_qualified_model(Some("glm-5.3-flash")).unwrap_err();
+        assert!(error.contains("provider/model"), "names the shape: {error}");
+        assert!(
+            error.contains("zai-coding-plan/glm-5.3-flash"),
+            "names the concrete remedy: {error}"
+        );
+        assert!(
+            error.contains("glm-5.3-flash"),
+            "echoes what arrived: {error}"
+        );
+    }
+
+    #[test]
+    fn qualified_empty_and_absent_opencode_models_pass_the_gate() {
+        require_qualified_model(Some("zai-coding-plan/glm-5.3-flash")).unwrap();
+        require_qualified_model(Some("")).unwrap();
+        require_qualified_model(None).unwrap();
     }
 
     #[test]

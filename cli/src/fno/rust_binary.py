@@ -568,7 +568,15 @@ def resolve_front_binary() -> Optional[Path]:
 
 
 def front_door_handoff(tail: Sequence[str], family: str) -> Optional[int]:
-    """Hand a native-family call to the door; None when no runnable door exists or the door is this launcher (an fno-py shim re-enters)."""
+    """Hand a native-family call to the door; None when no runnable door exists or the door is this launcher (an fno-py shim re-enters).
+
+    Also None when the door exec'd this fno-py itself (``FNO_PY_FROM_DOOR``):
+    the argv we hold is one the door already declined to serve, so handing it
+    back ping-pongs door -> python -> door until the waiting-process chain
+    eats the machine.
+    """
+    if os.environ.get("FNO_PY_FROM_DOOR"):
+        return None
     import subprocess
 
     door = resolve_front_binary()
@@ -621,6 +629,10 @@ def _native_family_signpost(name: str, command: str):
         callback=_cb,
         params=[click.Argument(("argv",), nargs=-1, type=str, required=False)],
         context_settings={"ignore_unknown_options": True, "allow_interspersed_args": True},
+        # click's eager --help would answer locally with this stub's blurb;
+        # the door owns the family usage, so --help rides the handoff like
+        # -h does.
+        add_help_option=False,
         help=f"The {name} family is native: the Rust front door answers it.",
     )
 

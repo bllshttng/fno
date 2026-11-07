@@ -378,7 +378,6 @@ G2	crates/fno-agents/src/correction_meter.rs	rs	1
 G2	crates/fno-agents/src/correction_outcome.rs	rs	1
 G2	crates/fno-agents/src/correction_readings.rs	rs	1
 G2	crates/fno-agents/src/correction_seat.rs	rs	2
-G2	crates/fno-agents/src/corrections_verify/tests.rs	rs	5
 G2	crates/fno-agents/src/cutover.rs	rs	2
 G3	crates/fno-agents/src/daemon/claude_stop.rs	rs	6
 G3	crates/fno-agents/src/daemon/codex_thread_lane.rs	rs	1

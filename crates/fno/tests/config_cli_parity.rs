@@ -14,12 +14,16 @@
 //! the committed oracle. The cold-settings.yaml path is covered end-to-end
 //! by the worktree-manager smoke tests, whose `wt_config` reader goes
 //! through `fno config get` against a fresh HOME.
+//! The two forwarded help routes are covered by `forwarded_help_keeps_argv`;
+//! they use a local `fno-py` probe instead of provisioning a wheel.
 //!
 //! With `FNO_CAPTURE_GOLDEN=1` the test re-freezes every golden from the
 //! oracle (`--case` mode, which loads the base-commit leg from git) instead
 //! of comparing, so the capture stays reproducible while the base commit
 //! exists.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -169,12 +173,6 @@ fn cases() -> Vec<Case> {
             fixture: "empty_project",
         },
         Case {
-            name: "builddir_help",
-            argv: &["config", "build-dir", "--help"],
-            env: &[],
-            fixture: "empty_project",
-        },
-        Case {
             name: "budget_nostamp",
             argv: &["config", "assert-subagent-budget", "--width", "4"],
             env: &[],
@@ -245,12 +243,6 @@ fn cases() -> Vec<Case> {
             argv: &["config", "active-backlog"],
             env: FAKE_BIN,
             fixture: "fake_agents_list",
-        },
-        Case {
-            name: "backlog_help",
-            argv: &["config", "active-backlog", "--help"],
-            env: &[],
-            fixture: "empty_project",
         },
         Case {
             name: "plugin_usage",
@@ -352,9 +344,10 @@ fn unique_root(name: &str) -> PathBuf {
 
 /// Build the fixture through the driver, the way the capture ran it.
 fn build_fixture(case: &Case, root: &Path) {
+    debug_assert!(!case.fixture.is_empty());
     let out = Command::new("python3")
         .arg(DRIVER)
-        .args(["--fixture", case.fixture])
+        .args(["--fixture", case.name])
         .arg(root)
         .output()
         .expect("python3 must exist to rebuild parity fixtures");
@@ -376,6 +369,15 @@ fn run_native(case: &Case, root: &Path) -> (String, String, i32) {
         .args(case.argv)
         .current_dir(&project)
         .env("PATH", std::env::var("PATH").unwrap_or_default());
+    for marker in [
+        "CODEX_THREAD_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CODEX_SESSION_ID",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+    ] {
+        command.env_remove(marker);
+    }
     for (key, value) in case_env(root, case.env) {
         command.env(key, value);
     }
@@ -440,4 +442,50 @@ fn config_cli_family_matches_the_captured_leg() {
         }
         let _ = std::fs::remove_dir_all(&root);
     }
+    #[cfg(unix)]
+    forwarded_help_keeps_argv();
+}
+
+#[cfg(unix)]
+fn forwarded_help_keeps_argv() {
+    let root = unique_root("forwarded-help");
+    let project = root.join("project");
+    let home = root.join("home");
+    let state = root.join("state");
+    std::fs::create_dir_all(project.join(".fno")).unwrap();
+    std::fs::create_dir_all(home.join(".fno")).unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join(".path-migration-done"), b"").unwrap();
+    let launcher = root.join("fno-py");
+    std::fs::write(&launcher, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n").unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for args in [
+        &["config", "build-dir", "--help"][..],
+        &["config", "active-backlog", "--help"][..],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_fno"))
+            .args(args)
+            .current_dir(&project)
+            .env("FNO_PY", &launcher)
+            .env("FNO_AGENT_SELF", "1")
+            .env("FNO_REPO_ROOT", &project)
+            .env("FNO_GLOBAL_SETTINGS_PATH", home.join(".fno/settings.yaml"))
+            .env("FNO_NO_CANONICAL_CONFIG", "1")
+            .env("FNO_STATE_DIR", &state)
+            .env("HOME", &home)
+            .output()
+            .expect("fno must run");
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            args.join(" ")
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "forwarded CLI stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

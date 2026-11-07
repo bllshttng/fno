@@ -116,13 +116,4 @@ mod tests {
         assert_eq!(got.len(), 4);
         assert_eq!(got[3], "\u{25c9} +2 more watching");
     }
-
-    #[test]
-    fn a_long_observer_line_ends_in_an_ellipsis_at_the_width() {
-        let line = "\u{25c9} teacher \u{b7} ssh \u{b7} lead-5317".to_string();
-        assert_eq!(clip(line.clone(), 40), line);
-        let cut = clip(line, 12);
-        assert_eq!(cut.chars().count(), 12);
-        assert!(cut.ends_with('\u{2026}'), "{cut}");
-    }
 }

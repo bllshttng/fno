@@ -1,9 +1,8 @@
 //! Spawn gate : global concurrency cap + free-RAM floor + queue loop.
 //!
 //! Called at the top of the client `spawn` arm for the `bg`/`headless`
-//! substrates only (`pane` re-execs into the Python CLI, whose mirrored gate
-//! in `fno/agents/spawn_gate.py` is the sole gate on that path — exactly one
-//! gate evaluation per spawn, LD1).
+//! substrates only (`pane` re-execs through the native command dispatcher; the
+//! same Rust gate is the sole gate on every supported spawn path).
 //!
 //! The gate is READ-ONLY: the `max_live` slot cap counts the fno registry
 //! (worker provenance) and the RAM floor reads system `vm_stat`/meminfo. The
@@ -35,7 +34,7 @@ use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_rece
 use crate::spawn_gate_slots::{annotate_burst, burst_slot_reading, slot_tick_line};
 use crate::state::RegistryEntry;
 use crate::AgentStatus;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Exit codes, allocated by the shared table in
 /// `cli/src/fno/agents/spawn_gate.py` and kept unique across both trees by
@@ -89,6 +88,8 @@ pub const EXIT_RULE_REFUSED: i32 = 93;
 /// seat waits. Work on a node that already has a PR is exempt, and
 /// `--force` does not lift it.
 pub const EXIT_OPEN_PR_CAP: i32 = 94;
+/// A team's known metered model spend has reached `budget.team.cost_cap_usd`.
+pub const EXIT_TEAM_COST_CAP: i32 = 95;
 
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
@@ -1321,6 +1322,8 @@ pub struct GateInput {
     pub session_phase: Option<String>,
 }
 
+pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
+
 const REVIEW_SESSION_REMEDY: &str = "run the review in the session that did the work: \
      /fno:review <level> ($fno:review <level> on codex), or fno do target request-self-review";
 
@@ -1565,6 +1568,11 @@ fn decide_gate(
         route_provider.and_then(|p| spawn_gate_lanes::provider_lanes_cap(config_cwd, p));
 
     if flags.force && provider_cap.is_none() {
+        // A team spend cap is hard even when the caller uses --force. The
+        // ordinary admission path checks it at dispatch after any queue wait.
+        if let Err(refusal) = crate::spawn_gate_spend::check_team_cost_cap(config_cwd, &input) {
+            return Err(refusal);
+        }
         // Force speaks for the machine being busy, never for one territory
         // overrunning its team, so the per-territory cap stays enforced
         // here - the one axis --force does not excuse.
@@ -2079,6 +2087,12 @@ fn decide_gate(
                                     return Err(territory_refusal(&receipt));
                                 }
                             }
+                            if let Err(refusal) =
+                                crate::spawn_gate_spend::check_team_cost_cap(config_cwd, &input)
+                            {
+                                guard.release();
+                                return Err(refusal);
+                            }
                             // The blueprint axis beside it: a full
                             // planning lane refuses, never queues.
                             if let Err(receipt) = check_blueprint_cap(
@@ -2308,6 +2322,8 @@ fn decide_gate(
             return Err(Refusal::with_receipt(EXIT_QUEUE_TIMEOUT, receipt));
         }
         std::thread::sleep(pause);
+        // A queued pass must not reuse the admit pass's roster reading.
+        crate::backlog::worked::forget_roster_reading();
     }
 }
 

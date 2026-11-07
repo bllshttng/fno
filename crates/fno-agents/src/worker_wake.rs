@@ -182,9 +182,9 @@ fn run_pass_with(
         liveness,
     } = pass;
     let evidence = crate::watch_expiry::read_evidence(home, now)?;
-    let receipts = crate::event_store::journal_text_checked(
+    let journal = crate::event_store::journal_text_checked(
         &home.events_jsonl(),
-        &crate::event_store::EventQuery::of_types(&[EVENT]),
+        &crate::event_store::EventQuery::of_types(&[EVENT, "termination"]),
     )?;
     let mut acted = 0;
     let mut seen = HashSet::new();
@@ -277,6 +277,12 @@ fn run_pass_with(
                 continue;
             }
         };
+        if let (Some(fno_id), Some(last)) = (row.fno_id.as_deref(), tail.last) {
+            if team_budget_terminal_after(&journal, fno_id, last) {
+                report_skip(dry_run, row, "team_cost_budget_terminal");
+                continue;
+            }
+        }
         if let Some(reason) = tail.parked.as_deref() {
             report_skip(dry_run, row, reason);
             continue;
@@ -355,7 +361,7 @@ fn run_pass_with(
             report_skip(dry_run, row, "duplicate_episode");
             continue;
         }
-        if receipts
+        if journal
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
             .any(|r| {
@@ -418,6 +424,22 @@ fn run_pass_with(
         }
     }
     Ok(acted)
+}
+
+fn team_budget_terminal_after(journal: &str, fno_id: &str, latest_turn_ms: i64) -> bool {
+    journal.lines().any(|line| {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+        let data = &row["data"];
+        data["session_id"].as_str() == Some(fno_id)
+            && data["reason"].as_str() == Some("Budget")
+            && data["axis"].as_str() == Some("team_cost")
+            && row["ts"]
+                .as_str()
+                .and_then(epoch)
+                .is_some_and(|ts| ts >= latest_turn_ms)
+    })
 }
 
 fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
@@ -857,6 +879,7 @@ mod tests {
             "terminal_pr",
             "unmeasured_pr",
             "complete",
+            "team_cost_budget",
             "unknown_liveness",
             "quota",
             "quota_code_only",
@@ -889,6 +912,15 @@ mod tests {
                     };
                 }
                 "complete" => f.write(&[json!({"type":"task_complete", "last_agent_message":"<promise>MISSION COMPLETE: shipped</promise>"})]),
+                "team_cost_budget" => {
+                    f.row.fno_id = Some("manifest-a".into());
+                    crate::events::EventEmitter::new(f.home.events_jsonl(), "hook")
+                        .emit("termination", &json!({
+                            "session_id":"manifest-a", "reason":"Budget", "axis":"team_cost",
+                            "message":"budget exceeded (axis=team_cost)"
+                        }))
+                        .unwrap();
+                }
                 "terminal" => f.nodes[0]["status"] = json!("done"),
                 "role" => f.row.role_level = Some(2),
                 "operator" => f.row.origin = Some("operator".into()),
@@ -910,5 +942,22 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn team_budget_terminal_parks_until_a_later_transcript_timestamp() {
+        let journal = r#"{"ts":"2026-10-06T10:10:00Z","data":{"session_id":"manifest-a","reason":"Budget","axis":"team_cost"}}"#;
+        let terminal = epoch("2026-10-06T10:10:00Z").unwrap();
+        assert!(team_budget_terminal_after(
+            journal,
+            "manifest-a",
+            terminal - 1
+        ));
+        assert!(team_budget_terminal_after(journal, "manifest-a", terminal));
+        assert!(!team_budget_terminal_after(
+            journal,
+            "manifest-a",
+            terminal + 1
+        ));
     }
 }

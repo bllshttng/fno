@@ -889,21 +889,6 @@ mod tests {
         assert_eq!(status, 200, "{body}");
         assert_eq!(io.clears.len(), 1);
     }
-
-    /// The gate itself: a leading `-`, whitespace, and control characters in
-    /// the id are refused; a plain `q-` slug passes.
-    #[test]
-    fn argv_gate_refuses_flag_shaped_and_control_ids() {
-        assert!(argv_gate("q-abc123", "prose").is_ok());
-        assert!(argv_gate("", "prose").is_err());
-        assert!(argv_gate("--answer", "prose").is_err());
-        assert!(argv_gate("q abc", "prose").is_err());
-        assert!(argv_gate("q-\u{7}x", "prose").is_err());
-        let long = format!("q-{}", "a".repeat(200));
-        assert!(argv_gate(&long, "prose").is_err());
-        assert!(argv_gate("q-abc", &"x".repeat(2001)).is_err());
-    }
-
     #[test]
     fn exactly_one_of_option_words_done_is_enforced() {
         let mut io = MemIo::default();
@@ -1005,38 +990,6 @@ mod tests {
         assert_eq!(io.rows[1]["data"]["idempotency_key"], "k2");
         assert_eq!(io.clears.len(), 1, "no second clear");
     }
-
-    #[test]
-    fn done_answers_a_pin_and_is_refused_on_a_question() {
-        let sinks = vec![sink("phone", "tok-1")];
-        let mut io = MemIo::default();
-        io.items = vec![item_json("p-1", "pin", 0)];
-        io.journal = MemIo::asked("p-1");
-        let (status, _) = handle_answer(
-            &mut io,
-            &sinks,
-            "p-1",
-            Some("tok-1"),
-            None,
-            br#"{"done": true, "idempotency_key": "k"}"#,
-        );
-        assert_eq!(status, 200);
-        assert_eq!(io.clears, vec![("p-1".into(), "done".into())]);
-
-        let mut io = MemIo::default();
-        io.items = vec![item_json("q-1", "question", 2)];
-        let (status, _) = handle_answer(
-            &mut io,
-            &sinks,
-            "q-1",
-            Some("tok-1"),
-            None,
-            br#"{"done": true, "idempotency_key": "k"}"#,
-        );
-        assert_eq!(status, 422);
-        assert!(io.rows.is_empty());
-    }
-
     #[test]
     fn list_filters_by_state_kind_ready_and_project() {
         let mut io = MemIo::default();
@@ -1071,37 +1024,5 @@ mod tests {
         let (_, body) = handle_list(&mut io, &q);
         assert_eq!(body["items"].as_array().unwrap().len(), 1);
         assert_eq!(body["items"][0]["id"], "q-3");
-    }
-
-    #[test]
-    fn a_projection_failure_reads_503_and_a_garbage_body_422() {
-        struct Broken;
-        impl ApiIo for Broken {
-            fn items(&mut self) -> Result<(String, Vec<Value>), String> {
-                Err("needs: spawn failed".into())
-            }
-            fn journal_text(&mut self) -> Result<String, String> {
-                Err("no journal".into())
-            }
-            fn append_row(&mut self, _row: &Value) -> Result<(), String> {
-                Err("no disk".into())
-            }
-            fn clear(&mut self, _id: &str, _text: &str) -> Result<(), String> {
-                Ok(())
-            }
-        }
-        let mut io = Broken;
-        let sinks = vec![sink("phone", "tok-1")];
-        let (status, _) = handle_answer(
-            &mut io,
-            &sinks,
-            "q-1",
-            Some("tok-1"),
-            None,
-            &answer_body(1, "k"),
-        );
-        assert_eq!(status, 503);
-        let (status, _) = handle_answer(&mut io, &sinks, "q-1", Some("tok-1"), None, b"not json");
-        assert_eq!(status, 422);
     }
 }

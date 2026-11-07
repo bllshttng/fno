@@ -199,8 +199,6 @@ use bot_nudge::{
 };
 pub(crate) use bot_verdict::bot_verdict;
 use bot_verdict::{clean_pass_review, usage_limit_comment_by};
-#[cfg(test)]
-use bounded_run::BOUNDED_STDERR_TAIL_CAP;
 pub(crate) use bounded_run::{
     bounded_read, bounded_read_diagnostic, bounded_read_unadmitted, git_bounded,
     log_bounded_read_error, BoundedOutput, GhReadError,
@@ -277,8 +275,8 @@ use posture::{
 };
 #[cfg(test)]
 use pr_read::manifest_node_pr_selector;
-use pr_read::node_done_pr_merged;
 pub(crate) use pr_read::CiConclusion;
+use pr_read::{node_done_terminal, DoneNodeTerminal};
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_command::{run_review_coverage, run_review_coverage_capture};
 use review_findings::{
@@ -767,6 +765,11 @@ pub(crate) fn decide_with_payload(
                 cap_usd.map(|c| serde_json::json!(c)),
                 serde_json::json!(spent_usd),
             ),
+            BudgetTrip::TeamCost { cap_usd, spent_usd } => (
+                "team_cost",
+                cap_usd.map(|c| serde_json::json!(c)),
+                serde_json::json!(spent_usd),
+            ),
         };
         let mut data = serde_json::json!({
             "session_id": session_id,
@@ -837,20 +840,23 @@ pub(crate) fn decide_with_payload(
     // re-learn a known fact, and under a loaded machine that read is the one
     // thing that can still time out - each timeout re-blocked the finished
     // session so it never went idle and never took its queued mail. Retire
-    // the fire on the store's own stamp, before the probe and done()
-    // can pay for a read. Batched units ship via the batch PR (their terminal
-    // is DoneBatched) and advisory/plan units have their own folds, so none of
-    // them take this verdict. A failed store read or an open node keeps the
-    // REST read, which is the pre-existing behavior (fail-open).
+    // the fire on the store's own stamp, before the probe and done() can pay
+    // for a read. A done node with no PR record uses the advisory
+    // terminal on a promise, after the same finding, local-work and probe
+    // holds. Batched, plan and explicitly advisory units have their own folds.
+    // A failed store read or an open node keeps the REST read (fail-open).
     if !manifest.batched && !manifest.planned && !manifest.advisory && !manifest.no_ship {
-        if let Some(pr_number) = node_done_pr_merged(&cwd, node_id.as_deref()) {
+        if let Some(node_terminal) = node_done_terminal(&cwd, node_id.as_deref()).filter(|t| {
+            matches!(t, DoneNodeTerminal::Merged(_))
+                || (matches!(t, DoneNodeTerminal::NoPr) && intent == Intent::Promise)
+        }) {
             // The shortcut must not outrank the terminal gates that ride the
             // full done() read: an open operator finding holds every success
             // terminal, unshipped local work is not delivered work, and a red
-            // done_probe is the final DonePRGreen conjunct. Each one falls
-            // through to the full gate, which blocks with its own reason.
-            // Plan fidelity rides the node itself: the done stamp is
-            // reconcile's own all-ships-landed verdict.
+            // done_probe withholds the terminal. Each one falls through to the
+            // full gate, which blocks with its own reason. Plan fidelity rides
+            // the node itself: the done stamp is reconcile's all-ships-landed
+            // verdict.
             let held_by_findings = match node_id.as_deref() {
                 Some(n) => {
                     let (open_findings, findings_read_error) =
@@ -892,11 +898,24 @@ pub(crate) fn decide_with_payload(
                 );
             }
             if shortcut_holds {
-                let reason = format!(
-                    "node {node} done and PR #{n} recorded merged in the graph store; retiring the fire without the REST read",
-                    node = node_id.as_deref().unwrap_or(""),
-                    n = pr_number
-                );
+                let (reason, terminal_reason, terminal_name) = match node_terminal {
+                    DoneNodeTerminal::Merged(pr_number) => (
+                        format!(
+                            "node {node} done and PR #{pr_number} recorded merged in the graph store; retiring the fire without the REST read",
+                            node = node_id.as_deref().unwrap_or(""),
+                        ),
+                        TerminationReason::DonePRGreen,
+                        "DonePRGreen",
+                    ),
+                    DoneNodeTerminal::NoPr => (
+                        format!(
+                            "node {} done with no PR record; promise accepted as advisory without the REST read",
+                            node_id.as_deref().unwrap_or(""),
+                        ),
+                        TerminationReason::DoneAdvisory,
+                        "DoneAdvisory",
+                    ),
+                };
                 // The termination row is the only journal row: a custom event
                 // type would need the schema.yaml inventory plus its cargo
                 // regen, and an unregistered type is rejected by the judge.
@@ -904,19 +923,13 @@ pub(crate) fn decide_with_payload(
                     "termination",
                     serde_json::json!({
                         "session_id": session_id,
-                        "reason": "DonePRGreen",
+                        "reason": terminal_name,
                         "message": reason
                     }),
                 );
                 return (
                     0,
-                    allow_output(
-                        "allow",
-                        Some(TerminationReason::DonePRGreen),
-                        &reason,
-                        0,
-                        None,
-                    ),
+                    allow_output("allow", Some(terminal_reason), &reason, 0, None),
                 );
             }
         }
@@ -3401,15 +3414,6 @@ mod tests {
         })
     }
 
-    fn stale_findings_review() -> Value {
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "state": "COMMENTED",
-            "commit": {"oid": "0000000000"},
-            "submittedAt": "2026-08-17T01:00:00Z"
-        })
-    }
-
     fn fresh_at_head() -> impl Fn(&str) -> Freshness {
         |sha: &str| {
             if sha == "abc12345" {
@@ -3421,13 +3425,6 @@ mod tests {
     }
 
     // ── nudge state ────────────────────────────────────────────────────
-
-    fn nudge_now() -> DateTime<Utc> {
-        "2026-07-06T02:00:00Z".parse().unwrap()
-    }
-    fn mention(body: &str, created: &str) -> Value {
-        serde_json::json!({"body": body, "createdAt": created})
-    }
 
     // ── step 2: inline findings + severity + addressed (US2) ────────────────
 

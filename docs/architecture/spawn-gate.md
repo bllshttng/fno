@@ -61,6 +61,20 @@ The gate never kills work. A burst reverses by admitting nothing more while CPU 
 
 The caps stack lowest first: the learned cap, the user's floor, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. The floor holds the learned cap up but never above `agents.max_live`. Only the burst passes the ceiling. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
 
+## One admission read per spawn
+
+A node-bearing spawn asks one question three times: does a live worker hold this node? The guard's worked overlay asks it, and so do the gate's admit arm and its slot-free arm. Each answer once shelled `claude agents --json --all`, which takes 0.5 to 0.8 s under load. Spawn call-to-row p50 was 7,993 ms over 401 spawns in the week to 2026-11-06.
+
+The client now opens a `RosterScope` around the guard and the gate. Inside it the first roster read is kept and the later ones replay it. The scope closes before the launch, so a later read sees the new worker. A queued pass sleeps and then forgets the reading, so a spawn that waited reads the fleet again. The guard folds over its own node's graph row, not a whole-graph strict read.
+
+The roster read stays, and the node claim alone does not decide occupancy. On 2026-11-06 a join of the registry, the claude roster and the claim list found 8 live node-bearing rows with no live node claim. A claim-only gate can seat a second worker on each of them. The same join found 3 of 25 claude rows that the registry marked alive but the claude roster marked stopped or done. So a registry-only read is not liveness either.
+
+Each admission reserves its worker name with a `spawn-name:<name>` claim. The registry has no row until the child boots, so two spawns of one seed once both drew the same name. The claim names the spawn client's pid and has no TTL. It reads stale the moment that client exits, so it needs no release, and an exec'd harness keeps the pid and the name. A minted name that another spawn holds takes the next suffix. A typed `--name` that another spawn holds refuses and names the holder. The key is not `name:`, because that key marks a lead's drawn person name as used forever.
+
+The `spawn-handover:<name>` node claim also has no pid. The spawn client exits within seconds, so a pid there read suspect `pid-absent`, a death basis, long before the worker's init took the claim over. The claim now reads suspect `pid-unavailable` for its 900 s TTL. A dead client is no evidence against it, and only the pane probe proves the worker gone. A handover that no init takes over expires, and the next spawn admits.
+
+The `agent_spawned` event of a codex thread spawn carries `stage_ms`: `seam`, `gate`, `guard`, `launch`, `row`, `total` and `queued`. `total` sums the first five. `queued` is the gate wait, outside `total`.
+
 ## A waiting spawn names its place
 
 A spawn that waits holds one `gate-wait:<holder>` ticket in the gate's global claims root. Its place is one plus the live tickets that joined before it. On its first wait, and every 30 seconds after, it prints `spawn queued: place 2 of 3 waiting; waiting on the slot cap, 8 live of 8; waited 30s`. The reason is the slot cap, the fleet CPU hold, or the gate mutex. On 2026-10-14, 5 of 54 attempts launched in four hours, and no wait named its place or its reason. A spawn behind the gate mutex printed nothing at all.

@@ -593,7 +593,7 @@ def _hermetic_authorized_merge(monkeypatch):
 # list that loses to the next var somebody adds. `fno doctor test` applies the
 # same env natively in-process, which covers the shell and cargo trees; this
 # door call is what covers a developer running a bare `pytest cli/tests/...`.
-from fno.test_env_door import native_env  # noqa: E402
+from fno.env_door import native_env  # noqa: E402
 
 # The pytest process's own harness session id, caught BEFORE the swap below
 # scrubs it. Session markers are deliberately ambient - tests run as bare

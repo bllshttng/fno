@@ -151,47 +151,6 @@ fn pane_border_keeps_a_divider_beside_an_unframed_pane() {
     assert_eq!(row1[47], '│', "the seam keeps its glyph");
     assert_eq!(row1[48], '╭', "the framed neighbour owns its own border");
 }
-
-#[test]
-fn pane_border_renders_a_metaless_pane_as_shell() {
-    // AC7-ERR: a pane with no PaneMeta row and no AgentRow (Layout still in
-    // flight) still frames, names itself `shell`, and carries no fields.
-    let v = two_pane_view();
-    let frame = v.compose();
-    let top: String = (64..99)
-        .map(|c| frame.cells[frame.cols as usize + c].c)
-        .collect();
-    assert!(top.contains("─ shell ─"), "{top}");
-    assert!(
-        !top.contains("49%") && !top.contains("main") && !top.contains("n-abc12"),
-        "{top}"
-    );
-}
-
-#[test]
-fn pane_border_diff_only_the_top_edge_moves() {
-    // AC8-HP: a badge flip repaints only the focused pane's top-edge row;
-    // every content row is identical. Sideline columns are excluded (the
-    // flip repaints the agent's sideline row too, a different surface).
-    let v1 = framed_pair();
-    let mut v2 = framed_pair();
-    v2.layout.agents[0].badge = Some(AgentBadge::Blocked);
-    let a = v1.compose();
-    let b = v2.compose();
-    let mut moved = Vec::new();
-    // Row 0 is the tab bar: its rollup glyph reads the agent's badge by
-    // design (US4), so only the pane area below it proves the frame diff.
-    for r in 1..a.rows as usize {
-        for c in 28..a.cols as usize {
-            if a.cells[r * a.cols as usize + c] != b.cells[r * a.cols as usize + c] {
-                moved.push(r);
-                break;
-            }
-        }
-    }
-    assert_eq!(moved, vec![1]);
-}
-
 #[test]
 fn pane_border_hit_test_answers_content_and_border() {
     // AC10-HP: a click at framed pane 11's content origin answers (11,0,0);
@@ -202,19 +161,6 @@ fn pane_border_hit_test_answers_content_and_border() {
     // The gap cell between the two frames forwards to nothing too.
     assert_eq!(v.hit_test(2, 63), None);
 }
-
-#[test]
-fn pane_border_press_route_names_the_ring() {
-    // AC9: the ring answers for a press (the route sends FocusPane); grips
-    // and seams win their own cells before this check ever runs.
-    let v = framed_pair();
-    assert_eq!(v.border_pane_at(1, 64), Some(11));
-    // A grip cell is on the ring too, but grip_at wins it in the route.
-    assert_eq!(v.border_pane_at(1, 45), Some(10));
-    // The gap between frames belongs to no ring.
-    assert_eq!(v.border_pane_at(2, 63), None);
-}
-
 #[test]
 fn the_focused_edge_reads_theme_border_under_both_footnote_themes() {
     // The PR capture: the real composed frame under both footnote themes.

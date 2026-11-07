@@ -1233,6 +1233,22 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "PI_SESSION_FILE",
 ];
 
+/// The Rex terminal-host keys. They name the USER's Rex session and pane,
+/// never anything the child is: a worker that inherits them reads the Rex
+/// SessionStart hook's "You're running in a Rex terminal" line and opens
+/// blocks in that session. The strip is lossless for the same reason the
+/// identity one is.
+pub(crate) const TERMINAL_HOST_ENV_KEYS: [&str; 3] = ["REX_SERVER", "REX_SESSION", "REX_BLOCK"];
+
+/// Hold the terminal-host keys out of a child's environment. Long-lived
+/// hosts (a daemon, an app-server) call this directly; the identity scrub
+/// carries it.
+pub(crate) fn scrub_terminal_host_env(command: &mut std::process::Command) {
+    for key in TERMINAL_HOST_ENV_KEYS {
+        command.env_remove(key);
+    }
+}
+
 /// The same names with their harness family, in the Python
 /// `AMBIENT_IDENTITY_ENV` order: the one list the identity strip remedy
 /// walks, so a name without a classified family is never suggested for
@@ -1261,13 +1277,15 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("FNO_NODE_REASON", "fno"),
 ];
 
-/// Clear inherited session identity from a child's environment. A host this
-/// process boots lives past the caller (a supervisor, a serve, a daemon), so
-/// the caller's markers must not ride into it and name it as its own.
+/// Clear inherited session identity and the launching terminal's Rex
+/// markers from a child's environment. A host this process boots lives past
+/// the caller (a supervisor, a serve, a daemon), so the caller's markers
+/// must not ride into it and name it as its own.
 pub(crate) fn scrub_identity_env(command: &mut std::process::Command) {
     for name in AMBIENT_IDENTITY_NAMES {
         command.env_remove(name);
     }
+    scrub_terminal_host_env(command);
 }
 
 /// Clear inherited session identity before stamping the values owned by this

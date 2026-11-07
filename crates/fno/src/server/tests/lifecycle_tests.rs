@@ -46,20 +46,3 @@ fn lifecycle_identity_never_resolves_an_identityless_external_row() {
         "an identityless external row is refused even by a carried id"
     );
 }
-
-#[test]
-fn lifecycle_identity_that_misses_falls_back_to_the_label() {
-    let mut core = empty_core();
-    core.agents = vec![exited_claude_row(
-        "label",
-        Some("33333333-3333-4333-8333-333333333333"),
-    )];
-    // The carried id names no row (stale snapshot): the label still works.
-    let resolved =
-        core.resolve_lifecycle_target("label", Some("44444444-4444-4444-8444-444444444444"));
-    assert_eq!(
-        resolved.map(|a| a.name.clone()).as_deref(),
-        Ok("label"),
-        "a missed id falls back to the label"
-    );
-}

@@ -37,7 +37,6 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:audit` | Before you call a feature complete across a surface. | A gap report and follow-up nodes. |
 | `fno:intel` | A stall or a postmortem asks where sessions needed correction. | The provenance report. |
 | `fno:law` | The user states a durable rule mid-run. | The recorded law id. |
-| `fno:autocorrect` | A user correction should become a rule or a patch. | A triaged proposal. |
 | `fno:harness-commands` | Before you use a harness-native slash command. | The roster with risk classes. |
 | `fno:setup` | `fno` is missing, or `fno config doctor` fails. | The setup report. |
 | `fno:using-fno` | You are unsure whether a CLI primitive or a skill fits. | The surface table. |

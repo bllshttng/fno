@@ -39,13 +39,14 @@ impl Drop for Scratch {
     }
 }
 
-/// A child process that is always killed on test exit.
+/// A child process that is always killed on test exit. The group kill is the
+/// fn-47ea driver fix: a pid kill leaves the server's children (pane shells,
+/// MCP servers) running at ppid 1.
 struct Server(Child);
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        kill_child_group(&mut self.0);
     }
 }
 
@@ -56,6 +57,7 @@ impl CpuLoad {
         let child = Command::new("yes")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .expect("start CPU load");
         Self(child)
@@ -64,9 +66,18 @@ impl CpuLoad {
 
 impl Drop for CpuLoad {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        kill_child_group(&mut self.0);
     }
+}
+
+/// Group-kill a test child: the child leads its own process group, so the
+/// kill takes its descendants. Pairs with `.process_group(0)` at spawn.
+fn kill_child_group(child: &mut Child) {
+    let pid = child.id();
+    let _ = child.kill();
+    // SAFETY: SIGKILL to the group of a child this test spawned.
+    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+    let _ = child.wait();
 }
 
 fn spawn_server(sock: &Path, shell: &str) -> Server {
@@ -75,7 +86,10 @@ fn spawn_server(sock: &Path, shell: &str) -> Server {
 
 fn spawn_server_with_env(sock: &Path, shell: &str, env: &[(&str, &str)]) -> Server {
     let mut cmd = server_command(sock, shell, env);
-    Server(cmd.spawn().unwrap())
+    // SAFETY: process_group puts the child in its own group for the drop kill.
+    use std::os::unix::process::CommandExt as _;
+    let child = cmd.process_group(0).spawn().unwrap();
+    Server(child)
 }
 
 fn server_command(sock: &Path, shell: &str, env: &[(&str, &str)]) -> Command {
@@ -319,6 +333,22 @@ fn server_spine_losing_contender_emits_no_raise_receipt() {
     let scratch = Scratch::new("loser-receipt");
     let _winner = spawn_server(&scratch.sock(), "/bin/sh");
     let _probe = connect_with_retry(&scratch.sock());
+    let log_path = scratch.sock().with_extension("log");
+    let serving = format!("fno mux: serving {}", scratch.sock().display());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let log_start = loop {
+        let log = std::fs::read_to_string(&log_path);
+        if let Ok(text) = &log {
+            if text.lines().any(|line| line.ends_with(serving.as_str())) {
+                break text.len();
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "winner did not publish its ready record: {log:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
 
     let mut loser = server_command(&scratch.sock(), "/bin/sh", &[]);
     cap_child_nofile(&mut loser, 256, false);
@@ -326,8 +356,16 @@ fn server_spine_losing_contender_emits_no_raise_receipt() {
     let output = loser.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains("a server is already running"), "{stderr}");
-    assert!(!stderr.contains("open-file limit raised"), "{stderr}");
+    let log = std::fs::read(&log_path).unwrap();
+    let diagnostics = format!("{stderr}\n{}", String::from_utf8_lossy(&log[log_start..]));
+    assert!(
+        diagnostics.contains("a server is already running"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("open-file limit raised"),
+        "{diagnostics}"
+    );
 }
 
 #[test]

@@ -196,13 +196,12 @@ const LOCK_BEARING_FOLDERS: &[&str] = &[
     "migrations",
 ];
 
-/// Fold candidates that drain instead of folding: each child's absolute
-/// path is recorded elsewhere (a route-settings file is named in an agent
-/// registry row, and a relaunch refuses a moved file rather than relaunch
-/// on the wrong account), so the mover never renames one. New writes land
-/// at the row's destination, the 14-day prune empties the legacy folder,
-/// and this pass removes the empty shell.
-const DRAIN_ONLY_FOLDERS: &[&str] = &["route-settings"];
+/// Fold candidates that drain instead of folding. A live reader may retain a
+/// child's absolute path, so the mover never renames it. New writes use the
+/// row's destination; cargo-build residue and plugin-stage swap debris have
+/// safe park rules, while live entries stay until their owner drains them.
+const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings"];
+pub(crate) const LEGACY_DRAIN_AGE_SECS: u64 = 3 * 24 * 60 * 60;
 
 /// Fold candidates that hold message or journal lines. A clashing child never
 /// parks here: it merges (`state_layout_merge`), and a destination that does
@@ -687,14 +686,30 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // row still names must stay put until its prune. Only the emptied shell
     // goes.
     if DRAIN_ONLY_FOLDERS.contains(&row.legacy.as_str()) {
+        if matches!(row.legacy.as_str(), "cargo-build" | "plugin-stage") {
+            let remaining = drain_legacy_children(root, &legacy, stamp, apply);
+            if !remaining.is_empty() {
+                return Status::Pending(format!(
+                    "drains: {} child path(s) remain",
+                    remaining.len()
+                ));
+            }
+        } else {
+            let emptied = std::fs::read_dir(&legacy)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false);
+            if !emptied {
+                return Status::Pending("drains: recorded paths stay until pruned".to_string());
+            }
+        }
+        if !apply {
+            return Status::Pending("fold (dry run)".to_string());
+        }
         let emptied = std::fs::read_dir(&legacy)
             .map(|mut d| d.next().is_none())
             .unwrap_or(false);
         if !emptied {
             return Status::Pending("drains: recorded paths stay until pruned".to_string());
-        }
-        if !apply {
-            return Status::Pending("fold (dry run)".to_string());
         }
         return match std::fs::remove_dir(&legacy) {
             Ok(()) => Status::Moved,
@@ -923,6 +938,127 @@ fn mtime_of(p: &Path) -> std::time::SystemTime {
     std::fs::metadata(p)
         .and_then(|m| m.modified())
         .unwrap_or(std::time::UNIX_EPOCH)
+}
+
+fn drain_legacy_children(root: &Path, legacy: &Path, stamp: &str, apply: bool) -> Vec<String> {
+    let Some(folder) = legacy.file_name().and_then(|name| name.to_str()) else {
+        return vec![legacy.display().to_string()];
+    };
+    let Ok(entries) = std::fs::read_dir(legacy) else {
+        eprintln!(
+            "state-root drain: kept {} (directory unreadable)",
+            legacy.display()
+        );
+        return vec![legacy.display().to_string()];
+    };
+    let now = std::time::SystemTime::now();
+    let mut remaining = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            remaining.push(legacy.display().to_string());
+            continue;
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let park_reason = match folder {
+            "cargo-build" => match quiet_untagged_tree(&path, now) {
+                Ok(true) => Some("untagged cargo residue quiet past the age limit"),
+                Ok(false) => None,
+                Err(reason) => {
+                    eprintln!("state-root drain: kept {} ({reason})", path.display());
+                    remaining.push(name);
+                    continue;
+                }
+            },
+            "plugin-stage"
+                if path.is_dir()
+                    && (name.starts_with(".fno.new-") || name.starts_with(".fno.old-")) =>
+            {
+                match quiet_tree(&path, now) {
+                    Ok(true) => Some("stale plugin-stage swap residue"),
+                    Ok(false) => None,
+                    Err(reason) => {
+                        eprintln!("state-root drain: kept {} ({reason})", path.display());
+                        remaining.push(name);
+                        continue;
+                    }
+                }
+            }
+            _ => None,
+        };
+        let Some(reason) = park_reason else {
+            let detail = if folder == "plugin-stage" {
+                "live stage or unknown entry"
+            } else {
+                "tagged, recent, or unknown entry"
+            };
+            eprintln!("state-root drain: kept {} ({detail})", path.display());
+            remaining.push(name);
+            continue;
+        };
+        if !apply {
+            eprintln!("state-root drain: would park {} ({reason})", path.display());
+            remaining.push(name);
+            continue;
+        }
+        match park_file_at(root, stamp, &path) {
+            Ok(parked) => eprintln!("state-root drain: parked {} ({reason})", parked.display()),
+            Err(error) => {
+                eprintln!("state-root drain: kept {} ({error})", path.display());
+                remaining.push(name);
+            }
+        }
+    }
+    remaining
+}
+
+fn quiet_untagged_tree(path: &Path, now: std::time::SystemTime) -> Result<bool, &'static str> {
+    if contains_cache_tag(path)? {
+        return Err("contains CACHEDIR.TAG");
+    }
+    quiet_tree(path, now)
+}
+
+fn contains_cache_tag(path: &Path) -> Result<bool, &'static str> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| "path unreadable")?;
+    if metadata.file_type().is_symlink() {
+        return Err("symlink is not safe to park");
+    }
+    if !metadata.is_dir() {
+        return Ok(path.file_name().and_then(|n| n.to_str()) == Some("CACHEDIR.TAG"));
+    }
+    for entry in std::fs::read_dir(path).map_err(|_| "directory unreadable")? {
+        let entry = entry.map_err(|_| "directory entry unreadable")?;
+        if contains_cache_tag(&entry.path())? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn quiet_tree(path: &Path, now: std::time::SystemTime) -> Result<bool, &'static str> {
+    fn newest(path: &Path, latest: &mut std::time::SystemTime) -> Result<(), &'static str> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|_| "path unreadable")?;
+        if metadata.file_type().is_symlink() {
+            return Err("symlink is not safe to park");
+        }
+        let modified = metadata.modified().map_err(|_| "mtime unavailable")?;
+        *latest = (*latest).max(modified);
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).map_err(|_| "directory unreadable")? {
+                newest(
+                    &entry.map_err(|_| "directory entry unreadable")?.path(),
+                    latest,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut latest = std::time::SystemTime::UNIX_EPOCH;
+    newest(path, &mut latest)?;
+    let quiet = now.duration_since(latest).unwrap_or_default();
+    Ok(quiet >= std::time::Duration::from_secs(LEGACY_DRAIN_AGE_SECS))
 }
 
 /// The run's backup folder: `backups/state-root-migration/<utc stamp>/`.
@@ -1309,6 +1445,73 @@ mod tests {
         let listed = list_dir_children(&root, "flight");
         assert_eq!(listed.len(), 1, "the list read sees the legacy child");
         clean(&root);
+    }
+
+    #[test]
+    fn cargo_and_plugin_stage_drains_preserve_live_payload_and_park_stale_residue() {
+        fn age_tree(path: &Path, old: std::time::SystemTime) {
+            if let Ok(file) = std::fs::File::options().read(true).open(path) {
+                let _ = file.set_times(std::fs::FileTimes::new().set_modified(old));
+            }
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    age_tree(&entry.path(), old);
+                }
+            }
+        }
+
+        let rows = parse_table(
+            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n",
+        )
+        .unwrap();
+        let live = tmp_root("drain-live");
+        let tagged = live.join("cargo-build/00/hash");
+        std::fs::create_dir_all(&tagged).unwrap();
+        std::fs::write(tagged.join("CACHEDIR.TAG"), b"Signature: cache\n").unwrap();
+        let stage_file = live.join("plugin-stage/fno/hooks/stop.sh");
+        std::fs::create_dir_all(stage_file.parent().unwrap()).unwrap();
+        std::fs::write(&stage_file, b"live hook\n").unwrap();
+
+        let receipt = migrate_rows(&live, &rows, true, "live");
+        for name in ["cargo-build", "plugin-stage"] {
+            let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
+            assert!(
+                matches!(row.status, Status::Pending(ref reason) if reason.starts_with("drains:")),
+                "{name} must wait for its recorded path to drain: {row:?}"
+            );
+            assert!(live.join(name).exists(), "{name} must stay at its old path");
+        }
+        assert!(tagged.join("CACHEDIR.TAG").is_file());
+        assert!(stage_file.is_file());
+        clean(&live);
+
+        let residue = tmp_root("drain-residue");
+        let old_cargo = residue.join("cargo-build/fc/build/output");
+        std::fs::create_dir_all(old_cargo.parent().unwrap()).unwrap();
+        std::fs::write(&old_cargo, b"old untagged residue\n").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(4 * 24 * 60 * 60);
+        age_tree(&residue.join("cargo-build"), old);
+        for name in [".fno.new-old", ".fno.old-old"] {
+            let marker = residue.join("plugin-stage").join(name).join("marker");
+            std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+            std::fs::write(marker, b"stale swap residue\n").unwrap();
+        }
+        age_tree(&residue.join("plugin-stage"), old);
+
+        let receipt = migrate_rows(&residue, &rows, true, "test");
+        for name in ["cargo-build", "plugin-stage"] {
+            let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
+            assert!(matches!(row.status, Status::Moved), "{row:?}");
+            assert!(
+                !residue.join(name).exists(),
+                "empty {name} shell is removed"
+            );
+        }
+        let parked = residue.join("backups/state-root-migration/test");
+        assert!(parked.join("fc").join("build/output").is_file());
+        assert!(parked.join(".fno.new-old/marker").is_file());
+        assert!(parked.join(".fno.old-old/marker").is_file());
+        clean(&residue);
     }
 
     #[test]

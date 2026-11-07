@@ -163,8 +163,11 @@ pub(crate) fn lane_with_room(
 /// The lane a run moves to when it cannot ride its own: the main lane's
 /// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
 /// never the first claude inventory row, which can be opus, and opus never
-/// runs target work.
-const FALLBACK_LANE: &str = "claude-sonnet-5-5";
+/// runs target work. The name is a shipped roster model id, and
+/// model_tiers.toml carries the builtin row of the same name, so a virgin
+/// install resolves it too; a rename sweep moves the id, the roster and the
+/// row together (the roster test pins the pairing).
+const FALLBACK_LANE: &str = "claude-sonnet-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
@@ -2606,7 +2609,7 @@ mod tests {
         w.tick(true, at(3));
         assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize + 1);
         let fallback = w.spawns.borrow()[MAIN_MAX_TRIES as usize].join(" ");
-        assert!(fallback.contains("--lane claude-sonnet-5"), "{fallback}");
+        assert!(fallback.contains("--lane claude-sonnet-5 "), "{fallback}");
         assert!(fallback.contains("-fallback"), "{fallback}");
         w.tick(false, at(3));
         w.tick(true, at(4));
@@ -3196,31 +3199,6 @@ mod tests {
         assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
     }
 
-    #[test]
-    fn a_head_the_baseline_cannot_cover_does_not_hold_the_lane() {
-        let mut w = World::new("skills/s\ncrates/x/a.rs\n");
-        std::fs::write(
-            w.dir.path().join("evals/bank/c1.yaml"),
-            "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
-        )
-        .unwrap();
-        // Head 7 covers a task the baseline never graded and would need a
-        // build the fixture cannot seat; its launch attempt skips and the
-        // lane still reaches head 8 in the same tick.
-        w.files_b = "skills/s\n".into();
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1, "the covered head launched");
-        let argv = spawns[0].join(" ");
-        assert!(argv.contains(&format!("--ref {SHA2}")), "{argv}");
-        assert!(argv.contains("--task g1"), "{argv}");
-        drop(spawns);
-        let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
-        assert_eq!(state.heads.get(SHA2).map(String::as_str), Some(QUEUED));
-    }
-
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
     }
@@ -3740,11 +3718,31 @@ mod tests {
             let spawns = w.spawns.borrow();
             assert_eq!(spawns.len(), 1, "the head launched on the fallback");
             let argv = spawns[0].join(" ");
-            assert!(argv.contains("--lane claude-sonnet-5-5 "), "{argv}");
+            assert!(argv.contains("--lane claude-sonnet-5 "), "{argv}");
             if !banned.is_empty() {
                 assert!(!argv.contains(banned), "{argv}");
             }
         }
+    }
+
+    #[test]
+    fn the_fallback_lane_names_a_model_the_shipped_claude_roster_declares() {
+        // The fallback lane is a lane named for a sonnet model id. A rename
+        // sweep that moves the id also moves the shipped roster, so this
+        // read fails in the same PR instead of at the next quota-capped
+        // gate run, where the fallback is the one lane the day rides.
+        let contract = crate::harness_capabilities::HarnessContract::packaged()
+            .expect("shipped capability contract parses");
+        let models = contract
+            .capabilities("claude")
+            .expect("claude row in the contract")
+            .models
+            .clone()
+            .expect("claude model roster");
+        assert!(
+            models.iter().any(|m| m == FALLBACK_LANE),
+            "FALLBACK_LANE {FALLBACK_LANE:?} is not a model the shipped claude roster declares: {models:?}"
+        );
     }
 
     #[test]

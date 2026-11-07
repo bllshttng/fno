@@ -9,7 +9,8 @@ use std::path::Path;
 use std::process::Command;
 
 use super::merge_evidence::{
-    node_pr_refs, query_pr_state, render_merge_evidence_failure, resolve_merge_evidence, Outcome,
+    fill_ref_urls, node_pr_refs, query_pr_state, render_merge_evidence_failure,
+    resolve_merge_evidence, Outcome,
 };
 use super::node_match::{resolve_id, MatchKind, NodeMatch};
 use super::pr_link::{
@@ -153,7 +154,7 @@ pub(super) fn gate_pipeline(
             );
         }
     } else {
-        check_promise(node, cwd, &[])?;
+        check_promise(node, cwd, &[], None)?;
     }
     Ok(evidence_pr_url)
 }
@@ -162,8 +163,9 @@ fn check_promise(
     node: &Value,
     cwd: Option<&str>,
     extra: &[(i64, Option<String>)],
+    repo: Option<&str>,
 ) -> Result<(), i32> {
-    let promise = resolve_promise_evidence(node, cwd, extra);
+    let promise = resolve_promise_evidence(node, cwd, extra, repo);
     if !promise.satisfied() {
         if let Some(reason) = &promise.reason {
             eprintln!("{reason}");
@@ -195,7 +197,12 @@ pub(super) fn warm_parent_promises(
         .into_iter()
         .collect();
     let verdicts = super::promise::rollup_hold_set(&candidates, &mut |parent| {
-        resolve_promise_evidence(parent, super::promise::gate_cwd_for(parent).as_deref(), &[])
+        resolve_promise_evidence(
+            parent,
+            super::promise::gate_cwd_for(parent).as_deref(),
+            &[],
+            None,
+        )
     });
     for (pid, verdict) in verdicts {
         if let Some(reason) = &verdict.reason {
@@ -506,6 +513,22 @@ fn pr_url_to_stamp(
     Ok(url)
 }
 
+/// The merge gate's ref set: an explicit --pr replaces the node's refs, and
+/// --repo fills a url-less ref with the repo-derived url, so the read lands
+/// in the named repo instead of the checkout's. A recorded url stays
+/// authoritative; --repo is for the PR the checkout cannot see.
+fn gate_refs_with_repo(
+    node: &Value,
+    pr: Option<i64>,
+    repo: Option<&str>,
+) -> Vec<(i64, Option<String>)> {
+    let refs = match pr {
+        Some(n) => vec![(n, text_at(node, "pr_url").map(str::to_string))],
+        None => node_pr_refs(node),
+    };
+    fill_ref_urls(refs, repo)
+}
+
 /// The completion flags, the fuzzy query, and the branch auto-detect.
 pub(super) fn run_rich(args: &DoneArgs) -> i32 {
     let graph = settings::graph_path();
@@ -516,10 +539,14 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
         return run_backfill(args, &graph, env_session.as_deref());
     }
     if active_backend_name() != "graph" {
-        if args.pr.is_some() || args.pr_url.is_some() || args.link.is_some() || args.note.is_some()
+        if args.pr.is_some()
+            || args.pr_url.is_some()
+            || args.link.is_some()
+            || args.note.is_some()
+            || args.repo.is_some()
         {
             eprintln!(
-                "fno backlog done: --pr/--pr-url/--link/--note record graph-backend completion \
+                "fno backlog done: --pr/--pr-url/--link/--note/--repo record graph-backend completion \
                  metadata and cannot be recorded under an external tracker backend"
             );
             return 2;
@@ -567,6 +594,14 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
         eprintln!("fno backlog done: --pr-url requires --pr");
         return 2;
     }
+    // The slug check from pr_url_to_stamp, fired before any gate read: with
+    // --repo alone the gates consume the slug before the stamp path runs.
+    if let Some(repo) = args.repo.as_deref().filter(|r| !is_repo_slug(r)) {
+        eprintln!(
+            "fno backlog done: --repo '{repo}' is not an owner/name slug (expected <owner>/<repo>, e.g. fnodotdev/fno)"
+        );
+        return 2;
+    }
     let node_id = found.id.clone().unwrap_or_default();
     let Some(node) = entries
         .iter()
@@ -597,10 +632,7 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
     // closed node is a metadata update, gated when it first closed.
     let mut merged = false;
     if !already_done {
-        let gate_refs = match pr {
-            Some(n) => vec![(n, text_at(node, "pr_url").map(str::to_string))],
-            None => node_pr_refs(node),
-        };
+        let gate_refs = gate_refs_with_repo(node, pr, args.repo.as_deref());
         if !gate_refs.is_empty() {
             let evidence = resolve_merge_evidence(&gate_refs, cwd.as_deref());
             match evidence.outcome {
@@ -640,13 +672,20 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
                 }
             }
         }
-        let extra_url = args
-            .pr_url
-            .clone()
-            .or_else(|| auto_url.clone())
-            .or_else(|| text_at(node, "pr_url").map(str::to_string));
-        let extra: Vec<(i64, Option<String>)> = pr.map(|n| (n, extra_url)).into_iter().collect();
-        if let Err(code) = check_promise(node, cwd.as_deref(), &extra) {
+        let extra: Vec<(i64, Option<String>)> = pr
+            .map(|n| {
+                (
+                    n,
+                    args.pr_url
+                        .clone()
+                        .or_else(|| args.repo.as_deref().map(|r| pr_url_from_slug(r.trim(), n)))
+                        .or_else(|| auto_url.clone())
+                        .or_else(|| text_at(node, "pr_url").map(str::to_string)),
+                )
+            })
+            .into_iter()
+            .collect();
+        if let Err(code) = check_promise(node, cwd.as_deref(), &extra, args.repo.as_deref()) {
             return code;
         }
     }
@@ -930,6 +969,7 @@ pub(super) fn done_via_seam(
 
 #[cfg(test)]
 mod tests {
+    use super::super::merge_evidence::{resolve_merge_evidence_with, PrReadError};
     use super::*;
 
     fn rollup() -> Rollup {
@@ -975,5 +1015,52 @@ mod tests {
             pr_url_to_stamp(8, &rich(Some(url), None), None, &node),
             Ok(url.to_string())
         );
+    }
+
+    #[test]
+    fn repo_alone_aims_the_merge_read_at_the_named_repo() {
+        // A pr_number recorded without a url, its PR merged in a repo the
+        // checkout cannot name: --repo alone must aim the gate read there.
+        let node = json!({"id": "ab-11111111", "pr_number": 7});
+        let refs = gate_refs_with_repo(&node, None, Some("fork/widget"));
+        assert_eq!(
+            refs,
+            vec![(7, Some("https://github.com/fork/widget/pull/7".to_string()))]
+        );
+        let saw = RefCell::new(None);
+        let ev = resolve_merge_evidence_with(
+            &refs,
+            None,
+            &|n: i64, repo: Option<&str>, _cwd: Option<&str>| {
+                *saw.borrow_mut() = repo.map(str::to_string);
+                match repo {
+                    Some("fork/widget") => Ok((
+                        "MERGED".to_string(),
+                        Some(format!("https://github.com/fork/widget/pull/{n}")),
+                    )),
+                    _ => Err(PrReadError::new("PR not found in that repo", "not_found")),
+                }
+            },
+        );
+        assert_eq!(ev.outcome, Outcome::Merged);
+        assert_eq!(saw.into_inner().as_deref(), Some("fork/widget"));
+    }
+
+    #[test]
+    fn a_recorded_url_keeps_precedence_over_repo() {
+        // The recorded url is the node's own evidence; --repo fills only the
+        // url-less refs, on both the recorded-refs and explicit --pr arms.
+        let node = json!({
+            "id": "ab-11111111",
+            "pr_number": 7,
+            "pr_url": "https://github.com/acme/widget/pull/7",
+        });
+        let refs = gate_refs_with_repo(&node, None, Some("fork/widget"));
+        assert_eq!(
+            refs,
+            vec![(7, Some("https://github.com/acme/widget/pull/7".to_string()))]
+        );
+        let explicit = gate_refs_with_repo(&node, Some(7), Some("fork/widget"));
+        assert_eq!(explicit, refs);
     }
 }

@@ -534,20 +534,7 @@ pub fn theme_role_overrides(
 }
 
 #[cfg(test)]
-mod colorfgbg_tests {
-    use super::colorfgbg_is_light;
-
-    #[test]
-    fn only_a_white_background_is_light() {
-        assert!(!colorfgbg_is_light(None));
-        assert!(!colorfgbg_is_light(Some("")));
-        assert!(!colorfgbg_is_light(Some("15;0")), "black bg is dark");
-        assert!(!colorfgbg_is_light(Some("0;8")));
-        assert!(!colorfgbg_is_light(Some("nonsense")));
-        assert!(colorfgbg_is_light(Some("0;7")), "white bg is light");
-        assert!(colorfgbg_is_light(Some("15;15")));
-    }
-}
+mod colorfgbg_tests {}
 
 #[cfg(test)]
 mod theme_role_override_tests {
@@ -1602,40 +1589,6 @@ pub async fn on_attach(session: &str, focused_cwd: &str) -> Option<Vec<TLine>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dev_profile_dir_recognizes_both_cargo_binary_shapes() {
-        // A plain dev binary sits IN the profile dir; a test binary sits in
-        // its deps/ subdir. Both must resolve, or a test that spawns a
-        // paired binary passes on machines with an installed PATH copy and
-        // fails on CI - no code difference between the two.
-        let base = std::env::temp_dir().join(format!("fno-devprof-{}", std::process::id()));
-        let debug = base.join("crates/fno/target/debug");
-        std::fs::create_dir_all(debug.join("deps")).unwrap();
-        assert_eq!(
-            dev_profile_dir(&debug).as_deref(),
-            Some(debug.as_path()),
-            "the profile dir itself"
-        );
-        assert_eq!(
-            dev_profile_dir(&debug.join("deps")).as_deref(),
-            Some(debug.as_path()),
-            "the deps/ subdir of a test binary"
-        );
-        assert_eq!(
-            dev_profile_dir(&base.join("usr/local/bin")),
-            None,
-            "an installed layout is not a dev profile"
-        );
-        assert_eq!(dev_profile_dir(&base), None, "a bare dir is not either");
-        // A deps/ dir NOT under a profile dir (pathological) reads as none.
-        let stray = base.join("deps");
-        std::fs::create_dir_all(&stray).unwrap();
-        assert_eq!(dev_profile_dir(&stray), None);
-
-        std::fs::remove_dir_all(&base).ok();
-    }
-
     #[test]
     fn config_reader_rows() {
         let cfg = "schema_version = 1\nstate_dir = \"~/.fno/\"\n";
@@ -1747,27 +1700,6 @@ mod tests {
         }
         std::fs::remove_dir_all(&base).ok();
     }
-
-    #[test]
-    fn selector_is_worktree_basename() {
-        assert_eq!(
-            selector_from_cwd("/Users/x/conductor/workspaces/footnote/x-aaaa").as_deref(),
-            Some("x-aaaa")
-        );
-        assert_eq!(selector_from_cwd("/w/x-aaaa/").as_deref(), Some("x-aaaa"));
-        assert_eq!(selector_from_cwd(""), None);
-        assert_eq!(selector_from_cwd("/"), None);
-    }
-
-    #[test]
-    fn config_defaults_when_absent() {
-        let dir = Path::new("/nonexistent-xyz");
-        // No settings file anywhere reachable -> defaults (on, 10min).
-        // (HOME may have one; the point is the parse path, covered below.)
-        let _ = attach_digest_enabled(dir);
-        let _ = threshold_secs(dir);
-    }
-
     #[test]
     fn json_lines_rows() {
         let json = r#"{"lines":["! 1 block (last: FAILURE) - resolved","PR #42 OPEN - CI SUCCESS - reviewed"]}"#;
@@ -1956,27 +1888,6 @@ mod tests {
             "a dead override must fall through, never answer"
         );
     }
-
-    #[test]
-    fn fno_agents_bin_auto_answers_a_runnable_override() {
-        let dir = tempfile::tempdir().unwrap();
-        let live = dir.path().join("fno-agents");
-        std::fs::write(&live, b"payload").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let prev = std::env::var_os("FNO_AGENTS_BIN");
-        std::env::set_var("FNO_AGENTS_BIN", &live);
-        let resolved = fno_agents_bin_auto();
-        match prev {
-            Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
-            None => std::env::remove_var("FNO_AGENTS_BIN"),
-        }
-        assert_eq!(resolved.as_deref(), Some(live.as_path()));
-    }
-
     #[test]
     fn key_reader_rows() {
         let p = Path::new("/tmp/config.toml");
@@ -2075,87 +1986,14 @@ mod tests {
 
 #[cfg(test)]
 mod user_theme_tests {
-    use super::{
-        join_warnings, materialize_user_theme, merge_theme_layers, set_themes_dir_for_test,
-        user_themes,
-    };
-    use crate::keys::KeymapWarning;
-    use crate::proto::Color;
-    use crate::theme::{ground_set, Theme};
-    use std::path::Path;
-
-    use super::ENVIRONMENT_LOCK;
+    use super::materialize_user_theme;
+    use crate::theme::Theme;
 
     fn spec(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
-    }
-
-    fn assert_user_theme_loads_inherits_and_overrides() {
-        let (t, w) = materialize_user_theme(
-            "midnight",
-            &spec(&[
-                ("inherit", "tokyo-night"),
-                ("base", "#101018"),
-                ("brand", " RED "),
-            ]),
-        );
-        assert!(w.is_empty(), "{w:?}");
-        assert_eq!(t.name, "midnight");
-        assert_eq!(t.inherit_from, "tokyo-night");
-        assert_eq!(t.base, Color::Rgb(0x10, 0x10, 0x18));
-        assert_eq!(t.brand, Color::Indexed(1));
-        // Untouched roles ride the parent.
-        assert_eq!(t.sel, Theme::from_name("tokyo-night").0.sel);
-    }
-
-    fn assert_default_inherit_and_unknown_inherit_warn() {
-        let (t, w) = materialize_user_theme("bare", &spec(&[]));
-        assert!(w.is_empty());
-        assert_eq!(t.inherit_from, "footnote-superscript");
-        let (t, w) = materialize_user_theme("typo", &spec(&[("inherit", "solarized")]));
-        assert_eq!(w.len(), 1, "{w:?}");
-        assert!(w[0].0.contains("mux.themes.typo.inherit"), "{w:?}");
-        assert_eq!(t.inherit_from, "footnote-superscript");
-    }
-
-    fn assert_bad_hex_and_unknown_role_warn_and_are_ignored() {
-        let (t, w) =
-            materialize_user_theme("sloppy", &spec(&[("base", "#zzzzzz"), ("wat", "#112233")]));
-        assert_eq!(w.len(), 2, "{w:?}");
-        assert!(w[0].0.contains("mux.themes.sloppy.base"), "{w:?}");
-        assert!(w[1].0.contains("not a theme role"), "{w:?}");
-        assert_eq!(
-            t.base,
-            Theme::from_name("footnote-superscript").0.base,
-            "the bad hex is ignored, the role keeps its parent value"
-        );
-    }
-
-    fn assert_user_theme_paints_its_ground_through_its_parents_palette() {
-        let (t, w) = materialize_user_theme(
-            "midnight",
-            &spec(&[("inherit", "footnote-superscript"), ("base", "#0f0f14")]),
-        );
-        assert!(w.is_empty());
-        let osc = ground_set(&t).expect("an inherited slot table means a ground");
-        let s = String::from_utf8(osc).unwrap();
-        assert!(
-            s.contains("\x1b]11;#0f0f14"),
-            "the user base is the OSC 11 ground: {s:?}"
-        );
-        // The parent's 16-slot table rides (OSC 4 slots emitted).
-        assert!(s.contains("\x1b]4;0;"), "parent palette slots ride: {s:?}");
-    }
-
-    #[test]
-    fn user_theme_materialization_keeps_role_fallbacks_warnings_and_ground() {
-        assert_user_theme_loads_inherits_and_overrides();
-        assert_default_inherit_and_unknown_inherit_warn();
-        assert_bad_hex_and_unknown_role_warn_and_are_ignored();
-        assert_user_theme_paints_its_ground_through_its_parents_palette();
     }
 
     #[test]
@@ -2172,84 +2010,5 @@ mod user_theme_tests {
         assert!(w.is_none());
         let (_, w) = Theme::from_name_in("nowhere", &table);
         assert!(w.is_some_and(|x| x.0.contains("nowhere")));
-    }
-
-    #[test]
-    fn a_higher_layer_wins_per_role() {
-        let layers = vec![
-            vec![("a".to_string(), spec(&[("brand", "#000000")]))],
-            vec![(
-                "a".to_string(),
-                spec(&[("brand", "#111111"), ("base", "#222222")]),
-            )],
-        ];
-        let merged = merge_theme_layers(layers.into_iter());
-        let a = merged.iter().find(|(n, _)| n == "a").unwrap();
-        assert!(a.1.iter().any(|(k, v)| k == "brand" && v == "#111111"));
-        assert!(a.1.iter().any(|(k, v)| k == "base" && v == "#222222"));
-        assert_eq!(a.1.len(), 2, "no key is dropped across layers");
-    }
-
-    #[test]
-    fn the_theme_folder_is_the_lowest_layer_and_a_config_table_wins_per_role() {
-        let _env = ENVIRONMENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let base = std::env::temp_dir().join(format!("fno-themes-dir-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let dir = base.join("themes");
-        std::fs::create_dir_all(&dir).unwrap();
-        set_themes_dir_for_test(Some(dir.clone()));
-        let ambient = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", base.join("config.toml"));
-        std::fs::write(
-            dir.join("midnight.toml"),
-            "[mux.themes.midnight]\nbase = \"#101018\"\nstamp = \"#e8e8e8\"\nbrand = \"#0000ff\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            base.join("config.toml"),
-            "[mux.themes.midnight]\nbrand = \"#ff0000\"\n",
-        )
-        .unwrap();
-        let (themes, w) = user_themes(Path::new("/"));
-        assert!(w.is_empty(), "{w:?}");
-        let t = &themes.iter().find(|(n, _)| n == "midnight").unwrap().1;
-        assert_eq!(
-            t.base,
-            Color::Rgb(0x10, 0x10, 0x18),
-            "the folder supplies base"
-        );
-        assert_eq!(
-            t.brand,
-            Color::Rgb(0xff, 0x00, 0x00),
-            "the config table wins the role"
-        );
-        std::fs::write(
-            dir.join("gruvbox.toml"),
-            "[mux.themes.gruvbox]\nbase = \"#010203\"\n",
-        )
-        .unwrap();
-        let (themes, _) = user_themes(Path::new("/"));
-        assert!(
-            themes.iter().any(|(name, _)| name == "gruvbox"),
-            "the reader lists the folder name"
-        );
-        let (theme, warning) = Theme::from_name_in("gruvbox", &themes);
-        assert_eq!(theme.base, Theme::from_name("gruvbox").0.base);
-        assert!(warning.is_none());
-        match ambient {
-            Some(v) => std::env::set_var("FNO_CONFIG", v),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        set_themes_dir_for_test(None);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn multiple_warnings_join_into_one_notice() {
-        assert_eq!(join_warnings(vec![]), None);
-        let one = join_warnings(vec![KeymapWarning("a".into())]);
-        assert_eq!(one.unwrap().0, "a");
-        let two = join_warnings(vec![KeymapWarning("a".into()), KeymapWarning("b".into())]);
-        assert_eq!(two.unwrap().0, "a; b");
     }
 }

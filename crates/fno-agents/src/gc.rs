@@ -84,6 +84,12 @@ pub struct GcRow {
     /// The row is an eval worker whose attempt the evals history reads
     /// terminal (`graded` or `unavailable`): finished work by definition.
     pub eval_finished: bool,
+    /// Seconds since the row's own exit stamp. `Some` only when the registry
+    /// itself recorded the exit (`Exited`, stamped by the reconcile that
+    /// confirmed the child gone): a probe result, not an inference. Past
+    /// [`EXIT_ROW_REAP_SECS`] it outranks the brainstorm and idle-window
+    /// keeps, which protect rows whose death is only inferred.
+    pub exited_age_s: Option<i64>,
 }
 
 /// The statuses that complete a PLANNING assignment: the plan was written
@@ -115,6 +121,14 @@ pub const SKILL_IDLE_RETIRE_SECS: i64 = 86_400;
 /// Law d-b01ffede: a row whose node is done retires after 30 idle minutes,
 /// whatever its origin.
 pub const DONE_NODE_IDLE_RETIRE_SECS: i64 = 1_800;
+
+/// An exit-recorded row reaps once its recorded exit is this old. The guard
+/// only spaces the reap from the death (nudges and the stuck escalation run
+/// inside it); the stamp itself is the reconcile's positive proof of death,
+/// written only after it confirmed the child gone. Nothing reaped these rows
+/// before, and they stacked up (measured 2026-11-06: 22 of them on one
+/// machine, ages 0 to 73 hours).
+pub const EXIT_ROW_REAP_SECS: i64 = 7_200;
 
 /// WHICH positive fact holds a [`GcAction::Keep`] row. Removal is the
 /// default, so an unknown fact never keeps a row: there is no variant for
@@ -185,6 +199,15 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             let (node, pr) = (node.clone(), *pr);
             return (GcAction::Keep, Some(KeepReason::OpenPr { node, pr }));
         }
+    }
+    // A recorded exit past the guard retires whatever the transcript says:
+    // the brainstorm keep (law d-defa43c7) and the idle window protect rows
+    // whose death is inferred, and this row's death is a stored probe result.
+    if row
+        .exited_age_s
+        .is_some_and(|age| age >= EXIT_ROW_REAP_SECS)
+    {
+        return (GcAction::Retire, None);
     }
     if row.fno_skill == Some(false) && !row.eval_finished && row.origin.as_deref() != Some("spawn")
     {
@@ -1078,6 +1101,21 @@ pub fn maybe_retirement_sweep(
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         let emitter = EventEmitter::new(events, "daemon");
+        // Revival precedes destruction on the first sweeps after a boot:
+        // a reboot empties the roster and ages every transcript past every
+        // window, so a sweep that runs before the boot pass finishes would
+        // vacate and reap the fleet the revival exists to bring back. The
+        // hold is bounded: past the ceiling, or on a host that cannot name
+        // its boot, the gate is unevaluable and the sweeps run as before.
+        if let Some(reason) = crate::boot_revival::hold_reason(&home) {
+            let _ = emitter.emit(
+                "retire_held_for_boot_revival",
+                &serde_json::json!({"reason": reason}),
+            );
+            crate::boot_revival::start(&home);
+            return;
+        }
+
         let grace_secs = crate::agents_config::retire_grace_secs(&grace_cwd) as i64;
         let retain_days = crate::agents_config::reap_receipt_retain_days(&grace_cwd);
         // The dead-team sweep runs BEFORE the registry sweep: a vacated
@@ -1260,6 +1298,15 @@ mod tests {
         let home = AgentsHome::at(&dir);
         home.ensure_root().unwrap();
         crate::paths::pin_test_claims_root(&dir.join("claims-root"));
+        // The retire arm reads the boot-revival receipt before it may sweep;
+        // a fixture with no receipt holds every pass. Stamp one finished so
+        // these tests exercise the arm itself.
+        crate::boot_revival::write_receipt(
+            &home.root().join("boot-revival.json"),
+            crate::boot_revival::boot_time().unwrap_or(0),
+            &[],
+            true,
+        );
         (dir, home)
     }
 
@@ -1292,6 +1339,25 @@ mod tests {
 
     fn wait_for_retire_row(path: &std::path::Path) -> usize {
         wait_for_retire_row_within(path, 5)
+    }
+
+    /// Polls the committed journal for one event kind, a 10s bound.
+    fn wait_for_event(path: &std::path::Path, kind: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let found = crate::events::committed_journal_text(path)
+                .lines()
+                .any(|l| l.contains(&format!("\"type\":\"{kind}\"")));
+            if found {
+                return true;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{kind} never landed in {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// The longer bound for registries whose rows the age seam must probe
@@ -1367,6 +1433,83 @@ mod tests {
                 1,
                 "no second run may land inside one guard window"
             );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The gate: while this boot's revival pass has not finished, the retire
+    /// arm emits the hold event and runs nothing; once the receipt reads
+    /// done, the next pass runs its sweeps.
+    #[test]
+    fn the_retire_arm_holds_its_sweeps_until_this_boots_revival_finished() {
+        let (dir, home) = retirement_sweep_tmp_home("revival-gate");
+        // This test owns the gate's own legs: clear the helper's finished
+        // receipt so the first pass reads the no-receipt hold.
+        std::fs::remove_file(home.root().join("boot-revival.json")).ok();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let in_flight = Arc::new(AtomicBool::new(false));
+            let cell: Arc<RetireIntervalCell> = Arc::new(Mutex::new(None));
+            let mut last = Instant::now() - Duration::from_secs(301);
+            // No receipt: the pass holds, names the reason, runs no sweep.
+            crate::gc::maybe_retirement_sweep(
+                &mut last,
+                &in_flight,
+                &cell,
+                home.clone(),
+                dir.clone(),
+                home.events_jsonl(),
+                Duration::from_secs(300),
+                || crate::reap_render::MuxSweep::Skipped,
+                noop_roster_sweep,
+                noop_team_sweep,
+            );
+            let held = wait_for_event(&home.events_jsonl(), "retire_held_for_boot_revival");
+            assert!(held, "the held pass must name itself");
+            assert_eq!(
+                count_retire_rows(&home.events_jsonl()),
+                0,
+                "a held pass lands no retire tick"
+            );
+            // The pass done: the next tick runs the sweeps.
+            crate::boot_revival::write_receipt(
+                &home.root().join("boot-revival.json"),
+                crate::boot_revival::boot_time().unwrap(),
+                &[],
+                true,
+            );
+            // The first pass stamped the guard window, and its body may
+            // still hold the in-flight gate while the listing read fails
+            // over. Wait for the drop and backdate, or the proceed pass is
+            // refused before its body ever runs.
+            let free = Instant::now() + Duration::from_secs(30);
+            while in_flight.load(std::sync::atomic::Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < free,
+                    "the held pass never released the in-flight gate"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            last = Instant::now() - Duration::from_secs(301);
+            crate::gc::maybe_retirement_sweep(
+                &mut last,
+                &in_flight,
+                &cell,
+                home.clone(),
+                dir.clone(),
+                home.events_jsonl(),
+                Duration::from_secs(300),
+                || crate::reap_render::MuxSweep::Skipped,
+                noop_roster_sweep,
+                noop_team_sweep,
+            );
+            // The proceed leg runs the real probes; on a runner with no
+            // claude they run out their whole timeout before the tick lands.
+            wait_for_retire_row_within(&home.events_jsonl(), 30);
+            assert_eq!(count_retire_rows(&home.events_jsonl()), 1);
         });
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1554,6 +1697,14 @@ mod tests {
         let home = AgentsHome::at(dir.path().join("agents"));
         home.ensure_root().unwrap();
         crate::paths::pin_test_claims_root(dir.path());
+        // The retire arm reads the boot-revival receipt before it may sweep;
+        // stamp one finished so this tick exercises the held-rows event.
+        crate::boot_revival::write_receipt(
+            &home.root().join("boot-revival.json"),
+            crate::boot_revival::boot_time().unwrap_or(0),
+            &[],
+            true,
+        );
         crate::graph_store::seed_rows(
             &dir.path().join("graph.json"),
             &[serde_json::json!({
@@ -1912,6 +2063,7 @@ mod tests {
             open_pr: None,
             peer_drives_pr: false,
             eval_finished: false,
+            exited_age_s: None,
         }
     }
 
@@ -2064,6 +2216,41 @@ mod tests {
         ] {
             assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None), "{row:?}");
         }
+    }
+
+    /// An exit-recorded row past the guard retires whatever the transcript
+    /// says: the brainstorm keep and the idle window protect
+    /// rows whose death is inferred, and this row's death is a stored probe
+    /// result. Inside the guard the keeps still hold, and a live claim still
+    /// outranks the exit reap.
+    #[test]
+    fn an_exit_recorded_row_past_the_guard_reaps() {
+        let mut row = retiring();
+        row.fno_skill = Some(false);
+        row.origin = None;
+        row.transcript_age_s = Some(SKILL_IDLE_RETIRE_SECS + 1);
+        let recorded = GcRow {
+            exited_age_s: Some(EXIT_ROW_REAP_SECS + 1),
+            ..row.clone()
+        };
+        assert_eq!(gc_decide(&recorded, GRACE), (GcAction::Retire, None));
+        let young = GcRow {
+            exited_age_s: Some(EXIT_ROW_REAP_SECS - 1),
+            ..row
+        };
+        assert_eq!(
+            gc_decide(&young, GRACE),
+            (GcAction::Keep, Some(KeepReason::Brainstorm))
+        );
+        let claimed = GcRow {
+            exited_age_s: Some(EXIT_ROW_REAP_SECS + 1),
+            live_claim: Some("node:x-1 (holder t-1)".into()),
+            ..recorded
+        };
+        assert!(matches!(
+            gc_decide(&claimed, GRACE),
+            (GcAction::Keep, Some(KeepReason::LiveClaim { .. }))
+        ));
     }
 
     #[test]

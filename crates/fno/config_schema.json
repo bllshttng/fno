@@ -1561,6 +1561,18 @@
       "title": "Board Scope",
       "type": "string"
      },
+     "report_parent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Report Parent"
+     },
      "prefix": {
       "anyOf": [
        {
@@ -4016,7 +4028,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries."
+     "doc": "Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries."
   },
   {
    "path": "paths.memory_dir",
@@ -6622,6 +6634,15 @@
    "question": "",
    "default_source": "default",
    "doc": "Which projects the mux backlog board shows: repo (default, this checkout's project.id) | all | workspace:<name>, e.g. workspace:main for a workspace holding web, backend and marketing. A scope that cannot resolve falls back to every project, and `fno mux doctor` reports that as a warn naming the remedy. Latched at mux server birth; `fno mux kill-server` re-reads."
+  },
+  {
+   "path": "mux.report_parent",
+   "type": "str (optional)",
+   "default": null,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "default",
+   "doc": "Parent epic for reports filed with prefix+!. Unset files reports without a parent."
   },
   {
    "path": "mux.prefix",

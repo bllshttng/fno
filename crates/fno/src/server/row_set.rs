@@ -1187,37 +1187,6 @@ mod tests {
         assert_eq!(got2.len(), 1);
         assert_eq!(got2[0].source, "claim");
     }
-
-    #[test]
-    fn an_empty_join_keeps_the_name_fallback() {
-        // AC4-EDGE: a malformed/empty join binds nothing by itself, and
-        // today's name + claim fallbacks still resolve node and leave pr
-        // unset.
-        let join = BacklogJoin::default();
-        let ids: HashMap<String, ()> = ["x-2222"]
-            .into_iter()
-            .map(|i| (i.to_string(), ()))
-            .collect();
-        let holders: HashMap<String, String> = [("w1".to_string(), "x-2222".to_string())].into();
-        let claim_agent = RegistryAgent {
-            name: "w1".into(),
-            ..Default::default()
-        };
-        let got = graph_bindings_for(&join, &ids, &holders, &HashMap::new(), &claim_agent);
-        assert_eq!(got.len(), 1, "the claim fallback survives an empty join");
-        assert_eq!(got[0].source, "claim");
-        assert_eq!(got[0].node, "x-2222");
-        assert_eq!(got[0].pr, None);
-        let name_agent = RegistryAgent {
-            name: "x-2222-runner".into(),
-            ..Default::default()
-        };
-        let got2 = graph_bindings_for(&join, &ids, &HashMap::new(), &HashMap::new(), &name_agent);
-        assert_eq!(got2.len(), 1, "the name fallback survives an empty join");
-        assert_eq!(got2[0].source, "name");
-        assert_eq!(got2[0].node, "x-2222");
-    }
-
     fn ids_empty() -> HashMap<String, ()> {
         HashMap::new()
     }

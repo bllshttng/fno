@@ -41,6 +41,8 @@ pub struct ReapRow {
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_session: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
     pub reaped: bool,
     pub reason: String,
 }
@@ -168,6 +170,7 @@ pub fn reap_rows(ps_output: &str, apply: bool, min_elapsed: u64) -> Vec<ReapRow>
             zombies: orphan.zombies,
             command: orphan.command.clone(),
             owner_session: None,
+            kind: None,
             reaped: false,
             reason: String::new(),
         };
@@ -229,14 +232,22 @@ pub fn maybe_sweep(last_sweep: &mut Instant, in_flight: &Arc<AtomicBool>, events
             crate::daemon::global_events_path(&home),
         );
         let emitter = EventEmitter::new(events, "daemon");
+        let registry_pids = production_registry_pids();
+        let env_lease_of = |pid: u32| crate::process_owner::owner_lease_for_pid(pid);
         match read_ps() {
             Some(ps) => {
-                let rows = reap_snapshot(&ps, true, min_elapsed);
+                let rows = reap_snapshot(
+                    &ps,
+                    true,
+                    min_elapsed,
+                    &env_lease_of,
+                    registry_pids.as_ref(),
+                );
                 for row in &rows {
-                    let event = if row.owner_session.is_some() {
-                        "orphan_owner_server_reaped"
-                    } else {
-                        "orphan_test_binary_reaped"
+                    let event = match row.kind {
+                        Some("leased_process") => "orphan_leased_process_reaped",
+                        _ if row.owner_session.is_some() => "orphan_owner_server_reaped",
+                        _ => "orphan_test_binary_reaped",
                     };
                     let _ = emitter.emit(event, row);
                 }
@@ -313,10 +324,41 @@ pub fn reap_sweep_once(apply: bool, min_elapsed: u64) -> Vec<ReapRow> {
     let Some(ps) = read_ps() else {
         return Vec::new();
     };
-    reap_snapshot(&ps, apply, min_elapsed)
+    let registry_pids = production_registry_pids();
+    let env_lease_of = |pid: u32| crate::process_owner::owner_lease_for_pid(pid);
+    reap_snapshot(
+        &ps,
+        apply,
+        min_elapsed,
+        &env_lease_of,
+        registry_pids.as_ref(),
+    )
 }
 
-fn reap_snapshot(ps: &str, apply: bool, min_elapsed: u64) -> Vec<ReapRow> {
+/// Registry pids from the store, `None` on a read failure: the lease sweep
+/// fails closed like every other retirement gate (an unreadable store never
+/// retires), because an empty exclusion set would expose tracked keepers
+/// carrying stale inherited leases to the kill.
+fn production_registry_pids() -> Option<std::collections::BTreeSet<u32>> {
+    let home = crate::paths::AgentsHome::from_env();
+    crate::state::load_registry(&home.registry_json())
+        .ok()
+        .map(|registry| {
+            registry
+                .entries
+                .iter()
+                .filter_map(|entry| entry.pid)
+                .collect()
+        })
+}
+
+fn reap_snapshot(
+    ps: &str,
+    apply: bool,
+    min_elapsed: u64,
+    env_lease_of: impl Fn(u32) -> crate::process_owner::OwnerRead,
+    registry_pids: Option<&std::collections::BTreeSet<u32>>,
+) -> Vec<ReapRow> {
     let mut rows: Vec<ReapRow> = reap_rows(&ps, apply, min_elapsed)
         .into_iter()
         .filter(|row| row.reaped)
@@ -326,7 +368,171 @@ fn reap_snapshot(ps: &str, apply: bool, min_elapsed: u64) -> Vec<ReapRow> {
             .into_iter()
             .filter(|row| row.reaped),
     );
+    rows.extend(
+        leased_process_rows_with(ps, apply, &env_lease_of, registry_pids)
+            .into_iter()
+            .filter(|row| row.reaped),
+    );
     rows
+}
+
+/// The lease sweep's injectable process reads, so tests drive the whole flow
+/// without planting real tagged processes.
+struct LeaseSweepSeams<'a> {
+    lease_of: &'a dyn Fn(u32) -> crate::process_owner::OwnerRead,
+    owner_alive: &'a dyn Fn(u32, u64) -> bool,
+    carrier_birth: &'a dyn Fn(u32) -> Option<u64>,
+    registry_pids: &'a std::collections::BTreeSet<u32>,
+    kill: &'a dyn Fn(u32) -> bool,
+}
+
+/// Parse one `ps` row into (pid, ppid, elapsed, command) for the lease sweep:
+/// the same shape the fixed detectors read, no argv filter.
+fn leased_row_fields(line: &str) -> Option<(u32, u32, u64, String)> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 7 {
+        return None;
+    }
+    let (Ok(pid), Ok(ppid)) = (fields[0].parse::<u32>(), fields[1].parse::<u32>()) else {
+        return None;
+    };
+    let elapsed_seconds = elapsed_seconds(fields[3])?;
+    Some((pid, ppid, elapsed_seconds, fields[6..].join(" ")))
+}
+
+/// Find lease-carrying processes in the same machine snapshot as the fixed
+/// sweeps, any shape, any parent. Kill authority is a dead lease owner
+/// (identity mismatch, the owner-server sweep's existing rule) at any ppid; a
+/// live lease owner keeps the carrier even at ppid 1, because that is the
+/// intentionally-detached set: pane keepers and the processes a spawn released
+/// on purpose. A partial or unreadable lease is a hold, never kill authority.
+/// Registry pids are excluded: their machinery owns them.
+fn leased_process_rows(ps_output: &str, apply: bool, seams: &LeaseSweepSeams<'_>) -> Vec<ReapRow> {
+    let mut rows = Vec::new();
+    let self_pid = std::process::id();
+    for line in ps_output.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("PID ") {
+            continue;
+        }
+        let Some((pid, _ppid, elapsed, command)) = leased_row_fields(line) else {
+            continue;
+        };
+        if pid == self_pid || seams.registry_pids.contains(&pid) {
+            continue;
+        }
+        match (seams.lease_of)(pid) {
+            crate::process_owner::OwnerRead::Owner(lease) => {
+                if (seams.owner_alive)(lease.pid, lease.birth) {
+                    continue;
+                }
+                let owner_start = crate::daemon::process_start_time(lease.pid);
+                if owner_start.is_none() && pid_exists(lease.pid) {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "held: owner identity unreadable",
+                    ));
+                    continue;
+                }
+                if !apply {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "dry-run: lease owner dead; pass --apply to kill",
+                    ));
+                    continue;
+                }
+                // Re-verify the carrier's identity before the kill, the
+                // owner-server sweep's rule: the snapshot row must still be
+                // the process whose env was read.
+                if (seams.carrier_birth)(pid).is_none() {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "held: carrier identity unreadable",
+                    ));
+                    continue;
+                }
+                // A tagged worker leads its own process group, so the kill
+                // takes its descendants with it; a legacy carrier that shares
+                // a group gets a pid kill only.
+                let killed = (seams.kill)(pid);
+                rows.push(leased_row(
+                    pid,
+                    elapsed,
+                    command,
+                    Some(lease.session),
+                    killed,
+                    if killed {
+                        "SIGKILL sent"
+                    } else {
+                        "kill failed"
+                    },
+                ));
+            }
+            crate::process_owner::OwnerRead::Unknown => {
+                rows.push(leased_row(
+                    pid,
+                    elapsed,
+                    command,
+                    None,
+                    false,
+                    "held: owner lease unreadable, incomplete, or identity-mismatched",
+                ));
+            }
+            crate::process_owner::OwnerRead::Ownerless => {}
+        }
+    }
+    rows
+}
+
+/// SIGKILL the tagged carrier: its own process group when it leads one (the
+/// tagged-worker shape), the pid alone otherwise. A group kill must never be
+/// attempted on a carrier that merely SHARES a group.
+fn kill_carrier(pid: u32) -> bool {
+    // SAFETY: getpgid answers the carrier's group without signalling.
+    let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    if pgid > 0 && pgid == pid as libc::pid_t {
+        // SAFETY: SIGKILL to the group the confirmed carrier leads.
+        unsafe { libc::killpg(pgid, libc::SIGKILL) == 0 }
+    } else {
+        // SAFETY: SIGKILL to the one pid the confirmed carrier named.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
+    }
+}
+
+/// The lease sweep with production seams for the manual command: env leases
+/// per pid, owner and carrier liveness via process start times, registry pids
+/// from the store.
+fn leased_process_rows_with(
+    ps: &str,
+    apply: bool,
+    env_lease_of: &impl Fn(u32) -> crate::process_owner::OwnerRead,
+    registry_pids: Option<&std::collections::BTreeSet<u32>>,
+) -> Vec<ReapRow> {
+    // Fail closed: an unreadable registry means the tracked-worker exclusion
+    // cannot be proven, so this pass sweeps nothing.
+    let Some(registry_pids) = registry_pids else {
+        return Vec::new();
+    };
+    let seams = LeaseSweepSeams {
+        lease_of: env_lease_of,
+        owner_alive: &|pid, birth| crate::test_run::owner_alive(pid, birth),
+        carrier_birth: &|pid| crate::daemon::process_start_time(pid),
+        registry_pids,
+        kill: &|pid| kill_carrier(pid),
+    };
+    leased_process_rows(ps, apply, &seams)
 }
 
 fn owner_server_rows(ps_output: &str) -> Vec<(u32, u64, String, PathBuf)> {
@@ -461,9 +667,25 @@ fn owner_reap_row(
         zombies: 0,
         command,
         owner_session,
+        kind: None,
         reaped,
         reason: reason.to_string(),
     }
+}
+
+/// A lease-sweep row: stamped with its kind so the event and render legs can
+/// name the killed shape instead of calling every tagged carrier a mux server.
+fn leased_row(
+    pid: u32,
+    elapsed_seconds: u64,
+    command: String,
+    owner_session: Option<String>,
+    reaped: bool,
+    reason: &str,
+) -> ReapRow {
+    let mut row = owner_reap_row(pid, elapsed_seconds, command, owner_session, reaped, reason);
+    row.kind = Some("leased_process");
+    row
 }
 
 fn pid_exists(pid: u32) -> bool {
@@ -495,14 +717,19 @@ pub fn run_orphan_reap(args: &[String]) -> i32 {
     };
     let test_rows = reap_rows(&ps, apply, min_elapsed);
     let owner_rows = reap_owner_server_rows(&ps, apply);
+    let registry_pids = production_registry_pids();
+    let env_lease_of = |pid: u32| crate::process_owner::owner_lease_for_pid(pid);
+    let leased_rows = leased_process_rows_with(&ps, apply, &env_lease_of, registry_pids.as_ref());
     let mut rows = test_rows.clone();
     rows.extend(owner_rows.iter().cloned());
+    rows.extend(leased_rows.iter().cloned());
     if json {
         println!(
             "{}",
             serde_json::json!({
                 "orphan_test_binaries": test_rows,
                 "orphan_mux_servers": owner_rows,
+                "orphan_leased_processes": leased_rows,
                 "exit_code": 0
             })
         );
@@ -514,7 +741,18 @@ pub fn run_orphan_reap(args: &[String]) -> i32 {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     for row in &rows {
-        if row.owner_session.is_some()
+        if row.kind == Some("leased_process") {
+            let _ = writeln!(
+                out,
+                "lease-tagged process: pid {}, owner session {}, elapsed {}:{:02}:{:02}: {}",
+                row.pid,
+                row.owner_session.as_deref().unwrap_or("unknown"),
+                row.elapsed_seconds / 3600,
+                (row.elapsed_seconds % 3600) / 60,
+                row.elapsed_seconds % 60,
+                row.command
+            );
+        } else if row.owner_session.is_some()
             || crate::process_owner::mux_server_socket(&row.command).is_some()
         {
             let _ = writeln!(
@@ -742,5 +980,68 @@ mod tests {
     /// A unique per-test tempdir so parallel tests never share a fixture.
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("fno-orphan-reap-{}-{tag}", std::process::id()))
+    }
+
+    /// The full lease sweep over fake seams: one kill, three skips, one hold.
+    #[test]
+    fn the_lease_sweep_kills_dead_owner_carriers_and_holds_the_rest() {
+        let ps = [
+            "PID PPID S ELAPSED %CPU RSS COMMAND",
+            "601 1 S 20:00:00 0.0 4096 /tmp/rig/bin/footnote",
+            "602 1 S 20:00:00 0.0 4096 codex app-server",
+            "603 1 S 20:00:00 0.0 4096 some-cli --flag",
+            "604 1 S 00:01:00 0.0 4096 pane-shell",
+            "605 1 S 00:01:00 0.0 4096 pane-shell",
+        ]
+        .join("\n");
+        let lease_of = |pid: u32| match pid {
+            601 => crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
+                pid: 500,
+                birth: 1,
+                session: "dead-owner-a".into(),
+            }),
+            602 => crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
+                pid: 900,
+                birth: 7,
+                session: "live-owner-b".into(),
+            }),
+            604 => crate::process_owner::OwnerRead::Unknown,
+            _ => crate::process_owner::OwnerRead::Ownerless,
+        };
+        let registry: BTreeSet<u32> = BTreeSet::from([603]);
+        let killed = std::cell::RefCell::new(Vec::new());
+        let seams = LeaseSweepSeams {
+            lease_of: &lease_of,
+            owner_alive: &|pid, birth| pid == 900 && birth == 7,
+            carrier_birth: &|_| Some(1),
+            registry_pids: &registry,
+            kill: &|pid| {
+                killed.borrow_mut().push(pid);
+                true
+            },
+        };
+        let rows = leased_process_rows(&ps, true, &seams);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].pid, 601);
+        assert!(rows[0].reaped, "{}", rows[0].reason);
+        assert_eq!(rows[0].reason, "SIGKILL sent");
+        assert_eq!(rows[0].owner_session.as_deref(), Some("dead-owner-a"));
+        assert_eq!(rows[1].pid, 604);
+        assert!(!rows[1].reaped, "{}", rows[1].reason);
+        assert_eq!(
+            rows[1].reason,
+            "held: owner lease unreadable, incomplete, or identity-mismatched"
+        );
+        assert_eq!(*killed.borrow(), vec![601]);
+        let dry = leased_process_rows(&ps, false, &seams);
+        assert_eq!(dry.len(), 2, "{dry:?}");
+        assert_eq!(dry[0].pid, 601);
+        assert!(!dry[0].reaped, "{}", dry[0].reason);
+        assert_eq!(
+            dry[0].reason,
+            "dry-run: lease owner dead; pass --apply to kill"
+        );
+        assert_eq!(dry[1].pid, 604);
+        assert!(!dry[1].reaped, "{}", dry[1].reason);
     }
 }

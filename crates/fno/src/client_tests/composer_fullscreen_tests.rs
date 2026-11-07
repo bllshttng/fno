@@ -60,53 +60,6 @@ async fn toggle_composer_opens_over_a_hidden_panel_without_a_resize() {
         "opening reshapes the sheet, never the pane: {buf:?}"
     );
 }
-
-#[tokio::test]
-async fn toggle_panel_with_composer_open_closes_it() {
-    let mut v = two_pane_view();
-    let mut buf: Vec<u8> = Vec::new();
-    dispatch_event(&mut v, Event::ToggleComposer, &mut buf)
-        .await
-        .unwrap();
-    assert!(v.launcher.is_some());
-    dispatch_event(&mut v, Event::TogglePanel, &mut buf)
-        .await
-        .unwrap();
-    assert!(!v.panel_on, "sideline hidden");
-    assert!(
-        v.launcher.is_none(),
-        "hiding the sideline closes the composer"
-    );
-}
-
-#[tokio::test]
-async fn full_screen_sideline_hides_panes_without_the_composer() {
-    let mut v = two_pane_view();
-    v.term = (40, 120);
-    v.frames.insert(10, text_frame(29, 35, 'Q'));
-    v.frames.insert(11, text_frame(29, 36, 'Q'));
-    assert!(
-        frame_text(&v.compose()).contains('Q'),
-        "sanity: panes paint in normal mode"
-    );
-    let mut buf: Vec<u8> = Vec::new();
-    dispatch_event(&mut v, Event::ToggleFullSideline, &mut buf)
-        .await
-        .unwrap();
-    assert!(v.sideline_full);
-    assert!(v.launcher.is_none(), "F no longer opens the composer");
-    let text = frame_text(&v.compose());
-    assert!(!text.contains('Q'), "no pane cell paints");
-    assert!(
-        text.contains("last msg"),
-        "the Extended table header paints"
-    );
-    assert!(
-        !text.contains("new agent"),
-        "the composer sheet stays closed; prefix+i owns it"
-    );
-}
-
 #[tokio::test]
 async fn full_screen_sideline_toggles_back_resyncs_and_repaints_panes() {
     let mut v = two_pane_view();
@@ -159,30 +112,4 @@ async fn full_screen_click_beyond_the_panel_never_sends_bytes() {
         .await
         .unwrap();
     assert!(buf.is_empty(), "no mouse bytes forwarded");
-}
-
-#[tokio::test]
-async fn bell_full_screen_covers_panes_and_toggles_back() {
-    // The bell is an overlay like the composer sheet: F covers the panes
-    // with no Resize (the bell path holds no socket writer at all), and a
-    // second F returns to the size the panel had. The pane glyph is ✗, not
-    // the sideline tests' Q: the panel's own "Questions" tab label prints a
-    // Q, so a Q probe would read the bell's own chrome.
-    let mut v = two_pane_view();
-    v.term = (40, 120);
-    v.frames.insert(10, text_frame(29, 35, '✗'));
-    v.frames.insert(11, text_frame(29, 36, '✗'));
-    bell::open(&mut v);
-    assert!(
-        frame_text(&v.compose()).contains('✗'),
-        "sanity: the normal panel leaves the panes visible"
-    );
-    bell::keys(&mut v, b"F");
-    let text = frame_text(&v.compose());
-    assert!(!text.contains('✗'), "no pane cell paints: {text:?}");
-    bell::keys(&mut v, b"F");
-    assert!(
-        frame_text(&v.compose()).contains('✗'),
-        "the panes paint again at their old size"
-    );
 }

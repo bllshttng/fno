@@ -46,21 +46,23 @@ mod wire_version;
 mod workspace_folder;
 use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
-use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
-#[cfg(test)]
-use sweep_scope::{parse_sweep_receipt, sweep_apply_args};
-
 use self::rename_overlay::RenameTarget;
 pub use row_menu::SplitOpens;
 #[cfg(test)]
 use row_menu::{build_row_menu, row_menu_execute_selected};
 use row_menu::{build_tab_menu, row_menu_keys, row_menu_mouse};
+#[cfg(test)]
+use sweep_scope::parse_sweep_receipt;
+use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
 
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
 pub(crate) mod attach_handshake;
+mod health;
 mod launch;
+mod panic_log;
 mod placement_pickers;
+mod report;
 pub mod snapshot;
 
 use self::placement_pickers::{
@@ -395,7 +397,7 @@ fn run_inner(session: &str) -> Result<i32, String> {
     let _ = proto::mux_dir();
     if let Some((w, _remedy)) = proto::pending_config_warning() {
         let _ = proto::ensure_mux_dir();
-        client_log_append(&proto::mux_dir().join("client-warnings.log"), w);
+        crate::mux_log::client("warn", w);
     }
     // Nested same-server guard (AC3-UI/EDGE): BEFORE any socket, spawn, or
     // terminal mode change. `FNO_SERVER` (and the legacy `FNO_SESSION`) is
@@ -412,20 +414,6 @@ fn run_inner(session: &str) -> Result<i32, String> {
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
     runtime.block_on(attach_handshake::attach_once_more(&path))
-}
-
-/// Append one line to a log file under the mux dir, best-effort. The shared
-/// write behind both the e2e breadcrumbs and the config-warning log: one
-/// append mechanism, never stderr (see [`e2e_client_log`] for the rule).
-fn client_log_append(path: &Path, msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        use std::io::Write;
-        let _ = writeln!(f, "{msg}");
-    }
 }
 
 /// Connect to a live server, or spawn one and connect. AC3-ERR: a dead
@@ -515,24 +503,11 @@ fn log_path(socket: &Path) -> PathBuf {
     socket.with_extension("log")
 }
 
-/// CI diagnostics: connect-path breadcrumbs, FNO_E2E-gated, appended
-/// to `<mux_dir>/client-<pid>.log` (the e2e harness dumps every `*.log` in
-/// its scratch on a timeout). NEVER stderr: pre-TUI stderr reaches the
-/// client's PTY, and any byte there trips the harness's screen-not-empty
-/// gates before the client has actually attached.
+/// Connect-path breadcrumbs share the client log without painting over the TUI.
 fn e2e_client_log(msg: std::fmt::Arguments<'_>) {
-    if std::env::var_os("FNO_E2E").is_none() {
-        return;
+    if std::env::var_os("FNO_E2E").is_some() {
+        crate::mux_log::client("info", &format!("pid {}: {msg}", std::process::id()));
     }
-    let ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let line = format!("[{ms} pid {}] {msg}", std::process::id());
-    client_log_append(
-        &proto::mux_dir().join(format!("client-{}.log", std::process::id())),
-        &line,
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +675,8 @@ pub(crate) struct View {
     session: String,
     layout: LayoutView,
     frames: HashMap<u64, Frame>,
+    health: health::Health,
+    report: Option<report::Report>,
     /// Manual sideline toggle; narrow terminals override it (auto-hide).
     /// Orthogonal to [`View::density`]: this is visibility, that is how much
     /// each visible row shows. `Slim` is a narrow rail, NOT a hidden panel.
@@ -734,6 +711,9 @@ pub(crate) struct View {
     machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
+    /// Nest workers under their lead in the card layout (prefix+t),
+    /// persisted. Off = flat cards; the list layout always nests.
+    group_by_lead: bool,
     /// The manual reorder sequence (agent names in display order) behind the
     /// Manual sort column, persisted.
     manual_order: Vec<String>,
@@ -1319,17 +1299,6 @@ struct MovePick {
 }
 
 impl MovePick {
-    /// The selected destination squad id, or `None` for an empty list.
-    ///
-    /// Test-only: the commit path consumes the picker and indexes `squads`
-    /// directly, so this exists to let a test read the selection without
-    /// reproducing that arithmetic. Unconditional, it is dead code in the
-    /// shipped build.
-    #[cfg(test)]
-    fn target(&self) -> Option<u64> {
-        self.squads.get(self.cursor).copied()
-    }
-
     /// A freshly opened picker: cursor at the top, no escape carry.
     fn new(src: MoveSrc, squads: Vec<u64>) -> Self {
         Self {
@@ -1712,6 +1681,8 @@ pub(crate) enum AuxAction {
     ToggleExperimental(experimental::Flag),
     Share(share_flow::Act),
     OpenBacklogView,
+    /// Nest workers under their lead in the card layout (the prefix+t toggle).
+    ToggleGroupByLead,
     /// Flip the sideline's row shape (list <-> card) live: swap the view's
     /// in-memory layout, persist `sideline.layout` through the CLI, then
     /// invalidate the palette cache. A failed save keeps the in-memory shape
@@ -1840,6 +1811,7 @@ impl View {
         let (density, agent_sort, stored_width) = view_store::load_prefs();
         let agent_group = view_store::load_agent_group();
         let show_card_head = view_store::load_card_head();
+        let group_by_lead = view_store::load_group_by_lead();
         let manual_order = view_store::load_manual_order();
         // The stored intent, resolved once. Deliberately NOT clamped to
         // the current terminal here: `panel_w` clamps transiently on every paint,
@@ -1849,6 +1821,8 @@ impl View {
         // canonical size, so nothing changes until the first drag.
         let sideline_width = stored_width.unwrap_or_else(|| canonical_width(density));
         View {
+            health: health::Health::new(Instant::now()),
+            report: None,
             term,
             session,
             layout,
@@ -1862,6 +1836,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             show_card_head,
+            group_by_lead,
             manual_order,
             status_on: true,
             resource_meter_on: false,
@@ -2492,6 +2467,7 @@ impl View {
     fn menu_usurping_open(&self) -> bool {
         self.launcher.is_some()
             || self.keys_modal.is_some()
+            || self.report.is_some()
             || self.row_menu.is_some()
             || self.aux.is_some()
             || self.connections.is_some()
@@ -3999,6 +3975,7 @@ impl View {
         let held = self.selected_agent_name();
         self.agent_sort = self.agent_sort.advance();
         view_store::save_prefs(self.density, self.agent_sort);
+        self.set_notice(agent_sort::sort_notice(self.agent_sort));
         self.reanchor_selector(held);
     }
 
@@ -4427,7 +4404,9 @@ impl View {
         file_viewer::draw(self, &mut cells, rows, cols);
         bell::draw(self, &mut cells, rows, cols);
         let (overlay_origin, overlay_dims) = self.overlay_viewport();
-        if let Some(m) = &self.feed_detail {
+        if self.report.is_some() {
+            report::draw(self, &mut cells, rows, cols);
+        } else if let Some(m) = &self.feed_detail {
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if questions::draw_detail(
             self,
@@ -5144,58 +5123,6 @@ impl View {
                 self.pin_needs(rows, depths)
             }
         }
-    }
-
-    /// Sorts agent runs the way the extended table orders them: each
-    /// contiguous run of agent rows between non-agent rows orders by the
-    /// active column (leads compared against each other, workers ordered
-    /// inside their own lineage level), so the card view and the table read
-    /// in the sorted order and the painted age is the value sorted on.
-    fn sort_agent_runs<'a>(
-        &self,
-        rows: Vec<DisplayRow<'a>>,
-        depths: Vec<usize>,
-    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
-        let needs = self.attention_needs();
-        let now = crate::digest_overlay::now_secs();
-        let order = &AgentOrder {
-            manual: &self.manual_order,
-        };
-        let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
-        let mut group = Vec::new();
-        let mut iter = rows.into_iter().zip(depths).peekable();
-
-        while let Some((row, depth)) = iter.next() {
-            match row {
-                DisplayRow::Agent(agent) => {
-                    let item = vec![(DisplayRow::Agent(agent), depth)];
-                    group.push((item, agent));
-                    if !matches!(iter.peek(), Some((DisplayRow::Agent(_), _))) {
-                        append_sorted_agent_group(
-                            &mut out,
-                            &mut group,
-                            self.agent_sort,
-                            &needs,
-                            now,
-                            order,
-                        );
-                    }
-                }
-                row => {
-                    append_sorted_agent_group(
-                        &mut out,
-                        &mut group,
-                        self.agent_sort,
-                        &needs,
-                        now,
-                        order,
-                    );
-                    out.push((row, depth));
-                }
-            }
-        }
-        append_sorted_agent_group(&mut out, &mut group, self.agent_sort, &needs, now, order);
-        out.into_iter().unzip()
     }
 
     // The sideline tree, with the top-K idle cap applied. A PURE
@@ -5971,11 +5898,15 @@ fn attention_key(a: &AgentRow, need: Option<NeedKind>) -> (u8, u8, std::cmp::Rev
 /// measurement nothing took, on the surface this branch exists to fix. The
 /// label carries it instead, and it asserts only that the rows are hidden.
 ///
+/// A pinned row never folds: the pin is the operator's promise that the row
+/// leads its workspace, and a fold would hide it behind `+N more`.
+///
 /// This predicate is display density, not truth. Attention states (`Blocked`,
 /// `Working`, `DoneUnseen`) are enumerated by exclusion on purpose - a state
 /// added later does not fold, so a new signal fails VISIBLE, never hidden.
 fn is_idle_row(a: &AgentRow) -> bool {
     !a.exited
+        && !a.pinned
         && matches!(
             pane_state(a.badge, a.seen, a.pane_activity),
             PaneState::Idle | PaneState::Empty | PaneState::Unmeasured
@@ -6532,6 +6463,7 @@ async fn attach_and_run(
     .await
     .map_err(|e| format!("attach failed: {e}"))?;
 
+    view.health = health::Health::new(Instant::now());
     let stashed_modesync =
         attach_handshake::read_preamble(&mut sock_r, &mut view, &log_hint).await?;
 
@@ -6929,7 +6861,11 @@ async fn attach_and_run(
                 meter_tx.clone(),
             );
         }
+        let health_deadline = report::deadline(&view);
         tokio::select! {
+            _ = health::wait(health_deadline) => {
+                if let Err(error) = report::tick(&mut view, &mut compositor) { break Err(error); }
+            },
             msg = srv_rx.recv() => match msg.unwrap_or(Err(ProtoError::Closed)) {
                 Ok(ServerMsg::Frame { pane_id, frame }) => {
                     if !frame.geometry_ok() {
@@ -6947,6 +6883,7 @@ async fn attach_and_run(
                         // from this frame, so streaming output neither paints
                         // a stale span nor scans at frame cadence.
                         view.link_hover.on_frame(pane_id, Instant::now());
+                        view.health.frame(Instant::now());
                         view.frames.insert(pane_id, frame);
                         if let Err(e) = compositor.draw(&view.compose()) {
                             break Err(format!("draw: {e}"));
@@ -7968,11 +7905,16 @@ async fn dispatch_event(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<DispatchFlow, String> {
     match event {
+        Event::Report => {
+            report::open(view);
+            return Ok(DispatchFlow::Break);
+        }
         Event::Forward(chunk) => {
             // Reliable channel: awaited send, input is NEVER dropped.
             write_msg(sock_w, &ClientMsg::Input(chunk))
                 .await
                 .map_err(|e| format!("input send failed: {e}"))?;
+            view.health.input(Instant::now());
         }
         Event::ShowPaneIds => {
             view.reveal_pane_ids_at(Instant::now());
@@ -8152,6 +8094,7 @@ async fn dispatch_event(
             view_store::save_agent_group(view.agent_group);
             view.set_notice(format!("grouping by {}", view.agent_group.word()));
         }
+        Event::ToggleGroupByLead => view.toggle_group_by_lead(),
         Event::ToggleCardHead => {
             // Pure local state: the head row is one display row, and the
             // scroll math reads painted_rows() every pass.
@@ -8598,6 +8541,10 @@ async fn execute_aux_action(
         AuxAction::Detach => {
             view.aux = None;
             return Ok(DispatchFlow::Detach);
+        }
+        AuxAction::ToggleGroupByLead => {
+            view.aux = None;
+            view.toggle_group_by_lead();
         }
         AuxAction::LiftHold => hold::lift(view).await,
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
@@ -9595,5 +9542,3 @@ mod needs_queue;
 
 #[path = "client/header_band.rs"]
 mod header_band;
-
-use agent_sort::{append_sorted_agent_group, AgentOrder};

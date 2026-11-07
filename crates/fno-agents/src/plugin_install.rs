@@ -1,9 +1,10 @@
 //! `fno-agents plugin-install <harness> [--force]`, surfaced as
 //! `fno config plugin install`. One local-dev install door for every
 //! plugin harness. Everything installs from the FILTERED stage
-//! (`<state-root>/plugin-stage/fno`: git-tracked + untracked-but-not-ignored
+//! (`<state-root>/install/plugin-stage/fno`: git-tracked + untracked-but-not-ignored
 //! files only, rebuilt wholesale), never from the repo root, because harness
-//! caches copy what they are pointed at.
+//! caches copy what they are pointed at. The previous root-level stage stays
+//! readable during the direct-session drain.
 //!
 //! This module owns stage build, the `--check`/`--restage` deploy commands, the
 //! claude, opencode and agy arms plus the old env-export cleanup. The codex arm
@@ -34,6 +35,18 @@ pub(crate) fn state_root() -> PathBuf {
     std::env::var_os("FNO_RECLAIM_STATE_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_home().join(".fno"))
+}
+
+pub(crate) fn stage_parent() -> PathBuf {
+    crate::state_layout::place_dir(&state_root(), "plugin-stage")
+        .unwrap_or_else(|| state_root().join("plugin-stage"))
+}
+
+fn legacy_stage_parent() -> Option<PathBuf> {
+    let legacy = state_root().join("plugin-stage");
+    let is_real_dir = std::fs::symlink_metadata(&legacy)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+    (legacy != stage_parent() && is_real_dir).then_some(legacy)
 }
 
 fn run_checked(cmd: &[String], cwd: Option<&Path>) -> Result<String, String> {
@@ -283,7 +296,77 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     build_stage_as(source_root, stage_parent, Profile::Full)
 }
 
-/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// The trees the codex dev stage drops: no codex hook, skill or command
+/// reads them at run time (measured by sweep 2026-11-06), and they are 9,394
+/// of the dev stage's 11,676 entries. codex fingerprints the whole stage
+/// inside each hook's own timeout, so every entry is paid on every hook call.
+fn codex_dropped_tree(rel: &str) -> bool {
+    const DROPPED: [&str; 4] = ["crates", "cli", "tests", "evals"];
+    DROPPED
+        .iter()
+        .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
+}
+
+/// First `PLUGIN_ROOT/<dropped tree>` read in `text`. The regex crate has no
+/// look-around, so the "not followed by `-` or a word character" boundary is
+/// checked by hand after each match.
+fn dropped_tree_read(text: &str) -> Option<&str> {
+    let pattern = regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)"#)
+        .expect("valid tree-read pattern");
+    let hit = pattern.find_iter(text).find_map(|m| {
+        let next = text[m.end()..].chars().next();
+        let continues = next.is_some_and(|c| c == '-' || c == '_' || c.is_alphanumeric());
+        (!continues).then(|| &text[m.range()])
+    });
+    hit
+}
+
+/// Refuse a codex stage whose hooks, skills, agents or commands name a
+/// dropped tree at run time: the guard turns a future runtime read into a
+/// build refusal naming the file and the path (AC8), not a broken hook at
+/// runtime.
+fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
+    for dir in ["hooks", "skills", "agents", "commands"] {
+        let root = source_root.join(dir);
+        if !root.is_dir() {
+            continue;
+        }
+        // Depth ≤ 2: skills nest one level (skills/<name>/references/);
+        // deeper nesting is docs, not runtime reads.
+        let mut stack: Vec<std::path::PathBuf> = vec![root];
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if let Some(hit) = dropped_tree_read(&text) {
+                let rel = path.strip_prefix(source_root).unwrap_or(path);
+                return Err(format!(
+                    "codex stage: {} names dropped tree path {:?} at run time; \
+                     widen the keep set or fix the reference",
+                    rel.display(),
+                    hit
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `build_stage` for one profile. A pack stage lives at `install/plugin-stage/fno-pack`
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
     source_root: &Path,
@@ -291,8 +374,11 @@ fn build_stage_as(
     profile: Profile,
 ) -> Result<(PathBuf, usize), String> {
     require_fno_source(source_root)?;
+    if matches!(profile, Profile::Codex) {
+        codex_runtime_read_guard(source_root)?;
+    }
     let mux = match profile {
-        Profile::Full => None,
+        Profile::Full | Profile::Codex => None,
         Profile::Pack => Some(MuxPaths::load(source_root)?),
     };
     let listed = run_checked(
@@ -318,6 +404,9 @@ fn build_stage_as(
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
             if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
+            if matches!(profile, Profile::Codex) && codex_dropped_tree(rel) {
                 continue;
             }
             let src = source_root.join(rel);
@@ -363,7 +452,11 @@ fn build_stage_as(
         let stamp = json!({
             "source_head": head,
             "built_at": chrono::Utc::now().to_rfc3339(),
-            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+            "profile": match profile {
+                Profile::Pack => "pack",
+                Profile::Codex => "codex",
+                Profile::Full => "full",
+            },
         });
         let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
     }
@@ -1120,11 +1213,15 @@ enum RestageOutcome {
 /// up the directory marketplace has no stage and gets a no-op. Each profile
 /// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
-        .into_iter()
-        .filter(|p| stage_parent.join(p.stage_dir()).exists())
-        .collect();
-    if present.is_empty() {
+    let legacy_parent = (stage_parent == crate::plugin_install::stage_parent())
+        .then(legacy_stage_parent)
+        .flatten();
+    let new_present = present_profiles(stage_parent);
+    let legacy_present = legacy_parent
+        .as_deref()
+        .map(present_profiles)
+        .unwrap_or_default();
+    if new_present.is_empty() && legacy_present.is_empty() {
         return Ok(RestageOutcome::Absent);
     }
     let root = repo_root(source_dir)?;
@@ -1136,14 +1233,41 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         ],
         Some(&root),
     )?;
-    let mut files = 0;
-    let mut full_stage: Option<std::path::PathBuf> = None;
-    for profile in present {
-        let (stage, count) = build_stage_as(&root, stage_parent, profile)?;
-        files += count;
-        if profile == Profile::Full {
-            full_stage = Some(stage);
+    let mut files = restage_profiles(&root, stage_parent, &new_present)?;
+    let migrating = !legacy_present.is_empty() && !stage_parent.join(".legacy-flip.at").is_file();
+    let mut full_stage = stage_parent.join(Profile::Full.stage_dir());
+    if migrating {
+        // The first deploy flips new consumers while preserving the old tree
+        // for sessions that already loaded hooks from it.
+        files += restage_profiles(&root, stage_parent, &legacy_present)?;
+        let legacy = legacy_parent.as_ref().unwrap();
+        files += restage_profiles(&root, legacy, &legacy_present)?;
+        repoint_legacy_harnesses(legacy, &root);
+        write_legacy_flip_stamp(stage_parent)?;
+        println!(
+            "plugin stage: keeping legacy stage {}; first cutover drain started",
+            legacy.display()
+        );
+    } else if let Some(legacy) = legacy_parent.clone() {
+        files += restage_profiles(&root, &legacy, &legacy_present)?;
+        repoint_legacy_harnesses(&legacy, &root);
+        let still_configured = legacy_harnesses(&legacy);
+        if still_configured.is_empty() {
+            drain_legacy_stage(&legacy, pre_flip_harness_processes(stage_parent))?;
+        } else {
+            println!(
+                "plugin stage: keeping legacy stage {}; harness configs still name it: {}",
+                legacy.display(),
+                still_configured.join(",")
+            );
         }
+    }
+    if !full_stage.exists() {
+        full_stage = legacy_parent
+            .as_ref()
+            .map(|p| p.join(Profile::Full.stage_dir()))
+            .filter(|p| p.exists())
+            .unwrap_or(full_stage);
     }
     // A restage rewrites the full stage in place with no install attached, so
     // without this the pointer keeps naming whatever copy primed last and an
@@ -1152,14 +1276,162 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
     // and a worker's init resolved the stale copy). Same rule as
     // install_harness: a pack restage never moves the pointer off a full
     // stage, and a manifest-less stage writes nothing (the prime checks).
-    if let Some(stage) = full_stage {
-        prime_plugin_root_pointer(&stage);
+    if full_stage.exists() {
+        prime_plugin_root_pointer(&full_stage);
     }
     Ok(RestageOutcome::Restaged {
         files,
         root,
         head12: head.chars().take(12).collect(),
     })
+}
+
+fn present_profiles(parent: &Path) -> Vec<Profile> {
+    [Profile::Full, Profile::Pack, Profile::Codex]
+        .into_iter()
+        .filter(|profile| parent.join(profile.stage_dir()).exists())
+        .collect()
+}
+
+fn restage_profiles(root: &Path, parent: &Path, profiles: &[Profile]) -> Result<usize, String> {
+    let mut files = 0;
+    for profile in profiles {
+        files += build_stage_as(root, parent, *profile)?.1;
+    }
+    Ok(files)
+}
+
+fn write_legacy_flip_stamp(parent: &Path) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system clock before epoch: {e}"))?
+        .as_secs_f64();
+    let stamp = parent.join(".legacy-flip.at");
+    std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    std::fs::write(&stamp, format!("{now:.6}\n"))
+        .map_err(|e| format!("write {}: {e}", stamp.display()))
+}
+
+fn repoint_legacy_harnesses(legacy: &Path, source: &Path) {
+    for harness in legacy_harnesses(legacy) {
+        match install_harness(harness, harness == "codex", source, Profile::Full) {
+            Ok(receipt) => println!("plugin stage: repointed {harness}: {receipt}"),
+            Err(error) => println!("plugin stage: repoint {harness} failed: {error}"),
+        }
+    }
+}
+
+fn legacy_harnesses(legacy: &Path) -> Vec<&'static str> {
+    let home = dirs_home();
+    let legacy_text = legacy.display().to_string();
+    let mentions = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .any(|path| std::fs::read_to_string(path).is_ok_and(|text| text.contains(&legacy_text)))
+    };
+    let link_points_at =
+        |path: PathBuf| std::fs::read_link(path).is_ok_and(|target| target.starts_with(legacy));
+    let codex = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let claude = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    let mut configured = Vec::new();
+    if mentions(&[claude.join("plugins/known_marketplaces.json")]) {
+        configured.push("claude");
+    }
+    if mentions(&[
+        codex.join("config.toml"),
+        codex.join("footnote/plugin-channel.json"),
+    ]) {
+        configured.push("codex");
+    }
+    if link_points_at(crate::grok_store::grok_home().join("plugins/fno")) {
+        configured.push("grok");
+    }
+    if mentions(&[
+        home.join(".gemini/config/hooks.json"),
+        home.join(".gemini/config/settings.json"),
+    ]) || link_points_at(home.join(".gemini/config/plugins/footnote"))
+    {
+        configured.push("agy");
+    }
+    if link_points_at(home.join(".footnote/plugins/fno")) {
+        configured.push("footnote");
+    }
+    configured
+}
+
+fn pre_flip_harness_processes(parent: &Path) -> Result<Vec<u32>, String> {
+    let stamp = parent.join(".legacy-flip.at");
+    let flip = std::fs::read_to_string(&stamp)
+        .map_err(|e| format!("read {}: {e}", stamp.display()))?
+        .trim()
+        .parse::<f64>()
+        .map_err(|e| format!("parse {}: {e}", stamp.display()))?;
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,comm="])
+        .output()
+        .map_err(|e| format!("ps: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("ps exited {}", output.status.code().unwrap_or(-1)));
+    }
+    harness_processes_before_flip(&String::from_utf8_lossy(&output.stdout), flip)
+}
+
+fn harness_processes_before_flip(ps_output: &str, flip: f64) -> Result<Vec<u32>, String> {
+    let candidates = ["claude", "opencode", "grok", "agy", "pi", "footnote"];
+    let mut blockers = Vec::new();
+    for line in ps_output.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(command) = parts.next() else {
+            continue;
+        };
+        let name = Path::new(command)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or(command);
+        if !candidates.contains(&name.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        match crate::process_probe::process_started_epoch(pid) {
+            Some(started) if started <= flip => blockers.push(pid),
+            Some(_) => {}
+            None => return Err(format!("start time unavailable for candidate pid {pid}")),
+        }
+    }
+    Ok(blockers)
+}
+
+fn drain_legacy_stage(legacy: &Path, blockers: Result<Vec<u32>, String>) -> Result<(), String> {
+    match blockers {
+        Ok(blockers) if blockers.is_empty() => {
+            std::fs::remove_dir_all(legacy)
+                .map_err(|e| format!("remove drained legacy stage {}: {e}", legacy.display()))?;
+            println!(
+                "plugin stage: removed drained legacy stage {}",
+                legacy.display()
+            );
+        }
+        Ok(blockers) => println!(
+            "plugin stage: keeping legacy stage {}; pre-flip harness pids {}",
+            legacy.display(),
+            blockers
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Err(reason) => println!(
+            "plugin stage: keeping legacy stage {}; process check unknown: {reason}",
+            legacy.display()
+        ),
+    }
+    Ok(())
 }
 
 fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
@@ -1603,10 +1875,18 @@ struct PluginInstallArgs {
     dry_run: bool,
     /// Consent to replace a release-channel plugin with the local checkout.
     dev: bool,
+    /// Read or refresh codex plugin-hook trust rows (`codex --trust-hooks`).
+    trust_hooks: bool,
+    /// `--trust-hooks --check`: read-only verdict, no writes.
+    trust_hooks_check: bool,
     /// Converge codex onto the release channel (setup's wiring).
     release: bool,
     /// Install the pack profile: no mux skills, no mux hooks.
     pack: bool,
+    /// Skip the post-install reclaim chain. `fno doctor update`'s codex
+    /// refresh runs the janitor itself, after its budget fold, so a big
+    /// reclaim (6.3 GB measured) is not charged to the update's 60 s budget.
+    no_reclaim: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1634,8 +1914,11 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         yes: false,
         dry_run: false,
         dev: false,
+        trust_hooks: false,
+        trust_hooks_check: false,
         release: false,
         pack: false,
+        no_reclaim: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1682,12 +1965,20 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dev = true;
                 i += 1;
             }
+            "--trust-hooks" => {
+                parsed.trust_hooks = true;
+                i += 1;
+            }
             "--release" => {
                 parsed.release = true;
                 i += 1;
             }
             "--pack" => {
                 parsed.pack = true;
+                i += 1;
+            }
+            "--no-reclaim" => {
+                parsed.no_reclaim = true;
                 i += 1;
             }
             "--json" | "-J" => {
@@ -1719,7 +2010,9 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             "--check" | "--restage" => {
-                if parsed.mode.is_none() {
+                if parsed.trust_hooks {
+                    parsed.trust_hooks_check = true;
+                } else if parsed.mode.is_none() {
                     parsed.mode = Some(args[i].clone());
                 } else {
                     parsed.dropped_mode = Some(args[i].clone());
@@ -1760,8 +2053,11 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         yes,
         dry_run,
         dev,
+        trust_hooks,
+        trust_hooks_check,
         release,
         pack,
+        no_reclaim,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1818,7 +2114,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         // this after a successful install.
         Some("--restage") => {
             let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
-            let stage_parent = state_root().join("plugin-stage");
+            let stage_parent = stage_parent();
             match restage_stage(&source_dir, &stage_parent) {
                 Ok(RestageOutcome::Absent) => {
                     println!("plugin stage: absent, skipped");
@@ -1852,11 +2148,16 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             if harness == "codex" && status {
                 return crate::codex_converge::run_status();
             }
+            if harness == "codex" && trust_hooks {
+                return crate::codex_hook_trust::run_cli(trust_hooks_check, json);
+            }
             if harness == "codex" && release {
                 return crate::codex_converge::run_release(json);
             }
             if harness == "opencode" {
-                return run_opencode_arm(harness, json, uninstall, status, quick, yes, dry_run);
+                return run_opencode_arm(
+                    harness, json, uninstall, status, quick, yes, dry_run, no_reclaim,
+                );
             }
             if harness == "grok" && status {
                 let receipt = grok_status_receipt();
@@ -1897,9 +2198,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                             stale.iter().map(|p| p.display().to_string()).collect();
                         println!("removed stale copies: {}", joined.join(", "));
                     }
-                    let home = AgentsHome::from_env();
-                    let _ =
-                        crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+                    if !no_reclaim {
+                        let home = AgentsHome::from_env();
+                        let _ = crate::reclaim::run_reclaim(
+                            &RECLAIM_ON_INSTALL.map(String::from),
+                            &home,
+                        );
+                    }
                     0
                 }
                 Err(e) => {
@@ -1910,7 +2215,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--source <dir>]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--no-reclaim] [--source <dir>]"
             );
             eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
@@ -1935,6 +2240,7 @@ fn run_opencode_arm(
     quick: bool,
     yes: bool,
     dry_run: bool,
+    no_reclaim: bool,
 ) -> i32 {
     let say = |line: String| {
         if json {
@@ -2101,10 +2407,12 @@ fn run_opencode_arm(
                 let joined: Vec<String> = stale.iter().map(|p| p.display().to_string()).collect();
                 say(format!("removed stale copies: {}", joined.join(", ")));
             }
-            let home = AgentsHome::from_env();
-            let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            if !no_reclaim {
+                let home = AgentsHome::from_env();
+                let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            }
             let full = Profile::Full.stage_dir();
-            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
+            prime_plugin_root_pointer(&stage_parent().join(full));
             if receipt.status == "partial" {
                 3
             } else {
@@ -2440,8 +2748,16 @@ fn install_harness(
     source_dir: &Path,
     profile: Profile,
 ) -> Result<String, String> {
+    // The codex dev install gets the slim profile unless --pack asked for
+    // the mux-free pack; the shared full stage stays for every other
+    // harness.
+    let profile = if harness == "codex" && profile == Profile::Full {
+        Profile::Codex
+    } else {
+        profile
+    };
     let root = repo_root(source_dir)?;
-    let parent = state_root().join("plugin-stage");
+    let parent = stage_parent();
     let (stage, _) = build_stage_as(&root, &parent, profile)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
@@ -2666,9 +2982,10 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
 /// then the filtered stage. `None` when neither carries it.
 pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
     const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
-    let stage = state_root()
-        .join("plugin-stage")
-        .join(Profile::Full.stage_dir());
+    let stage = [stage_parent(), state_root().join("plugin-stage")]
+        .into_iter()
+        .map(|parent| parent.join(Profile::Full.stage_dir()))
+        .find(|path| path.join(REL).is_file())?;
     crate::provider::plugin_root()
         .into_iter()
         .chain(std::iter::once(stage))
@@ -2742,7 +3059,7 @@ pub(crate) fn loop_install_probe(
                 Ok(root) => root,
                 Err(reason) => return Some(Err(reason)),
             };
-            let stage = match build_stage(&root, &state_root().join("plugin-stage")) {
+            let stage = match build_stage(&root, &stage_parent()) {
                 Ok(stage) => stage.0,
                 Err(reason) => return Some(Err(reason)),
             };
@@ -2914,7 +3231,11 @@ fn install_grok(stage: &Path, _force: bool) -> Result<String, String> {
     let read = grok_reachability();
     let read_is_copy = trusted_path_is_copy(&read, &home);
     match read {
-        GrokReachability::Reachable { path } if !read_is_copy => {
+        GrokReachability::Reachable { path }
+            if !read_is_copy
+                && std::fs::read_link(home.join("plugins").join(PLUGIN_LINK_NAME))
+                    .is_ok_and(|target| target == stage) =>
+        {
             Ok(format!("already installed, reachable: {path}"))
         }
         GrokReachability::Unknown { reason } => Err(format!("unknown: {reason}")),
@@ -3032,6 +3353,24 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[test]
+    fn dropped_tree_read_pattern_compiles_and_checks_boundary() {
+        assert_eq!(
+            dropped_tree_read("run ${CLAUDE_PLUGIN_ROOT}/cli/x"),
+            Some("CLAUDE_PLUGIN_ROOT}/cli")
+        );
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli"),
+            Some("PLUGIN_ROOT/cli")
+        );
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/cli-x"), None);
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/clix"), None);
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli-x PLUGIN_ROOT/tests"),
+            Some("PLUGIN_ROOT/tests")
+        );
+    }
+
     // zcode install: a malformed config is refused byte-identical.
     #[test]
     fn zcode_malformed_config_refused_byte_identical() {
@@ -3144,6 +3483,9 @@ mod tests {
     /// the stale copy. A pack-only restage never moves the pointer.
     #[test]
     fn restage_primes_pointer_from_full_stage() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("pi-restage-ptr-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
@@ -3190,6 +3532,180 @@ mod tests {
         }
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&pack_base);
+    }
+
+    #[test]
+    fn restage_flips_legacy_stage_and_keeps_it_for_the_first_cutover() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("pi-stage-flip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        let state = base.join("state");
+        let legacy = state.join("plugin-stage");
+        let new = state.join("install/plugin-stage");
+        let mut legacy_fno = legacy.clone();
+        legacy_fno.push("fno");
+        let mut new_fno = new.clone();
+        new_fno.push("fno");
+        fs::write(source.join("version.txt"), "before\n").unwrap();
+        git_in(&source, &["add", "version.txt"]);
+        git_in(&source, &["commit", "-q", "-m", "before flip"]);
+        build_stage(&source, &legacy).unwrap();
+        fs::write(source.join("version.txt"), "after\n").unwrap();
+        git_in(&source, &["add", "version.txt"]);
+        git_in(&source, &["commit", "-q", "-m", "after flip"]);
+
+        let claude_dir = base.join("claude");
+        fs::create_dir_all(claude_dir.join("plugins")).unwrap();
+        fs::write(
+            claude_dir.join("plugins/known_marketplaces.json"),
+            serde_json::to_vec(&json!({"fno": {
+                "installLocation": legacy_fno.clone(),
+                "source": {"source": "directory", "path": legacy_fno.clone()}
+            }}))
+            .unwrap(),
+        )
+        .unwrap();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let log = base.join("claude.log");
+        crate::write_exec_stub(
+            &bin,
+            "claude",
+            &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        );
+        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
+        let previous_home = std::env::var_os("FNO_HOME");
+        let previous_user_home = std::env::var_os("HOME");
+        let previous_claude = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let previous_path = std::env::var_os("PATH");
+        let test_home = base.join("home");
+        fs::create_dir_all(&test_home).unwrap();
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
+        std::env::set_var("FNO_HOME", &state);
+        std::env::set_var("HOME", &test_home);
+        std::env::set_var("CLAUDE_CONFIG_DIR", &claude_dir);
+        let test_path = previous_path
+            .as_ref()
+            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
+            .unwrap_or_else(|| bin.display().to_string());
+        std::env::set_var("PATH", test_path);
+        build_stage_as(&source, &new, Profile::Codex).unwrap();
+
+        restage_stage(&source, &new).unwrap();
+
+        assert!(new.join("fno/.claude-plugin/plugin.json").is_file());
+        assert!(legacy.join("fno/.claude-plugin/plugin.json").is_file());
+        assert_eq!(
+            fs::read_to_string(new.join("fno/version.txt")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(
+            fs::read_to_string(legacy.join("fno/version.txt")).unwrap(),
+            "after\n"
+        );
+        assert!(new.join(".legacy-flip.at").is_file());
+        assert!(fs::read_to_string(&log)
+            .unwrap()
+            .contains(&format!("marketplace add {}", new_fno.display())));
+        assert_eq!(
+            fs::read_to_string(state.join("install/plugin-root"))
+                .unwrap()
+                .trim(),
+            new_fno.to_str().unwrap()
+        );
+        fs::write(new.join(".legacy-flip.at"), "0\n").unwrap();
+        restage_stage(&source, &new).unwrap();
+        assert!(
+            legacy.exists(),
+            "a harness config that still names legacy must keep it"
+        );
+        fs::write(
+            claude_dir.join("plugins/known_marketplaces.json"),
+            serde_json::to_vec(&json!({"fno": {
+                "installLocation": new_fno.clone(),
+                "source": {"source": "directory", "path": new_fno.clone()}
+            }}))
+            .unwrap(),
+        )
+        .unwrap();
+        restage_stage(&source, &new).unwrap();
+        assert!(
+            !legacy.exists(),
+            "drain completes after the config repoints"
+        );
+        let symlink_state = state.join("symlink-state");
+        let external_stage = base.join("external-stage");
+        fs::create_dir_all(&symlink_state).unwrap();
+        fs::create_dir_all(&external_stage).unwrap();
+        std::os::unix::fs::symlink(&external_stage, symlink_state.join("plugin-stage")).unwrap();
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &symlink_state);
+        assert!(
+            legacy_stage_parent().is_none(),
+            "legacy symlinks are not writable roots"
+        );
+        let hook = source.join("hooks/runtime.sh");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(&hook, "cat ${PLUGIN_ROOT}/cli/path\n").unwrap();
+        assert!(codex_runtime_read_guard(&source).is_err());
+        for path in ["cli-extra", "cli_extra", "cli2"] {
+            fs::write(&hook, format!("cat ${{PLUGIN_ROOT}}/{path}\n")).unwrap();
+            assert!(codex_runtime_read_guard(&source).is_ok());
+        }
+        match previous_root {
+            Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
+            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
+        }
+        match previous_home {
+            Some(value) => std::env::set_var("FNO_HOME", value),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        match previous_user_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_claude {
+            Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn legacy_drain_waits_for_a_clear_process_reading() {
+        let base = std::env::temp_dir().join(format!("pi-stage-drain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let legacy = base.join("plugin-stage");
+        fs::create_dir_all(&legacy).unwrap();
+        let started = crate::process_probe::process_started_epoch(std::process::id()).unwrap();
+        let pid = std::process::id();
+        let before_flip =
+            harness_processes_before_flip(&format!("{pid} claude"), started + 0.001).unwrap();
+        assert_eq!(before_flip, vec![pid]);
+        assert!(harness_processes_before_flip("4294967295 claude", started + 5.0).is_err());
+        assert!(
+            harness_processes_before_flip(&format!("{pid} claude"), started - 0.001)
+                .unwrap()
+                .is_empty()
+        );
+
+        drain_legacy_stage(&legacy, Err("process check unavailable".into())).unwrap();
+        assert!(
+            legacy.exists(),
+            "an unknown process reading must keep legacy"
+        );
+        drain_legacy_stage(&legacy, Ok(before_flip)).unwrap();
+        assert!(legacy.exists(), "a pre-flip harness must keep legacy");
+        drain_legacy_stage(&legacy, Ok(Vec::new())).unwrap();
+        assert!(!legacy.exists(), "a drained legacy stage should be removed");
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// A GitHub-sourced claude marketplace or a codex release marker is a

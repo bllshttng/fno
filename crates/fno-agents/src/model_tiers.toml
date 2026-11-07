@@ -20,6 +20,9 @@
 claude-fable = ["claude", "fable"]
 claude-opus = ["claude", "opus"]
 claude-sonnet = ["claude", "sonnet"]
+# The evals gate's fallback lane names the roster model id; this row is what
+# lets a virgin install resolve that name (no config row required).
+"claude-sonnet-5" = ["claude", "claude-sonnet-5"]
 claude-haiku = ["claude", "haiku"]
 "glm-5.3[1m]" = ["claude", "glm-5.3[1m]"]
 "glm-4.7" = ["claude", "glm-4.7"]

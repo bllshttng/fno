@@ -21,7 +21,9 @@ The stable branch of release 0.4.4 still names its marketplace `footnote`, so th
 
 `#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
 
-If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/install/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+
+The previous stage path, `~/.fno/plugin-stage`, remains readable during migration. `fno doctor update` rebuilds the new stage, repoints configured harnesses, and keeps the old stage until earlier sessions exit and no config names that old path.
 
 `fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
 
@@ -204,7 +206,7 @@ fno uninstall --yes        # no question; needed when stdin is not a terminal
 
 It removes each item through its own uninstall command, in this order:
 
-1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist` and the autocorrect agents).
+1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist`), plus any autocorrect agents or crontab block an old install left.
 2. The Claude Code and Codex plugins, their `fno` or older `footnote` marketplaces, and the OpenCode plugin files.
 3. The hooks fno added to `~/.claude/settings.json`, `~/.gemini/settings.json` and `~/.codex/config.toml`. Your own hooks stay.
 4. The `uv` tool, the Homebrew formula and the bootstrap cache. When the install script installed `uv` itself, `uv` is listed too.
