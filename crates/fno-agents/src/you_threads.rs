@@ -1229,13 +1229,12 @@ mod tests {
         .join("\n");
         let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
         assert_eq!(out.items.len(), 1);
-        assert_eq!(out.items[0].turn_id, uuid);
-        assert_eq!(out.items[0].end_reply, "Two commits: the pin and the gate.");
+        let it = out.items.first().expect("one item");
+        assert_eq!(it.turn_id, uuid);
+        assert_eq!(it.end_reply, "Two commits: the pin and the gate.");
         // The reply_text keeps every visible block, unchanged for the paint.
-        assert!(out.items[0].reply_text.contains("Reading the log."));
-        assert!(out.items[0]
-            .reply_text
-            .contains("Two commits: the pin and the gate."));
+        assert!(it.reply_text.contains("Reading the log."));
+        assert!(it.reply_text.contains("Two commits: the pin and the gate."));
     }
 
     /// AC2: a codex rollout with a user message, commentary and a
@@ -1252,7 +1251,9 @@ mod tests {
                 "content": [{"type": "text", "text": text}],
             });
             if let Some(phase) = phase {
-                p["phase"] = json!(phase);
+                p.as_object_mut()
+                    .expect("object payload")
+                    .insert("phase".into(), json!(phase));
             }
             json!({"timestamp": "2026-11-05T01:55:00Z", "type": "response_item",
                    "payload": p})
@@ -1275,10 +1276,11 @@ mod tests {
         let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
         assert_eq!(out.items.len(), 1);
         // No uuid on codex rows: the derived digest folds the line index.
-        assert!(out.items[0].turn_id.starts_with("derived-"));
-        assert_eq!(out.items[0].end_reply, "The id sat at payload.id.");
+        let it = out.items.first().expect("one item");
+        assert!(it.turn_id.starts_with("derived-"));
+        assert_eq!(it.end_reply, "The id sat at payload.id.");
         assert_eq!(
-            out.items[0].reply_text,
+            it.reply_text,
             "Checking the rollout shape.\n\nThe id sat at payload.id."
         );
         // The context shape: the instructions payload opens nothing, and the
@@ -1301,8 +1303,9 @@ mod tests {
             "only the real ask opens: {:?}",
             out.items
         );
-        assert_eq!(out.items[0].typed_text, "status on the gate?");
-        assert_eq!(out.items[0].end_reply, "Green.");
+        let it = out.items.first().expect("one item");
+        assert_eq!(it.typed_text, "status on the gate?");
+        assert_eq!(it.end_reply, "Green.");
     }
 
     /// A derived turn id survives a resume: the cached suffix walk folds the
@@ -1314,7 +1317,10 @@ mod tests {
             let mut payload = json!({"type": "message", "role": role,
                      "content": [{"type": "text", "text": text}]});
             if role == "assistant" {
-                payload["phase"] = json!("final_answer");
+                payload
+                    .as_object_mut()
+                    .expect("object payload")
+                    .insert("phase".into(), json!("final_answer"));
             }
             json!({"timestamp": "2026-11-05T02:00:00Z", "type": "response_item",
                    "payload": payload})
@@ -1335,7 +1341,7 @@ mod tests {
         let mut store = YouStore::open(PathBuf::from("/dev/null"), false);
         let first = store.advance(&file, "cx", &BusIndex::empty());
         assert_eq!(first.len(), 1);
-        let first_id = first[0].turn_id.clone();
+        let first_id = first.first().expect("one item").turn_id.clone();
         assert!(first_id.starts_with("derived-"));
 
         // The turn's reply lands; the resume re-walks from the opener and
@@ -1351,8 +1357,9 @@ mod tests {
         std::fs::write(&file, &text).expect("write part 2");
         let second = store.advance(&file, "cx", &BusIndex::empty());
         assert_eq!(second.len(), 2);
-        assert_eq!(second[0].turn_id, first_id);
-        assert_eq!(second[0].end_reply, "the answer");
+        let second_first = second.first().expect("two items");
+        assert_eq!(second_first.turn_id, first_id);
+        assert_eq!(second_first.end_reply, "the answer");
 
         // A full walk over the same rows derives the same id: the queue's
         // ack join reads exactly this value.
@@ -1364,7 +1371,7 @@ mod tests {
             "cx",
             None,
         );
-        assert_eq!(full.items[0].turn_id, first_id);
+        assert_eq!(full.items.first().expect("one item").turn_id, first_id);
         let _ = std::fs::remove_file(&file);
     }
 
@@ -1443,10 +1450,12 @@ mod tests {
         };
         let rows = asks_rows(&inputs);
         assert_eq!(rows.len(), 2, "one ask per session: {rows:?}");
-        assert_eq!(rows[0]["state"], "pending");
-        assert_eq!(rows[0]["session_id"], "sess-b");
-        assert_eq!(rows[1]["state"], "answered");
-        assert_eq!(rows[1]["session_id"], "sess-a");
+        let pending = rows.first().expect("two rows");
+        assert_eq!(pending["state"], "pending");
+        assert_eq!(pending["session_id"], "sess-b");
+        let answered = rows.get(1).expect("two rows");
+        assert_eq!(answered["state"], "answered");
+        assert_eq!(answered["session_id"], "sess-a");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

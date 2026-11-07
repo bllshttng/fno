@@ -825,9 +825,14 @@ async fn ac7_ac8_asks_paint_pending_first_and_the_empty_state() {
         .filter(|t| !t.trim().is_empty())
         .collect();
     assert_eq!(body.len(), 2, "title plus one empty-state line: {body:?}");
+    let title = body.first().expect("title and empty-state line");
     assert!(
-        body[0].starts_with("Your asks"),
+        title.starts_with("Your asks"),
         "the title names the view: {body:?}"
     );
-    assert_eq!(body[1], "(no asks yet)", "one empty-state line");
+    assert_eq!(
+        body.get(1).map(String::as_str),
+        Some("(no asks yet)"),
+        "one empty-state line"
+    );
 }
