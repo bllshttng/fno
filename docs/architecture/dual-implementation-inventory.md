@@ -465,6 +465,8 @@ The shell resolver in `scripts/lib/worktree-lifecycle.sh::_cargo_build_base` sta
 
 When Cargo runs the wrapper before a native fno binary exists, the wrapper uses the current base for `SCCACHE_DIR`. When the caller sets `SCCACHE_DIR`, the wrapper keeps that value.
 
+**The ssh fast options.** Shared-vocabulary. `SSH_FAST_OPTIONS` in `crates/fno-agents/src/mail_remote.rs` and the option pair in `crates/fno/src/client/remote_hosts.rs` `probe_argv` spell the same BatchMode + ConnectTimeout=5 probe prefix at two sites. The fno crate lists no fno-agents dependency, so neither site can import the other. A served constant door through an `fno-agents` read is the one-owner form. Until then the copy is named here, so the next audit counts it.
+
 ## The four CI parity scripts
 
 All four are shared-vocabulary. None is a port candidate. The reasons differ enough to state one at a time.
