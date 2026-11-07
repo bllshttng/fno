@@ -8,7 +8,7 @@ grade:
     expect: 0
 timeout_minutes: 5
 tags: [golden]
-covers: ["crates/fno-agents/src/pr_status/"]
+covers: ["crates/fno-agents/src/pr_status/", "crates/fno-agents/src/pr_front.rs"]
 golden:
   source: {kind: reaction-approve, ref: "0aea1458-811f-4ad3-89c9-93a957d7d556:d5d5d014-ceee-486b-8623-e1cb924cf0b8"}
   quote: "fno do pr status 1522"

@@ -8,7 +8,7 @@ grade:
     expect: 0
 timeout_minutes: 5
 tags: [golden]
-covers: ["crates/fno-agents/src/backlog/"]
+covers: ["crates/fno-agents/src/backlog/", "crates/fno-agents/src/target_start.rs"]
 golden:
   source: {kind: correction, ref: "24508275:wrong_assumption"}
   quote: "wait why is this being built in ~/code/footnote/footnote"
