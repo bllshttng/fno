@@ -10788,6 +10788,7 @@ crates/fno/src/clipboard.rs	clippy::indexing_slicing	let b0 = chunk[0] as u32;
 crates/fno/src/clipboard.rs	clippy::indexing_slicing	let mid = std::str::from_utf8(&payload[1..payload.len() - 1]).unwrap();
 crates/fno/src/clipboard.rs	clippy::indexing_slicing	out.push(A[(n >> 12 & 63) as usize] as char);
 crates/fno/src/clipboard.rs	clippy::indexing_slicing	out.push(A[(n >> 18 & 63) as usize] as char);
+crates/fno/src/codesign.rs	clippy::disallowed_methods	.output()
 crates/fno/src/config_cli/get.rs	clippy::indexing_slicing	parts[0] = "accounts";
 crates/fno/src/config_cli/get.rs	clippy::indexing_slicing	return resolve_schema(real[0], defs);
 crates/fno/src/config_cli/history.rs	clippy::indexing_slicing	let token = tokens[index].clone();
