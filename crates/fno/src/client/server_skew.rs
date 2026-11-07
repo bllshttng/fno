@@ -14,18 +14,15 @@ pub(super) fn build_skew_popup(server_proto: Option<u32>, wanted: &str) -> AuxPo
     let rows = vec![
         PopupRow::Header("the mux server is too old".into()),
         PopupRow::Rule,
-        PopupRow::Text(format!("this command needs newer mux code: {wanted}")),
+        PopupRow::Text(format!("needs newer mux code: {wanted}")),
         PopupRow::Text(format!(
             "{server}; this client v{}",
             crate::proto::PROTO_VERSION
         )),
         PopupRow::Rule,
-        PopupRow::Text(
-            "restart keeps every pane with a keeper. a session holding a keeperless pane \
-             refuses the restart and nothing is killed."
-                .into(),
-        ),
-        PopupRow::Text("every live mux session on this machine restarts.".into()),
+        PopupRow::Text("restart keeps every pane with a keeper.".into()),
+        PopupRow::Text("a session with a keeperless pane refuses the restart;".into()),
+        PopupRow::Text("nothing is killed. every live mux session restarts.".into()),
         PopupRow::Rule,
         PopupRow::Entry {
             glyph: "↻".into(),
@@ -37,8 +34,7 @@ pub(super) fn build_skew_popup(server_proto: Option<u32>, wanted: &str) -> AuxPo
     AuxPopup {
         popup: Popup::new(rows, Anchor::Center)
             .title("server too old")
-            .footer("esc close")
-            .width_cap(usize::MAX),
+            .footer("esc close"),
         actions: vec![AuxAction::RestartAgents],
     }
 }
