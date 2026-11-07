@@ -1600,7 +1600,11 @@ mod tests {
         assert_eq!(rows[0]["dimension"], "mission_fit");
         assert_eq!(rows[0]["verdict"], "pass");
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 1, "only the filtered dimension spawns: {seen:?}");
+        assert_eq!(
+            seen.len(),
+            1,
+            "only the filtered dimension spawns: {seen:?}"
+        );
         assert!(seen[0].ends_with("mission_fit"));
     }
 
