@@ -684,7 +684,10 @@ fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     let mut waiter = agent_row("waiter", 5, Some(AgentBadge::Working), false);
     waiter.build = Some(crate::proto::BuildMark::waiting(Some(2)));
     let plain = agent_row("plain", 6, Some(AgentBadge::Working), false);
-    let v = wide_view(vec![builder, waiter, plain]);
+    let mut v = wide_view(vec![builder, waiter, plain]);
+    // The list cell is the contract under test: pin the layout so the test
+    // reads the code, never the ambient config's own choice.
+    v.sideline_layout = sideline_color::SidelineLayout::List;
     let text = frame_text(&v.compose());
     let builder_row = text.lines().find(|line| line.contains("builder")).unwrap();
     assert!(
