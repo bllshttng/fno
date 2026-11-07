@@ -38,7 +38,6 @@ cd "$ROOT" || exit 2
 FILES="$(git ls-files -- hooks skills plugins/buddy \
     scripts/validate-plan.sh 'scripts/lib/worktree-*.sh' scripts/lib/worktree_occupancy.py \
     scripts/lib/skill_discovery.py scripts/setup.sh 'scripts/memory/*.sh' \
-    scripts/autocorrect-review.sh scripts/autocorrect-pack.sh scripts/autocorrect-triage.sh \
     scripts/speculate-compare.sh scripts/save-session.py 2>/dev/null \
     | grep -v -E '(^|/)(tests?|evals)/|\.test\.[a-z]+$|\.(md|ya?ml|tsv)$')" || FILES=""
 

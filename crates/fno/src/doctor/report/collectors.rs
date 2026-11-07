@@ -454,15 +454,21 @@ fn control_plane_arms_report() -> Value {
             Err(e) => return json!({"red": [], "unknown_reason": format!("read failed: {e}")}),
         }
     };
+    let dead_sinks: Vec<Value> = payload
+        .get("stuck_work")
+        .and_then(|s| s.get("dead_sinks"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let attention = payload
         .get("arms_attention")
         .and_then(Value::as_array)
         .cloned();
     let Some(attention) = attention else {
-        return json!({"red": [], "unknown_reason": "status payload carries no arms_attention"});
+        return json!({"red": [], "unknown_reason": "status payload carries no arms_attention", "dead_sinks": dead_sinks});
     };
     let red: Vec<Value> = attention.into_iter().filter(|a| a.is_object()).collect();
-    json!({"red": red, "unknown_reason": null})
+    json!({"red": red, "unknown_reason": null, "dead_sinks": dead_sinks})
 }
 
 fn fd_limit_report() -> Value {

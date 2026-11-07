@@ -150,6 +150,7 @@ pub mod codex_daemon_upgrade;
 /// only a library item reaches both.
 #[doc(hidden)]
 pub mod codex_fake_daemon;
+pub mod codex_hook_trust;
 pub mod codex_inject;
 /// Public because `codex_resume` (pub, exercised by the parity test) names
 /// [`CodexRoute`] in its signature.
@@ -174,7 +175,6 @@ pub mod correction_meter;
 pub mod correction_outcome;
 pub mod correction_readings;
 pub mod correction_seat;
-pub mod corrections_verify;
 pub mod cursor_agent;
 pub mod cutover;
 pub mod daemon;
@@ -539,7 +539,6 @@ pub mod question_sweep;
 pub mod quiet_retire;
 pub mod reader_cost;
 pub mod readiness;
-pub mod real_session;
 pub(crate) mod reap_evidence;
 pub mod reap_release;
 pub mod reap_render;

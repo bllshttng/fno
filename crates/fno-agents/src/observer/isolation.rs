@@ -43,8 +43,7 @@ fn escape_explanation(surface_key: &str) -> String {
         "ledger_json" => "writer bypasses project-local path overrides - known escapee: register-task.py ledger registration (scripts/metrics/register-task.py:23)".to_string(),
         "graph_json" => "writer bypasses project-local path overrides - known escapee: paths.sh STATE_DIR (scripts/lib/paths.sh:11-13)".to_string(),
         "repo_events_jsonl" | "global_events_jsonl" => "writer bypasses project-local path overrides - known escapee: paths.sh STATE_DIR bash-layer writers".to_string(),
-        "memory_dir" => "memory-pass or autocorrect writer may have used real session context".to_string(),
-        "corrections_log" => "autocorrect corrections.log writer may bypass project-local isolation".to_string(),
+        "memory_dir" => "memory-pass writer may have used real session context".to_string(),
         _ => "writer bypasses project-local path overrides - check known escapees: register-task.py (scripts/metrics/register-task.py:23) and paths.sh STATE_DIR (scripts/lib/paths.sh:11-13)".to_string(),
     }
 }
@@ -184,16 +183,9 @@ pub(crate) fn check_isolation(
             all.extend(scan_state_file(Path::new(raw), eval_session_ids, key));
         }
     }
-    // memory dir (whole-file scan per file), then the corrections log.
+    // memory dir (whole-file scan per file).
     if let Some(Value::String(raw)) = real_state_paths.get("memory_dir") {
         all.extend(scan_memory_dir(Path::new(raw), eval_session_ids));
-    }
-    if let Some(Value::String(raw)) = real_state_paths.get("corrections_log") {
-        all.extend(scan_whole_file(
-            Path::new(raw),
-            eval_session_ids,
-            "corrections_log",
-        ));
     }
     let verdict = if all.is_empty() { "clean" } else { "violated" };
     IsolationResult {
@@ -252,16 +244,6 @@ pub(crate) fn default_real_state_paths(repo_root: &Path) -> Map<String, Value> {
             json!(fno_home.join("events.jsonl")),
         ),
         ("memory_dir".into(), json!(fno_home.join("memory"))),
-        // corrections.log moved under logs/ in the state-root wave; scan it
-        // there.
-        (
-            "corrections_log".into(),
-            json!(fno_home
-                .join("logs")
-                .join("corrections.log")
-                .display()
-                .to_string()),
-        ),
     ])
 }
 

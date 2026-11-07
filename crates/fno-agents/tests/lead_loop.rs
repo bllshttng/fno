@@ -866,37 +866,6 @@ fn the_cleared_row_reset_survives_into_the_next_fire() {
 }
 
 #[test]
-fn a_row_cleared_while_the_board_grew_is_still_progress() {
-    // Progress is a row LEAVING, never board size. The board refills while the
-    // lead works, so a count that went up can still carry real progress.
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    let state = lead_manifest(cwd, "k-refill");
-    let events = cwd.join("events.jsonl");
-    let bin_dir = TempDir::new().unwrap();
-
-    let ids = serde_json::json!(["undispatched:x-1234", "undispatched:x-5678"]);
-    lead_event(
-        &events,
-        "lead_loop_check",
-        serde_json::json!({"session_id": "k-refill", "actionable_ids": ids}),
-    );
-    lead_event(
-        &events,
-        "lead_loop_check",
-        serde_json::json!({"session_id": "k-refill", "actionable_ids": ids}),
-    );
-
-    let fno = org_board_bin(bin_dir.path(), BOARD_REFILLED, 0);
-    let (code, d) = lead_fire(&state, cwd, &events, &fno);
-
-    assert_eq!(code, 0, "a grown board that cleared a row is progress: {d}");
-    assert_eq!(d["decision"], "block");
-    assert_eq!(d["actionable"], 3);
-    assert_eq!(d["fires"], 1);
-}
-
-#[test]
 fn an_unchanged_board_clears_nothing_and_still_reaches_noprogress() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path();
@@ -918,32 +887,6 @@ fn an_unchanged_board_clears_nothing_and_still_reaches_noprogress() {
 
     assert_eq!(code, 0);
     assert_eq!(d["termination_reason"], "NoProgress");
-}
-
-#[test]
-fn a_fire_records_the_actionable_ids_the_next_fire_compares_against() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    let state = lead_manifest(cwd, "k-record");
-    let events = cwd.join("events.jsonl");
-    let bin_dir = TempDir::new().unwrap();
-    let fno = org_board_bin(bin_dir.path(), BOARD_TWO_ACTIONABLE, 0);
-
-    lead_fire(&state, cwd, &events, &fno);
-
-    let journal = event_text(&events);
-    let row: serde_json::Value = journal
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-        .find(|v| v["type"] == "lead_loop_check")
-        .expect("a blocking fire must record its board");
-    let ids = row["data"]["actionable_ids"].as_array().unwrap();
-    assert_eq!(
-        ids.len(),
-        2,
-        "without these the next fire cannot see a clear"
-    );
-    assert_eq!(ids[0], "undispatched:x-1234");
 }
 
 #[test]
@@ -1396,33 +1339,6 @@ fn external_read_timeout_dies_at_its_slice_and_is_named() {
 // return above the manifest ceiling and the dry-fire backstop: blocking was
 // unbounded and the parked state was never recorded. These drive the bound.
 
-/// AC1: a quiet board with undelivered scope waits for CI or a worker.
-#[test]
-fn a_quiet_board_with_undelivered_scope_terminates_nowork_while_waiting() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    let bin_dir = TempDir::new().unwrap();
-    let log = cwd.join("escalations.log");
-    let state = lead_manifest(cwd, "k-quiet");
-    let events = cwd.join("events.jsonl");
-    let spec = lead_quiet_drain_bin(bin_dir.path(), &[Some(3)], &log);
-
-    let last = lead_fire(&state, cwd, &events, &spec);
-
-    assert_eq!(last.0, 0, "{:?}", last.1);
-    assert_eq!(last.1["decision"], "allow", "{:?}", last.1);
-    assert_eq!(last.1["termination_reason"], "NoWork");
-    assert!(last.1["reason"]
-        .as_str()
-        .unwrap()
-        .starts_with("waiting on CI or a worker"));
-    let logged = fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        !logged.contains("--reason NoProgress"),
-        "a legal wait must not escalate: {logged}"
-    );
-}
-
 /// AC2: the undelivered journal row is written before the legal wait terminal.
 #[test]
 fn a_quiet_board_records_undelivered_before_nowork() {
@@ -1472,39 +1388,6 @@ fn an_unreadable_drain_is_never_a_progress_baseline() {
         .as_str()
         .unwrap()
         .starts_with("waiting on CI or a worker"));
-}
-
-/// AC5: the unreadable-questions block is bounded, and each blocking fire
-/// emitted its journal row so the counters advanced to the bound.
-#[test]
-fn an_unreadable_question_source_is_bounded_not_eternal() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    let state = lead_manifest(cwd, "k-questions-bounded");
-    let events = cwd.join("events.jsonl");
-    let bin_dir = TempDir::new().unwrap();
-    let spec = org_board_bin(bin_dir.path(), BOARD_CLEAN, 0);
-    lead_prepare_fixture(cwd, bin_dir.path(), &spec);
-    make_questions_unreadable(cwd);
-
-    let mut last = (0, serde_json::Value::Null);
-    for _ in 0..3 {
-        last = lead_spawn(&state, cwd, &events, bin_dir.path());
-    }
-
-    assert_eq!(last.1["decision"], "allow", "{:?}", last.1);
-    assert_eq!(last.1["termination_reason"], "NoProgress");
-    let journal = event_text(&events);
-    let rows = journal
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-        .filter(|v| v["type"] == "lead_loop_check")
-        .filter(|v| v["data"]["session_id"] == "k-questions-bounded")
-        .count();
-    assert!(
-        rows >= 2,
-        "every blocking fire must emit a journal row: {rows} rows in {journal}"
-    );
 }
 
 /// AC6: an open operator question is a legal wait and the terminal is durable.

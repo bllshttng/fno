@@ -434,6 +434,7 @@ const GLOBAL_CHORD_PREFIX: &[u8] = b"\x1b[1;7";
 /// bytes are NEVER re-encoded (AC2-UI).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    Report,
     Forward(Vec<u8>),
     Cmd(Command),
     /// Digit tab jump: select the tab at this 1-BASED ordinal - the
@@ -503,6 +504,9 @@ pub enum Event {
     /// Show or hide the card's `node · PR` header row (prefix+Y). The header
     /// shows at every width now; this is the operator's off switch.
     ToggleCardHead,
+    /// Nest workers under their lead in the card layout (prefix+t).
+    /// Persisted. Cards sit flat by default; the list layout always nests.
+    ToggleGroupByLead,
     /// Show/hide the status row (prefix+s). Client-local (US4, AC4-FR).
     ToggleStatus,
     /// Reveal each visible pane's stable id while the key repeats.
@@ -1434,6 +1438,13 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             Global,
             "show or hide the card header row",
         ),
+        b(
+            b't',
+            "toggle-group-by-lead",
+            ToggleGroupByLead,
+            Global,
+            "nest workers under their lead in cards",
+        ),
         b(b's', "toggle-status", ToggleStatus, Global, "toggle status"),
         b(
             b'S',
@@ -1484,6 +1495,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             Global,
             "grab work (dispatch next ready)",
         ),
+        b(b'!', "report", Report, Global, "report a problem"),
         b(b'd', "detach", Detach, Global, "detach"),
     ]
 }

@@ -15,7 +15,6 @@ state-parser.sh
 transcript-parser.sh
 worktree-manager.sh
 worktree-config.sh
-corrections-lock.sh
 phase-handoff.sh
 target-guard.sh
 spawn-subagent.sh

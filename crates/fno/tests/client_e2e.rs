@@ -379,3 +379,441 @@ fn a_lone_esc_closes_the_row_selector() {
     h.type_bytes(b"q\r");
     h.wait_screen(15, |s| s.contains("not found"));
 }
+
+#[test]
+fn mux_report_submits_context_and_keeps_text_after_a_refusal() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("report");
+    let door = scratch.0.join("report-door");
+    std::fs::write(
+        &door,
+        r#"#!/bin/sh
+if [ "$1 $2" = 'do feedback' ]; then printf '%s\n' "$@" > "$RECORD_DIR/draft-argv"; cat "$RECORD_DIR/draft.json"; exit 0; fi
+if [ "$1 $2" != 'backlog idea' ]; then exit 0; fi
+printf '%s\n' "$@" > "$RECORD_DIR/argv"
+cat > "$RECORD_DIR/body"
+echo call >> "$RECORD_DIR/calls"
+if [ -e "$RECORD_DIR/no-id" ]; then echo help-without-a-node; exit 0; fi
+if [ -e "$RECORD_DIR/delay" ]; then exec sleep 30; fi
+if [ ! -e "$RECORD_DIR/allow" ]; then echo 'report: graph is busy' >&2; exit 3; fi
+printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&door, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let box_top = format!("┌{}┐", "─".repeat(70));
+    let box_bottom = format!("└{}┘", "─".repeat(70));
+    let box_body = format!("│ focus-left {} right-edge │", " ".repeat(45));
+    let draft_body = format!("## What happened?\n\nportal stopped\n## Frame\n```text\n{box_top}\n{box_body}\n{box_bottom}\n```\n{}\n[session] <local path> [host]\nreport-frame-evidence feedback-row probe-bbbb server-log-evidence client-log-evidence\nfno-feedback-ref: report-preview-ref\n", (0..50).map(|n| format!("diagnostic line {n}")).collect::<Vec<_>>().join("\n"));
+    std::fs::write(scratch.0.join("draft.json"), serde_json::json!({"title":"[bug] portal stopped", "body":draft_body, "ref":"report-preview-ref"}).to_string()).unwrap();
+    let gh = scratch.0.join("gh");
+    std::fs::write(
+        &gh,
+        r#"#!/bin/sh
+case "$1 $2" in
+ 'auth status') [ ! -e "$RECORD_DIR/no-auth" ]; exit $? ;;
+ 'issue list')
+  if [ -e "$RECORD_DIR/issue-found" ]; then echo '[{"url":"https://github.com/fnodotdev/fno/issues/12345"}]'; else echo '[]'; fi
+  exit 0 ;;
+ 'issue create')
+  printf '%s\n' "$@" > "$RECORD_DIR/issue-argv"
+  cat > "$RECORD_DIR/issue-body"
+  echo call >> "$RECORD_DIR/issue-calls"
+  if [ -e "$RECORD_DIR/issue-no-receipt" ]; then exit 1; fi
+  echo 'https://github.com/fnodotdev/fno/issues/12345'; exit 0 ;;
+esac
+exit 1
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let report_path = format!(
+        "{}:{}",
+        scratch.0.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let config_root = scratch.0.join("config-root");
+    std::fs::create_dir_all(config_root.join(".fno")).unwrap();
+    std::fs::write(
+        config_root.join(".fno/config.toml"),
+        "[mux]\nreport_parent = \"probe-aaaa\"\n",
+    )
+    .unwrap();
+    struct Peer {
+        stop: std::sync::mpsc::Sender<()>,
+        thread: Option<std::thread::JoinHandle<()>>,
+        socket: std::path::PathBuf,
+    }
+    impl Drop for Peer {
+        fn drop(&mut self) {
+            let _ = self.stop.send(());
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+    let listener = std::os::unix::net::UnixListener::bind(scratch.main_sock()).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (stop, rx) = std::sync::mpsc::channel();
+    let session = "eeeeeeee-1111-2222-3333-444455556666";
+    let mouse_leaks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_mouse = mouse_leaks.clone();
+    let thread = std::thread::spawn(move || {
+        use fno::proto::{read_msg_sync, write_msg_sync, ClientMsg, ServerMsg};
+        while rx.try_recv().is_err() {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let Ok(message) = read_msg_sync::<_, ClientMsg>(&mut stream) else {
+                continue;
+            };
+            if matches!(message, ClientMsg::Query) {
+                let _ = write_msg_sync(
+                    &mut stream,
+                    &ServerMsg::Info {
+                        session: "main".into(),
+                        clients: 0,
+                        squads: 1,
+                        panes: 1,
+                    },
+                );
+                continue;
+            }
+            let ClientMsg::Attach {
+                rows, cols, cwd, ..
+            } = message
+            else {
+                continue;
+            };
+            let row = fno::proto::AgentRow {
+                name: "feedback-row".into(),
+                squad: Some(1),
+                pane_id: Some(1),
+                node: Some("probe-bbbb".into()),
+                harness_session_id: Some(session.into()),
+                ..Default::default()
+            };
+            let layout: ServerMsg = serde_json::from_value(serde_json::json!({"Layout": {
+                "squads": [{"id": 1, "name": "report", "canonical_cwd": cwd, "tabs": [{"id": 1, "name": "shell"}], "active_tab": 0, "panes": 2}],
+                "active_squad": 1, "panes": [[1, {"x": 0, "y": 0, "rows": rows / 2, "cols": cols}], [2, {"x": 0, "y": rows / 2, "rows": rows - rows / 2, "cols": cols}]], "focus": 1, "area": [rows, cols], "agents": [row]
+            }})).unwrap();
+            let mut pane = fno::vt::Pane::new(rows / 2, cols);
+            pane.feed(b"report-frame-evidence\r\n```\r\n$ ");
+            write_msg_sync(&mut stream, &layout).unwrap();
+            write_msg_sync(
+                &mut stream,
+                &ServerMsg::Frame {
+                    pane_id: 1,
+                    frame: pane.frame(),
+                },
+            )
+            .unwrap();
+            let mut other = fno::vt::Pane::new(rows - rows / 2, cols);
+            other.feed(b"OTHER-PANE-PRIVATE\r\n");
+            write_msg_sync(
+                &mut stream,
+                &ServerMsg::Frame {
+                    pane_id: 2,
+                    frame: other.frame(),
+                },
+            )
+            .unwrap();
+            while rx.try_recv().is_err() {
+                match read_msg_sync::<_, ClientMsg>(&mut stream) {
+                    Ok(ClientMsg::Detach) | Err(fno::proto::ProtoError::Closed) => return,
+                    Ok(ClientMsg::Mouse { .. }) => {
+                        observed_mouse.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Err(fno::proto::ProtoError::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+            return;
+        }
+    });
+    let mut peer = Peer {
+        stop,
+        thread: Some(thread),
+        socket: scratch.main_sock(),
+    };
+    let mut h = ClientHarness::spawn_sized_with(
+        &scratch,
+        30,
+        120,
+        &[
+            ("FNO_BIN", door.to_str().unwrap()),
+            ("RECORD_DIR", scratch.0.to_str().unwrap()),
+            ("PATH", &report_path),
+            ("NO_COLOR", "1"),
+            ("FNO_REPO_ROOT", config_root.to_str().unwrap()),
+        ],
+    );
+    h.wait_screen(15, |s| {
+        s.contains("feedback-row")
+            && s.contains("report-frame-evidence")
+            && s.contains("OTHER-PANE-PRIVATE")
+    });
+    for (name, text) in [
+        ("main.log", "server-log-evidence"),
+        ("client.log", "client-log-evidence"),
+    ] {
+        writeln!(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(scratch.0.join(name))
+                .unwrap(),
+            "{text}"
+        )
+        .unwrap();
+    }
+    h.type_bytes(b"\x02!");
+    let report_screen = h.wait_screen(5, |s| s.contains("report a problem"));
+    let body_column = report_screen
+        .lines()
+        .find_map(|line| line.find("Includes focused pane text"))
+        .expect("report capture notice");
+    let footer_column = report_screen
+        .lines()
+        .find_map(|line| line.find("Tab type"))
+        .expect("report action hints");
+    assert_eq!(footer_column, body_column, "report footer aligns with body");
+    for label in ["type", "description"] {
+        let (row, line) = report_screen
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(label))
+            .unwrap();
+        let col = line[..line.find(label).unwrap()].chars().count();
+        let frame = h.pane.frame();
+        assert_ne!(
+            frame.cells[row * frame.cols as usize + col].flags & fno::proto::cell_flags::BOLD,
+            0,
+            "{label} label must be bold: row={row} col={col} text={line:?} cell={:?}",
+            frame.cells[row * frame.cols as usize + col]
+        );
+    }
+    let cursor_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        h.screen();
+        if !h.pane.frame().cursor_visible {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < cursor_deadline,
+            "the pane cursor must hide behind the report form"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    h.type_bytes(b"\x1b[<0;100;7M\x1b[<0;100;7m");
+    h.type_bytes(b"portal stopped\r");
+    let preview = h.wait_screen(15, |s| s.contains("review GitHub issue"));
+    let lines: Vec<_> = preview.lines().collect();
+    let border = lines
+        .iter()
+        .position(|line| line.contains('┌'))
+        .expect("frame top border");
+    assert!(
+        lines[border + 1].contains("│ focus-left"),
+        "frame lines must not rewrap"
+    );
+    h.type_bytes(b"\x1b[C\x1b[C\x1b[C");
+    h.wait_screen(5, |s| s.contains("right-edge"));
+    h.type_bytes(b"\x1b[H");
+    h.wait_screen(5, |s| s.contains("│ focus-left"));
+    assert!(
+        !scratch.0.join("issue-calls").exists(),
+        "preview must not publish"
+    );
+    h.type_bytes(b"\x1b[F");
+    h.wait_screen(5, |s| s.contains("report-preview-ref"));
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| s.contains("report: graph is busy"));
+    assert!(
+        h.screen().contains("portal stopped"),
+        "a refusal keeps the draft"
+    );
+    std::fs::write(scratch.0.join("no-id"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(5, |s| s.contains("returned no node ID"));
+    assert!(
+        h.screen().contains("portal stopped"),
+        "a missing receipt keeps the draft"
+    );
+    std::fs::remove_file(scratch.0.join("no-id")).unwrap();
+    std::fs::write(scratch.0.join("delay"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| s.contains("timed out after 10s"));
+    assert!(
+        h.screen().contains("portal stopped"),
+        "a timeout keeps the draft"
+    );
+    std::fs::remove_file(scratch.0.join("delay")).unwrap();
+    std::fs::write(scratch.0.join("allow"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("probe-abcd") && !s.contains("report a problem")
+    });
+    let argv = std::fs::read_to_string(scratch.0.join("argv")).unwrap();
+    let args: Vec<_> = argv.lines().collect();
+    assert!(args.windows(2).any(|w| w == ["--type", "bug"]));
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-body")).unwrap(),
+        draft_body,
+        "publish exactly the complete preview body"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "backlog retries must not duplicate the issue"
+    );
+    let issue_args = std::fs::read_to_string(scratch.0.join("issue-argv")).unwrap();
+    assert!(issue_args.contains("https://github.com/fnodotdev/fno"));
+    assert!(issue_args.contains("--body-file\n-"));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--source-kind", "operator_request"]));
+    assert!(args.windows(2).any(|w| w == ["--parent", "probe-aaaa"]));
+    assert!(args.windows(2).any(|w| w == ["--difficulty", "medium"]));
+    let body = std::fs::read_to_string(scratch.0.join("body")).unwrap();
+    for evidence in [
+        "portal stopped",
+        "report-frame-evidence",
+        "feedback-row",
+        "probe-bbbb",
+        "server-log-evidence",
+        "client-log-evidence",
+    ] {
+        assert!(
+            body.contains(evidence),
+            "missing report evidence {evidence}: {body}"
+        );
+    }
+    assert_eq!(
+        body, draft_body,
+        "the backlog keeps the reviewed redacted body too"
+    );
+    assert!(!body.contains(session));
+    let captured = std::fs::read_to_string(scratch.0.join("draft-argv")).unwrap();
+    assert!(
+        captured.contains("````text\nreport-frame-evidence\n```"),
+        "pane Markdown cannot close the captured block"
+    );
+    assert!(
+        !captured.contains("OTHER-PANE-PRIVATE"),
+        "other panes must not enter the report"
+    );
+    assert!(
+        !captured.contains("working unknown"),
+        "mux chrome must not enter the pane capture"
+    );
+    for evidence in [
+        session,
+        "report-frame-evidence",
+        "feedback-row",
+        "server-log-evidence",
+        "client-log-evidence",
+    ] {
+        assert!(
+            captured.contains(evidence),
+            "the native drafter receives captured evidence {evidence}"
+        );
+    }
+    std::fs::write(scratch.0.join("issue-no-receipt"), "").unwrap();
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("report a problem"));
+    h.type_bytes(b"portal stopped\r");
+    h.wait_screen(15, |s| s.contains("review GitHub issue"));
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("GitHub returned no issue receipt") && s.contains("probe-abcd")
+    });
+    assert!(
+        h.screen().contains("review GitHub issue"),
+        "a partial report keeps the preview"
+    );
+    std::fs::remove_file(scratch.0.join("issue-no-receipt")).unwrap();
+    std::fs::write(scratch.0.join("issue-found"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("issues/12345") && !s.contains("review GitHub issue")
+    });
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        5,
+        "issue retry retains the successful backlog receipt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "lookup recovers the unknown issue receipt without another create"
+    );
+    std::fs::write(scratch.0.join("no-auth"), "").unwrap();
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("No gh authentication"));
+    h.type_bytes(b"portal stopped\r");
+    h.wait_screen(15, |s| s.contains("Enter backlog only"));
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| {
+        s.contains("probe-abcd") && !s.contains("review GitHub issue")
+    });
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("issue-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "backlog-only confirmation does not call GitHub"
+    );
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("report a problem"));
+    h.type_bytes(b"\x1b");
+    h.wait_screen(5, |s| !s.contains("report a problem"));
+    h.type_bytes(b"\x02!");
+    let screen = h.wait_screen(5, |s| s.contains("report a problem"));
+    let (row, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("report a problem"))
+        .unwrap();
+    let at = line.find("esc").expect("the report paints an esc chip");
+    let col = line[..at].chars().count() + 2;
+    h.type_bytes(format!("\x1b[<0;{col};{}M\x1b[<0;{col};{}m", row + 1, row + 1).as_bytes());
+    h.wait_screen(5, |s| !s.contains("report a problem"));
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        6
+    );
+    h.type_bytes(b"\x02d");
+    assert!(h.wait_exit(10).success());
+    peer.thread.take().unwrap().join().unwrap();
+    assert_eq!(
+        mouse_leaks.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "report mouse input must not reach the pane"
+    );
+}

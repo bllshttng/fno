@@ -2001,7 +2001,88 @@ pub(crate) fn append_answer_row_stamped(
     crate::events::EventEmitter::new(&path, "daemon")
         .emit_fields("attention_answer", fields)
         .map_err(|e| format!("answer row for {item_id}: {e}"))?;
+    // A user answer is a ruling: mint the operator law row the clear door
+    // writes for file-lane settles. The answer row is the durable half, so
+    // the mint is best effort: the door's live_decision read resumes rather
+    // than minting a second row when the file lane clears later.
+    if !already_won
+        && matches!(
+            answer,
+            crate::attention_file::FileAnswer::Option(_)
+                | crate::attention_file::FileAnswer::Words(_)
+        )
+    {
+        if let Err(e) = mint_answer_law_row(home, item_id, answer, attested_by, email) {
+            eprintln!("fno-agents attention: law row for {item_id}: {e}");
+        }
+    }
     Ok((receipt, already_won))
+}
+
+/// Mint the operator law row a user answer deserves: the clear door stamps
+/// `operator` authority for every user-lane answer, but only the file arm's
+/// settle path ever reached that door, so a board answer left no row for
+/// `fno backlog decisions --lane law` to recover. Best effort: the answer
+/// row above is the durable half; the door's live_decision read never mints
+/// a second row for the same question, so the file lane's later clear is a
+/// no-op resume.
+fn mint_answer_law_row(
+    home: &crate::paths::AgentsHome,
+    item_id: &str,
+    answer: &crate::attention_file::FileAnswer,
+    attested_by: &str,
+    email: Option<&str>,
+) -> Result<(), String> {
+    let index = crate::provider_cap::questions_path(home);
+    let (mut asked, closed) = crate::question_intake::question_rows(&index);
+    if closed.contains(item_id) {
+        return Ok(());
+    }
+    let question = asked
+        .remove(item_id)
+        .ok_or("no operator_question row names this id")?;
+    let text = match answer {
+        crate::attention_file::FileAnswer::Option(n) => question["data"]["options"]
+            .as_array()
+            .and_then(|opts| opts.get(n.saturating_sub(1) as usize))
+            .and_then(|o| o.get("text"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("option {n}")),
+        crate::attention_file::FileAnswer::Words(w) => w.clone(),
+        _ => return Ok(()),
+    };
+    // The law row mirrors into the project the question was asked in, not
+    // wherever the daemon happens to run: the question row carries the
+    // asking session's cwd.
+    let cwd = question["data"]["cwd"]
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+    let req = crate::question_clear::ClearRequest {
+        ids: vec![item_id.to_string()],
+        answer: None,
+        cap: crate::question_intake::QUESTION_CAP,
+        provenance: json!({
+            "decided_by": email.unwrap_or("operator"),
+            "authority_source": "operator",
+            "attested_by": attested_by,
+        }),
+        closed_by: None,
+        caller: None,
+        home: Some(home.clone()),
+        journal_path: crate::paths::events_path(&cwd),
+        index_path: index,
+        decisions_path: crate::decision_index::default_state_path("decisions.jsonl"),
+        graph: crate::graph_get::default_graph_path(),
+        repo_root: cwd,
+    };
+    let event = crate::question_clear::make_decision(&req, item_id, &question, &text)?;
+    crate::question_clear::record_decision_row(&req, event)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2010,6 +2091,102 @@ mod tests {
 
     use crate::attention::project;
 
+    #[test]
+    fn an_answer_mints_the_operator_law_row_once() {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!(
+            "arm-law-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let home = crate::paths::AgentsHome::at(tmp.join("fno/agents"));
+        let (saved_home, saved_fno) = (
+            std::env::var("FNO_AGENTS_HOME").ok(),
+            std::env::var("FNO_HOME").ok(),
+        );
+        std::env::set_var("FNO_AGENTS_HOME", tmp.join("fno/agents"));
+        std::env::set_var("FNO_HOME", &tmp);
+        let index = crate::provider_cap::questions_path(&home);
+        let row = serde_json::json!({"ts": "2026-11-06T10:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-law", "question": "PR 81 paint approval: merge as painted?",
+            "cwd": repo.display().to_string(), "node": "x-law",
+            "options": [{"n": 1, "text": "Merge as painted"}, {"n": 2, "text": "Hold for changes"}]}});
+        crate::event_store::append_envelope(&index, &row.to_string(), None).unwrap();
+        let answer = crate::attention_file::FileAnswer::Option(1);
+        let (receipt, superseded) = append_answer_row(
+            &home,
+            "q-law",
+            "mux",
+            &answer,
+            "mux_board",
+            "arm",
+            "mux-board",
+        )
+        .unwrap();
+        assert!(receipt.contains("option 1"), "{receipt}");
+        assert!(!superseded);
+        // The in-append mint is silent on failure, so the direct call names
+        // any mint error this fixture can hit.
+        mint_answer_law_row(&home, "q-law", &answer, "mux-board", None)
+            .expect("direct mint failed");
+        let decisions_path = crate::decision_index::default_state_path("decisions.jsonl");
+        // The mirror commits through the store twin, so read the same layer
+        // the door's own tests read, never the raw bytes.
+        let decisions = crate::event_store::journal_text(&decisions_path, &["operator_decision"]);
+        let rows: Vec<Value> = decisions
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let law = rows
+            .iter()
+            .find(|r| r["data"]["authority_source"] == "operator")
+            .unwrap_or_else(|| panic!("no operator law row in {decisions_path:?}: {rows:?}"));
+        assert_eq!(law["data"]["question_id"], "q-law");
+        assert_eq!(law["data"]["subject"], "x-law");
+        assert_eq!(law["data"]["decision"], "Merge as painted");
+        assert_eq!(law["data"]["trace"]["parent_span_id"], "q-law");
+        let (_, again_won) = append_answer_row(
+            &home,
+            "q-law",
+            "mux",
+            &answer,
+            "mux_board",
+            "arm",
+            "mux-board",
+        )
+        .unwrap();
+        assert!(again_won, "a second append reads superseded");
+        let after = crate::event_store::journal_text(&decisions_path, &["operator_decision"]);
+        let law_count = after
+            .lines()
+            .filter(|l| l.contains("operator_decision"))
+            .count();
+        let before_count = decisions
+            .lines()
+            .filter(|l| l.contains("operator_decision"))
+            .count();
+        assert_eq!(
+            law_count, before_count,
+            "no second law row on a superseded append"
+        );
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        match saved_fno {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        drop(lock);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
     /// One not-ready question with a live asker: every context field but
     /// `unknowns` is present, so `missing` names exactly one field.
     fn not_ready_items() -> Vec<AttentionItem> {

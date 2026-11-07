@@ -79,7 +79,7 @@ impl Core {
     /// same client, or a tag past the cap changes nothing.
     pub(super) fn observe(&mut self, id: u64, hello: ObserverHello) -> Flow {
         if !self.is_passive(id) {
-            eprintln!("fno mux: client {id} sent Observe but is not an observer; ignored");
+            crate::mux_log!(warn; "fno mux: client {id} sent Observe but is not an observer; ignored");
             return Flow::Continue;
         }
         let live: Vec<u64> = self.clients.iter().map(|c| c.id).collect();

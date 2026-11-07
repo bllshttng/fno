@@ -251,16 +251,33 @@ pub fn thread_unarchive_request_json(id: u64, thread_id: &str) -> String {
 }
 
 /// Resume one exact thread for provider control without changing its model,
-/// sandbox, approval policy, or thread config.
+/// sandbox, approval policy, or thread config. The hook-trust bypass still
+/// rides along: a resumed control thread must not lose the posture that lets
+/// its hooks run.
 pub(crate) fn thread_resume_control_request_json(id: u64, thread_id: &str, cwd: &Path) -> String {
+    thread_resume_control_request_json_with(id, thread_id, cwd, thread_hook_trust_bypass())
+}
+
+/// The explicit form: tests pass the posture directly, since the version
+/// probe answers empty under test cfg by design.
+fn thread_resume_control_request_json_with(
+    id: u64,
+    thread_id: &str,
+    cwd: &Path,
+    bypass: bool,
+) -> String {
+    let mut params = json!({
+        "threadId": thread_id,
+        "excludeTurns": true,
+        "cwd": cwd,
+    });
+    if let Some(config) = config_with_hook_trust_bypass(None, bypass) {
+        params["config"] = Value::Object(config);
+    }
     json!({
         "id": id,
         "method": "thread/resume",
-        "params": {
-            "threadId": thread_id,
-            "excludeTurns": true,
-            "cwd": cwd,
-        }
+        "params": params,
     })
     .to_string()
 }
@@ -2671,6 +2688,58 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
     Ok(carry)
 }
 
+/// The MCP servers an fno-spawned codex thread starts WITHOUT:
+/// `mcp_servers.<name>.enabled=false` rides every worker's `thread/start` and
+/// `thread/resume` config map. The codex app-server spawns one MCP server
+/// process per loaded thread and reaps none of them, so a worker lane that
+/// never calls a server still pays its process for the daemon's whole life
+/// (measured 2026-11-06: one `rea` npm child per thread, 15 children under
+/// the daemon against 9 loaded threads). A spawn that names
+/// `mcp_servers.<name>.` itself keeps every key it set; only the absent
+/// names land disabled.
+const WORKER_DISABLED_MCP_SERVERS: &[&str] = &["rea"];
+
+fn merged_thread_config(
+    config: Option<&serde_json::Map<String, Value>>,
+) -> Option<serde_json::Map<String, Value>> {
+    let mut merged = config.cloned().unwrap_or_default();
+    for name in WORKER_DISABLED_MCP_SERVERS {
+        let prefix = format!("mcp_servers.{name}.");
+        if merged.keys().any(|key| key.starts_with(&prefix)) {
+            continue;
+        }
+        merged.insert(format!("mcp_servers.{name}.enabled"), Value::Bool(false));
+    }
+    Some(merged)
+}
+
+/// The hook-trust bypass posture the thread lane carries in its `config` map.
+///
+/// CLI lanes pass `--dangerously-bypass-hook-trust`; a daemon-hosted thread
+/// cannot take a flag, so the lane forwards the same `bypass_hook_trust`
+/// override codex exec itself forwards for a bypassed config. Without it a
+/// plugin update flips every fno hook to modified and an unattended worker
+/// runs with no fno hooks at all. Gated on the same codex version the CLI
+/// flag needs, so an older codex gets the byte-identical frame it parses.
+fn thread_hook_trust_bypass() -> bool {
+    !crate::codex_ask::hook_trust_flag().is_empty()
+}
+
+/// Merge the bypass into the caller's config. A caller-supplied
+/// `-c bypass_hook_trust=false` wins. `bypass: false` returns the input
+/// untouched, keeping absent and empty configs absent and empty.
+fn config_with_hook_trust_bypass(
+    config: Option<&serde_json::Map<String, Value>>,
+    bypass: bool,
+) -> Option<serde_json::Map<String, Value>> {
+    if !bypass || config.is_some_and(|config| config.contains_key("bypass_hook_trust")) {
+        return config.cloned();
+    }
+    let mut merged = config.cloned().unwrap_or_default();
+    merged.insert("bypass_hook_trust".to_string(), Value::Bool(true));
+    Some(merged)
+}
+
 fn thread_start_request_with_options(
     id: u64,
     cwd: &Path,
@@ -2679,6 +2748,7 @@ fn thread_start_request_with_options(
     project_id: Option<&str>,
     config: Option<&serde_json::Map<String, Value>>,
 ) -> String {
+    let config = config_with_hook_trust_bypass(config, thread_hook_trust_bypass());
     let mut params = json!({
         "cwd": cwd,
         "sandbox": posture.sandbox.as_scalar(),
@@ -2690,9 +2760,9 @@ fn thread_start_request_with_options(
     if let Some(project_id) = project_id.filter(|id| !id.is_empty()) {
         params["projectId"] = json!(project_id);
     }
-    // Absent or empty keeps the frame byte-identical to the pre-config form.
-    if let Some(config) = config.filter(|config| !config.is_empty()) {
-        params["config"] = Value::Object(config.clone());
+    if let Some(config) = merged_thread_config(config.as_ref()).filter(|config| !config.is_empty())
+    {
+        params["config"] = Value::Object(config);
     }
     json!({"id": id, "method": "thread/start", "params": params}).to_string()
 }
@@ -2705,6 +2775,7 @@ fn thread_resume_request_with_options(
     posture: &CodexPosture,
     config: Option<&serde_json::Map<String, Value>>,
 ) -> String {
+    let config = config_with_hook_trust_bypass(config, thread_hook_trust_bypass());
     let mut params = json!({
         "threadId": thread_id,
         "excludeTurns": true,
@@ -2715,8 +2786,9 @@ fn thread_resume_request_with_options(
     if let Some(model) = model.filter(|model| !model.is_empty()) {
         params["model"] = json!(model);
     }
-    if let Some(config) = config.filter(|config| !config.is_empty()) {
-        params["config"] = Value::Object(config.clone());
+    if let Some(config) = merged_thread_config(config.as_ref()).filter(|config| !config.is_empty())
+    {
+        params["config"] = Value::Object(config);
     }
     json!({"id": id, "method": "thread/resume", "params": params}).to_string()
 }
@@ -2898,6 +2970,163 @@ mod tests {
         .unwrap();
         assert_eq!(read_only["params"]["sandbox"], "read-only");
         assert_eq!(read_only["params"]["approvalPolicy"], "on-request");
+    }
+
+    /// The leak fix: an fno-spawned worker starts WITHOUT the MCP servers the
+    /// disabled list names, on the start frame and the resume frame alike.
+    #[test]
+    fn worker_thread_frames_disable_the_default_mcp_server() {
+        let yolo = resolve_thread_posture(None, Some("yolo"), None).expect("yolo maps");
+        let frame: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &yolo,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            frame["params"]["config"]["mcp_servers.rea.enabled"],
+            json!(false),
+            "the default disable rides thread/start: {frame}"
+        );
+        let resume: Value = serde_json::from_str(&thread_resume_request_with_options(
+            1,
+            "thread-p",
+            std::path::Path::new("/tmp/w"),
+            None,
+            &yolo,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            resume["params"]["config"]["mcp_servers.rea.enabled"],
+            json!(false),
+            "the default disable rides thread/resume: {resume}"
+        );
+    }
+    #[test]
+    fn an_explicit_mcp_override_survives_the_default_disable() {
+        let mut config = serde_json::Map::new();
+        config.insert("mcp_servers.rea.enabled".to_string(), json!(true));
+        let merged = merged_thread_config(Some(&config)).expect("merged");
+        assert_eq!(
+            merged.get("mcp_servers.rea.enabled"),
+            Some(&json!(true)),
+            "the spawn's own mcp_servers.rea pair wins"
+        );
+        let mut other = serde_json::Map::new();
+        other.insert("mcp_servers.node_repl.enabled".to_string(), json!(false));
+        let merged = merged_thread_config(Some(&other)).expect("merged");
+        assert_eq!(merged.get("mcp_servers.rea.enabled"), Some(&json!(false)));
+        assert_eq!(
+            merged.get("mcp_servers.node_repl.enabled"),
+            Some(&json!(false))
+        );
+    }
+
+    /// AC1: a codex that ships hook trust gets `bypass_hook_trust` in the
+    /// start frame's config map, and a caller-supplied key wins over the
+    /// lane's posture (`-c bypass_hook_trust=false` stays false).
+    #[test]
+    fn thread_start_frame_carries_hook_trust_bypass() {
+        let frame: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            None,
+            config_with_hook_trust_bypass(None, true).as_ref(),
+        ))
+        .unwrap();
+        assert_eq!(frame["params"]["config"]["bypass_hook_trust"], true);
+
+        let caller_false: serde_json::Map<String, Value> =
+            [("bypass_hook_trust".to_string(), Value::Bool(false))]
+                .into_iter()
+                .collect();
+        let merged = config_with_hook_trust_bypass(Some(&caller_false), true).unwrap();
+        assert_eq!(merged["bypass_hook_trust"], Value::Bool(false));
+    }
+
+    /// AC1: the resume and provider-control resume frames carry the same
+    /// bypass, so a plugin update never demotes an existing worker.
+    #[test]
+    fn resume_and_control_frames_carry_hook_trust_bypass() {
+        let frame: Value = serde_json::from_str(&thread_resume_request_with_options(
+            1,
+            "thread-b",
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            config_with_hook_trust_bypass(None, true).as_ref(),
+        ))
+        .unwrap();
+        assert_eq!(frame["params"]["config"]["bypass_hook_trust"], true);
+        let control: Value = serde_json::from_str(&thread_resume_control_request_json_with(
+            2,
+            "thread-b",
+            std::path::Path::new("/tmp/w"),
+            true,
+        ))
+        .unwrap();
+        assert_eq!(control["params"]["config"]["bypass_hook_trust"], true);
+    }
+
+    /// AC2: an unknown codex version bypasses nothing, so no frame carries
+    /// the bypass key and a caller's own config rides through untouched. The
+    /// worker MCP disable still fills the absent names: the config param
+    /// predates the supported codex floor, so the map is not a skew surface.
+    #[test]
+    fn unknown_codex_keeps_hook_trust_frames_byte_identical() {
+        let caller_config = {
+            let mut map = serde_json::Map::new();
+            map.insert("model_reasoning_effort".to_string(), json!("high"));
+            map
+        };
+        let frame: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            None,
+            config_with_hook_trust_bypass(None, false).as_ref(),
+        ))
+        .unwrap();
+        // The bypass key is the protocol-skew surface, not the config map
+        // itself: the worker MCP disable fills the absent names on every
+        // frame, and the config param predates the supported codex floor.
+        assert!(frame["params"]["config"].get("bypass_hook_trust").is_none());
+        let resumed: Value = serde_json::from_str(&thread_resume_request_with_options(
+            1,
+            "thread-b",
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            config_with_hook_trust_bypass(Some(&caller_config), false).as_ref(),
+        ))
+        .unwrap();
+        assert_eq!(
+            resumed["params"]["config"]["model_reasoning_effort"],
+            "high"
+        );
+        assert!(resumed["params"]["config"]
+            .get("bypass_hook_trust")
+            .is_none());
+        let control =
+            thread_resume_control_request_json(2, "thread-b", std::path::Path::new("/tmp/w"));
+        let expected = json!({
+            "id": 2,
+            "method": "thread/resume",
+            "params": {
+                "threadId": "thread-b",
+                "excludeTurns": true,
+                "cwd": "/tmp/w",
+            }
+        })
+        .to_string();
+        assert_eq!(control, expected);
     }
 
     #[test]

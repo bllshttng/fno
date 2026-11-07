@@ -239,7 +239,7 @@ fn run_bounded(
 /// Unbounded foreground run for installer-shaped children (cargo, uv, pip):
 /// inherit stdio so progress streams, return the exit code. The Python exec
 /// had no timeout either.
-fn run_inherit(bin: &Path, args: &[String]) -> i32 {
+pub(crate) fn run_inherit(bin: &Path, args: &[String]) -> i32 {
     let status = command_for(bin, args);
     match status {
         Ok(mut cmd) => match cmd.status() {
@@ -680,7 +680,7 @@ pub(crate) fn write_marker(path: &Path, rev: &str) -> std::io::Result<()> {
 /// The cargo-installed fno-agents binary, or None. Deliberately the cargo
 /// install location, NOT the resolver: a bundled-wheel binary refreshes via
 /// pip, not cargo.
-fn cargo_installed_bin() -> Option<PathBuf> {
+pub(crate) fn cargo_installed_bin() -> Option<PathBuf> {
     cargo_bin(&format!("fno-agents{}", exe_suffix()))
 }
 

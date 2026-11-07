@@ -126,7 +126,7 @@ jobs:
     # gap is visible in the log rather than a silent empty picture.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: read
@@ -232,6 +232,20 @@ jobs:
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
           done
           bash scripts/ops/mux-demo-snapshot.sh --out shots/sideline-200x56-light.png --format png --theme light --size 200x56 --fit
+          # Pin order: two pinned leads with workers and one unpinned lead,
+          # under two sorts, dark and light.
+          for sort in status:ascending age:descending; do
+            for theme in dark light; do
+              bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-pins-${sort%%:*}-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --sort "$sort"
+            done
+          done
+          # Cards flat is the default above. Rows nest under their lead, the
+          # toggle turns nesting on for cards, and its menu row.
+          for theme in dark light; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-rows-nested-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --layout list
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-cards-nested-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --lead-nesting
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-menu-lead-toggle-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --view sideline-menu
+          done
           # The other-machines layer: the second machine's rows by workspace
           # and by status, where a remote row pins first and a blocked one bands
           # under Needs input. The band sits below this machine's, so the

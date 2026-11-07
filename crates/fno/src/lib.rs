@@ -157,6 +157,8 @@ pub mod mux_cli;
 #[cfg(feature = "full")]
 pub mod mux_link;
 #[cfg(feature = "full")]
+pub mod mux_log;
+#[cfg(feature = "full")]
 pub mod mux_rows;
 #[cfg(feature = "full")]
 pub mod needs_overlay;

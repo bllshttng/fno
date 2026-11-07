@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-placement-rule.sh - CI gate enforcing the placement rule (ab-f063
 # Wave 2, amended 2026-09-03 by the spaces move): footnote's own accumulating
-# state (logs, telemetry, corrections) lives ONLY under ~/.fno/, the repo's
+# state (logs, telemetry) lives ONLY under ~/.fno/, the repo's
 # space (~/.fno/spaces/<slug>/), or internal/<project>/ - never under .claude/
 # or ~/.claude/. Inside a checkout only .fno/config.toml (committed project
 # config) and the sandbox-denied breadcrumb (.fno/state-root-denied.json) are
@@ -242,10 +242,6 @@
 #      archive-worktree.sh's salvage step skips the same
 #      shape for the same reason: copying a setup-written link would copy a
 #      slice of the canonical checkout through it.
-#   3. autocorrect's OWN remaining ~/.claude/ files that this wave
-#      deliberately did NOT move (proposed-patches/, corrections-malformed.log,
-#      the various watermark files, insights.md) - only corrections.log and
-#      corrections-rejected.log were in scope (see skills/autocorrect/SKILL.md).
 #
 # Carveout cv-8dc3c6dc (RESOLVED): the git-protection hook's state
 # (git-protection.json + approve_no_verify.flag) and save-session.py's
@@ -415,28 +411,18 @@ hooks/attest-model.sh
 hooks/cache-keepalive-inject.sh
 hooks/write-gate.sh
 crates/fno-agents/src/hook/write_gate.rs
-hooks/corrections-git-postcommit.sh
 hooks/lead-delegation-guard.sh
 hooks/session-start.sh
 hooks/target-stop-hook.sh
 hooks/worktree-setup.sh
 hooks/helpers/check-impl-location.sh
-scripts/autocorrect-pack.sh
-scripts/autocorrect-review.sh
-scripts/autocorrect-triage.sh
-scripts/autocorrect-watcher.sh
 scripts/ci/check-no-internal-refs.sh
 scripts/ci/check-no-stale-skill-refs.sh
 scripts/ci/check-placement-rule.sh
 scripts/diagnostics/guard-corpus-sweep.py
 scripts/release/hookagg.py
-scripts/corrections-log-init.sh
-scripts/corrections-migrate-to-fno.sh
 scripts/ensure-global-dir.sh
-scripts/install-autocorrect-cron.sh
-scripts/install-corrections-git-hook.sh
 scripts/lib/config.sh
-scripts/lib/corrections-lock.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
 scripts/lint/no-invalid-events.sh

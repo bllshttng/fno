@@ -1636,6 +1636,18 @@
           "default": null,
           "title": "Preset"
         },
+        "report_parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Report Parent"
+        },
         "restore": {
           "$ref": "#/$defs/MuxRestoreBlock"
         },

@@ -14,6 +14,25 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+fn birth_stage_ms(client: &Value, launch_ms: u64, row_ms: u64) -> Option<Value> {
+    let mut stages = client.as_object()?.clone();
+    for key in ["seam", "gate", "guard", "queued"] {
+        stages.get(key)?.as_u64()?;
+    }
+    stages.insert("launch".into(), json!(launch_ms));
+    stages.insert("row".into(), json!(row_ms));
+    let total = ["seam", "gate", "guard", "launch", "row"]
+        .into_iter()
+        .map(|key| stages[key].as_u64().unwrap_or(0))
+        .sum::<u64>();
+    stages.insert("total".into(), json!(total));
+    Some(Value::Object(stages))
+}
+
+fn duration_ms(duration: std::time::Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 pub(super) async fn spawn_codex_thread_lane(
     ctx: &Ctx,
     req: &Request,
@@ -218,6 +237,7 @@ pub(super) async fn spawn_codex_thread_lane(
         Ok(cwd) => cwd,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
+    let launch_started = std::time::Instant::now();
     let driver = match crate::codex_thread::CodexThread::start_with_state_dirs(
         cwd.clone(),
         model,
@@ -237,6 +257,7 @@ pub(super) async fn spawn_codex_thread_lane(
             return Response::err(req.id, ErrorCode::SpawnFailed, error.to_string());
         }
     };
+    let launch_ms = duration_ms(launch_started.elapsed());
     let mut entry = build_codex_thread_entry(
         name,
         &cwd,
@@ -252,6 +273,7 @@ pub(super) async fn spawn_codex_thread_lane(
         role.as_ref().map(|(_, scope)| scope.as_str()),
     );
     let session_id = entry.harness_session_id.clone().unwrap_or_default();
+    let row_started = std::time::Instant::now();
     let inserted = update_registry_offloaded(ctx.home.registry_json(), move |registry| {
         if registry
             .entries
@@ -291,6 +313,7 @@ pub(super) async fn spawn_codex_thread_lane(
         true
     })
     .await;
+    let row_ms = duration_ms(row_started.elapsed());
     match inserted {
         Ok(true) => {}
         Ok(false) => {
@@ -357,22 +380,30 @@ pub(super) async fn spawn_codex_thread_lane(
     // (crates/fno/src/server.rs parse_spawn_receipts) drops any agent_spawned
     // event without both, which is how a thread worker could lose its only
     // resume fallback before the row is reaped.
+    let mut extras = json!({
+        "provider": "codex",
+        "harness": "codex",
+        "harness_session_id": session_id,
+        "short_id": "",
+        "status": "live",
+        "lane": "thread",
+        "substrate": "thread",
+        "cwd": cwd.to_string_lossy(),
+        "node": node,
+    });
+    if let Some(stages) = req
+        .params
+        .get("stage_ms")
+        .and_then(|client| birth_stage_ms(client, launch_ms, row_ms))
+    {
+        extras["stage_ms"] = stages;
+    }
     let _ = ctx.emitter.emit(
         "agent_spawned",
         &crate::spawn_edge::birth_event(
             name,
             &crate::codex_thread_entry::thread_lineage(&req.params, provenance),
-            json!({
-                "provider": "codex",
-                "harness": "codex",
-                "harness_session_id": session_id,
-                "short_id": "",
-                "status": "live",
-                "lane": "thread",
-                "substrate": "thread",
-                "cwd": cwd.to_string_lossy(),
-                "node": node,
-            }),
+            extras,
         ),
     );
     Response::ok(

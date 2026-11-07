@@ -260,9 +260,64 @@ pub fn claims_dirs(cwd: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The full read: hung commands first, then dead holders. An error from either
-/// leg fails the whole read - a partially blind answer reads as a failed
-/// read, never as a clean empty.
+/// The sink-health file the dead-sink read scans: the attention state dir,
+/// resolved the way the attention arm resolves it.
+fn sink_health_file() -> Option<PathBuf> {
+    crate::attention_arm::attention_dir()
+        .ok()
+        .map(|dir| crate::attention_http::sink_health_path(&dir))
+}
+
+/// One finding per dead sink in `sink-health.json`: a sink whose
+/// consecutive-failure streak is 3 or more and whose last success is missing
+/// or predates the streak's start. A missing or unreadable file adds
+/// nothing: an unconfigured sink list is quiet.
+fn dead_sinks_from_health(path: &Path) -> Vec<Finding> {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(map) = serde_json::from_str::<crate::attention_http::SinkHealth>(&raw) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for (name, row) in map {
+        let Some(first_fail) = row.first_fail_at else {
+            continue;
+        };
+        let dead = row.fail_streak >= crate::attention_http::DEAD_SINK_STREAK_MIN
+            && row.last_ok_at.is_none_or(|t| first_fail > t);
+        if !dead {
+            continue;
+        }
+        let host = row.url.split("://").nth(1).unwrap_or(row.url.as_str());
+        let host = host.split('/').next().unwrap_or(host);
+        let last = row.last_error.clone().unwrap_or_else(|| {
+            row.last_status
+                .map(|s| format!("status {s}"))
+                .unwrap_or_else(|| "no status".to_string())
+        });
+        let last = cut(&last, 120);
+        findings.push(Finding {
+            kind: "dead_sink",
+            key: format!("dead_sink:{name}@{first_fail}"),
+            line: format!(
+                "attention sink {name} dead since {first_fail}: {} posts failed, last {last} ({host})",
+                row.fail_streak
+            ),
+            root: None,
+            holder: None,
+            claim_key: None,
+        });
+    }
+    findings
+}
+
+/// The full read: hung commands, dead holders, then dead attention sinks. An
+/// error from either leg fails the whole read - a partially blind answer
+/// reads as a failed read, never as a clean empty. The sink-health read is
+/// the one exception: a missing or unreadable `sink-health.json` adds
+/// nothing and never fails the read, because an unconfigured sink list is
+/// quiet.
 pub fn collect(cwd: &Path) -> Result<Vec<Finding>, String> {
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -270,6 +325,9 @@ pub fn collect(cwd: &Path) -> Result<Vec<Finding>, String> {
         .unwrap_or(0);
     let mut findings = hung_commands(&ps_rows()?, now_unix);
     findings.extend(dead_holders(&claims_dirs(cwd))?);
+    if let Some(path) = sink_health_file() {
+        findings.extend(dead_sinks_from_health(&path));
+    }
     Ok(findings)
 }
 
@@ -287,7 +345,12 @@ pub fn status_value(cwd: &Path) -> Value {
                 .filter(|f| f.kind == "dead_holder")
                 .map(|f| f.line.as_str())
                 .collect();
-            json!({"hung_commands": hung, "dead_holders": holders})
+            let sinks: Vec<&str> = findings
+                .iter()
+                .filter(|f| f.kind == "dead_sink")
+                .map(|f| f.line.as_str())
+                .collect();
+            json!({"hung_commands": hung, "dead_holders": holders, "dead_sinks": sinks})
         }
         Err(e) => json!({"error": e}),
     }
@@ -309,7 +372,12 @@ pub fn render_lines(value: &Value) -> Vec<String> {
         .and_then(Value::as_array)
         .map(|a| a.len())
         .unwrap_or(0);
-    if hung + holders == 0 {
+    let sinks = value
+        .get("dead_sinks")
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+        .unwrap_or(0);
+    if hung + holders + sinks == 0 {
         return Vec::new();
     }
     let mut lines = vec!["stuck work:".to_string()];
@@ -321,6 +389,13 @@ pub fn render_lines(value: &Value) -> Vec<String> {
         .chain(
             value
                 .get("dead_holders")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+        .chain(
+            value
+                .get("dead_sinks")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten(),
@@ -466,5 +541,39 @@ mod tests {
         assert_eq!(f.holder.as_deref(), Some("single-flight:9:ab"));
         crate::claims::release("flight:k", "single-flight:9:ab", f.root.as_deref(), None).unwrap();
         assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn dead_sink_finding_from_health_file_and_missing_file_is_silent() {
+        use crate::attention_http::{SinkHealth, SinkHealthRow};
+        use std::collections::BTreeMap;
+        let td = TempDir::new().unwrap();
+        let path = crate::attention_http::sink_health_path(td.path());
+        assert!(dead_sinks_from_health(&path).is_empty());
+        let mut map: SinkHealth = BTreeMap::new();
+        map.insert(
+            "phone".into(),
+            SinkHealthRow {
+                url: "https://ntfy.example:8443".into(),
+                last_ok_at: None,
+                first_fail_at: Some(1793985830),
+                last_fail_at: Some(1793985831),
+                fail_streak: 5,
+                last_status: None,
+                last_error: Some("curl exited 6: Could not resolve host".into()),
+            },
+        );
+        std::fs::write(&path, serde_json::to_string(&map).unwrap()).unwrap();
+        let findings = dead_sinks_from_health(&path);
+        assert_eq!(findings.len(), 1);
+        let f = &findings[0];
+        assert_eq!(f.kind, "dead_sink");
+        assert_eq!(f.key, "dead_sink:phone@1793985830");
+        assert!(
+            f.line
+                .contains("attention sink phone dead since 1793985830: 5 posts failed"),
+            "{}",
+            f.line
+        );
     }
 }

@@ -613,8 +613,24 @@ fn run_home(args: &[String]) -> i32 {
     }
 
     if codex_hooks {
-        if fix || cost_check || codex_bind {
-            return usage_error("--codex-hooks may only be combined with --json");
+        if cost_check || codex_bind {
+            return usage_error("--codex-hooks may only be combined with --json (and --fix)");
+        }
+        if fix {
+            // fno-agents owns the daemon protocol: it writes the trust rows
+            // through `config/batchWrite`, so the daemon stays the one
+            // writer of its own config. Its output carries before/after.
+            if let Some(bin) = crate::doctor_update::cargo_installed_bin() {
+                let args = vec![
+                    "plugin-install".to_string(),
+                    "codex".to_string(),
+                    "--trust-hooks".to_string(),
+                ];
+                let code = crate::doctor_update::run_inherit(&bin, &args);
+                if code != 0 {
+                    eprintln!("fno doctor: codex-hooks --fix exited {code}");
+                }
+            }
         }
         let result = report::codex_hooks_report();
         if json {

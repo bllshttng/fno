@@ -101,7 +101,6 @@ Rules the renderer holds to:
 - The tag `#agent-correction` appears only in the User corrections section. The corrections line grammar does not change.
 - A section that cannot be written still appears, with one line `not written: <reason>`. It is never left out.
 - Unattended sessions (zero user and zero relay turns) stay out of every section except the fold counters. They are machinery runs.
-- The corrections lines must survive `bash scripts/corrections-insights-tag.sh --insights-file <report>` untouched: the tag is ` #agent-correction` at end of line, the `signal=` pair inside it.
 
 ## HTML copy
 

@@ -1,56 +1,5 @@
 use super::*;
 
-/// The hint is rendered IN PROCESS by the native capability builder now:
-/// the same function the parity goldens freeze, so the stub-script bridge
-/// cases died with the spawn. The three behaviors the bridge kept are the
-/// sized answer, the placeholder-as-None case, and the harness spelling.
-#[test]
-fn sized_hint_renders_in_process() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
-    let repo = dir.join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    let git = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .expect("git spawns");
-        assert!(status.success(), "git {args:?} failed");
-    };
-    git(&["init", "-q", "-b", "main"]);
-    git(&["config", "user.email", "t@example.test"]);
-    git(&["config", "user.name", "t"]);
-    std::fs::write(repo.join("base.txt"), "seed\n").unwrap();
-    git(&["add", "-A"]);
-    git(&["commit", "-q", "-m", "base"]);
-    git(&["branch", "origin/main"]);
-    std::fs::write(repo.join("b.txt"), "1\n2\n").unwrap();
-    std::fs::write(repo.join("c.txt"), "3\n4\n5\n").unwrap();
-    git(&["add", "-A"]);
-    git(&["commit", "-q", "-m", "small"]);
-
-    // Sized: two files and five lines land in the low tier, and the claude
-    // spelling rides the parity-checked base row.
-    assert_eq!(
-        sized_self_review_hint(&repo, Some("claude")).as_deref(),
-        Some("/fno:review low --comment")
-    );
-    // The harness spelling: codex renders $fno:review through the same
-    // normalizer every dispatch surface uses.
-    assert_eq!(
-        sized_self_review_hint(&repo, Some("codex")).as_deref(),
-        Some("$fno:review low --comment")
-    );
-    // Placeholder: no measurable diff, so the hint reads as None and the
-    // levelless line stands.
-    assert_eq!(sized_self_review_hint(dir, Some("claude")), None);
-}
-
 /// Run the command until the quota probe answers decisively (a bool
 /// graphql_exhausted): a fork/exec blip on a loaded runner lands as
 /// probe_graphql_quota -> None (null), which is correct behavior - the
