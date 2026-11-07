@@ -45,20 +45,35 @@ fn bump_first_row(rows: &mut Vec<Value>) -> Result<bool, fno_agents::graph_store
 /// AC3/AC8: a one-row mutate holds the lock for under a quarter of its wall
 /// time. On the pre-change code the whole pure pipeline sits inside the
 /// hold, so this test fails there (AC8) and pins the shrink (AC3) after.
+/// The hold event lands in this store's own events path, so a failure
+/// carries the phases that name where the time went.
 #[test]
 fn one_row_edit_holds_the_lock_for_a_small_slice_of_the_call() {
-    let (_dir, path) = seeded_store(SEEDED_ROWS);
+    let (dir, path) = seeded_store(SEEDED_ROWS);
+    let events = dir.path().join("events.jsonl");
+    std::env::set_var("FNO_EVENTS_PATH", &events);
     let started = Instant::now();
     let outcome = graph_store::mutate_rows(&path, DEFAULT_LOCK_TIMEOUT, None, None, bump_first_row)
         .expect("mutate cycle completes")
         .expect("publish lands");
     let elapsed = started.elapsed();
-    assert!(
-        outcome.lock_held * 4 < elapsed,
-        "lock held {:?} of {:?} wall time; the whole pipeline must not sit inside the hold",
-        outcome.lock_held,
-        elapsed
-    );
+    if outcome.lock_held * 4 >= elapsed {
+        let phases = fno_agents::event_store::query_events(
+            &events,
+            &fno_agents::event_store::EventQuery {
+                types: vec!["graph_lock_held".into()],
+                ..Default::default()
+            },
+        )
+        .ok()
+        .and_then(|rows| rows.first().map(|row| row.line.clone()))
+        .unwrap_or_else(|| "no hold row landed".to_string());
+        panic!(
+            "lock held {:?} of {:?} wall time; the whole pipeline must not sit inside the hold; hold row: {phases}",
+            outcome.lock_held,
+            elapsed
+        );
+    }
 }
 
 /// AC7: a foreground `locked_mutate` lands within DEFAULT_LOCK_TIMEOUT
