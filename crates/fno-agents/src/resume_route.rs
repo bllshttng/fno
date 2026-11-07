@@ -14,6 +14,24 @@ pub(crate) enum ResumeRoute {
     Refused(String),
 }
 
+/// Whether the packaged contract gives this harness's keeper lane a proven
+/// same-id revival: `[harness.<h>.keeper]` lists `resume_session_id`. The
+/// one read the manual resume door and the boot pass share, so they cannot
+/// disagree.
+pub(crate) fn keeper_carries_revival(contract: &HarnessContract, harness: &str) -> bool {
+    contract
+        .capabilities(harness)
+        .ok()
+        .and_then(|caps| caps.keeper.as_ref())
+        .map(|keeper| {
+            keeper
+                .carries
+                .iter()
+                .any(|axis| axis == "resume_session_id")
+        })
+        .unwrap_or(false)
+}
+
 pub(crate) fn resume_route(
     harness: &str,
     substrate: Option<&str>,
@@ -41,17 +59,7 @@ pub(crate) fn resume_route(
                 ResumeRoute::Refused(format!("fno agents resume: {name}: {}", conversion.refusal))
             }
             "keeper-rebind" => {
-                let carries_revival = contract
-                    .capabilities(harness)
-                    .ok()
-                    .and_then(|caps| caps.keeper.as_ref())
-                    .map(|keeper| {
-                        keeper
-                            .carries
-                            .iter()
-                            .any(|axis| axis == "resume_session_id")
-                    })
-                    .unwrap_or(false);
+                let carries_revival = keeper_carries_revival(contract, harness);
                 if carries_revival {
                     return ResumeRoute::KeeperRevive;
                 }

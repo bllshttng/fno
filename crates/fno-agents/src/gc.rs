@@ -1474,13 +1474,6 @@ mod tests {
                 0,
                 "a held pass lands no retire tick"
             );
-            // The pass done: the next tick runs the sweeps.
-            crate::boot_revival::write_receipt(
-                &home.root().join("boot-revival.json"),
-                crate::boot_revival::boot_time().unwrap(),
-                &[],
-                true,
-            );
             // The first pass stamped the guard window, and its body may
             // still hold the in-flight gate while the listing read fails
             // over. Wait for the drop and backdate, or the proceed pass is
@@ -1493,6 +1486,25 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
+            // The body's return only proves the pass planned and spawned;
+            // its batch thread stamps the unfinished receipt on its way out.
+            // Await that thread too, then write the done receipt: a stamp
+            // that lands after this write would hold the next tick forever.
+            let batch_free = Instant::now() + Duration::from_secs(10);
+            while crate::boot_revival::batch_running_for_tests() {
+                assert!(
+                    Instant::now() < batch_free,
+                    "the held pass's batch thread never finished"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // The pass done: the next tick runs the sweeps.
+            crate::boot_revival::write_receipt(
+                &home.root().join("boot-revival.json"),
+                crate::boot_revival::boot_time().unwrap(),
+                &[],
+                true,
+            );
             last = Instant::now() - Duration::from_secs(301);
             crate::gc::maybe_retirement_sweep(
                 &mut last,

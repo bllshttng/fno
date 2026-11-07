@@ -81,13 +81,30 @@ A revival re-seats a row that already held a seat, so it never asks the spawn ga
 
 ## After a reboot, without a tap
 
-The first `fno-agents` daemon start of a boot revives the fleet on its own (`crates/fno-agents/src/boot_revival.rs`). It plans before the startup sweep rewrites a status. If a worker was live at the boot, it counts: a live-ish status, or an exit stamped after the boot began. If `claude agents --json --all` lists its job as stopped or failed and its node is still open, it revives. A worker whose node's PR merged and whose row proves a deliberate stop stays down, recorded as a skipped receipt row. Leads go first, then the rest in parallel, each through `claude respawn <job id>`. One receipt row per worker, revived, skipped with its reason, or failed with its error, lands in `~/.fno/agents/boot-revival.json`. That file's boot stamp makes the pass run once per boot. Its `done` marker tells the daemon's retire arm the pass finished. The arm holds its vacates and row reaps until the done marker lands. It kicks the pass each interval and drops the hold 30 minutes past boot. If the listing cannot be read, the pass stamps nothing and the hold's interval kick retries it. A row the pass never reached still revives on one tap. A tap refuses while the listing cannot be read, because a bg resume of a live session starts a copy.
+The first `fno-agents` daemon start of a boot revives the fleet on its own (`crates/fno-agents/src/boot_revival.rs`). It plans after the startup keeper sweep. A keeper that survives the reboot re-binds there first. The plan reads the world as the machine went down, plus the sweep's verdicts. If a row was live at the boot, it counts: a live-ish status, or an exit stamped after the boot began. A claude row needs the `claude agents --json --all` listing to name its job stopped or failed and its node still open. It respawns through `claude respawn <job id>`. A keeper-lane row of a harness whose `[harness.<h>.keeper]` carries `resume_session_id` (agy, cursor-agent) skips that listing. The listing never lists their jobs. The row comes back through its own keeper revival on the contract's `interactive_resume` form. The revival runs behind the same resume gate and reservation the manual door uses. A worker whose node's PR merged and whose row proves a deliberate stop stays down, recorded as a skipped receipt row. Leads go first, then the rest in parallel. One receipt row per worker, revived, skipped with its reason, or failed with its error, lands in `~/.fno/agents/boot-revival.json`. That file's boot stamp makes the pass run once per boot. Its `done` marker tells the daemon's retire arm the pass finished. The arm holds its vacates and row reaps until the done marker lands. It kicks the pass each interval and drops the hold 30 minutes past boot. If the listing cannot be read, only the claude rows wait. They land as named skip rows. The hold's interval kick retries the pass until a listing reads. Keeper rows revive regardless. A row the pass never reached still revives on one tap. A tap refuses while the listing cannot be read, because a bg resume of a live session starts a copy.
+
+Per harness, what comes back after a reboot without a person:
+
+| Harness | Mux member restore | Boot thread revival | Reason |
+|---|---|---|---|
+| claude | the revive re-entry plan | the claude pass, listing-gated | the listing names the job, so `claude respawn` restarts it |
+| agy, cursor-agent | the declared `interactive_resume` form | the keeper arm | the keeper carries `resume_session_id`, so the same-id keeper launch is proven |
+| codex | the declared form | daemon start, fresh rows only | a fresh full-identity row recovers at daemon start; an older one waits for its next ask |
+| opencode | the declared form | none | thread conversion is unsupported (see [thread lanes](thread-lanes.md)) |
+| pi, grok | the declared form | none, yet | the keeper carries no `resume_session_id` and no passing restart journey is recorded, so the contract refuses |
+| muse | the declared form | none | its revival is its own work item under the same epic |
+| gemini | the declared form | none | deprecated |
+| zcode, footnote | none | none | no resume form to render |
+
+Beyond this page, [thread lanes](thread-lanes.md) owns the lane contract these rows read, and [the harness command matrix](../harness-command-matrix.md) owns the per-command revive rows.
 
 ## Files
 
 - `crates/fno/src/server/workspace_restore.rs` - the bulk driver (`workspace_restore_start` / `workspace_restore_apply`)
 - `crates/fno-agents/src/reentry.rs` - the claude re-entry plan, including the `revive` transition
 - `crates/fno-agents/src/boot_revival.rs` - the once-per-boot revival pass
+- `crates/fno-agents/src/keeper_revival.rs` - the keeper launch, its Identify proof and the row flip
+- `crates/fno-agents/src/resume_route.rs` - the resume route resolver and the shared carries read
 - `crates/fno/src/server.rs` - `declared_resume_form` (the thin view), `resume_one` (the shared gate walk), `restore_candidates`
 - `crates/fno/src/agents_view.rs` - `declared_form` (the one reader), `FormLane`, `resume_form`, `attach_form`
 - `crates/fno/src/mux_cli.rs` - `workspace` / `workspace_restore` CLI parsing and output
