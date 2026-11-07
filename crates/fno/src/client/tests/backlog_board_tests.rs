@@ -1080,6 +1080,18 @@ fn tab_cycles_kanban_list_and_graph_views() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
+    let cursor_rows = lines
+        .iter()
+        .filter(|line| {
+            line.roles
+                .iter()
+                .any(|role| matches!(role, crate::text_style::TextStyle::Tab))
+        })
+        .count();
+    assert_eq!(
+        cursor_rows, 5,
+        "exactly the focused box wears the inverse cursor border: {painted}"
+    );
     assert!(
         painted.contains("family"),
         "graph header missing: {painted}"

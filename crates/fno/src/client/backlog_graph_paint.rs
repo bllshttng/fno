@@ -127,8 +127,16 @@ pub(crate) fn lines(
         for (slot, node) in layers[layer].iter().enumerate() {
             let y = band_y[band] + slot * NODE_STEP;
             let role = node_role(node, selected);
+            // The cursor rides the border, in the one inverse role no other
+            // board surface uses, so the focused box reads at a glance and
+            // no lead color can impersonate it.
+            let border_role = if selected == Some(node.id.as_str()) {
+                TextStyle::Tab
+            } else {
+                role
+            };
             let labels = node_lines(node, node_w);
-            draw_box(&mut grid, x, y, node_w, &labels, role);
+            draw_box(&mut grid, x, y, node_w, &labels, border_role, role);
         }
     }
     for (index, layer) in layer_ids.iter().enumerate() {
@@ -289,9 +297,15 @@ fn draw_box(
     y: usize,
     width: usize,
     labels: &[String; 3],
-    role: TextStyle,
+    border_role: TextStyle,
+    text_role: TextStyle,
 ) {
     if width < 3 {
+        let role = if border_role == TextStyle::Tab {
+            border_role
+        } else {
+            text_role
+        };
         for (row, label) in labels.iter().enumerate() {
             for (offset, ch) in label.chars().take(width).enumerate() {
                 grid.put(x + offset, y + row + 1, ch, role);
@@ -300,18 +314,18 @@ fn draw_box(
         return;
     }
     let bottom = y + 4;
-    grid.put(x, y, '┌', role);
-    grid.put(x + width - 1, y, '┐', role);
-    grid.horizontal(x + 1, x + width - 2, y, '─', role);
+    grid.put(x, y, '┌', border_role);
+    grid.put(x + width - 1, y, '┐', border_role);
+    grid.horizontal(x + 1, x + width - 2, y, '─', border_role);
     for (row, label) in labels.iter().enumerate() {
         let y = y + row + 1;
-        grid.put(x, y, '│', role);
-        grid.put(x + width - 1, y, '│', role);
-        draw_text(grid, x + 1, y, x + width - 1, label, role);
+        grid.put(x, y, '│', border_role);
+        grid.put(x + width - 1, y, '│', border_role);
+        draw_text(grid, x + 1, y, x + width - 1, label, text_role);
     }
-    grid.put(x, bottom, '└', role);
-    grid.put(x + width - 1, bottom, '┘', role);
-    grid.horizontal(x + 1, x + width - 2, bottom, '─', role);
+    grid.put(x, bottom, '└', border_role);
+    grid.put(x + width - 1, bottom, '┘', border_role);
+    grid.horizontal(x + 1, x + width - 2, bottom, '─', border_role);
 }
 
 fn draw_text(grid: &mut Grid, x: usize, y: usize, end: usize, text: &str, role: TextStyle) {
