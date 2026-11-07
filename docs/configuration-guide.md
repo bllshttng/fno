@@ -9,7 +9,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
-| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = "fnodotdev/fno"`. |
+| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-ins already carry this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = "fnodotdev/fno"`. |
 | `branch.prefix` | str | `fno` | advanced | Prefix for dispatched worktree branches: <prefix>/<slug>-<node>. |
 | `build.agent_freeze` | bool | `false` | never | Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile. |
 | `paths.ledger_json` | str (optional) | _(none)_ | never | Override path to ledger.json. |
@@ -18,7 +18,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.fleet_dir` | str (optional) | _(none)_ | never | Override path to the megatron fleet dir. |
 | `paths.postmortems_dir` | str (optional) | _(none)_ | never | Override path to the postmortems dir. |
 | `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
-| `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
+| `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
@@ -242,7 +242,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `evals.gate.daily_usd` | float | `15.0` | never | Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off. |
 | `evals.gate.lane` | str | `zai-flash` | never | Lane the gate's golden runs use. Defaults zai-flash. |
 | `evals.enabled` | bool | `true` | never | Enable the headless eval-suite grading-worker spawn. Defaults true. |
-| `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs on the pr-watch tick (0 disables). |
+| `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs; the daemon checks each minute (0 disables). |
 | `evals.stale_days` | int | `7` | never | Age in days at which the newest regression-tier run reads STALE in doctor and triage health. |
 | `evals.scratch_threshold` | int | `3` | never | Distinct jobs inside the window at which a recurring scratch shape files one p1 node. |
 | `evals.scratch_window_days` | int | `28` | never | Window in days the scratch-shape sweep reads job tmp dirs over. |
@@ -307,6 +307,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `mux.restore.hold_workers` | bool | `true` | advanced | Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on). |
 | `mux.restore.policy` | typing.Literal['hold', 'idle', 'resume'] (optional) | _(none)_ | advanced | Startup restore policy for worker members: hold (rebuild named held panes, resume on focus, skip tabs whose every slot binds a done worker, default), idle (members stay idle rows), or resume (relaunch every member that is not tombstoned, gone, or reap-retired, finished work included). The policy never decides the tab count by itself: tabs rebuild from the stored tab trees under every value, so no value restores zero tabs. Overrides hold_workers when set. |
 | `mux.board_scope` | str | `repo` | advanced | Which projects the mux backlog board shows: repo (default, this checkout's project.id) \| all \| workspace:<name>, e.g. workspace:main for a workspace holding web, backend and marketing. A scope that cannot resolve falls back to every project, and `fno mux doctor` reports that as a warn naming the remedy. Latched at mux server birth; `fno mux kill-server` re-reads. |
+| `mux.report_parent` | str (optional) | _(none)_ | advanced | Parent epic for reports filed with prefix+!. Unset files reports without a parent. |
 | `mux.prefix` | str (optional) | _(none)_ | advanced | The mux prefix key, as C-a / Ctrl-a / ^a or a bare printable character. A digit 1-9 is refused (those select tabs), as is a key an action already holds. Unset keeps the built-in Ctrl-b. |
 | `mux.preset` | str (optional) | _(none)_ | advanced | Named key set for the mux: tmux (default, the shipped table) \| zellij (Zellij's pane-mode letters under the prefix: r splits right, d splits down, detach moves to Q). Rows in mux.keys win over the preset. A prefix mux and Zellij's modal one differ, so the preset maps letters, not modes: docs/mux-keys.md lists what does not map. |
 | `mux.keys` | dict[str, str] | `{}` | advanced | Per-action key rebinds (action -> key), e.g. detach: 'Q'. Action ids are the ones prefix+? lists. An unreadable key, an unknown action, a digit (1-9 select tabs), or a collision is refused and reported rather than silently ignored. The sideline action map and the Ctrl+Opt+Left global chord: docs/mux-keys.md. |

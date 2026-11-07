@@ -21,7 +21,9 @@ The stable branch of release 0.4.4 still names its marketplace `footnote`, so th
 
 `#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
 
-If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/install/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+
+The previous stage path, `~/.fno/plugin-stage`, remains readable during migration. `fno doctor update` rebuilds the new stage, repoints configured harnesses, and keeps the old stage until earlier sessions exit and no config names that old path.
 
 `fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
 
@@ -178,6 +180,10 @@ When a person runs the wizard, a preset sets the pace. The preset screen opens w
 | balanced | the safe middle | the detected ones with credentials | each harness keeps its current model | the PR watcher and the groom | off |
 | user-reviewed | nothing without you | none ticked | each harness keeps its current model | none | off |
 
+## Keeping fno on the machine: codesign and updates
+
+On macOS, `fno update` signs each binary it places with the Developer ID identity in your keychain. The identifiers are fixed (dev.fno.fno, dev.fno.fno-agents, and so on), so your macOS permission grants survive every update. Login Items then stops reporting fno as an item from an unidentified developer. Without a Developer ID certificate, fno skips the signing and says so. The real identity checks are `codesign --verify --strict` and the Authority chain in `codesign -dv`. An `spctl -a` rejection on a bare CLI binary comments on the file shape, never on the identity. The Python `fno` console script cannot carry this signature: it is a script, not a Mach-O binary. The binaries are not notarized. That matters only the day binaries ship as downloads.
+
 ## Keeping fno up to date
 
 On a release install, run `fno update`. On a wheel install (`uv tool install fno`), it moves fno to the binary install in `~/.fno/install/bin`. It downloads the release tarball for your version, checks its `.sha256`, and points the `fno` command there. After the move, `fno update` installs the newest GitHub release. A wheel older than the release that carries the move needs `fno update` twice: the first run upgrades the wheel, and the second run moves it. On fno 0.4.4 and older, `fno update` stops with "Could not locate the fno CLI source", so run `uv tool upgrade fno` yourself first. Plugin updates are separate: in Claude Code, run `/plugin update`.
@@ -204,7 +210,7 @@ fno uninstall --yes        # no question; needed when stdin is not a terminal
 
 It removes each item through its own uninstall command, in this order:
 
-1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist` and the autocorrect agents).
+1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist`), plus any autocorrect agents or crontab block an old install left.
 2. The Claude Code and Codex plugins, their `fno` or older `footnote` marketplaces, and the OpenCode plugin files.
 3. The hooks fno added to `~/.claude/settings.json`, `~/.gemini/settings.json` and `~/.codex/config.toml`. Your own hooks stay.
 4. The `uv` tool, the Homebrew formula and the bootstrap cache. When the install script installed `uv` itself, `uv` is listed too.

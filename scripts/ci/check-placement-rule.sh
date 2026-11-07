@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-placement-rule.sh - CI gate enforcing the placement rule (ab-f063
 # Wave 2, amended 2026-09-03 by the spaces move): footnote's own accumulating
-# state (logs, telemetry, corrections) lives ONLY under ~/.fno/, the repo's
+# state (logs, telemetry) lives ONLY under ~/.fno/, the repo's
 # space (~/.fno/spaces/<slug>/), or internal/<project>/ - never under .claude/
 # or ~/.claude/. Inside a checkout only .fno/config.toml (committed project
 # config) and the sandbox-denied breadcrumb (.fno/state-root-denied.json) are
@@ -44,6 +44,10 @@
 #      agent session and so never loads plugin hooks, which leaves the
 #      settings file the only place a WorktreeRemove hook can reach it. That
 #      is Claude Code config, not footnote state - nothing accumulates there.
+#      setup_run.rs names the active Claude Code settings file in the consent
+#      step description; it constructs no path and writes no Footnote state.
+#      cli_hooks_tests.rs uses synthetic home and config roots to check the
+#      settings-path resolver; the test writes no files at either root.
 #      plans_path.rs reads Claude's own plansDirectory setting to place plan
 #      docs in the project-selected directory; it does not write footnote state
 #      under .claude.
@@ -242,10 +246,6 @@
 #      archive-worktree.sh's salvage step skips the same
 #      shape for the same reason: copying a setup-written link would copy a
 #      slice of the canonical checkout through it.
-#   3. autocorrect's OWN remaining ~/.claude/ files that this wave
-#      deliberately did NOT move (proposed-patches/, corrections-malformed.log,
-#      the various watermark files, insights.md) - only corrections.log and
-#      corrections-rejected.log were in scope (see skills/autocorrect/SKILL.md).
 #
 # Carveout cv-8dc3c6dc (RESOLVED): the git-protection hook's state
 # (git-protection.json + approve_no_verify.flag) and save-session.py's
@@ -387,6 +387,10 @@ crates/fno-agents/src/orphans.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno/src/cli_hooks.rs
+# setup_run.rs names the Claude Code user settings file in an approval description.
+crates/fno/src/setup_run.rs
+# cli_hooks_tests.rs uses synthetic roots to check settings-path selection.
+crates/fno/src/cli_hooks_tests.rs
 crates/fno-agents/src/provider.rs
 crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs
@@ -415,28 +419,18 @@ hooks/attest-model.sh
 hooks/cache-keepalive-inject.sh
 hooks/write-gate.sh
 crates/fno-agents/src/hook/write_gate.rs
-hooks/corrections-git-postcommit.sh
 hooks/lead-delegation-guard.sh
 hooks/session-start.sh
 hooks/target-stop-hook.sh
 hooks/worktree-setup.sh
 hooks/helpers/check-impl-location.sh
-scripts/autocorrect-pack.sh
-scripts/autocorrect-review.sh
-scripts/autocorrect-triage.sh
-scripts/autocorrect-watcher.sh
 scripts/ci/check-no-internal-refs.sh
 scripts/ci/check-no-stale-skill-refs.sh
 scripts/ci/check-placement-rule.sh
 scripts/diagnostics/guard-corpus-sweep.py
 scripts/release/hookagg.py
-scripts/corrections-log-init.sh
-scripts/corrections-migrate-to-fno.sh
 scripts/ensure-global-dir.sh
-scripts/install-autocorrect-cron.sh
-scripts/install-corrections-git-hook.sh
 scripts/lib/config.sh
-scripts/lib/corrections-lock.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
 scripts/lint/no-invalid-events.sh

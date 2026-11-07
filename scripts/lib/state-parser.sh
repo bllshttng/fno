@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# state-parser.sh - shared field-extraction helpers for target-state.md
-# and megawalk-state.md.
+# state-parser.sh - shared field-extraction helpers for target-state.md.
 #
 # Centralizes the `grep | head -1 | sed | tr -d` pattern that previously
-# appeared in target-stop-hook.sh, megawalk-stop-hook.sh, and the various
+# appeared in target-stop-hook.sh and the various
 # emit-helper scripts. A single helper gives us one place to update parsing
 # logic when the state file format evolves (block-style YAML support,
 # multi-line values, etc.).

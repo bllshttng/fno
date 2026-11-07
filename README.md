@@ -1,6 +1,6 @@
 # Footnote marketplace plugin
 
-This tree is generated from main at source commit `80812955fb32d8ffae3d3f15da6a61eb923234dc`. Do not edit this branch.
+This tree is generated from main at source commit `0ed202148713560104819904cb1874fc5479cca9`. Do not edit this branch.
 
 Source and contributions: https://github.com/fnodotdev/fno/tree/main
 

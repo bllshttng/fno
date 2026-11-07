@@ -41,6 +41,8 @@ The fno skills ship together. At each moment in [references/toolbag.md](referenc
 
 That is the whole job when a backlog node or plan is already bound. `fno do target start` prints an orientation report (node, worktree, tests, done-when) - read it and go. Everything below is detail on a spine step or an **"only if"** branch you skip unless its trigger fires.
 
+When a run owes no PR, see [Runs that owe no PR](../../docs/architecture/unified-loop.md#runs-that-owe-no-pr) for the init flag, plan gate, completed-node rule, and delivery evidence path.
+
 **Which path you are on is a READ, not a guess** - dispatch off the node's real state (`fno backlog get <id>`), never self-classification:
 
 - **ready node** (a plan is bound and its frontmatter reads `status: ready`): you are on the spine above. The idea-first work (think, blueprint, discovery) is already done - do not re-open it or load its references. The **size profile** (S/M/L) still sets the post-build phases (M adds docs + external; L adds adversarial, browser, clean - [references/pipeline-and-philosophy.md](references/pipeline-and-philosophy.md)). Multi-wave plans continue in this session across wave boundaries. A flat single-file plan also skips `ph_write`.
