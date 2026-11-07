@@ -1474,9 +1474,22 @@ mod tests {
                 0,
                 "a held pass lands no retire tick"
             );
-            // The held pass still ran its keeper half, and its thread stamps
-            // the unfinished receipt on its way out. Await that thread before
-            // writing the done receipt, or its final stamp clobbers this one.
+            // The first pass stamped the guard window, and its body may
+            // still hold the in-flight gate while the listing read fails
+            // over. Wait for the drop and backdate, or the proceed pass is
+            // refused before its body ever runs.
+            let free = Instant::now() + Duration::from_secs(30);
+            while in_flight.load(std::sync::atomic::Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < free,
+                    "the held pass never released the in-flight gate"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // The body's return only proves the pass planned and spawned;
+            // its batch thread stamps the unfinished receipt on its way out.
+            // Await that thread too, then write the done receipt: a stamp
+            // that lands after this write would hold the next tick forever.
             let batch_free = Instant::now() + Duration::from_secs(10);
             while crate::boot_revival::batch_running_for_tests() {
                 assert!(
@@ -1492,18 +1505,6 @@ mod tests {
                 &[],
                 true,
             );
-            // The first pass stamped the guard window, and its body may
-            // still hold the in-flight gate while the listing read fails
-            // over. Wait for the drop and backdate, or the proceed pass is
-            // refused before its body ever runs.
-            let free = Instant::now() + Duration::from_secs(30);
-            while in_flight.load(std::sync::atomic::Ordering::SeqCst) {
-                assert!(
-                    Instant::now() < free,
-                    "the held pass never released the in-flight gate"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
             last = Instant::now() - Duration::from_secs(301);
             crate::gc::maybe_retirement_sweep(
                 &mut last,
