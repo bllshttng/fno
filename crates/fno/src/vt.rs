@@ -17,12 +17,12 @@ use rio_vt::ansi::CursorShape;
 use rio_vt::config::colors::{AnsiColor as VtColor, ColorRgb, NamedColor};
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
-use rio_vt::crosswords::selection::{Selection, SelectionType};
 use rio_vt::crosswords::square::{CellFlags, ContentTag, Hyperlink, Square, Wide};
 use rio_vt::crosswords::style::{Style, StyleFlags};
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
+use rio_vt::selection::{Selection, SelectionType};
 
 use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
 use serde::{Deserialize, Serialize};
@@ -79,7 +79,7 @@ fn scrollback_lines() -> usize {
         .unwrap_or(SCROLLBACK_LINES)
 }
 
-/// `Dimensions` impl for constructing/resizing the headless [`Term`].
+/// `Dimensions` impl for constructing/resizing the headless [`Crosswords`].
 #[derive(Debug, Clone, Copy)]
 struct GridSize {
     rows: usize,
@@ -330,7 +330,7 @@ impl Pane {
         self.cols = cols;
         // Reflow rewraps history, staling any (line, col) anchors: drop the
         // selection rather than render a highlight over the wrong cells
-        // (AC2-UI). The display offset is clamped by alacritty's own resize.
+        // (AC2-UI). The display offset is clamped by rio-vt's own resize.
         self.term.selection = None;
         self.selected_block = None;
         // Reflow stales the stored match anchors too (v12, AC3-FR): drop the
@@ -457,7 +457,7 @@ impl Pane {
     // -- Scroll (US1) ----------------------------------------------------------
 
     /// Scroll the display by `delta` lines (positive = up into history). Clamps
-    /// at the oldest history line and at the live bottom (alacritty owns the
+    /// at the oldest history line and at the live bottom (the engine owns the
     /// clamp - AC1-EDGE, no panic, no wraparound). Returns the resulting offset.
     pub fn scroll(&mut self, delta: i32) -> usize {
         self.term.scroll_display(Scroll::Delta(delta));
@@ -471,7 +471,7 @@ impl Pane {
     }
 
     /// Anchor the viewport at the oldest history line (scroll-mode `g`).
-    /// Same alacritty clamp family as `scroll` - no panic at any history
+    /// Same engine clamp family as `scroll` - no panic at any history
     /// size; a zero-history pane is already at the top.
     pub fn scroll_to_top(&mut self) {
         self.term.scroll_display(Scroll::Top);
@@ -507,7 +507,7 @@ impl Pane {
         self.selected_block = None;
     }
 
-    /// The selected text, joining soft-wrapped lines per alacritty's semantic
+    /// The selected text, joining soft-wrapped lines per the engine's semantic
     /// rules and reaching into scrolled-off history (AC2-EDGE). `None` when
     /// there is no non-empty selection.
     pub fn selection_text(&self) -> Option<String> {
@@ -523,7 +523,9 @@ impl Pane {
     fn viewport_point(&self, row: u16, col: u16) -> Pos {
         let col = (col as usize).min(self.cols.saturating_sub(1) as usize);
         let row = (row as usize).min(self.rows.saturating_sub(1) as usize);
-        Pos::new(Line(row as i32 + self.display_offset() as i32), Column(col))
+        // Grid line of a viewport row: the inverse of frame()'s
+        // `Line(viewport_row - offset)` read.
+        Pos::new(Line(row as i32 - self.display_offset() as i32), Column(col))
     }
 
     // -- Links --------------------------------------------------------
@@ -658,10 +660,20 @@ impl Pane {
         let rows = self.rows as usize;
         points
             .iter()
-            .filter_map(|p| point_to_viewport(d, *p))
+            .filter_map(|p| Self::point_to_viewport(d, *p))
             .filter(|p| p.row.0 >= 0 && (p.row.0 as usize) < rows)
             .map(|p| (p.row.0 as u16, p.col.0 as u16))
             .collect()
+    }
+
+    /// Viewport point for a grid point through the display offset: the
+    /// inverse of `viewport_point` (viewport row = grid row + offset).
+    /// `None` when the point sits above the viewport (rio-vt keeps the
+    /// renderer's old helper private to its frontend, so this port carries
+    /// its own).
+    fn point_to_viewport(offset: i32, point: Pos) -> Option<Pos> {
+        let row = point.row.0 + offset;
+        (row >= 0).then_some(Pos::new(Line(row), point.col))
     }
 
     /// The visible cells of one OSC 8 anchor around `point`: the contiguous
@@ -787,7 +799,7 @@ impl Pane {
     /// way `search` already does it).
     ///
     /// A URL that reaches column 80 continues on the next row with no separator,
-    /// so linkifying one row at a time would find two broken halves. alacritty
+    /// so linkifying one row at a time would find two broken halves. The engine
     /// marks a soft wrap by setting `WRAPLINE` on the LAST cell of the row that
     /// wrapped, which is what both walks test.
     /// Returns `None` when the join hit its row cap while the line was STILL
@@ -1024,7 +1036,7 @@ impl Pane {
         let cur = self.search.as_ref()?.current;
         let needle = self.search.as_ref()?.needle.clone();
         // Fresh anchor of the currently-highlighted match: the live selection
-        // tracks it across eviction (alacritty rotates it), so its start row is
+        // tracks it across eviction (the engine rotates it), so its start row is
         // the match's row in the re-scanned list. Re-anchor the walk to it, else
         // a stale ordinal skips matches that aged out from the front of the list
         // (gemini/codex review): on B in [A,B,C,D], A evicting leaves [B,C,D] but
@@ -1365,7 +1377,7 @@ impl Pane {
             sgr_mouse: m.contains(Mode::SGR_MOUSE),
             utf8_mouse: m.contains(Mode::UTF8_MOUSE),
             alternate_scroll: m.contains(Mode::ALTERNATE_SCROLL),
-            kitty_flags: kitty_bits(m),
+            kitty_flags: kitty_bits(&m),
         }
     }
 }
@@ -1387,7 +1399,8 @@ pub struct Modes {
     pub utf8_mouse: bool,
     pub alternate_scroll: bool,
     /// The kitty keyboard-protocol flag bits (progressive enhancement), as
-    /// alacritty_terminal 0.26 models them: 1 disambiguate, 2 event types,
+    /// rio-vt models them, matching the wire order the kitty protocol
+    /// defines: 1 disambiguate, 2 event types,
     /// 4 alternate keys, 8 all-keys-as-esc, 16 associated text.
     pub kitty_flags: u8,
 }
@@ -1568,34 +1581,36 @@ fn strip_ansi(bytes: &[u8]) -> String {
 /// right half is never overdrawn.
 fn map_square(square: &Square, styles: &[Style]) -> Cell {
     let mut f = 0u8;
-    let style_flags = styles
-        .get(square.style_id() as usize)
-        .map(|s| s.flags)
-        .unwrap_or(StyleFlags::empty());
-    if style_flags.contains(StyleFlags::BOLD) {
-        f |= cell_flags::BOLD;
-    }
-    if style_flags.contains(StyleFlags::ITALIC) {
-        f |= cell_flags::ITALIC;
-    }
-    if style_flags.intersects(StyleFlags::ALL_UNDERLINES) {
-        f |= cell_flags::UNDERLINE;
-    }
-    if style_flags.contains(StyleFlags::INVERSE) {
-        f |= cell_flags::INVERSE;
-    }
-    if style_flags.contains(StyleFlags::DIM) {
-        f |= cell_flags::DIM;
-    }
+    // The second cell of a wide glyph: the client must skip it so the glyph's
+    // right half is never overdrawn.
     if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
         f |= cell_flags::WIDE_SPACER;
     }
     let (c, fg, bg) = match square.content_tag() {
         ContentTag::Codepoint => {
+            // style_id() is tag-UNSAFE by contract: on bg-only cells the same
+            // bits hold the bg color, so the lookup may only run after this
+            // tag check.
             let style = styles
                 .get(square.style_id() as usize)
                 .copied()
                 .unwrap_or_default();
+            let style_flags = style.flags;
+            if style_flags.contains(StyleFlags::BOLD) {
+                f |= cell_flags::BOLD;
+            }
+            if style_flags.contains(StyleFlags::ITALIC) {
+                f |= cell_flags::ITALIC;
+            }
+            if style_flags.intersects(StyleFlags::ALL_UNDERLINES) {
+                f |= cell_flags::UNDERLINE;
+            }
+            if style_flags.contains(StyleFlags::INVERSE) {
+                f |= cell_flags::INVERSE;
+            }
+            if style_flags.contains(StyleFlags::DIM) {
+                f |= cell_flags::DIM;
+            }
             let c = if style_flags.contains(StyleFlags::HIDDEN) {
                 ' '
             } else {
@@ -1603,6 +1618,8 @@ fn map_square(square: &Square, styles: &[Style]) -> Cell {
             };
             (c, style.fg, style.bg)
         }
+        // A bg-only cell (a clear-with-bg fill) carries its background inline
+        // and no style bits at all: it renders as an unstyled space.
         ContentTag::BgPalette => (
             ' ',
             VtColor::Named(NamedColor::Foreground),
@@ -1789,7 +1806,7 @@ impl BlockRead {
 
 // -- OSC 133 (FinalTerm) shell-integration scanner ------------------------------
 //
-// alacritty's ANSI processor silently drops OSC sequences it does not model, so
+// The engine's ANSI processor silently drops OSC sequences it does not model, so
 // OSC 133 never reaches a handler we control (verified against the landed code).
 // Capture is therefore a pre-`advance` byte scanner: it walks the PTY stream, and
 // at each `ESC ] 133; <arg> (BEL | ST)` it emits a typed marker and STRIPS the
@@ -2028,7 +2045,7 @@ impl Default for Osc133Scanner {
 impl Osc133Scanner {
     /// Split `bytes` into passthrough spans and stripped markers, in order.
     /// Common case (no `ESC`): one `Pass` covering the whole read.
-    // ponytail: one to_vec per read of terminal output; alacritty's advance
+    // ponytail: one to_vec per read of terminal output; the engine's advance
     // copies into the grid anyway, so this is not the hot allocation. Zero-copy
     // spans would need lifetimes across the carried-over state - not worth it.
     fn scan(&mut self, bytes: &[u8]) -> Vec<Seg> {
@@ -3327,5 +3344,47 @@ mod tests {
         assert!(!pane.has_search(), "resize drops the search snapshot");
         assert!(!pane.has_selection());
         assert_eq!(pane.search_step(BlockDir::Next), None);
+    }
+
+    #[test]
+    fn scrolled_selection_link_and_bce_cells_map_true() {
+        // The port's changed mapping paths, pinned at NON-zero offset:
+        // viewport_point (the selection anchor), point_to_viewport (the link
+        // span cells), and the tag-unsafe style read on bg-only cells. All
+        // three agree at offset 0, so only a scrolled pane catches them.
+        let mut pane = Pane::new(3, 20);
+        pane.feed(b"\x1b[31mrow0\x1b[0m\r\nrow1\r\nhttps://example.com\r\nfour\r\nfive\r\n");
+        assert_eq!(pane.scroll(2), 2);
+
+        // viewport_point: a selection over viewport row 0 must yank "row0"
+        // (the oldest visible line), not a row 2*offset away.
+        pane.selection_start(0, 0);
+        pane.selection_update(0, 3);
+        assert_eq!(pane.selection_text().as_deref(), Some("row0"));
+        pane.selection_clear();
+
+        // point_to_viewport: the URL's span cells must sit on viewport row 2.
+        let span = pane
+            .link_span(2, 0, "/tmp")
+            .expect("url resolvable scrolled");
+        assert_eq!(span.uri, "https://example.com");
+        assert!(
+            span.cells.iter().all(|&(r, _)| r == 2),
+            "span cells on viewport row 2: {:?}",
+            span.cells
+        );
+
+        // Bg-only cells (a BCE clear) carry NO style bits: style_id() is
+        // tag-unsafe there and must never leak a neighbor's BOLD/INVERSE.
+        pane.scroll_to_bottom();
+        pane.feed(b"\x1b[41m\x1b[2J");
+        let frame = pane.frame();
+        assert!(
+            frame
+                .cells
+                .iter()
+                .all(|c| c.c == ' ' && c.flags == 0 && c.bg == Color::Indexed(9)),
+            "BCE fill cells are unstyled red spaces"
+        );
     }
 }
