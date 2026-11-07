@@ -582,6 +582,27 @@ pub(crate) fn handle_session_report(
                 related_filled: false,
             };
         }
+        // The transport-key backfill: a row born identity-pending (the spawn
+        // transaction persists the birth before the harness hands out the
+        // session) reports with an empty `short_id`, and every reader that
+        // joins on the transport key (`ask`, logs, attach) then refuses with
+        // "no short id on file". The derived claude jobId prefix fills it at
+        // the worker's first report, hex-guarded, never over a taken address
+        // (the same guard the operator register's fresh row applies).
+        let short_backfill: Option<String> = {
+            let derived = crate::client_commands::derived_short_id(&session_id);
+            let hex_guarded = harness == "claude"
+                && derived.chars().count() == 8
+                && derived
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+            (hex_guarded
+                && !r.entries.iter().enumerate().any(|(i, e)| {
+                    i != idx
+                        && crate::register::address_taken(std::slice::from_ref(e), &derived, false)
+                }))
+            .then(|| derived)
+        };
         let entry = &mut r.entries[idx];
         if entry.status == AgentStatus::Spawning {
             entry.status = AgentStatus::Live;
@@ -591,6 +612,11 @@ pub(crate) fn handle_session_report(
         }
         if let Some(src) = &source {
             entry.start_source = Some(src.clone());
+        }
+        if entry.short_id.is_empty() {
+            if let Some(short) = &short_backfill {
+                entry.short_id = short.clone();
+            }
         }
         entry.last_report_at = Some(now_stamp.clone());
         // The worker's cwd heal (the retired Python `heal_own_cwd`): the
@@ -1514,6 +1540,64 @@ mod tests {
             "harness": "claude",
             "short_id": "3228ccad"
         })
+    }
+
+    #[test]
+    fn a_row_born_without_a_transport_key_backfills_it_at_first_report() {
+        let (_d, home) = temp_home("backfill");
+        seed_registry(&home, json!({
+            "name": "w1", "cwd": "/repo", "status": "spawning",
+            "created_at": "2026-09-26T00:00:00Z",
+            "harness": "claude",
+            "harness_session_id": "312d5c0f-0000-0000-0000-000000000000"
+        }));
+        let sid = "312d5c0f-0000-0000-0000-000000000000";
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("claude", sid, json!({}))),
+        );
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let row = &read_rows(&home)[0];
+        assert_eq!(row.short_id, "312d5c0f");
+    }
+
+    #[test]
+    fn a_taken_address_is_never_backfilled_over() {
+        let (_d, home) = temp_home("backfill-taken");
+        let sid = "312d5c0f-0000-0000-0000-000000000000";
+        let reg = json!({
+            "schema_version": 1,
+            "agents": [
+                {
+                    "name": "w1", "cwd": "/repo", "status": "live",
+                    "created_at": "2026-09-26T00:00:00Z",
+                    "harness": "claude",
+                    "harness_session_id": "312d5c0f-0000-0000-0000-000000000000",
+                    "short_id": ""
+                },
+                {
+                    "name": "w2", "cwd": "/repo", "status": "live",
+                    "created_at": "2026-09-26T00:00:00Z",
+                    "harness": "claude",
+                    "short_id": "312d5c0f"
+                },
+            ]
+        });
+        std::fs::write(
+            home.registry_json(),
+            serde_json::to_vec_pretty(&reg).unwrap(),
+        )
+        .unwrap();
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("claude", sid, json!({}))),
+        );
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let rows = read_rows(&home);
+        let w1 = rows.iter().find(|r| r.name == "w1").unwrap();
+        assert_eq!(w1.short_id, "");
     }
 
     /// Backdate a file so the prune's 24-hour floor reads it as stale.
