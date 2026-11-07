@@ -309,4 +309,114 @@ mod tests {
             assert_eq!(plan(&mut params, &mut name, substrate).unwrap_err(), 2);
         }
     }
+
+    /// The env a `plan` test isolates: every ambient identity name (the
+    /// caller ladder reads them) plus the state roots the plan touches.
+    struct PlanEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl PlanEnvGuard {
+        fn take() -> Self {
+            let lock = crate::claims::test_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut names: Vec<&'static str> = crate::claims::AMBIENT_IDENTITY_NAMES.to_vec();
+            names.extend([
+                "FNO_AGENTS_HOME",
+                "FNO_CONFIG",
+                "FNO_HOME",
+                "FNO_CLAIMS_ROOT",
+                "FNO_STATE_DIR",
+            ]);
+            let saved = names
+                .into_iter()
+                .map(|var| (var, std::env::var_os(var)))
+                .collect();
+            Self { _lock: lock, saved }
+        }
+
+        fn clear_identity(&self) {
+            for (var, _) in &self.saved {
+                if crate::claims::AMBIENT_IDENTITY_NAMES.contains(var) {
+                    std::env::remove_var(var);
+                }
+            }
+        }
+    }
+
+    impl Drop for PlanEnvGuard {
+        fn drop(&mut self) {
+            for (var, saved) in &self.saved {
+                match saved {
+                    Some(v) => std::env::set_var(var, v),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+
+    /// The bare command (`spawn --promote <scope> --hand-off`, no `--name`)
+    /// draws the successor's name at plan. The seam mints no name for a
+    /// hand-off, so the settle draw is the only name source; an empty one
+    /// reached the launch lane as the "agent name must not be empty"
+    /// refusal instead of drawing.
+    #[test]
+    fn a_bare_hand_off_draws_the_successor_name_at_plan() {
+        let guard = PlanEnvGuard::take();
+        guard.clear_identity();
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        crate::registry_store::seed_raw(
+            &agents.join("registry.json"),
+            json!({"schema_version": 4, "agents": [
+                {"name": "kara", "status": "live", "role_scope": "alpha", "role_level": 2,
+                 "cwd": tmp.path().display().to_string(), "harness": "claude",
+                 "harness_session_id": "hand-off-uuid-1",
+                 "created_at": "2026-11-06T00:00:00Z"}
+            ]})
+            .to_string(),
+        );
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[[work.workspaces.main.projects]]\nname = \"alpha\"\npath = \"/repo/alpha\"\n",
+        )
+        .unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &agents);
+        std::env::set_var("FNO_CONFIG", tmp.path().join("config.toml"));
+        std::env::set_var("FNO_HOME", tmp.path());
+        std::env::set_var("FNO_CLAIMS_ROOT", tmp.path().join("claims"));
+        std::env::set_var("FNO_STATE_DIR", tmp.path().join("state"));
+        std::env::set_var("FNO_HARNESS_NAME", "claude");
+        std::env::set_var("FNO_HARNESS_SESSION_ID", "hand-off-uuid-1");
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "hand-off-uuid-1");
+
+        // The exact params the client parse yields for the bare argv.
+        let mut params = json!({"promote": ["alpha"], "hand_off": true});
+        let mut name = String::new();
+        let promotion = plan(&mut params, &mut name, "bg");
+
+        match promotion {
+            Ok(Some(promotion)) => {
+                assert!(
+                    crate::team_names::valid_person_name(&name),
+                    "the plan drew {name:?}, not a person name"
+                );
+                assert_eq!(
+                    params["name"],
+                    json!(name),
+                    "the launch params carry the draw"
+                );
+                assert_eq!(
+                    promotion.ask["plan"]["outcome"].as_str(),
+                    Some("succeeded"),
+                    "a holder handing off its own scope settles as a succession"
+                );
+            }
+            Ok(None) => panic!("the bare hand-off planned nothing: {:?}", params),
+            Err(code) => panic!("the bare hand-off refused with exit {code}"),
+        }
+    }
 }
