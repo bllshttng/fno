@@ -164,7 +164,9 @@ mkdir -p "$TOOLBIN"
 # --- Case 5: no uv, no fno, fresh HOME -> full notice, NOTHING started --------
 out=$(run_hook)
 grep -q "Ask the user first" <<<"$out" || fail "notice must ask for consent, got: $out"
-grep -q "astral.sh/uv/install.sh" <<<"$out" || fail "notice must name the uv installer, got: $out"
+grep -q "GitHub Releases" <<<"$out" || fail "notice must name the direct download, got: $out"
+grep -q "sha256" <<<"$out" || fail "notice must name the sum check, got: $out"
+grep -q "astral.sh/uv/install.sh" <<<"$out" || fail "notice must name the uv installer fallback, got: $out"
 grep -q "shell profile" <<<"$out" || fail "notice must name the profile edit, got: $out"
 grep -q "PyPI" <<<"$out" || fail "notice must name PyPI, got: $out"
 grep -qF "bash $PLUG/.claude-plugin/postinstall.sh" <<<"$out" || fail "notice must name the one command, got: $out"
@@ -182,6 +184,7 @@ chmod +x "$FAKEBIN/uv"
 out=$(run_hook)
 grep -q "uv is already installed" <<<"$out" || fail "uv present must be named, got: $out"
 grep -q "nothing but the fno tool" <<<"$out" || fail "uv-present notice must scope the touch, got: $out"
+grep -q "GitHub Releases" <<<"$out" || fail "uv-present notice must still name the direct download, got: $out"
 if grep -q "astral.sh" <<<"$out"; then
   fail "uv-present notice must skip the astral.sh step"
 fi

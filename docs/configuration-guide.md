@@ -362,3 +362,4 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
 | `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |
+| `telemetry.install_count.enabled` | bool | `true` | advanced | Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing. |

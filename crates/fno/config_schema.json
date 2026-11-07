@@ -3341,6 +3341,9 @@
      },
      "eval_events": {
       "$ref": "#/$defs/TelemetryEvalEventsBlock"
+     },
+     "install_count": {
+      "$ref": "#/$defs/TelemetryInstallCountBlock"
      }
     },
     "title": "TelemetryBlock",
@@ -3678,6 +3681,17 @@
      }
     },
     "title": "WorktreeBlock",
+    "type": "object"
+   },
+   "TelemetryInstallCountBlock": {
+    "properties": {
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "title": "TelemetryInstallCountBlock",
     "type": "object"
    }
   },
@@ -7129,6 +7143,15 @@
    "question": "",
    "default_source": "",
    "doc": "Settings schema version; managed by fno, not hand-set."
+  },
+  {
+   "path": "telemetry.install_count.enabled",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing."
   }
  ]
 }

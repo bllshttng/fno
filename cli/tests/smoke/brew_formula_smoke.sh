@@ -17,11 +17,12 @@
 #
 #   INSTALL (only with a binary-complete wheel + brew, gated on CI or
 #   FNO_BREW_SMOKE_INSTALL=1 so a local run never mutates the dev's brew):
-#     4. A concrete local-wheel formula (url=file://<wheel>, REAL sha256, the
-#        same symlink + test logic) installs via `brew install` (AC1-HP/AC5-HP).
+#     4. A concrete local-tarball formula (url=file://<tarball built from the
+#        wheel's shared scripts>, REAL sha256, the seed's install + test
+#        blocks) installs via `brew install` (AC1-HP/AC5-HP).
 #     5. All three fno-agents* binaries resolve under the keg bin (US2/AC2-HP):
-#        proof the explicit symlink surfaces the wheel's shared_scripts.
-#     6. `brew test fno` passes (AC1-UI/AC5-UI) and `fno --version` runs (no 127).
+#        proof the explicit symlink surfaces the tarball's binaries.
+#     6. `brew test fno` passes (AC1-UI/AC5-UI) and `fno mux ls` runs (no 127).
 #     7. `brew uninstall fno` removes the keg cleanly (US3/AC3-UI): `fno` no
 #        longer resolves to the brew copy, no orphaned keg left linked.
 #
@@ -29,16 +30,15 @@
 # formula fails the release rather than going silently green.
 #
 # Usage: brew_formula_smoke.sh <path-to-binary-complete-wheel>
-#   The wheel is required for the INSTALL tier; the STRUCTURAL tier ignores it.
+#   The wheel is required for the INSTALL tier (its shared scripts build the
+#   synthetic release tarball); the STRUCTURAL tier ignores it.
 #   The by-name `brew install <owner>/fno/fno` + the full `--new` audit go green
-#   only AFTER the PyPI publish + tap creation (foundation launch); this
+#   only AFTER the publish + tap creation (foundation launch); this
 #   smoke proves the formula + the symlink mechanism now.
 set -uo pipefail
 
-# The INSTALL tier runs the keg's `fno-py` console script. That script uses the
-# keg venv's interpreter, but an inherited PYTHONPATH still prepends the source
-# tree to sys.path, so `--version` answers from cli/src and the check passes on a
-# wheel that shipped nothing. preflight.sh exports exactly that.
+# An inherited PYTHONPATH can only contaminate the unzipped wheel's scripts;
+# nothing here runs Python, and preflight.sh exports exactly that var.
 unset PYTHONPATH
 [ -z "${PYTHONPATH:-}" ] || { echo "FAIL[env] PYTHONPATH survived unset (readonly?); refusing to smoke against a contaminated sys.path"; exit 1; }
 
@@ -123,15 +123,15 @@ fi
 need_grep() { # <label> <regex> <human>
   if grep -Eq "$2" "$FORMULA"; then pass "$1" "$3"; else miss "$1" "missing: $3"; fi
 }
-need_grep "venv"        '"-m", "venv", libexec' "builds the venv from the python@3.13 dependency"
-need_grep "python-dep"  'depends_on +"python@3\.' "declares depends_on python@3.x (brew provides Python)"
-need_grep "nounzip"     'using: :nounzip' "keeps the wheel a file (url :nounzip)"
-need_grep "wheel-file"  'pip".*install.*Dir\["\*\.whl"\]' \
-  "pip-installs the wheel FILE, not virtualenv_install_with_resources' unpacked dir"
-need_grep "symlink"     'bin\.install_symlink +Dir\[libexec/"bin/fno-agents\*"\]' \
-  "explicitly symlinks the shared_scripts binaries (Locked Decision 4)"
-need_grep "frontdoor"   'bin\.install_symlink +libexec/"bin/fno"' \
-  "symlinks the Rust fno front door onto the keg bin (x-538e)"
+need_grep "tarball-url"   'url "https://github\.com/[^"]*fno-agents-macos-x64\.tar\.gz"' "pins the release tarball as the top-level url"
+need_grep "arm-url"       'fno-agents-macos-arm64\.tar\.gz' "pins the arm tarball in the on_macos arm block"
+need_grep "no-python-dep" 'depends_on :macos' "declares macOS only (no Python dependency)"
+need_grep "libexec-install" 'libexec\.install "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"' \
+  "installs the tarball's four binaries into libexec"
+need_grep "symlink"       'bin\.install_symlink +libexec/"fno-agents"' \
+  "symlinks the agent binaries onto the keg bin (Locked Decision 4)"
+need_grep "frontdoor"     'bin\.install_symlink +libexec/"fno"' \
+  "symlinks the Rust fno front door onto the keg bin"
 need_grep "test-binaries" 'fno-agents.+fno-agents-daemon.+fno-agents-worker' \
   "test block asserts all three agent binaries"
 need_grep "test-frontdoor" 'fno mux ls' \
@@ -180,6 +180,24 @@ else
   WHEEL="$(cd "$(dirname "$WHEEL")" && pwd)/$(basename "$WHEEL")"
   SHA="$(shasum -a 256 "$WHEEL" | awk '{print $1}')"
 
+  # The tap installs the RELEASE TARBALL (the binary flywheel), so the smoke
+  # builds one from the wheel's shared scripts: same four binaries, the same
+  # root-level layout the release job tars, at
+  # fno-agents-macos-<arch>.tar.gz. The formula template below then matches
+  # the committed seed's shape (libexec install + keg-bin symlinks).
+  STAGE="$(mktemp -d)"
+  ARCH_DIR="macos-arm64"
+  case "$(uname -m)" in
+    x86_64) ARCH_DIR="macos-x64" ;;
+  esac
+  TARBALL="$STAGE/fno-agents-$ARCH_DIR.tar.gz"
+  unzip -o "$WHEEL" 'fno-*.data/scripts/*' -d "$STAGE/unzipped" >/dev/null
+  # The glob expands OUTSIDE the quotes; a quoted -C hands tar the literal
+  # pattern and the chdir fails (the one wheel data dir, unquoted).
+  SCRIPTS_DIR="$(cd "$STAGE/unzipped"/fno-*.data/scripts && pwd -P)"
+  tar -czf "$TARBALL" -C "$SCRIPTS_DIR" fno fno-agents fno-agents-daemon fno-agents-worker
+  TSHA="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
+
   # Modern brew only installs formulae from a tap, so stage the concrete
   # local-wheel formula into a throwaway tap (this also exercises the real
   # `brew install <owner>/fno/fno` tap path the launched channel uses).
@@ -203,25 +221,23 @@ else
 class Fno < Formula
   desc "Autonomous delivery pipeline CLI (footnote) - smoke"
   homepage "https://github.com/fnodotdev/fno"
-  url "file://$WHEEL", using: :nounzip
-  sha256 "$SHA"
+  url "file://$TARBALL"
+  sha256 "$TSHA"
   license "Apache-2.0"
 
   depends_on :macos
-  depends_on "python@3.13"
 
   def install
-    system formula_opt_bin("python@3.13")/"python3.13", "-m", "venv", libexec
-    system libexec/"bin/pip", "install", "--disable-pip-version-check", Dir["*.whl"].first
-    bin.install_symlink libexec/"bin/fno"
-    bin.install_symlink libexec/"bin/fno-py"
-    bin.install_symlink Dir[libexec/"bin/fno-agents*"]
+    libexec.install "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"
+    bin.install_symlink libexec/"fno"
+    bin.install_symlink libexec/"fno-agents"
+    bin.install_symlink libexec/"fno-agents-daemon"
+    bin.install_symlink libexec/"fno-agents-worker"
   end
 
   test do
     assert_match "[]", shell_output("#{bin}/fno mux ls --json")
-    assert_match "fno", shell_output("#{bin}/fno-py --version")
-    %w[fno fno-py fno-agents fno-agents-daemon fno-agents-worker].each do |b|
+    %w[fno fno-agents fno-agents-daemon fno-agents-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end
@@ -231,7 +247,7 @@ RUBY
   # --- check 4: install (no pre-existing fno - guaranteed by the guard above) ---
   run_capture_bounded 900 brew install --build-from-source "$TAP/fno"
   if [ "$RC" -eq 0 ]; then
-    pass "install" "brew install of the local-wheel formula succeeded (rc=0)"
+    pass "install" "brew install of the local-tarball formula succeeded (rc=0)"
   else
     miss "install" "rc=$RC out: $(printf '%s' "$OUT" | tail -4)"
   fi
@@ -239,14 +255,14 @@ RUBY
   KEGBIN="$(brew --prefix 2>/dev/null)/bin"
 
   # --- check 5: all four executables resolve under the keg bin ---
-  for b in fno fno-py fno-agents fno-agents-daemon fno-agents-worker; do
+  for b in fno fno-agents fno-agents-daemon fno-agents-worker; do
     if [ -x "$KEGBIN/$b" ]; then pass "binary:$b" "present + executable on the keg bin"
-    else miss "binary:$b" "absent (the explicit symlink must surface the wheel's shared_scripts)"; fi
+    else miss "binary:$b" "absent (the explicit symlink must surface the tarball's binaries)"; fi
   done
 
   # --- check 6: the advertised command runs (no 127) + brew test passes ---
-  # `fno mux ls` proves the Rust front door natively; fno-py --version proves
-  # the Python component beside it (x-538e AC2-HP).
+  # `fno mux ls` proves the Rust front door natively; the tarball carries no
+  # Python CLI, so the old fno-py row is gone with the wheel install.
   if [ -x "$KEGBIN/fno" ]; then
     run_capture "$KEGBIN/fno" mux ls
     if [ "$RC" -eq 0 ]; then
@@ -256,16 +272,6 @@ RUBY
     fi
   else
     miss "mux" "fno front door not on the keg bin at $KEGBIN/fno"
-  fi
-  if [ -x "$KEGBIN/fno-py" ]; then
-    run_capture "$KEGBIN/fno-py" --version
-    if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qi 'fno'; then
-      pass "version" "fno-py --version runs from the keg bin (rc=0)"
-    else
-      miss "version" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
-    fi
-  else
-    miss "version" "fno-py not on the keg bin at $KEGBIN/fno-py"
   fi
   run_capture brew test "$TAP/fno"
   if [ "$RC" -eq 0 ]; then
@@ -280,11 +286,10 @@ RUBY
   # check -L to catch a symlink brew left behind pointing at a removed keg.
   if [ "$RC" -eq 0 ] \
      && [ ! -e "$KEGBIN/fno" ] && [ ! -L "$KEGBIN/fno" ] \
-     && [ ! -e "$KEGBIN/fno-py" ] && [ ! -L "$KEGBIN/fno-py" ] \
      && [ ! -e "$KEGBIN/fno-agents" ] && [ ! -L "$KEGBIN/fno-agents" ]; then
     pass "uninstall" "brew uninstall removed the keg + symlinks cleanly"
   else
-    miss "uninstall" "rc=$RC; keg bin still has fno/fno-py/fno-agents after uninstall"
+    miss "uninstall" "rc=$RC; keg bin still has fno/fno-agents after uninstall"
   fi
 fi
 

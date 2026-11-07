@@ -163,6 +163,8 @@ pub enum ViewKind {
     UpdateWheel,
     /// The update modal on a binary install with a newer release.
     UpdateBinary,
+    /// The update modal on an install below the supported release floor.
+    UpdateUnsupported,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -323,6 +325,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
         "update-binary" => Some(ViewKind::UpdateBinary),
+        "update-unsupported" => Some(ViewKind::UpdateUnsupported),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
         "connections-add" => Some(ViewKind::ConnectionsAdd),
@@ -1236,6 +1239,35 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
             view.aux_esc.clear();
         }
+        Some(ViewKind::UpdateUnsupported) => {
+            use super::release_check::{Channel, ReleaseOutcome};
+            use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
+            let probe = UpdateProbe {
+                readiness: UpdateOutcome::Ok(UpdateReadiness {
+                    update_ready: false,
+                    installed_rev: None,
+                    source_rev: None,
+                    installed_version: Some("0.4.4".into()),
+                    source_prs_ahead: None,
+                    changelog: vec![],
+                    release_notes: None,
+                    guidance: "no source checkout and no installed-rev marker; a release install refreshes with `fno update`".into(),
+                    degraded: None,
+                    running: vec![],
+                    running_stale: 0,
+                    source_pin: None,
+                    revisions: None,
+                }),
+                release: ReleaseOutcome::Unsupported {
+                    channel: Channel::Uv,
+                    installed: "0.4.4".into(),
+                    floor: "0.4.5".into(),
+                },
+            };
+            view.update_outcome = Some(probe.clone());
+            view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
@@ -1730,6 +1762,7 @@ mod tests {
             ("sweep", ViewKind::Sweep),
             ("update-wheel", ViewKind::UpdateWheel),
             ("update-binary", ViewKind::UpdateBinary),
+            ("update-unsupported", ViewKind::UpdateUnsupported),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
             ("connections-add", ViewKind::ConnectionsAdd),

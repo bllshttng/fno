@@ -1826,6 +1826,17 @@ fn main() {
     if args.get(mail_at).and_then(|a| a.to_str()) == Some("mail") {
         args.insert(mail_at, OsString::from("agents"));
     }
+    // The bridge: a wheel install that has not yet moved
+    // runs the move here and execs the binary install's front door with this
+    // argv, so every door below - including this one - runs on the binary. A
+    // failed move prints one line and lets this command run on the wheel.
+    fno::doctor_update::first_run_move(&args);
+    // The floor gate (change 5): a version below min_supported refuses every
+    // command except the update doors, naming the one fix.
+    if let Some(line) = fno::doctor_update::floor_refusal(&args) {
+        eprintln!("{line}");
+        std::process::exit(2);
+    }
     // The worktree family's door claims before any forwarding: the Python
     // mounts die with the family port, so these argv shapes must answer
     // natively or not at all.
