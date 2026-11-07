@@ -709,6 +709,7 @@ pub(crate) struct View {
     /// The agents view's group-by axis (prefix+W), persisted like the density.
     agent_group: AgentGroup,
     machine_tree: machine_tree::MachineTree,
+    remote_hosts: remote_hosts::RemoteHosts,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
     /// Nest workers under their lead in the card layout (prefix+t),
@@ -1701,6 +1702,7 @@ pub(crate) enum AuxAction {
     /// persist via `fno config set mux.theme`. The picker lists the shipped
     /// names, so this carries one of them.
     ApplyTheme(String),
+    RemoteHost(remote_hosts::Act),
     ThemeImportOpen,
     ThemeImportSave,
     ThemeImportCancel,
@@ -1835,6 +1837,7 @@ impl View {
             agent_sort,
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
+            remote_hosts: remote_hosts::RemoteHosts::load(),
             show_card_head,
             group_by_lead,
             manual_order,
@@ -5717,6 +5720,7 @@ enum ChromeHit {
     OpenCreate,
     /// The footer's `+ session` button: what prefix+i does.
     ToggleComposer,
+    AddRemoteHost,
     /// Flip the active squad row's caret locally; no socket write.
     /// Advance one sideline section through the view cycle.
     CycleSection(SectionKey),
@@ -8111,16 +8115,8 @@ async fn dispatch_event(
                 .map_err(|e| format!("resize send failed: {e}"))?;
             // Persist here too: prefix+s and the settings toggle write the
             // same key, or the two entry points disagree about what the
-            // operator asked for. Fire-and-forget, so the flip stays instant;
-            // a lost write just means this flip was session-only. The writes
-            // serialize: config set is a read-modify-write of one file, and
-            // two overlapping processes could persist the earlier flip last.
-            let enabled = if view.status_on { "true" } else { "false" };
-            tokio::spawn(async move {
-                static TOGGLE_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-                let _guard = TOGGLE_WRITE.lock().await;
-                let _ = spawn_config_set("mux.status_row", enabled).await;
-            });
+            // operator asked for.
+            config_set::persist_in_background("mux.status_row", view.status_on);
         }
         Event::CycleSection => {
             // Pure local state, no I/O - usable even when the socket write path
@@ -8147,6 +8143,7 @@ async fn dispatch_event(
         Event::LiftHold => hold::lift(view).await,
         Event::OpenSidelineMenu => view.open_sideline_menu(Anchor::Center), // the footer `menu` popup
         Event::OpenCreate => view.open_create(), // the `+ new workspace` name input
+        Event::OpenAddHost => remote_hosts::open_add(view),
         Event::BlockJump(dir) => {
             write_msg(
                 sock_w,
@@ -8367,6 +8364,7 @@ async fn apply_hit(
                 .map_err(|e| format!("resize send failed: {e}"))?;
         }
         ChromeHit::ToggleComposer => sideline::toggle_composer(view, sock_w).await?,
+        ChromeHit::AddRemoteHost => remote_hosts::open_add(view),
         // US4: open the sideline MENU popup anchored at the clicked cell.
         ChromeHit::OpenSidelineMenu { row, col } => {
             view.open_sideline_menu(Anchor::At { row, col })
@@ -8560,6 +8558,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleReserveAuto
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
+        | AuxAction::RemoteHost(_)
         | AuxAction::ThemeImportOpen
         | AuxAction::ThemeImportSave
         | AuxAction::ThemeImportCancel
@@ -9528,13 +9527,14 @@ mod sideline;
 
 #[path = "client/agent_sort.rs"]
 mod agent_sort;
-
 #[path = "client/agent_group.rs"]
 mod agent_group;
 use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
+#[path = "client/remote_hosts.rs"]
+mod remote_hosts;
 #[path = "client/nav_rows.rs"]
 mod nav_rows;
 #[path = "client/needs_queue.rs"]

@@ -23,6 +23,8 @@ pub(crate) enum OrgMsg {
     Action(Done),
     /// The sideline machine layer's own fleet read.
     Machines(Result<serde_json::Value, String>),
+    /// One configured remote host's ssh probe landed.
+    HostProbe(String, super::remote_hosts::HostState),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
@@ -30,6 +32,7 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
         OrgMsg::Gather(inputs) => apply_fold(view, gen, inputs),
         OrgMsg::Action(done) => apply_action(view, gen, done),
         OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
+        OrgMsg::HostProbe(name, state) => super::remote_hosts::apply(view, name, state),
     }
 }
 

@@ -79,6 +79,12 @@ impl MachineTree {
             .collect()
     }
 
+    /// Every other machine in the newest fleet read: host, fresh, beat age.
+    pub(super) fn far_bands(&self) -> impl Iterator<Item = (&str, bool, i64)> {
+        let far = self.bands.iter().filter(|b| !b.local);
+        far.map(|b| (b.host.as_str(), b.fresh, b.age_s))
+    }
+
     /// Remote rows reading blocked. Zero while the toggle is off.
     pub(super) fn blocked_remote(&self) -> usize {
         if !self.on {
@@ -131,6 +137,7 @@ pub(super) fn set_on(view: &mut View, on: bool) {
 
 /// The off-loop read, single-flight, only while the toggle is on.
 pub(super) fn maybe_kick(view: &mut View, tx: &OrgTx) {
+    super::remote_hosts::kick(view, tx);
     let tree = &mut view.machine_tree;
     let due = tree.last_read.is_none_or(|at| at.elapsed() >= READ_EVERY);
     if !tree.on || tree.inflight || !due {
@@ -164,7 +171,9 @@ pub(super) fn apply(view: &mut View, read: Result<Value, String>) {
             });
             view.machine_tree.bands = fold(&map);
             if let Some(l) = view.launcher.as_mut() {
-                l.machines = view.machine_tree.destinations();
+                l.machines = view
+                    .remote_hosts
+                    .destinations(view.machine_tree.destinations());
             }
             view.reanchor_selector(held);
             if let Some(hr) = view.hover_row {
