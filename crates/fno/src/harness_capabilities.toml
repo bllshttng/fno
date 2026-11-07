@@ -2034,7 +2034,7 @@ proof = "goal-active"
 
 # Hook jobs: which fno hook jobs each harness runs, declared from the
 # measured wiring (the rename shim, the codex/opencode/pi registrations and
-# the agy PreToolUse adapter). The loop job is derived from
+# the agy/pi pretool host). The loop job is derived from
 # loop_participation/loop_extension, never declared here. A `missing` on a
 # wired row fails the load (validate_row), so a gap is a build break.
 
@@ -2123,6 +2123,50 @@ state = "missing"
 reason = "no fno hook registration for muse (no plugin hook file and no capability install lane)"
 
 [harness.muse.hooks.lead_reinject]
+state = "missing"
+reason = "no fno hook registration for muse (no plugin hook file and no capability install lane)"
+
+[harness.claude.hooks.pretool_guards]
+state = "supported"
+via = ["hooks/hooks.json", "hooks/hook-classes.tsv"]
+
+[harness.codex.hooks.pretool_guards]
+state = "supported"
+via = ["hooks/codex-hooks.json", "hooks/hook-classes.tsv", "hooks/join-partition-write-guard.sh"]
+
+[harness.agy.hooks.pretool_guards]
+state = "supported"
+via = ["hooks/agy-pretool.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/pretool_host.rs"]
+
+[harness.opencode.hooks.pretool_guards]
+state = "supported"
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/hooks.json"]
+
+[harness.pi.hooks.pretool_guards]
+state = "supported"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/hook/pretool_host.rs"]
+
+[harness.footnote.hooks.pretool_guards]
+state = "impossible"
+reason = "the footnote harness executes tool calls in process with no hook-file surface; its guard reach is its own runtime call path"
+
+[harness.gemini.hooks.pretool_guards]
+state = "missing"
+reason = "no fno hook registration for gemini (deprecated harness; no plugin hook file and no capability install lane)"
+
+[harness.cursor-agent.hooks.pretool_guards]
+state = "missing"
+reason = "no fno hook registration for cursor-agent (no plugin hook file and no capability install lane)"
+
+[harness.grok.hooks.pretool_guards]
+state = "missing"
+reason = "no fno hook registration for grok (no plugin hook file and no capability install lane; the grok install lane would flip this)"
+
+[harness.zcode.hooks.pretool_guards]
+state = "missing"
+reason = "no fno hook registration for zcode (no plugin hook file and no capability install lane)"
+
+[harness.muse.hooks.pretool_guards]
 state = "missing"
 reason = "no fno hook registration for muse (no plugin hook file and no capability install lane)"
 

@@ -20,6 +20,7 @@ pub mod lead_guard;
 pub mod lead_guard_wire;
 pub mod pipe_guard;
 pub mod pr_attribution;
+pub mod pretool_host;
 pub mod pretooluse_bash;
 pub mod prompt;
 pub mod recursive_grep_guard;
@@ -59,6 +60,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("prompt") => prompt::run(&args[1..]),
         Some("recursive-grep-guard") => recursive_grep_guard::run(&args[1..]),
         Some("posttooluse-bash") => refusal_streak::run(&args[1..]),
+        Some("pretool") => pretool_host::run(&args[1..]),
         Some("rules") => crate::event_rules::run_hook(&args[1..]),
         Some("save-session") => save_session::run(&args[1..]),
         Some("send-message-guard") => send_message_guard::run(&args[1..]),
@@ -72,7 +74,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, git-protection, join-partition-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, git-protection, join-partition-guard, lead-guard, pipe-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
             );
             2
         }

@@ -21,37 +21,22 @@ use std::path::{Path, PathBuf};
 use super::lead_guard_wire as wire;
 use crate::agents_config::config_lookup;
 
-/// Entry: read the payload once, decide, print, always exit 0. `--wire agy`
-/// reads agy's PreToolUse payload and prints agy's decision shape instead of
-/// the claude hook JSON.
+/// Entry: read the payload once, decide, print, always exit 0.
 pub fn run(args: &[String]) -> i32 {
-    let wire_agy = args.windows(2).any(|w| w[0] == "--wire" && w[1] == "agy");
     let raw: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
-    let payload = if wire_agy {
-        wire::agy_to_claude(raw)
-    } else {
-        raw
-    };
+    let payload = raw;
     let trace = std::env::var_os("FNO_GUARD_TRACE").is_some();
-    let emit_allow = || -> i32 {
-        if wire_agy {
-            println!("{{\"decision\":\"allow\"}}");
-            0
-        } else {
-            super::emit_allow()
-        }
-    };
     let allow = |why: &str| -> i32 {
         if !why.is_empty() {
             eprintln!("lead-delegation-guard: {why}");
         }
-        emit_allow()
+        super::emit_allow()
     };
     let allow_at = |stage: &str| -> i32 {
         if trace {
             eprintln!("lead-delegation-guard: allow at {stage}");
         }
-        emit_allow()
+        super::emit_allow()
     };
 
     // 1. Empty or unparseable payload: not a refusal.
@@ -217,13 +202,6 @@ pub fn run(args: &[String]) -> i32 {
     }
     let text = wire::deny_text(&denied, &repo_root);
     eprint!("{text}");
-    if wire_agy {
-        println!(
-            "{}",
-            serde_json::json!({"decision": "deny", "reason": text})
-        );
-        return 0;
-    }
     super::emit_block(&text)
 }
 

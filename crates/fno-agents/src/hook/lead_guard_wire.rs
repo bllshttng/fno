@@ -1,10 +1,13 @@
-//! The lead-guard wire layer: payload translation and shared refusal text.
+//! The lead-guard wire layer: payload boundary helpers and shared refusal
+//! text.
 //!
 //! [`super::lead_guard`] owns the decision core (registry, manifest, roots,
 //! mode). This module owns everything that crosses the payload boundary:
 //! the file-edit target derivation (claude file_path payloads and codex
-//! apply_patch bodies), the codex/agy payload translation, and the
-//! two-line refusal text both wires print.
+//! apply_patch bodies), the codex patch-header walk, and the two-line
+//! refusal text both wires print. The agy payload translation moved to
+//! [`super::adapter::agy::to_claude_pretool`], which the pretool host and
+//! this guard's claude wire both serve from.
 
 use serde_json::Value;
 use std::path::Path;
@@ -68,69 +71,6 @@ pub(super) fn patch_targets(command: &str) -> Vec<String> {
             (!path.is_empty()).then(|| path.to_string())
         })
         .collect()
-}
-
-/// Translate an agy PreToolUse payload into the claude shape the guard core
-/// reads: toolCall.name -> tool_name (agy tool names mapped: run_command ->
-/// Bash, write_blob -> Write, file_change -> Edit, edit_notebook ->
-/// NotebookEdit), toolCall.args -> tool_input with a recognized path key
-/// promoted to file_path and CommandLine to command, conversationId ->
-/// session_id, workspacePaths[0] -> cwd. Measured against agy 1.2.7's
-/// embedded hook contract (camelCase protojson, matcher-grouped
-/// registration, `{"decision":"deny","reason":...}` veto); agy auth was
-/// down machine-wide during the live fire, so the file tools' exact arg
-/// keys are unmeasured and the promotion reads every candidate spelling.
-pub(super) fn agy_to_claude(v: Value) -> Value {
-    let Some(obj) = v.as_object() else {
-        return Value::Null;
-    };
-    let call = obj.get("toolCall").cloned().unwrap_or(Value::Null);
-    let name = call.get("name").and_then(Value::as_str).unwrap_or("");
-    let args = call.get("args").cloned().unwrap_or(Value::Null);
-    let mut ti = match args {
-        Value::Object(map) => map,
-        _ => serde_json::Map::new(),
-    };
-    if !ti.contains_key("file_path") {
-        let key = [
-            "file_path",
-            "FilePath",
-            "AbsPath",
-            "TargetFile",
-            "Path",
-            "FileName",
-        ]
-        .into_iter()
-        .find(|k| ti.get(*k).and_then(Value::as_str).is_some());
-        if let Some(k) = key {
-            let p = ti.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            ti.insert("file_path".to_string(), Value::String(p));
-        }
-    }
-    if !ti.contains_key("command") {
-        if let Some(c) = ti.get("CommandLine").and_then(Value::as_str) {
-            ti.insert("command".to_string(), Value::String(c.to_string()));
-        }
-    }
-    let tool = match name {
-        "run_command" => "Bash",
-        "write_blob" => "Write",
-        "file_change" => "Edit",
-        "edit_notebook" => "NotebookEdit",
-        other => other,
-    };
-    let cwd = obj
-        .get("workspacePaths")
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    serde_json::json!({
-        "tool_name": tool,
-        "tool_input": Value::Object(ti),
-        "session_id": obj.get("conversationId").cloned().unwrap_or(Value::Null),
-        "cwd": cwd,
-    })
 }
 
 // ── Limb signatures ──────────────────────────────────────────────────────────
