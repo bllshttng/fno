@@ -1153,9 +1153,14 @@ mod tests {
         std::fs::write(&exe, b"").unwrap();
         // No sibling: the leg yields, and the chain falls to the bare name.
         assert_eq!(binary_beside(&exe, "fno"), None);
-        // The complete install ships fno beside fno-agents in one bin dir.
+        // The complete install ships fno beside fno-agents in one bin dir,
+        // and a file that cannot run is no front door: the leg yields on it
+        // too, and only an executable sibling answers.
         let sibling = dir.path().join("fno");
         std::fs::write(&sibling, b"").unwrap();
+        assert_eq!(binary_beside(&exe, "fno"), None);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(binary_beside(&exe, "fno"), Some(sibling));
     }
 }
