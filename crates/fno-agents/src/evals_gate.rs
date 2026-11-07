@@ -2606,7 +2606,7 @@ mod tests {
         w.tick(true, at(3));
         assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize + 1);
         let fallback = w.spawns.borrow()[MAIN_MAX_TRIES as usize].join(" ");
-        assert!(fallback.contains("--lane claude-sonnet-5"), "{fallback}");
+        assert!(fallback.contains("--lane claude-sonnet-5 "), "{fallback}");
         assert!(fallback.contains("-fallback"), "{fallback}");
         w.tick(false, at(3));
         w.tick(true, at(4));
