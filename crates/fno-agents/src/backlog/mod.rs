@@ -1013,15 +1013,6 @@ pub(crate) struct WriteReport {
     deleted_ids: Vec<String>,
 }
 
-fn confirm_ids_landed(connection: &Connection, after: &[Value]) -> Result<(), String> {
-    let expected: std::collections::BTreeSet<String> = after
-        .iter()
-        .filter_map(crate::graph_store::entry_id)
-        .map(str::to_owned)
-        .collect();
-    confirm_ids_landed_in(connection, after, &expected)
-}
-
 /// The read-back the publish trusts, over exactly the ids `changed` names:
 /// the store must still hold every row of `after` (the count check), and
 /// each changed id must be present in the typed table or the raw carry.
