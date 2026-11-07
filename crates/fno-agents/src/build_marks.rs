@@ -189,10 +189,16 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("ses_two.json")).unwrap())
                 .unwrap();
-        assert_eq!(body["state"], "waiting");
-        assert_eq!(body["position"], 2);
-        assert!(body["at"].as_str().is_some_and(|s| s.ends_with('Z')));
-        assert_eq!(body["ttl_ms"], MARK_TTL_MS);
+        assert_eq!(body.get("state").and_then(|v| v.as_str()), Some("waiting"));
+        assert_eq!(body.get("position").and_then(|v| v.as_i64()), Some(2));
+        assert!(body
+            .get("at")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.ends_with('Z')));
+        assert_eq!(
+            body.get("ttl_ms").and_then(|v| v.as_i64()),
+            Some(MARK_TTL_MS)
+        );
         // A second pass with no marks prunes every sidecar: an idle fleet
         // leaves the dir empty.
         write_marks(&dir, &[]).unwrap();

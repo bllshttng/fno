@@ -243,7 +243,7 @@ fn waiters() -> Vec<CargoWait> {
         if let Some(wait) = crate::test_run::live_waiter(&dir, Path::new(worktree)) {
             let lane = value["lane"].as_str().unwrap_or("normal").to_string();
             out.push(CargoWait {
-                marker_pid: value["pid"].as_i64().unwrap_or(0) as i32,
+                marker_pid: value.get("pid").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
                 wait,
                 lane,
                 worktree: worktree.to_string(),
