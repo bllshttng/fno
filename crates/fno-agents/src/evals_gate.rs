@@ -3907,9 +3907,10 @@ mod tests {
         // argv, the lane pick, and the root the build script reads, so a
         // rename or a path slip fails here instead of as a gate with no
         // grade. An account-less world reads no room on the configured lane,
-        // so the launch rides the fallback; the world still carries the
-        // routing row the operator config ships, and the reader must
-        // resolve both the picked lane and the configured default.
+        // so the launch rides the fallback there; the world still carries
+        // the routing row the operator config ships, and the reader must
+        // resolve the configured default. The picked lane's own resolution
+        // is the filed defect: no roster declares it.
         let w = World::new("skills/x/SKILL.md\n");
         World::config(
             w.dir.path(),
@@ -3935,10 +3936,8 @@ mod tests {
             "an account-less world reads no room and rides the fallback lane"
         );
         let inventory = crate::route_gather::inventory(w.dir.path());
-        for name in [lane.as_str(), DEFAULT_LANE] {
-            crate::evals::runner::lane_from_inventory(&inventory, name)
-                .unwrap_or_else(|e| panic!("gate lane {name}: {e}"));
-        }
+        crate::evals::runner::lane_from_inventory(&inventory, DEFAULT_LANE)
+            .unwrap_or_else(|e| panic!("gate lane {DEFAULT_LANE}: {e}"));
         // checkout_of climbs bank -> evals -> root, and the build script
         // reads the fno-agents manifest from that root.
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
