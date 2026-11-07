@@ -1486,11 +1486,21 @@ fn head_leg(
     }
     let today = d.now.format("%Y-%m-%d").to_string();
     let due = |disposition: &String| {
-        disposition == QUEUED
-            || disposition
-                .get(..BUDGET_PREFIX.len())
-                .is_some_and(|prefix| prefix == BUDGET_PREFIX)
-                && disposition.get(BUDGET_PREFIX.len()..) != Some(today.as_str())
+        if disposition == QUEUED {
+            return true;
+        }
+        let Some(rest) = disposition.strip_prefix(BUDGET_PREFIX) else {
+            return false;
+        };
+        match rest.split_once('@') {
+            // The refusal recorded its limit: a raised limit frees the head
+            // on the same day. An unparseable limit frees it too - the retry
+            // re-runs the check and re-records a fresh refusal.
+            Some((day, limit)) => {
+                day != today || limit.parse::<f64>().map(|l| daily_usd > l).unwrap_or(true)
+            }
+            None => rest != today,
+        }
     };
     // One launch loop per tick: a head the baseline cannot cover must not
     // hold the lane. Each due head is tried in order; a launch ends the
@@ -1831,7 +1841,7 @@ fn launch_head(
             &format!(
                 "budget spent: {daily_usd:.2} USD a day. Clear: raise evals.gate.daily_usd, or wait for 00:00 UTC."
             ),
-            format!("{BUDGET_PREFIX}{today}"),
+            format!("{BUDGET_PREFIX}{today}@{daily_usd:.2}"),
         );
         return format!("head {} over budget", short(&pr.sha));
     }
@@ -2882,6 +2892,39 @@ mod tests {
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("evals.gate.daily_usd"), "{post}");
+    }
+
+    #[test]
+    fn a_raised_limit_frees_a_head_refused_at_the_lower_one_on_the_same_day() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        let now = Utc::now();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for _ in 0..400 {
+            let row = json!({"task_id": "z", "tier": "capability", "pass": true, "status": "graded",
+                "experiment_id": "gate-main-old", "ts": now.to_rfc3339()});
+            writeln!(f, "{row}").unwrap();
+        }
+        World::config(w.dir.path(), "[evals.gate]\ndaily_usd = 15\n");
+        w.tick(true, now);
+        assert!(w.spawns.borrow().is_empty());
+        let held = load_state(&state_dir(&w.history())).heads;
+        // 400 worker rows cost 16.00 USD, so the refusal landed at 15, not free.
+        assert!(
+            held.values()
+                .any(|h| h.starts_with("budget:") && h.ends_with("@15.00")),
+            "{held:?}"
+        );
+
+        World::config(w.dir.path(), "[evals.gate]\ndaily_usd = 30\n");
+        w.tick(true, now);
+        assert!(
+            !w.spawns.borrow().is_empty(),
+            "a raised limit frees the head on the same day"
+        );
     }
 
     #[test]
