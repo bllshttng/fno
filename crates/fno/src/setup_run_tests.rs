@@ -89,6 +89,34 @@ fn the_argv_surface_parses_and_refuses() {
     assert!(parse_opts(&oss(&["--out"])).is_err());
 }
 #[test]
+fn claude_auto_mode_setup_requires_explicit_approval() {
+    let step = STEPS
+        .iter()
+        .find(|step| step.id == "claude-auto-mode")
+        .expect("Claude Auto Mode setup step");
+    assert_eq!(step.layer, Layer::Global);
+    assert_eq!(step.kind, Kind::Approve);
+    assert!(step.question.to_lowercase().contains("auto mode"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    let mut skips = Vec::new();
+    let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0].id, "claude-auto-mode");
+    assert!(proposed[0].key.is_empty());
+    assert!(proposed[0].reason.contains("--only claude-auto-mode"));
+    assert!(
+        !settings.exists(),
+        "a dry-run proposal must not write settings"
+    );
+
+    assert!(crate::cli_hooks::install_claude_auto_mode_allow(&settings).changed);
+    let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
+    assert!(proposed.is_empty(), "installed rules need no new proposal");
+}
+
+#[test]
 fn step_selection_offers_both_layers_and_filters() {
     // The table is askable: unique ids, real question text, both layers
     // always offered (the plan forbids a choose-one).

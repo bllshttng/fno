@@ -307,15 +307,25 @@ fn codex_dropped_tree(rel: &str) -> bool {
         .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
 }
 
+/// First `PLUGIN_ROOT/<dropped tree>` read in `text`. The regex crate has no
+/// look-around, so the "not followed by `-` or a word character" boundary is
+/// checked by hand after each match.
+fn dropped_tree_read(text: &str) -> Option<&str> {
+    let pattern = regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)"#)
+        .expect("valid tree-read pattern");
+    let hit = pattern.find_iter(text).find_map(|m| {
+        let next = text[m.end()..].chars().next();
+        let continues = next.is_some_and(|c| c == '-' || c == '_' || c.is_alphanumeric());
+        (!continues).then(|| &text[m.range()])
+    });
+    hit
+}
+
 /// Refuse a codex stage whose hooks, skills, agents or commands name a
 /// dropped tree at run time: the guard turns a future runtime read into a
 /// build refusal naming the file and the path (AC8), not a broken hook at
 /// runtime.
 fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
-    let pattern = regex::Regex::new(
-        r#"(?P<path>(?:CLAUDE_)?PLUGIN_ROOT[}"]*/(?:cli|crates|tests|evals))([^\w-]|$)"#,
-    )
-    .expect("valid tree-read pattern");
     for dir in ["hooks", "skills", "agents", "commands"] {
         let root = source_root.join(dir);
         if !root.is_dir() {
@@ -342,16 +352,13 @@ fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
-            if let Some(hit) = pattern
-                .captures(&text)
-                .and_then(|captures| captures.name("path"))
-            {
+            if let Some(hit) = dropped_tree_read(&text) {
                 let rel = path.strip_prefix(source_root).unwrap_or(path);
                 return Err(format!(
                     "codex stage: {} names dropped tree path {:?} at run time; \
                      widen the keep set or fix the reference",
                     rel.display(),
-                    hit.as_str()
+                    hit
                 ));
             }
         }
@@ -1876,6 +1883,10 @@ struct PluginInstallArgs {
     release: bool,
     /// Install the pack profile: no mux skills, no mux hooks.
     pack: bool,
+    /// Skip the post-install reclaim chain. `fno doctor update`'s codex
+    /// refresh runs the janitor itself, after its budget fold, so a big
+    /// reclaim (6.3 GB measured) is not charged to the update's 60 s budget.
+    no_reclaim: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1907,6 +1918,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         trust_hooks_check: false,
         release: false,
         pack: false,
+        no_reclaim: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1963,6 +1975,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
             }
             "--pack" => {
                 parsed.pack = true;
+                i += 1;
+            }
+            "--no-reclaim" => {
+                parsed.no_reclaim = true;
                 i += 1;
             }
             "--json" | "-J" => {
@@ -2041,6 +2057,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         trust_hooks_check,
         release,
         pack,
+        no_reclaim,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -2138,7 +2155,9 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 return crate::codex_converge::run_release(json);
             }
             if harness == "opencode" {
-                return run_opencode_arm(harness, json, uninstall, status, quick, yes, dry_run);
+                return run_opencode_arm(
+                    harness, json, uninstall, status, quick, yes, dry_run, no_reclaim,
+                );
             }
             if harness == "grok" && status {
                 let receipt = grok_status_receipt();
@@ -2179,9 +2198,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                             stale.iter().map(|p| p.display().to_string()).collect();
                         println!("removed stale copies: {}", joined.join(", "));
                     }
-                    let home = AgentsHome::from_env();
-                    let _ =
-                        crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+                    if !no_reclaim {
+                        let home = AgentsHome::from_env();
+                        let _ = crate::reclaim::run_reclaim(
+                            &RECLAIM_ON_INSTALL.map(String::from),
+                            &home,
+                        );
+                    }
                     0
                 }
                 Err(e) => {
@@ -2192,7 +2215,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--source <dir>]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--no-reclaim] [--source <dir>]"
             );
             eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
@@ -2217,6 +2240,7 @@ fn run_opencode_arm(
     quick: bool,
     yes: bool,
     dry_run: bool,
+    no_reclaim: bool,
 ) -> i32 {
     let say = |line: String| {
         if json {
@@ -2383,8 +2407,10 @@ fn run_opencode_arm(
                 let joined: Vec<String> = stale.iter().map(|p| p.display().to_string()).collect();
                 say(format!("removed stale copies: {}", joined.join(", ")));
             }
-            let home = AgentsHome::from_env();
-            let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            if !no_reclaim {
+                let home = AgentsHome::from_env();
+                let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            }
             let full = Profile::Full.stage_dir();
             prime_plugin_root_pointer(&stage_parent().join(full));
             if receipt.status == "partial" {
@@ -3327,6 +3353,24 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[test]
+    fn dropped_tree_read_pattern_compiles_and_checks_boundary() {
+        assert_eq!(
+            dropped_tree_read("run ${CLAUDE_PLUGIN_ROOT}/cli/x"),
+            Some("CLAUDE_PLUGIN_ROOT}/cli")
+        );
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli"),
+            Some("PLUGIN_ROOT/cli")
+        );
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/cli-x"), None);
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/clix"), None);
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli-x PLUGIN_ROOT/tests"),
+            Some("PLUGIN_ROOT/tests")
+        );
+    }
+
     // zcode install: a malformed config is refused byte-identical.
     #[test]
     fn zcode_malformed_config_refused_byte_identical() {
@@ -3502,6 +3546,10 @@ mod tests {
         let state = base.join("state");
         let legacy = state.join("plugin-stage");
         let new = state.join("install/plugin-stage");
+        let mut legacy_fno = legacy.clone();
+        legacy_fno.push("fno");
+        let mut new_fno = new.clone();
+        new_fno.push("fno");
         fs::write(source.join("version.txt"), "before\n").unwrap();
         git_in(&source, &["add", "version.txt"]);
         git_in(&source, &["commit", "-q", "-m", "before flip"]);
@@ -3515,8 +3563,8 @@ mod tests {
         fs::write(
             claude_dir.join("plugins/known_marketplaces.json"),
             serde_json::to_vec(&json!({"fno": {
-                "installLocation": legacy.join("fno"),
-                "source": {"source": "directory", "path": legacy.join("fno")}
+                "installLocation": legacy_fno.clone(),
+                "source": {"source": "directory", "path": legacy_fno.clone()}
             }}))
             .unwrap(),
         )
@@ -3562,12 +3610,12 @@ mod tests {
         assert!(new.join(".legacy-flip.at").is_file());
         assert!(fs::read_to_string(&log)
             .unwrap()
-            .contains(&format!("marketplace add {}", new.join("fno").display())));
+            .contains(&format!("marketplace add {}", new_fno.display())));
         assert_eq!(
             fs::read_to_string(state.join("install/plugin-root"))
                 .unwrap()
                 .trim(),
-            new.join("fno").to_str().unwrap()
+            new_fno.to_str().unwrap()
         );
         fs::write(new.join(".legacy-flip.at"), "0\n").unwrap();
         restage_stage(&source, &new).unwrap();
@@ -3578,8 +3626,8 @@ mod tests {
         fs::write(
             claude_dir.join("plugins/known_marketplaces.json"),
             serde_json::to_vec(&json!({"fno": {
-                "installLocation": new.join("fno"),
-                "source": {"source": "directory", "path": new.join("fno")}
+                "installLocation": new_fno.clone(),
+                "source": {"source": "directory", "path": new_fno.clone()}
             }}))
             .unwrap(),
         )

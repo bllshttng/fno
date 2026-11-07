@@ -164,7 +164,7 @@ pub(crate) fn lane_with_room(
 /// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
 /// never the first claude inventory row, which can be opus, and opus never
 /// runs target work.
-const FALLBACK_LANE: &str = "claude-sonnet-5-5";
+const FALLBACK_LANE: &str = "claude-sonnet-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
@@ -2606,7 +2606,7 @@ mod tests {
         w.tick(true, at(3));
         assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize + 1);
         let fallback = w.spawns.borrow()[MAIN_MAX_TRIES as usize].join(" ");
-        assert!(fallback.contains("--lane claude-sonnet-5"), "{fallback}");
+        assert!(fallback.contains("--lane claude-sonnet-5 "), "{fallback}");
         assert!(fallback.contains("-fallback"), "{fallback}");
         w.tick(false, at(3));
         w.tick(true, at(4));
@@ -3715,11 +3715,31 @@ mod tests {
             let spawns = w.spawns.borrow();
             assert_eq!(spawns.len(), 1, "the head launched on the fallback");
             let argv = spawns[0].join(" ");
-            assert!(argv.contains("--lane claude-sonnet-5-5 "), "{argv}");
+            assert!(argv.contains("--lane claude-sonnet-5 "), "{argv}");
             if !banned.is_empty() {
                 assert!(!argv.contains(banned), "{argv}");
             }
         }
+    }
+
+    #[test]
+    fn the_fallback_lane_names_a_model_the_shipped_claude_roster_declares() {
+        // The fallback lane is a lane named for a sonnet model id. A rename
+        // sweep that moves the id also moves the shipped roster, so this
+        // read fails in the same PR instead of at the next quota-capped
+        // gate run, where the fallback is the one lane the day rides.
+        let contract = crate::harness_capabilities::HarnessContract::packaged()
+            .expect("shipped capability contract parses");
+        let models = contract
+            .capabilities("claude")
+            .expect("claude row in the contract")
+            .models
+            .clone()
+            .expect("claude model roster");
+        assert!(
+            models.iter().any(|m| m == FALLBACK_LANE),
+            "FALLBACK_LANE {FALLBACK_LANE:?} is not a model the shipped claude roster declares: {models:?}"
+        );
     }
 
     #[test]

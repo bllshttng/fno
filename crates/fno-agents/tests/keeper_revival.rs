@@ -131,8 +131,9 @@ struct KillGuard(u32);
 
 impl Drop for KillGuard {
     fn drop(&mut self) {
-        // SAFETY: SIGKILL to the keeper pid a test started.
-        unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGKILL) };
+        // SAFETY: group SIGKILL to the keeper or pty child a test started,
+        // the fn-47ea driver pattern: a pid kill leaves descendants running.
+        unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGKILL) };
     }
 }
 
