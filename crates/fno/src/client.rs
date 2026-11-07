@@ -9525,20 +9525,20 @@ mod row_meter;
 #[path = "client/sideline.rs"]
 mod sideline;
 
-#[path = "client/agent_sort.rs"]
-mod agent_sort;
 #[path = "client/agent_group.rs"]
 mod agent_group;
+#[path = "client/agent_sort.rs"]
+mod agent_sort;
 use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
-#[path = "client/remote_hosts.rs"]
-mod remote_hosts;
 #[path = "client/nav_rows.rs"]
 mod nav_rows;
 #[path = "client/needs_queue.rs"]
 mod needs_queue;
+#[path = "client/remote_hosts.rs"]
+mod remote_hosts;
 
 #[path = "client/header_band.rs"]
 mod header_band;
