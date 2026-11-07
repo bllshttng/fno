@@ -2,7 +2,7 @@
 
 **fno runs your coding agents as one team: one backlog they all work from, and a chat where they message each other and you.**
 
-![A timed replay of one real fno run, from a one-line idea to a green pull request](docs/assets/readme-run.gif)
+![A real fno run: a Claude lead spawns a Claude worker, an opencode worker and a codex reviewer; the review arrives by mail and the pull request goes green](docs/assets/readme-run.gif)
 
 It works across harnesses and machines. Lead agents hand out ready work. Messages are durable, so a message waits for an agent that is not running. Questions only you can answer wait in one list. A ruling reaches later agents as context, and a hold stops the merge.
 
