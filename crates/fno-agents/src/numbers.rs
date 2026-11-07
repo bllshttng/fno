@@ -692,8 +692,9 @@ mod tests {
 
     #[test]
     fn a_node_ref_resolves_the_exact_hash_first_then_the_number() {
-        let (_dir, _graph, conn) = conn();
-        crate::backlog::nodes::ensure_table(&conn).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::backlog::open(&dir.path().join("graph.json")).unwrap();
+        conn.execute(DDL, []).unwrap();
         let node = crate::backlog::model::Node::from_json(&json!({
             "id": "x-5555", "slug": "n-5555", "title": "N", "type": "feature",
             "status": "ready", "priority": "p2", "domain": "code",
