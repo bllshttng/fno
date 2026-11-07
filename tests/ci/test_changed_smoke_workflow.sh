@@ -202,7 +202,7 @@ check(changed.get("steps", [{}])[0].get("with", {}).get("fetch-depth") == 0,
 # Each if also carries !cancelled(): the sizer above is PR-only, so on a push
 # it skips and GitHub's implicit success() would skip every transitive
 # dependent with it - main would run no tests.
-for name in ("smoke-pytest", "smoke-rest"):
+for name in ("tests-py", "smoke-rest"):
     job_if = str(jobs[name].get("if", ""))
     check("needs.pr-affected.outputs.python_full" in job_if
           and "!cancelled()" in job_if,
@@ -221,9 +221,9 @@ for name in ("hook-latency", "test-agents", "test-agents-integration", "test-mux
           f"{name} has if: {job.get('if')!r} and needs {needs!r}")
 needs_agents = jobs["test-agents"].get("needs")
 needs_agents = [needs_agents] if isinstance(needs_agents, str) else list(needs_agents or [])
-check("smoke-pytest" not in needs_agents,
+check("tests-py" not in needs_agents,
       "test-agents starts independently of pytest",
-      "test-agents still waits behind smoke-pytest")
+      "test-agents still waits behind tests-py")
 
 # --- the changed job may not produce FULL evidence --------------------------
 for forbidden, why in (
@@ -254,7 +254,9 @@ if gate_dependencies:
     check(len(all_gate_jobs) == len(gate_dependencies),
           "every job the gate needs exists",
           f"smoke needs {sorted(set(gate_dependencies) - set(all_gate_jobs))}, which do not exist")
-    runner_jobs = {n: jobs[n] for n in gate_shards if n in jobs}
+    # tests-py runs pytest over tests/py directly, not the smoke registry, so
+    # the runner contract below covers the smoke shards only.
+    runner_jobs = {n: jobs[n] for n in gate_shards if n in jobs and n != "tests-py"}
 else:
     runner_jobs = {"smoke": smoke}
 
