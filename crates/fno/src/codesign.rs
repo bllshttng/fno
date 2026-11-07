@@ -24,13 +24,45 @@ use std::process::Command;
 /// class counts.
 const IDENTITY_CLASS: &str = "Developer ID Application";
 
-/// Every binary stem an install may place: the mux front door plus the
-/// fno-agents triad. Derived from the triad's own list so a new bin is
-/// signed the day it appears, not the day someone notices it missing.
-fn stems() -> Vec<&'static str> {
-    std::iter::once("fno")
-        .chain(crate::doctor_update::TRIAD_STEMS)
-        .collect()
+/// Every fno Mach-O in `bin_dir`: the front door, the fno-agents triad, and
+/// the helpers other builds drop beside them (`fno-books`, `fno-gh-proxy`,
+/// `fnob`). Found by scanning, not by a fixed list, so a bin is signed the
+/// day it appears, not the day someone notices it ad hoc. Symlinks and
+/// scripts are skipped: a script is not a Mach-O and cannot carry a
+/// signature.
+fn placed_stems(bin_dir: &Path, suffix: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(bin_dir) else {
+        return Vec::new();
+    };
+    let mut stems: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let stem = name.strip_suffix(suffix)?;
+            let ours = stem == "fno" || stem == "fnob" || stem.starts_with("fno-");
+            (ours && is_mach_o(&e.path())).then(|| stem.to_string())
+        })
+        .collect();
+    stems.sort();
+    stems
+}
+
+/// True when the file opens with a Mach-O or fat-binary magic number, in
+/// either byte order.
+fn is_mach_o(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    if f.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    matches!(
+        u32::from_be_bytes(magic),
+        0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe | 0xcafe_babe | 0xbebb_afca
+    )
 }
 
 /// The codesign identifier for a binary stem, in the fixed `dev.fno`
@@ -96,10 +128,7 @@ pub(crate) fn sign_placed(bin_dir: &Path, dry_run: bool) {
         return;
     }
     let suffix = crate::doctor_update::exe_suffix();
-    let present: Vec<&str> = stems()
-        .into_iter()
-        .filter(|s| bin_dir.join(format!("{s}{suffix}")).is_file())
-        .collect();
+    let present = placed_stems(bin_dir, suffix);
     if present.is_empty() {
         return;
     }
@@ -112,10 +141,10 @@ pub(crate) fn sign_placed(bin_dir: &Path, dry_run: bool) {
     for stem in present {
         let bin = bin_dir.join(format!("{stem}{suffix}"));
         if dry_run {
-            println!("Would codesign: {} -> {}", bin.display(), identifier(stem));
+            println!("Would codesign: {} -> {}", bin.display(), identifier(&stem));
             continue;
         }
-        match sign_bin(&identity, &bin, stem) {
+        match sign_bin(&identity, &bin, &stem) {
             Ok(()) => println!("fno doctor update: signed {}", bin.display()),
             Err(e) => eprintln!(
                 "fno doctor update: WARNING: codesign failed on {}: {e}",
@@ -136,16 +165,27 @@ mod tests {
     }
 
     #[test]
-    fn stems_carry_the_front_door_and_the_whole_triad() {
+    fn placed_stems_take_every_fno_mach_o_and_skip_scripts_and_strangers() {
+        let dir = std::env::temp_dir().join(format!("fno-codesign-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mach_o = [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0];
+        for name in [
+            "fno",
+            "fno-agents",
+            "fno-books",
+            "fno-gh-proxy",
+            "fnob",
+            "other",
+        ] {
+            std::fs::write(dir.join(name), mach_o).unwrap();
+        }
+        std::fs::write(dir.join("fno-autocontinue"), b"#!/bin/bash\n").unwrap();
         assert_eq!(
-            stems(),
-            vec![
-                "fno",
-                "fno-agents",
-                "fno-agents-daemon",
-                "fno-agents-worker"
-            ],
+            placed_stems(&dir, ""),
+            vec!["fno", "fno-agents", "fno-books", "fno-gh-proxy", "fnob"],
         );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
