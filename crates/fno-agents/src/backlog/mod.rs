@@ -948,16 +948,64 @@ pub fn authoritative_sync(
     after: &[Value],
 ) -> Result<String, String> {
     // Same seam contract as authoritative_sync: the caller holds the store lock.
+    let changed = diff_rows(before, after);
+    authoritative_sync_prepared(graph, before, after, &changed, &content_version(after))
+}
+
+/// The prepared half of the whole-graph publish: the caller computed the
+/// changed-id set and the content version OUTSIDE the store lock, so the
+/// transaction writes only the changed rows, confirms only those landed,
+/// and stamps the precomputed digest.
+pub(crate) fn authoritative_sync_prepared(
+    graph: &Path,
+    before: &[Value],
+    after: &[Value],
+    changed: &[String],
+    version: &str,
+) -> Result<String, String> {
     let mut connection = open_holding_lock(graph)?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let _report = write_changed(&transaction, before, after, true)?;
-    let version = content_version(after);
-    stamp_version(&transaction, &version)?;
-    confirm_ids_landed(&transaction, after)?;
+    let report = write_changed_ids(&transaction, before, after, true, changed)?;
+    stamp_version(&transaction, version)?;
+    confirm_ids_landed_in(&transaction, after, &report.present_ids)?;
     transaction.commit().map_err(|error| error.to_string())?;
-    Ok(version)
+    Ok(version.to_string())
+}
+
+/// The ids whose canonical row differs between the two row sets, sorted.
+/// The unit of change is the node: this is the `unchanged` compare of
+/// `write_changed` lifted out, so the whole-graph publish computes the set
+/// before the store lock and the write transaction only touches these rows.
+pub(crate) fn diff_rows(before: &[Value], after: &[Value]) -> Vec<String> {
+    fn by_id(rows: &[Value]) -> std::collections::BTreeMap<String, &Value> {
+        rows.iter()
+            .filter(|row| row.is_object())
+            .filter_map(|row| crate::graph_store::entry_id(row).map(|id| (id.to_string(), row)))
+            .collect()
+    }
+    let before_map = by_id(before);
+    let after_map = by_id(after);
+    let mut ids: Vec<String> = before_map.keys().chain(after_map.keys()).cloned().collect();
+    ids.sort();
+    ids.dedup();
+    ids.into_iter()
+        .filter(|id| match (before_map.get(id), after_map.get(id)) {
+            // Fast path: equal raw serializations are the same row, so only
+            // unequal raw strings pay for the canonical form. The canonical
+            // compare is the load-bearing one on the sqlite branch: its raw
+            // export omits nulls, so a plain string compare there would
+            // rewrite every row on every mutation.
+            (Some(b), Some(a)) => {
+                crate::graph_store::to_python_pretty_json(b)
+                    != crate::graph_store::to_python_pretty_json(a)
+                    && canonical_row(b) != canonical_row(a)
+            }
+            (None, None) => false,
+            _ => true,
+        })
+        .collect()
 }
 
 pub(crate) struct WriteReport {
@@ -965,13 +1013,18 @@ pub(crate) struct WriteReport {
     deleted_ids: Vec<String>,
 }
 
-fn confirm_ids_landed(connection: &Connection, after: &[Value]) -> Result<(), String> {
+/// The read-back the publish trusts, over exactly the ids `changed_present`
+/// names (the changed ids that survive in `after`; a deletion is a changed
+/// id that must NOT be present, and the count check catches one that
+/// failed to land): the store must still hold every row of `after` by
+/// count, and each surviving changed id must be present in the typed table
+/// or the raw carry.
+fn confirm_ids_landed_in(
+    connection: &Connection,
+    after: &[Value],
+    changed_present: &[String],
+) -> Result<(), String> {
     const SQLITE_BIND_BATCH: usize = 900;
-    let expected: std::collections::BTreeSet<String> = after
-        .iter()
-        .filter_map(crate::graph_store::entry_id)
-        .map(str::to_owned)
-        .collect();
     let stored_count: i64 = connection
         .query_row(
             "SELECT (SELECT COUNT(*) FROM nodes) + (SELECT COUNT(*) FROM nodes_raw)",
@@ -981,7 +1034,7 @@ fn confirm_ids_landed(connection: &Connection, after: &[Value]) -> Result<(), St
         .map_err(|error| error.to_string())?;
 
     let mut stored = std::collections::BTreeSet::new();
-    let ids: Vec<&str> = expected.iter().map(String::as_str).collect();
+    let ids: Vec<&str> = changed_present.iter().map(String::as_str).collect();
     for batch in ids.chunks(SQLITE_BIND_BATCH) {
         let placeholders = std::iter::repeat_n("?", batch.len())
             .collect::<Vec<_>>()
@@ -1017,17 +1070,17 @@ fn confirm_ids_landed(connection: &Connection, after: &[Value]) -> Result<(), St
             stored.insert(row.map_err(|error| error.to_string())?);
         }
     }
-    let missing: Vec<&str> = expected
+    let missing: Vec<&str> = changed_present
         .iter()
         .map(String::as_str)
         .filter(|id| !stored.contains(*id))
         .collect();
-    if stored_count == expected.len() as i64 && missing.is_empty() {
+    if stored_count == after.len() as i64 && missing.is_empty() {
         return Ok(());
     }
     Err(format!(
         "publish read-back mismatch: expected {} ids, stored {stored_count}; missing ids {missing:?}",
-        expected.len()
+        changed_present.len()
     ))
 }
 
@@ -1076,6 +1129,18 @@ pub(crate) fn retry_on_busy<T>(
                     continue;
                 }
                 if busy {
+                    // The busy layer had no journal row: the
+                    // dozen 2026-11-06 refusals were these, and no events
+                    // file held a trace of them. One row per exhausted wait.
+                    crate::chokepoint_events::append_row(
+                        "graph_write_busy",
+                        serde_json::json!({
+                            "pid": std::process::id(),
+                            "attempts": ATTEMPTS,
+                            "elapsed_ms": started.elapsed().as_millis() as u64,
+                            "error": error.chars().take(300).collect::<String>(),
+                        }),
+                    );
                     return Err(format!(
                         "graph write refused: the store was busy after {ATTEMPTS} attempts over \
                          {:.1}s (sqlite: {error}). Nothing was written; no node was created. \
@@ -1251,6 +1316,22 @@ pub(crate) fn write_changed(
     after: &[Value],
     strict: bool,
 ) -> Result<WriteReport, String> {
+    let changed = diff_rows(before, after);
+    write_changed_ids(connection, before, after, strict, &changed)
+}
+
+/// Write exactly the rows `changed` names; the caller computed the set with
+/// [`diff_rows`], so the unchanged compare never runs inside a write
+/// transaction.
+///
+/// Returns the ids acted on, split by rows that should be present or deleted.
+pub(crate) fn write_changed_ids(
+    connection: &Connection,
+    before: &[Value],
+    after: &[Value],
+    strict: bool,
+    changed: &[String],
+) -> Result<WriteReport, String> {
     if strict {
         let mut seen_ids = std::collections::BTreeSet::new();
         for (ordinal, row) in after.iter().enumerate() {
@@ -1285,32 +1366,15 @@ pub(crate) fn write_changed(
             crate::graph_store::entry_id(row).map(|id| (id, ordinal as i64))
         })
         .collect();
-    let mut ids: Vec<String> = before_map.keys().chain(after_map.keys()).cloned().collect();
-    ids.sort();
-    ids.dedup();
     let mut report = WriteReport {
         present_ids: Vec::new(),
         deleted_ids: Vec::new(),
     };
-    for id in ids {
+    for id in changed {
+        let id = id.clone();
         let old = before_map.get(&id);
         let new = after_map.get(&id);
-        let unchanged = match (old, new) {
-            // Fast path: equal raw serializations are the same row, so only
-            // unequal raw strings pay for the canonical form. The canonical
-            // compare is the load-bearing one on the sqlite branch: its raw
-            // export omits nulls, so a plain string compare there would
-            // rewrite every row on every mutation.
-            // ponytail: whole-graph canonical compare, removed when
-            // single-row writes land.
-            (Some(b), Some(a)) => {
-                crate::graph_store::to_python_pretty_json(b)
-                    == crate::graph_store::to_python_pretty_json(a)
-                    || canonical_row(b) == canonical_row(a)
-            }
-            (None, None) => true,
-            _ => false,
-        };
+        let unchanged = matches!((old, new), (None, None));
         if unchanged {
             continue;
         }
