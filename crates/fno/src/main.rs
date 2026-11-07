@@ -452,6 +452,8 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
+    /// `fno do hello`: the smoke-print command, answered in-process.
+    DoHello,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
     DoRev,
@@ -1610,6 +1612,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoRev;
     }
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("hello")
+    {
+        return Role::DoHello;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1961,6 +1968,10 @@ fn main() {
             &["delivery-evaluate"],
             &rest,
         )),
+        Role::DoHello => {
+            println!("hello from fno");
+            std::process::exit(0);
+        }
         Role::AgentsClient(argv) => std::process::exit(fno_agents_exec("fno agents", &[], &argv)),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
@@ -2575,6 +2586,11 @@ mod tests {
 
         assert_eq!(status.status.code(), Some(19), "native owner exit status");
         assert_eq!(owner_pid, child_pid, "native owner replaced the front pid");
+    }
+
+    #[test]
+    fn do_hello_claims_its_leaf() {
+        assert_eq!(decide_role(&os(&["do", "hello"]), false), Role::DoHello);
     }
 
     #[test]
