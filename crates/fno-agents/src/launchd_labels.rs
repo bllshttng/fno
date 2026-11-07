@@ -127,6 +127,7 @@ pub fn retire_legacy_fixed_label(legacy: &str, expected_plist: &Path, what: &str
              run `launchctl bootout gui/$(id -u)/{legacy}` by hand"
         )),
     }
+    receipts
 }
 
 /// The registered plist path from `launchctl print` output: the first
