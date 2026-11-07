@@ -3160,7 +3160,10 @@ mod tests {
             dropped_tree_read("run ${CLAUDE_PLUGIN_ROOT}/cli/x"),
             Some("CLAUDE_PLUGIN_ROOT}/cli")
         );
-        assert_eq!(dropped_tree_read("PLUGIN_ROOT/cli"), Some("PLUGIN_ROOT/cli"));
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli"),
+            Some("PLUGIN_ROOT/cli")
+        );
         assert_eq!(dropped_tree_read("PLUGIN_ROOT/cli-x"), None);
         assert_eq!(dropped_tree_read("PLUGIN_ROOT/clix"), None);
         assert_eq!(
