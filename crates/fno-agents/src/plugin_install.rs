@@ -312,9 +312,10 @@ fn codex_dropped_tree(rel: &str) -> bool {
 /// build refusal naming the file and the path (AC8), not a broken hook at
 /// runtime.
 fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
-    let pattern =
-        regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)(?![-\w])"#)
-            .expect("valid tree-read pattern");
+    let pattern = regex::Regex::new(
+        r#"(?P<path>(?:CLAUDE_)?PLUGIN_ROOT[}"]*/(?:cli|crates|tests|evals))([^\w-]|$)"#,
+    )
+    .expect("valid tree-read pattern");
     for dir in ["hooks", "skills", "agents", "commands"] {
         let root = source_root.join(dir);
         if !root.is_dir() {
@@ -341,7 +342,10 @@ fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
-            if let Some(hit) = pattern.find(&text) {
+            if let Some(hit) = pattern
+                .captures(&text)
+                .and_then(|captures| captures.name("path"))
+            {
                 let rel = path.strip_prefix(source_root).unwrap_or(path);
                 return Err(format!(
                     "codex stage: {} names dropped tree path {:?} at run time; \
@@ -3598,6 +3602,14 @@ mod tests {
             legacy_stage_parent().is_none(),
             "legacy symlinks are not writable roots"
         );
+        let hook = source.join("hooks/runtime.sh");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(&hook, "cat ${PLUGIN_ROOT}/cli/path\n").unwrap();
+        assert!(codex_runtime_read_guard(&source).is_err());
+        for path in ["cli-extra", "cli_extra", "cli2"] {
+            fs::write(&hook, format!("cat ${{PLUGIN_ROOT}}/{path}\n")).unwrap();
+            assert!(codex_runtime_read_guard(&source).is_ok());
+        }
         match previous_root {
             Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
             None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
