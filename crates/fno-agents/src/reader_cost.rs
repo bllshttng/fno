@@ -117,7 +117,7 @@ pub fn classify(argv: &str) -> String {
         return "other:unknown".to_string();
     };
     let prog_base = basename(program);
-    let rest = &tokens[1..];
+    let rest = tokens.get(1..).unwrap_or_default();
     if BUILD_TOOLS.contains(&prog_base) {
         return "build".to_string();
     }
