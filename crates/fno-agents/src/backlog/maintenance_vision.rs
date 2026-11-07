@@ -5,6 +5,7 @@
 //! defers without it.
 
 use serde_json::{json, Value};
+use std::path::Path;
 
 use super::{Flags, Out, Seams};
 
