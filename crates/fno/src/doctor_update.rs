@@ -1980,12 +1980,14 @@ fn await_fno_py(fno_py: &Path, dry_run: bool) -> bool {
 /// Best-effort commands chained after a successful install, each command
 /// self-gating. The plugin-stage restage rides last: live sessions exec
 /// hooks straight from the stage, so a restage IS the deploy; the codex
-/// refresh follows the restage when its channel marker says dev.
-fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
+/// refresh follows the restage when its channel marker says dev. Returns
+/// whether the codex refresh ran (the update then runs the janitor itself,
+/// outside its budget).
+fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
     let fno_py = resolve_fno_py();
     if !await_fno_py(&fno_py, false) {
         failed.push("fno-py reappearance (launchd refresh skipped)".into());
-        return;
+        return false;
     }
     let args: Vec<String> = vec!["do".into(), "pr".into(), "watch".into(), "refresh".into()];
     let code = run_inherit(&fno_py, &args);
@@ -2005,14 +2007,18 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         );
         failed.push("post-install groom agent refresh".into());
     }
-    restage_plugin(resolved, failed);
+    restage_plugin(resolved, failed)
 }
 
 /// The plugin-stage restage, plus the codex refresh when its channel marker
 /// says dev. The stage holds skills, hooks and scripts, none of them
 /// compiled, so it also rides a Python hold: a skill fix never waits on a
-/// Rust tarball.
-fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
+/// Rust tarball. Returns whether the codex refresh ran; that refresh used to
+/// chain the reclaim inline (plugin-install chains it after every full
+/// install), and the update passes --no-reclaim and runs the janitor after
+/// its budget fold instead.
+fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) -> bool {
+    let mut codex_refresh_ran = false;
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [
             "plugin-install".into(),
@@ -2031,10 +2037,12 @@ fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
         // A restage keeps the version; codex re-copies its cache only on a
         // forced converge, so the dev-channel marker gates the refresh.
         if codex_channel_is_dev() {
+            codex_refresh_ran = true;
             let args: Vec<String> = [
                 "plugin-install".into(),
                 "codex".into(),
                 "--force".into(),
+                "--no-reclaim".into(),
                 "--source".into(),
                 resolved.to_string_lossy().into_owned(),
             ]
@@ -2048,6 +2056,7 @@ fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
             }
         }
     }
+    codex_refresh_ran
 }
 
 /// The codex dev-channel marker: `$CODEX_HOME/footnote/plugin-channel.json`
@@ -2610,6 +2619,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         }
     }
 
+    // The codex dev refresh used to chain the reclaim inline (plugin-install
+    // chains it after every full install), and a big reclaim (6.3 GB) was
+    // charged to this update's 60 s budget. The refresh passes --no-reclaim;
+    // the janitor runs after the budget fold below.
+    let mut codex_refresh_ran = false;
     let cmd: Vec<String> = if held.is_some() {
         Vec::new()
     } else if which_uv().is_some() {
@@ -2688,11 +2702,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             eprintln!("fno doctor update: ERROR: {e}");
             failed.push("source-pin record".into());
         }
-        post_install_steps(&resolved, &mut failed);
+        codex_refresh_ran = post_install_steps(&resolved, &mut failed);
     } else if held.is_none() {
         failed.push("uv install".into());
     } else {
-        restage_plugin(&resolved, &mut failed);
+        codex_refresh_ran = restage_plugin(&resolved, &mut failed);
     }
 
     release_update_claim();
@@ -2745,6 +2759,14 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let took = started.elapsed().as_secs();
     if took > UPDATE_BUDGET_SECS {
         failed.push(format!("the {UPDATE_BUDGET_SECS}s budget (took {took}s)"));
+    }
+    // The janitor runs after the budget fold: a big reclaim (6.3 GB measured)
+    // is the janitor's time, not the update's. Best-effort, bounded: its
+    // failure never fails the update (the inline chain ignored it too), and
+    // the receipt lives in <state>/state/reclaim/last-run.json.
+    if codex_refresh_ran {
+        let args: Vec<String> = vec!["reclaim".into(), "--apply".into(), "--no-uv-prune".into()];
+        let _ = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(600), None);
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {

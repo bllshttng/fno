@@ -3724,6 +3724,26 @@ mod tests {
     }
 
     #[test]
+    fn the_fallback_lane_names_a_model_the_shipped_claude_roster_declares() {
+        // The fallback lane is a lane named for a sonnet model id. A rename
+        // sweep that moves the id also moves the shipped roster, so this
+        // read fails in the same PR instead of at the next quota-capped
+        // gate run, where the fallback is the one lane the day rides.
+        let contract = crate::harness_capabilities::HarnessContract::packaged()
+            .expect("shipped capability contract parses");
+        let models = contract
+            .capabilities("claude")
+            .expect("claude row in the contract")
+            .models
+            .clone()
+            .expect("claude model roster");
+        assert!(
+            models.iter().any(|m| m == FALLBACK_LANE),
+            "FALLBACK_LANE {FALLBACK_LANE:?} is not a model the shipped claude roster declares: {models:?}"
+        );
+    }
+
+    #[test]
     fn a_head_task_with_no_baseline_rows_grades_green_and_no_scored_rows_stays_red() {
         // Two shapes, two verdicts. 4494: the baseline cohort held no rows
         // for the kept tasks (its own main run failed on the wedged slot),

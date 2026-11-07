@@ -89,9 +89,8 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     let print = has_flag(&args[1..], "", &["--print"]);
     let admitted = loop {
         let admitted = crate::spawn_admission::admit(&args, &here, &names);
-        let name = match (&admitted.exit, flag_value(&admitted.argv[1..], &["--name"])) {
-            (None, Some(name)) if !name.is_empty() && !print => name,
-            _ => break admitted,
+        let Some(name) = reservable_name(&admitted, print) else {
+            break admitted;
         };
         match reserve_name(&name, None) {
             Ok(()) => break admitted,
@@ -146,6 +145,15 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     }
     crate::claims::take_caller_identity(&crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV);
     Ok(argv)
+}
+
+/// The name an admitted spawn must reserve. A refusal carries an empty argv,
+/// so it reserves nothing and its reason prints.
+fn reservable_name(admitted: &crate::spawn_admission::Admission, print: bool) -> Option<String> {
+    if admitted.exit.is_some() || print {
+        return None;
+    }
+    flag_value(admitted.argv.get(1..).unwrap_or(&[]), &["--name"]).filter(|n| !n.is_empty())
 }
 
 /// Reserve a worker name while this spawn client runs. The registry holds no
@@ -432,6 +440,27 @@ mod tests {
         child.wait().unwrap();
         let _ = crate::claims::acquire("spawn-name:t-gone", "spawn-cli:2", rival(dead));
         assert_eq!(reserve_name("t-gone", Some(tmp.path())), Ok(()));
+    }
+
+    #[test]
+    fn a_refused_admission_reserves_no_name_and_keeps_its_reason() {
+        let refused = crate::spawn_admission::Admission {
+            argv: Vec::new(),
+            stderr: vec!["fno agents spawn: refused".to_string()],
+            exit: Some(2),
+            stdout: None,
+            take_over: None,
+            events: Vec::new(),
+        };
+        assert_eq!(reservable_name(&refused, false), None);
+        assert_eq!(refused.stderr, ["fno agents spawn: refused"]);
+        let ok = crate::spawn_admission::Admission {
+            argv: argv(&["spawn", "--name", "w1"]),
+            exit: None,
+            ..refused
+        };
+        assert_eq!(reservable_name(&ok, false), Some("w1".to_string()));
+        assert_eq!(reservable_name(&ok, true), None);
     }
 
     #[test]

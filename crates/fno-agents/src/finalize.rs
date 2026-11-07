@@ -63,9 +63,8 @@ use std::process::Command;
 /// Whether a completion eval fires for this termination reason.
 ///
 /// Before this, an eval only ran for `STUCK_REASONS` (then named
-/// `POSTMORTEM_REASONS`) - a failure-only sample that the autocorrect monthly
-/// review mined for rules. A failure-only sample writes rules in a
-/// predictable direction: nothing ever confirmed what a clean session did
+/// `POSTMORTEM_REASONS`) - a failure-only sample. A failure-only sample
+/// writes rules in a predictable direction: nothing ever confirmed what a clean session did
 /// right, so every lesson skewed toward caution. The operator ruling
 /// (2026-08-14) is that the eval must run on every completion, success and
 /// failure alike, so the corpus stops being biased by construction.
@@ -661,8 +660,8 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // ── completion eval artifact, every terminal but NoWork ──
     // Originally re-homed the BLOCKED-postmortem generator the control-plane
     // wedge dropped, gated to stuck terminals only: NoProgress/Budget/
-    // Interrupted/Aborted. That gate made the autocorrect monthly review's
-    // input a failure-only sample, and a failure-only sample writes rules -
+    // Interrupted/Aborted. That gate made the eval's input a failure-only
+    // sample, and a failure-only sample writes rules -
     // it never confirms what a clean session did right, so every lesson
     // skewed toward caution nobody asked for. `eval_should_fire`
     // now fires this for every terminal reason except NoWork (nothing to
@@ -2678,8 +2677,7 @@ fn file_outstanding_question(cwd: &Path, question: &str, node: Option<&str>) -> 
 // ── completion eval artifact, every terminal but NoWork ──
 
 /// Write a structured completion eval for this session to the postmortems
-/// dir, then best-effort append a corrections.log pointer so the autocorrect
-/// monthly review consumes it. Filename keyed by date + session-id prefix so
+/// dir. Filename keyed by date + session-id prefix so
 /// a retry overwrites rather than duplicating (idempotent). The body branches
 /// on `STUCK_REASONS`: a stuck session gets failure-triage prose (unchanged
 /// from the original stuck-only artifact); every other reason gets a lighter
@@ -2745,8 +2743,8 @@ fn write_postmortem(
             "Eval",
             format!(
                 "A `{reason}` terminal means this session completed - a clean \
-                 completion still belongs in the corpus the autocorrect monthly \
-                 review reads, not only a stuck one (: a failure-only \
+                 completion still belongs in the eval corpus, not only a stuck \
+                 one (: a failure-only \
                  sample writes rules in a predictable, overcautious direction). \
                  Review the last message above for anything the pre-promise \
                  memory pass should have captured and check it against the \
@@ -2772,7 +2770,6 @@ fn write_postmortem(
     );
     fs::write(&file, &body).map_err(|e| format!("write {}: {e}", file.display()))?;
 
-    append_corrections_pointer(home, &file, reason, &last_msg);
     Ok(file.to_string_lossy().into_owned())
 }
 
@@ -2855,92 +2852,6 @@ fn last_assistant_text(transcript: &Path) -> Option<String> {
     None
 }
 
-/// Best-effort: append a pointer line to `~/.fno/logs/corrections.log` so the
-/// autocorrect monthly review picks the postmortem up. Creates the log when
-/// absent (mode 0600): both launchd jobs were live while the file never
-/// existed, so every pointer before 2026-09 was dropped on "autocorrect not
-/// enabled here" - the writer starved its own reader. An existing file keeps
-/// its mode; `corrections-log-init.sh` stays the manual creator.
-/// Format mirrors the pre-wedge generator:
-/// `{ts} | S1 | target-postmortem | {path} | {reason}: {detail_truncated}`.
-///
-/// Lives under ~/.fno/, not ~/.claude/, per the placement rule (ab-f063 Wave
-/// 2). Resolution order mirrors scripts/lib/corrections-lock.sh's
-/// corrections_log_path(): POSTMORTEM_CORRECTIONS_LOG override, then
-/// FNO_HOME, then home-relative default.
-/// The corrections.log path, the ONE resolution for the finalize writer and
-/// the corrections-verify reader alike: POSTMORTEM_CORRECTIONS_LOG override,
-/// then FNO_HOME, then home-relative default. None when no home resolves
-/// (mirrors scripts/lib/corrections-lock.sh corrections_log_path()).
-pub(crate) fn corrections_log_path(home: Option<&Path>) -> Option<PathBuf> {
-    match std::env::var_os("POSTMORTEM_CORRECTIONS_LOG") {
-        Some(p) => Some(PathBuf::from(p)),
-        None => {
-            let root = std::env::var_os("FNO_HOME")
-                .map(PathBuf::from)
-                .or_else(|| home.map(|h| h.join(".fno")))?;
-            Some(crate::state_layout::place(&root, "corrections.log"))
-        }
-    }
-}
-
-/// The state root that holds the loop journals (events.jsonl sits directly
-/// under it): FNO_HOME override, then home-relative `.fno`. None when no
-/// home resolves.
-pub(crate) fn loop_state_root(home: Option<&Path>) -> Option<PathBuf> {
-    std::env::var_os("FNO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.map(|h| h.join(".fno")))
-}
-
-fn append_corrections_pointer(home: Option<&Path>, postmortem: &Path, reason: &str, detail: &str) {
-    let log = match corrections_log_path(home) {
-        Some(p) => p,
-        None => return,
-    };
-    // Fixture guard: a postmortem outside the postmortems root of
-    // the home this log resolved through is a unit-test temp dir that fell
-    // through the ladder - 360 of 418 live rows. Refuse at the one writer
-    // rather than filtering in every reader. The FNO_HOME read stays HERE
-    // (one carrier of the ladder, per the reachable-paths twin baseline);
-    // the predicate itself reads no environment. It gates BEFORE creation:
-    // a refused row must not materialize an empty log either.
-    let fno_home = std::env::var_os("FNO_HOME").map(PathBuf::from);
-    let pm_root = crate::real_session::postmortems_root_for_home(fno_home.as_deref(), home);
-    if !crate::real_session::is_real_run(pm_root.as_deref(), postmortem) {
-        return;
-    }
-    if !log.is_file() {
-        // Create at 0600 rather than drop the row. create_new keeps the
-        // mode decision on the creator: an existing file (or a losing
-        // race) never has its mode touched.
-        use std::os::unix::fs::OpenOptionsExt;
-        if let Some(parent) = log.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&log);
-    }
-    let detail_trunc: String = detail.replace(['\n', '\r'], " ").chars().take(80).collect();
-    let detail_trunc = if detail_trunc.trim().is_empty() {
-        "-".to_string()
-    } else {
-        detail_trunc
-    };
-    let line = format!(
-        "{} | S1 | target-postmortem | {} | {reason}: {detail_trunc}\n",
-        now_rfc3339_utc(),
-        postmortem.display(),
-    );
-    use std::io::Write;
-    if let Ok(mut f) = fs::OpenOptions::new().append(true).open(&log) {
-        let _ = f.write_all(line.as_bytes());
-    }
-}
-
 /// The round-review read for finalize: the caller-pinned journal only.
 /// `events_path` would migrate the checkout journal on read and re-home
 /// the session's rows mid-finalize; a finalize backstop scans for an
@@ -2955,10 +2866,6 @@ fn round_review_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::R
 }
 
 // ── unit tests (process-free) ────────────────────────────────────────────────
-
-#[cfg(test)]
-#[path = "finalize_pointer_tests.rs"]
-mod finalize_pointer_tests;
 
 #[cfg(test)]
 mod tests {
