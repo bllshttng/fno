@@ -294,16 +294,16 @@ impl Pane {
                         }
                     }
                     if self.term.mode().contains(Mode::SYNC_UPDATE) {
-                        // Park the bytes (see `held`); flush as soon as the
-                        // stream itself ends the update, ahead of the deadline.
-                        self.held.extend_from_slice(&b);
-                        if self.held.len() > SYNC_HELD_BYTES {
-                            let cut = self.held.len() - SYNC_HELD_BYTES;
-                            self.held.drain(..cut);
-                        }
-                        if b.windows(ESU.len()).any(|w| w == ESU) {
-                            let held = std::mem::take(&mut self.held);
-                            self.processor.advance(&mut self.term, &held);
+                        self.hold_bytes(&b);
+                    } else if let Some(pos) = find_subslice(&b, BSU) {
+                        // The chunk that OPENS the window: advance up to and
+                        // including the BSU, park the tail (a BSU split
+                        // across PTY reads degrades to a torn frame until
+                        // ESU or expiry - wrong timing, never wrong text).
+                        let split = pos + BSU.len();
+                        self.processor.advance(&mut self.term, &b[..split]);
+                        if self.term.mode().contains(Mode::SYNC_UPDATE) {
+                            self.hold_bytes(&b[split..]);
                         }
                     } else {
                         self.processor.advance(&mut self.term, &b);
@@ -326,6 +326,21 @@ impl Pane {
     /// When the open synchronized update (DEC mode 2026) expires, if one is open.
     pub fn sync_deadline(&self) -> Option<std::time::Instant> {
         self.term.sync_update_deadline()
+    }
+
+    /// Park bytes inside the open sync window (see `held`); flush them
+    /// through the parser the moment the parked stream itself carries ESU,
+    /// ahead of the deadline.
+    fn hold_bytes(&mut self, b: &[u8]) {
+        self.held.extend_from_slice(b);
+        if self.held.len() > SYNC_HELD_BYTES {
+            let cut = self.held.len() - SYNC_HELD_BYTES;
+            self.held.drain(..cut);
+        }
+        if self.held.windows(ESU.len()).any(|w| w == ESU) {
+            let held = std::mem::take(&mut self.held);
+            self.processor.advance(&mut self.term, &held);
+        }
     }
 
     /// Apply a synchronized update whose deadline has passed, and report whether
@@ -1959,6 +1974,18 @@ const SYNC_HELD_BYTES: usize = 256 * 1024;
 
 /// End of a synchronized update: `CSI ? 2026 l`.
 const ESU: &[u8] = b"\x1b[?2026l";
+
+/// Start of a synchronized update: `CSI ? 2026 h`.
+const BSU: &[u8] = b"\x1b[?2026h";
+
+/// First index of `needle` in `hay`, or `None` (bounded scan; the held
+/// paths only ever search 8-byte constants against one PTY read).
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.len() > hay.len() {
+        return None;
+    }
+    (0..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
+}
 
 /// Which recognized OSC a payload accumulator belongs to; the per-kind cap
 /// and the terminator handler read it.
