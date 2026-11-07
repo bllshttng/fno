@@ -133,6 +133,7 @@ fn fold(
     let mut plan = Vec::new();
     let mut rows = Map::new();
     let mut fields_by_rung: Map<String, Value> = Map::new();
+    let mut referenced: Vec<String> = Vec::new();
     let fault = |rung: &str, why: String| format!("slot=config {rung} {why}");
 
     for (index, raw) in lanes_raw.iter().enumerate() {
@@ -144,6 +145,7 @@ fn fold(
                     return Err(fault(&rung, "is an empty lane name".into()));
                 }
                 plan.push((rung, name.to_string()));
+                referenced.push(name.to_string());
             }
             Value::Object(table) => {
                 let lanes = lane_vocabulary();
@@ -227,6 +229,22 @@ fn fold(
         }
     }
     for (name, row) in declared_rows {
+        // A named row's args validates where the fold happens, exactly like
+        // an inline table's, but only for rows the profile's lanes name: a
+        // malformed row nobody uses never faults an unrelated walk.
+        if referenced.contains(name) {
+            if let Some(args) = row.get("args") {
+                let ok = args
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_string));
+                if !ok {
+                    return Err(fault(
+                        &name,
+                        format!(".args must be a non-empty list of strings; got {args}"),
+                    ));
+                }
+            }
+        }
         rows.insert(name.clone(), row.clone());
     }
     Ok((plan, rows, fields_by_rung))
@@ -2118,6 +2136,11 @@ fn pick(
                 lane_fields.insert(k.to_string(), Value::String(v.clone()));
             }
         }
+        // The row's own harness flags ride the lane like an inline table's,
+        // verbatim; the fold already validated the shape.
+        if let Some(args) = row.get("args").and_then(Value::as_array) {
+            lane_fields.insert("args".into(), Value::Array(args.clone()));
+        }
     }
     let mut candidate = Map::new();
     candidate.insert("harness".into(), json!(harness));
@@ -3469,6 +3492,49 @@ mod tests {
         assert!(chain_of(&out)
             .iter()
             .any(|l| l == "slot agents.profiles.target.lanes[0] flash-x capacity=ok window=w"));
+
+        // A named routing row's args ride the lane, the way an inline table's
+        // do (the advisor carriage).
+        let out = resolve_slot_payload(&payload(json!({
+            "declared_rows": {
+                "opus-x": {"name": "opus-x", "harness": "claude", "model": "opus-5",
+                            "band": "high", "operator_view": "claude-native",
+                            "args": ["--advisor", "claude-opus-5-5"]},
+            },
+            "lanes_raw": ["opus-x"],
+        })));
+        assert_eq!(out["status"], "pick");
+        assert_eq!(
+            out["candidate"]["lane_fields"]["args"],
+            json!(["--advisor", "claude-opus-5-5"])
+        );
+
+        // A named row whose args are not a string list faults the walk with
+        // the message the inline-table fold raises.
+        let out = resolve_slot_payload(&payload(json!({
+            "declared_rows": {
+                "bad-x": {"name": "bad-x", "harness": "claude", "model": "m",
+                           "args": "opus"},
+            },
+            "lanes_raw": ["bad-x"],
+        })));
+        assert_eq!(out["status"], "none");
+        assert!(chain_of(&out)
+            .iter()
+            .any(|l| l.contains(".args must be a non-empty list of strings")));
+
+        // The same malformed row left unreferenced faults no walk: the
+        // validation reaches only the rows a profile's lanes name.
+        let out = resolve_slot_payload(&payload(json!({
+            "declared_rows": {
+                "bad-x": {"name": "bad-x", "harness": "claude", "model": "m",
+                           "args": "opus"},
+                "flash-x": {"name": "flash-x", "harness": "claude", "model": "glm",
+                             "band": "low", "account": "zai-main", "route": "zai/glm"},
+            },
+            "lanes_raw": ["flash-x"],
+        })));
+        assert_eq!(out["status"], "pick");
 
         let out = resolve_slot_payload(&payload(json!({
             "profile": {"on_exhausted": "refuse", "on_low": "maybe",

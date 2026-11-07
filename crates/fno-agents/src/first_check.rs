@@ -439,6 +439,10 @@ pub(crate) fn run_pass(
             } else {
                 let text = format!("worker {}: no progress {}m after spawn. Evidence: {evidence}. First-check notice {} of 2. Inspect fno agents peek {}.", check.name, (now - check.born_at) / 60_000, check.notices + 1, check.name);
                 send_mail(&mut *runner, "fno-first-check", &check.parent, &text)?;
+                notice_event(home, row, check.notices + 1);
+                if let Some((to, line)) = row.and_then(consult_worker_line) {
+                    let _ = send_mail(&mut *runner, "fno-first-check", &to, &line);
+                }
                 check.notices += 1;
                 check.finished = check.notices >= 2;
                 check.deadline = now.saturating_add(check.interval);
@@ -451,6 +455,72 @@ pub(crate) fn run_pass(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+/// The notice, recorded beside the parent mail so the consult report and any
+/// later reader fold the store instead of a mailbox.
+fn notice_event(home: &AgentsHome, row: Option<&RegistryEntry>, notice: u8) {
+    use crate::events::EventEmitter;
+    let Some(row) = row else {
+        return;
+    };
+    let mut fields = serde_json::Map::new();
+    fields.insert("name".into(), serde_json::json!(row.name));
+    fields.insert("notice".into(), serde_json::json!(notice));
+    if let Some(sid) = row.harness_session_id.clone() {
+        fields.insert("session_id".into(), serde_json::json!(sid));
+    }
+    if let Some(node) = row.node.clone() {
+        fields.insert("node".into(), serde_json::json!(node));
+    }
+    if let Err(e) = EventEmitter::new(home.events_jsonl(), "fno-first-check")
+        .emit_fields("first_check_notice", fields)
+    {
+        eprintln!("fno-first-check: event write failed: {e}");
+    }
+}
+
+/// The worker's own consult line, when its lane is one the lead allows:
+/// `(to, text)` for a second mail beside the parent's.
+fn consult_worker_line(row: &RegistryEntry) -> Option<(String, String)> {
+    let root = std::path::Path::new(&row.project_root);
+    let lanes: Vec<String> =
+        crate::agents_config::config_lookup(root, &["agents", "consult", "lanes"])
+            .and_then(|v| v.as_array().cloned())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+    if lanes.is_empty() {
+        return None;
+    }
+    let model = row.model.as_deref().unwrap_or_default();
+    let declared = crate::route_gather::declared_rows(root);
+    let lane = declared.as_object()?.iter().find_map(|(name, decl)| {
+        (decl.get("harness").and_then(serde_json::Value::as_str) == Some(row.harness_name())
+            && decl.get("model").and_then(serde_json::Value::as_str) == Some(model))
+        .then(|| name.clone())
+    })?;
+    if !lanes.iter().any(|a| a == &lane) {
+        return None;
+    }
+    let cap = crate::agents_config::config_lookup(root, &["agents", "consult", "max_calls"])
+        .and_then(|v| v.as_integer())
+        .filter(|v| *v >= 0)
+        .unwrap_or(2);
+    let to = row
+        .harness_session_id
+        .clone()
+        .unwrap_or_else(|| row.name.clone());
+    Some((
+        to,
+        format!(
+            "No progress noticed. If you are stuck on a judgment call, run fno agents loop consult --question \"<one question>\" (cap {cap})."
+        ),
+    ))
 }
 
 pub(crate) fn transcript(row: &RegistryEntry) -> Option<std::path::PathBuf> {
@@ -921,5 +991,36 @@ mod tests {
         transfer_birth_claim(&row, 1_002).unwrap();
         let (_, again) = claims::status("node:x-col-idem", None);
         assert_eq!(again.unwrap(), before);
+    }
+
+    #[test]
+    fn consult_worker_line_answers_an_allowed_lane_and_none_off_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("proj");
+        std::fs::create_dir_all(root.join(".fno")).unwrap();
+        std::fs::write(
+            root.join(".fno/config.toml"),
+            "[agents.consult]\nlanes = [\"zai-flash\"]\n\n[[routing.models]]\nname = \"zai-flash\"\nharness = \"claude\"\nmodel = \"glm-5.3-flash[1m]\"\n",
+        )
+        .unwrap();
+        let mut row = RegistryEntry::default();
+        row.harness = Some("claude".into());
+        row.model = Some("glm-5.3-flash[1m]".into());
+        row.project_root = root.display().to_string();
+        row.harness_session_id = Some("sid-1".into());
+        let (to, text) = consult_worker_line(&row).expect("the allowed lane answers");
+        assert!(text.contains("fno agents loop consult"), "text: {text}");
+        assert!(text.contains("(cap 2)"), "text: {text}");
+        assert_eq!(to, "sid-1");
+        // An empty allowlist is the off posture: no worker line at all.
+        let root2 = temp.path().join("proj2");
+        std::fs::create_dir_all(root2.join(".fno")).unwrap();
+        std::fs::write(
+            root2.join(".fno/config.toml"),
+            "[agents.consult]\nlanes = []\n",
+        )
+        .unwrap();
+        row.project_root = root2.display().to_string();
+        assert!(consult_worker_line(&row).is_none());
     }
 }

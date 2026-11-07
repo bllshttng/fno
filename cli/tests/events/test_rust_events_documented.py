@@ -49,6 +49,12 @@ RUST_CLIENT_EVENT_SOURCES = {
     # close under the observer source its Python twin declared.
     "skill_eval_finding": "observer",
     "skill_eval_run_complete": "observer",
+    # The worker consult command runs in the caller's session, not the
+    # daemon; it names its own producer source.
+    "consult_call": "consult",
+    # The first-check sweep is a standalone client process beside the
+    # worker; it names its own producer source.
+    "first_check_notice": "fno-first-check",
 }
 
 
