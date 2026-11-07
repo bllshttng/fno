@@ -3,7 +3,7 @@
 //!
 //! launchd keys jobs by label inside the uid-scoped `gui/<uid>` domain, so a
 //! second HOME's install with a fixed label replaces the first HOME's
-//! registration (x-781d, measured in the x-f5c6 clean-run events journal).
+//! registration (measured in the clean-run events journal).
 //! The suffix is the first 8 hex chars of sha256 over the HOME env value:
 //! stable per HOME, distinct across HOMEs, and self-consistent inside a job
 //! because the plist template pins HOME in its EnvironmentVariables.
@@ -25,12 +25,12 @@ use sha2::{Digest, Sha256};
 /// The test seam env var. Set it to pin the suffix (e.g. `testhome`).
 pub const FNO_TEST_LAUNCHD_SUFFIX: &str = "FNO_TEST_LAUNCHD_SUFFIX";
 
-/// The label fno used before x-781d. Installs retire a registration under
+/// The label fno used before the HOME-derived suffix. Installs retire a registration under
 /// this label when its plist path points at THIS HOME; a foreign path is
 /// another HOME's job and is left alone.
 pub const LEGACY_PR_WATCHER_LABEL: &str = "sh.fno.pr-watcher";
 
-/// The groom label before x-781d.
+/// The groom label before the HOME-derived suffix.
 pub const LEGACY_GROOM_LABEL: &str = "sh.fno.groom";
 
 /// The watcher's plist file name (no suffix; the per-HOME LaunchAgents

@@ -1640,7 +1640,7 @@ pub fn read_tick_trace(journals: &[PathBuf], now_unix: u64) -> TickTrace {
     trace
 }
 
-/// This HOME's pr-watcher launchd label: the HOME-derived one (x-781d), not
+/// This HOME's pr-watcher launchd label: the HOME-derived one, not
 /// the journal scheduler identity [`SCHED_LAUNCHD`]'s tail. The journal
 /// identity stays fixed for attribution; only live launchctl probes use
 /// this.
@@ -1683,7 +1683,7 @@ pub fn foreign_plist_path(print_stdout: &str, home: &Path) -> Option<String> {
 
 /// The launchd labels the loops table lists, one row each with loaded yes/no
 /// and the last exit `launchctl list` reports. The pr-watcher and groom rows
-/// carry this HOME's derived labels (x-781d); the three legacy names have no
+/// carry this HOME's derived labels; the three legacy names have no
 /// installer left and stay fixed so their rows survive on machines that ran
 /// an older fno.
 pub fn launchd_fold_labels() -> Vec<String> {

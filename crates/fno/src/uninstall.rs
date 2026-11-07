@@ -270,7 +270,7 @@ fn launch_agents() -> Vec<(String, PathBuf)> {
 }
 
 /// The `<Label>` string value from one LaunchAgent plist, best-effort. The
-/// declared label carries the HOME-derived suffix (x-781d); the filename
+/// declared label carries the HOME-derived suffix; the filename
 /// does not.
 fn plist_label(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -676,9 +676,9 @@ fn execute(action: &Action) -> Result<String, String> {
         Action::Run(words) => run(words).map(|_| "removed".into()),
         Action::Launchd { label, plist } => {
             // Boot out the label the plist itself declares: the registered
-            // label carries the HOME-derived suffix (x-781d), which the
+            // label carries the HOME-derived suffix, which the
             // filename does not. The filename stem is the fallback for an
-            // unreadable plist and covers pre-x-781d plists, whose declared
+            // unreadable plist and covers pre-suffix plists, whose declared
             // label IS the stem. A job that is not loaded fails bootout;
             // removing the plist is what keeps it from loading at the next
             // login either way.

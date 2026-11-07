@@ -37,13 +37,13 @@ const PARTIAL_EXIT: i32 = 4;
 /// Past this the daily cadence is presumed dead. Deliberately > 24h so a
 /// healthy agent that merely slipped a night is not treated as broken.
 const STALE_HOURS: f64 = 48.0;
-/// This HOME's groom launchd label (HOME-derived suffix, x-781d). The plist
+/// This HOME's groom launchd label (HOME-derived suffix). The plist
 /// filename keeps no suffix: the per-HOME LaunchAgents directory already
 /// separates files.
 fn label() -> String {
     crate::launchd_labels::groom_label()
 }
-/// The groom label fno used before x-781d; installs retire it when its
+/// The groom label fno used before the HOME-derived suffix; installs retire it when its
 /// plist points at this HOME.
 const LEGACY_LABEL: &str = crate::launchd_labels::LEGACY_GROOM_LABEL;
 /// Local time; the UTC-keyed claim, not the clock, enforces once a day.
