@@ -3448,11 +3448,12 @@ mod tests {
         pane.scroll_to_bottom();
         pane.feed(b"\x1b[41m\x1b[2J");
         let frame = pane.frame();
+        // SGR 41 sets the background to palette 1 (red; 9 is bright red).
         assert!(
             frame
                 .cells
                 .iter()
-                .all(|c| c.c == ' ' && c.flags == 0 && c.bg == Color::Indexed(9)),
+                .all(|c| c.c == ' ' && c.flags == 0 && c.bg == Color::Indexed(1)),
             "BCE fill cells are unstyled red spaces"
         );
     }
