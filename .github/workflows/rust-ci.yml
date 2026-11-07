@@ -28,7 +28,7 @@ on:
       - crates/fno-agents/src/event_store/schema.yaml
       - scripts/ci/preflight.sh
       - scripts/ci/clippy-check.sh
-      - scripts/ci/clippy-baseline.txt
+      - tests/ci/clippy-baseline.txt
       - tests/ci/test_clippy_check.sh
       - scripts/tests/stress-rust-e2e-concurrency.sh
       - cli/src/fno/config/__init__.py
@@ -128,7 +128,7 @@ jobs:
     # clippy::correctness denied, plus clippy::invalid_regex,
     # clippy::indexing_slicing and clippy::disallowed_methods (bare
     # Command::output, configured in each crate's clippy.toml) held by the
-    # scripts/ci/clippy-baseline.txt ratchet. A hit is keyed by its line's
+    # tests/ci/clippy-baseline.txt ratchet. A hit is keyed by its line's
     # text, so editing a flagged line fails even though the hit itself is
     # baselined - deny-on-changed-lines with no merge-base diff. All four
     # lints run as WARN through clippy, because a deny-level lint stops the

@@ -12,7 +12,10 @@
 # NEW key and fails, so deny-on-changed-lines needs no merge-base diff and
 # holds on push and nightly runs too.
 #
-# Existing hits live in scripts/ci/clippy-baseline.txt. Fixing a line turns
+# Existing hits live in tests/ci/clippy-baseline.txt. The file sits under
+# tests/ because it is generated fixture data: a projection of raw source
+# lines, so it can carry token shapes (node-id-like strings) the tree gates
+# must not read as shipped breadcrumbs. Fixing a line turns
 # its entry stale (harmless, reported as a ratchet-down); re-ratchet with
 # --write-baseline after a fix or a toolchain bump. CLIPPY_TOOLCHAIN in
 # rust-ci.yml names the toolchain that wrote the baseline; bump them
@@ -35,7 +38,7 @@ export LC_ALL=C
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-BASELINE="scripts/ci/clippy-baseline.txt"
+BASELINE="tests/ci/clippy-baseline.txt"
 WRITE=0
 EXTRACT_SRC=""
 EXTRACT_CRATE=""

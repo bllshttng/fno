@@ -2,7 +2,7 @@
 # Positive control for scripts/ci/clippy-check.sh (the rust-ci clippy gate).
 #
 # The gate parses clippy's JSON stream into baseline keys and holds them
-# against scripts/ci/clippy-baseline.txt. A gate nobody has watched fail is
+# against tests/ci/clippy-baseline.txt. A gate nobody has watched fail is
 # not known to work, so this asserts, without a cargo build:
 #   - the parser emits the exact key per clippy lint, and filters rustc's
 #     own diagnostics and macro-expanded foreign paths,
