@@ -97,10 +97,12 @@ fn validation_rejects_bad_inputs() {
     let cwd = tmpdir("val-cwd");
     let d = Duration::from_secs(1);
 
-    let empty_name = dispatch_claude_ask(&home, &ch, "", "hi", "fno", &cwd, false, Some(d), &[]);
+    let empty_name = dispatch_claude_ask(&home, &ch, "", "hi", "fno", &cwd, false, Some(d), &[],
+        None);
     assert_eq!(empty_name.exit_code, 2);
 
-    let sep_name = dispatch_claude_ask(&home, &ch, "a/b", "hi", "fno", &cwd, false, Some(d), &[]);
+    let sep_name = dispatch_claude_ask(&home, &ch, "a/b", "hi", "fno", &cwd, false, Some(d), &[],
+        None);
     assert_eq!(sep_name.exit_code, 2);
 
     let shortid_shape = dispatch_claude_ask(
@@ -113,14 +115,17 @@ fn validation_rejects_bad_inputs() {
         false,
         Some(d),
         &[],
+        None,
     );
     assert_eq!(shortid_shape.exit_code, 2);
 
     let empty_msg =
-        dispatch_claude_ask(&home, &ch, "alice", "   ", "fno", &cwd, false, Some(d), &[]);
+        dispatch_claude_ask(&home, &ch, "alice", "   ", "fno", &cwd, false, Some(d), &[],
+        None);
     assert_eq!(empty_msg.exit_code, 2);
 
-    let bad_from = dispatch_claude_ask(&home, &ch, "alice", "hi", "a<b", &cwd, false, Some(d), &[]);
+    let bad_from = dispatch_claude_ask(&home, &ch, "alice", "hi", "a<b", &cwd, false, Some(d), &[],
+        None);
     assert_eq!(bad_from.exit_code, 2);
     assert!(bad_from.stderr.contains("XML-unsafe"));
 }
@@ -148,6 +153,7 @@ fn ask_unknown_name_exits_16_not_create() {
         false,
         None,
         &[("PATH", path.as_str())],
+        None,
     );
     assert_eq!(
         out.exit_code, 16,
@@ -543,6 +549,7 @@ fn followup_accepts_full_session_id_and_stamps_named_row() {
         false,
         Some(Duration::from_secs(3)),
         &[],
+        None,
     );
     handle.join().unwrap();
     cleanup_sock(&sock);
@@ -595,6 +602,7 @@ fn followup_socket_null_without_truth_exit_13_preserves_status() {
         false,
         Some(Duration::from_secs(2)),
         &[],
+        None,
     );
     assert_eq!(out.exit_code, 13);
     assert!(
@@ -716,6 +724,7 @@ fn concurrent_followups_serialize_on_flock() {
                 false,
                 Some(Duration::from_secs(5)),
                 &[],
+                None,
             )
         }));
     }
@@ -786,6 +795,7 @@ fn create_corrupt_registry_exit_12_no_spawn() {
         false,
         None,
         &[("PATH", path.as_str())],
+        None,
     );
     assert_eq!(out.exit_code, 12, "stderr={}", out.stderr);
 }
@@ -813,6 +823,7 @@ fn followup_interactive_claude_row_refuses_worker_short() {
         false,
         Some(Duration::from_secs(2)),
         &[],
+        None,
     );
     assert_eq!(out.exit_code, 12, "{}", out.stderr);
     assert!(out.stderr.contains("no short id"), "{}", out.stderr);
