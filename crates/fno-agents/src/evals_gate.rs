@@ -163,8 +163,9 @@ pub(crate) fn lane_with_room(
 /// The lane a run moves to when it cannot ride its own: the main lane's
 /// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
 /// never the first claude inventory row, which can be opus, and opus never
-/// runs target work.
-const FALLBACK_LANE: &str = "claude-sonnet-5-5";
+/// runs target work. The name is the builtin row, not a versioned spelling:
+/// a config row that some machines declare resolves nowhere elsewhere.
+const FALLBACK_LANE: &str = "claude-sonnet";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
@@ -3715,7 +3716,7 @@ mod tests {
             let spawns = w.spawns.borrow();
             assert_eq!(spawns.len(), 1, "the head launched on the fallback");
             let argv = spawns[0].join(" ");
-            assert!(argv.contains("--lane claude-sonnet-5-5 "), "{argv}");
+            assert!(argv.contains("--lane claude-sonnet "), "{argv}");
             if !banned.is_empty() {
                 assert!(!argv.contains(banned), "{argv}");
             }
