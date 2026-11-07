@@ -134,6 +134,8 @@ mod tests {
         let start = std::time::Instant::now();
         enforce_title_gate(&rows, &rows).unwrap();
         crate::graph_store::enforce_node_state_policy(&rows, &rows).unwrap();
+        let mut children = rows.clone();
+        crate::graph_store::compute_children(&mut children);
         assert!(
             start.elapsed() < std::time::Duration::from_secs(2),
             "gates took {:?} on 6600 rows",
