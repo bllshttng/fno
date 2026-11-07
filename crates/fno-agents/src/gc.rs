@@ -1474,6 +1474,17 @@ mod tests {
                 0,
                 "a held pass lands no retire tick"
             );
+            // The held pass still ran its keeper half, and its thread stamps
+            // the unfinished receipt on its way out. Await that thread before
+            // writing the done receipt, or its final stamp clobbers this one.
+            let batch_free = Instant::now() + Duration::from_secs(10);
+            while crate::boot_revival::batch_running_for_tests() {
+                assert!(
+                    Instant::now() < batch_free,
+                    "the held pass's batch thread never finished"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
             // The pass done: the next tick runs the sweeps.
             crate::boot_revival::write_receipt(
                 &home.root().join("boot-revival.json"),

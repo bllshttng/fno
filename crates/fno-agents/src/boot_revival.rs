@@ -39,6 +39,14 @@ const RECEIPT_FILE: &str = "boot-revival.json";
 /// would still read the pre-respawn world and double-respawn).
 static BATCH_RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// The in-flight guard's read, for tests that must await the pass thread
+/// before writing a receipt of their own: the thread's final stamp lands
+/// after the caller's, and a test that overwrites mid-flight races it.
+#[cfg(test)]
+pub(crate) fn batch_running_for_tests() -> bool {
+    BATCH_RUNNING.load(Ordering::SeqCst)
+}
+
 /// The hold's bound in seconds past boot: revival protection is not a veto.
 /// A listing that never reads (a broken harness CLI) must not hold the
 /// retire arm forever, so 30 minutes past boot the sweeps resume and the
