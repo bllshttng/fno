@@ -564,9 +564,10 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             .and_then(Value::as_str)
             .cmp(&b.get("last_ts").and_then(Value::as_str))
     });
-    // The You section rides the same projection: one row per registry-named
-    // claude session whose transcript carries typed turns.
-    // Fail-open: without a resolvable home the section reads as absent.
+    // The You section rides the same projection: one row per session whose
+    // transcript carries typed turns, named through the registry when it
+    // can be. Fail-open: without a resolvable home the section reads as
+    // absent.
     let you = crate::paths::AgentsHome::from_env_opt()
         .map(|home| {
             crate::you_threads::project_you(&crate::you_threads::YouInputs {
@@ -574,6 +575,10 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 projects_dir: crate::claude_drive::claude_projects_dir(),
                 home_root: home.root().to_path_buf(),
                 cache_path: home.root().join("intel").join("you-threads.json"),
+                capture_dir: crate::operator_turns::capture_dir(
+                    &std::env::current_dir().unwrap_or_default(),
+                )
+                .unwrap_or_else(|| home.root().join("operator-capture")),
             })
         })
         .unwrap_or_default();
