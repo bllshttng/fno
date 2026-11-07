@@ -873,7 +873,7 @@ fn flow_line(flow: &Value) -> String {
         .get("deliveries")
         .and_then(|d| d.get("weeks"))
         .and_then(Value::as_array);
-    let shipped = weeks
+    let delivered = weeks
         .and_then(|w| w.last())
         .and_then(|e| {
             let code = e.get("code").and_then(Value::as_u64).unwrap_or(0);
@@ -881,20 +881,31 @@ fn flow_line(flow: &Value) -> String {
             Some(code + doc)
         })
         .unwrap_or(0);
+    let delivered = if delivered == 0 {
+        "No deliveries this week".to_string()
+    } else {
+        format!("{delivered} deliveries this week")
+    };
     let cycle = flow
         .get("cycle")
         .and_then(|c| c.get("median_days"))
         .and_then(Value::as_f64);
     let cycle = match cycle {
         Some(d) => format!("cycle {d:.1}d median"),
-        None => "cycle n/a".into(),
+        None => format!(
+            "cycle unavailable: {}",
+            flow.get("cycle")
+                .and_then(|c| c.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        ),
     };
     let prs = flow
         .get("open_prs")
         .and_then(|p| p.get("count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    format!("{shipped} shipped this week · {cycle} · {prs} open PRs")
+    format!("{delivered} · {cycle} · {prs} open PRs")
 }
 
 /// The persistent filter bar's cells: Search, Status, Type, Priority,

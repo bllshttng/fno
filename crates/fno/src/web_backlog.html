@@ -1355,12 +1355,20 @@ function laneKeyOf(card, lanesBy, parents, byId) {
         bars.appendChild(b);
       }
       statsEl.appendChild(bars);
+    } else {
+      const empty = document.createElement("span");
+      empty.className = "dim";
+      const sinceDays = Number(flow.window && flow.window.since_days);
+      empty.textContent = Number.isFinite(sinceDays) && sinceDays > 0
+        ? "No deliveries in the last " + sinceDays + " days"
+        : "No deliveries in the selected period";
+      statsEl.appendChild(empty);
     }
     const cycle = flow.cycle || {};
     const cl = document.createElement("span");
     cl.className = "dim";
     cl.textContent = cycle.available === false
-      ? "cycle unavailable: " + (cycle.reason || "unknown")
+      ? "Cycle unavailable: " + (cycle.reason || "unknown")
       : "cycle median " + cycle.median_days + " d, p85 " + cycle.p85_days + " d (n=" + cycle.n + ")";
     statsEl.appendChild(cl);
     const prs = flow.open_prs || {};
@@ -1371,7 +1379,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     const w = document.createElement("span");
     w.className = "dim";
     const nOf = (v) => (v && typeof v === "object" ? v.count : v) || 0;
-    w.textContent = "waiting: in progress " + nOf(waiting.in_progress) + ", in review " + nOf(waiting.in_review) + ", blocked " + nOf(waiting.blocked);
+    w.textContent = "waiting: in review " + nOf(waiting.in_review) + ", blocked " + nOf(waiting.blocked);
     statsEl.appendChild(w);
   }
   function drawGraph() {

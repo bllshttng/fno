@@ -80,6 +80,30 @@ fn board_render_rows() {
         lines[0]
     );
 
+    let mut inp = board_inputs();
+    inp.flow = json!({
+        "available": true,
+        "window": {"since_days": 28},
+        "deliveries": {"weeks": [{"week_start": "2026-11-02", "code": 0, "doc": 0}]},
+        "cycle": {
+            "available": false,
+            "reason": "no merged PR dates in window"
+        },
+        "open_prs": {"count": 1}
+    });
+    let b = board_with(inp);
+    let (lines, _) = render(&b, 200);
+    assert!(
+        lines[0].contains("No deliveries this week"),
+        "{:?}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("cycle unavailable: no merged PR dates in window"),
+        "{:?}",
+        lines[0]
+    );
+
     let b = board_with(board_inputs());
     let (lines, _) = render(&b, 80);
     let stacked = lines

@@ -357,7 +357,7 @@ fn flow(
     }
 
     let cycle = if cycle_days.is_empty() {
-        json!({"available": false, "reason": "no merged PR with created_at and merged_at in window"})
+        json!({"available": false, "reason": "no merged PR dates in window"})
     } else {
         cycle_days.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let n = cycle_days.len();
@@ -975,6 +975,18 @@ mod tests {
         assert_eq!(weeks[4]["code"], 1);
         assert_eq!(flow["deliveries"]["code"], 3);
         assert_eq!(flow["deliveries"]["doc"], 1);
+
+        let empty_cycle = classify(&json!({
+            "entries": [{"id": "x-open", "status": "ready"}],
+            "rows": [],
+            "now": "2026-09-09T12:00:00",
+            "since_days": 28
+        }))
+        .unwrap();
+        assert_eq!(
+            empty_cycle["flow"]["cycle"]["reason"],
+            "no merged PR dates in window"
+        );
     }
 }
 
