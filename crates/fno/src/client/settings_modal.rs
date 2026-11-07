@@ -12,11 +12,12 @@ pub(crate) enum SettingsTab {
     Theme,
     Colors,
     Experimental,
+    RemoteHosts,
 }
 
 impl SettingsTab {
     /// Tab's section cycle: General -> Theme -> Colors -> Experimental ->
-    /// General, the order the tab strip draws (user ruling 2026-10-09: tab
+    /// Remote hosts -> General, the order the tab strip draws (user ruling 2026-10-09: tab
     /// reaches every section the header lists). Keybindings is no section
     /// here: it opened a different modal, so a tab landing on it left
     /// settings and every section after it was reachable only by click.
@@ -25,16 +26,18 @@ impl SettingsTab {
             SettingsTab::General => SettingsTab::Theme,
             SettingsTab::Theme => SettingsTab::Colors,
             SettingsTab::Colors => SettingsTab::Experimental,
-            SettingsTab::Experimental => SettingsTab::General,
+            SettingsTab::Experimental => SettingsTab::RemoteHosts,
+            SettingsTab::RemoteHosts => SettingsTab::General,
         }
     }
 }
 
-pub(crate) const ALL: [SettingsTab; 4] = [
+pub(crate) const ALL: [SettingsTab; 5] = [
     SettingsTab::General,
     SettingsTab::Theme,
     SettingsTab::Colors,
     SettingsTab::Experimental,
+    SettingsTab::RemoteHosts,
 ];
 
 impl View {
@@ -120,6 +123,7 @@ impl View {
                     &self.theme,
                 );
             }
+            SettingsTab::RemoteHosts => (rows, actions) = remote_hosts::rows(self),
             SettingsTab::Experimental => {
                 // Features still in progress, each off until turned on.
                 let flags = experimental::flags(self);
@@ -168,6 +172,7 @@ impl View {
                 ("theme".to_string(), tab == SettingsTab::Theme),
                 ("colors".to_string(), tab == SettingsTab::Colors),
                 ("experimental".to_string(), tab == SettingsTab::Experimental),
+                ("remote hosts".to_string(), tab == SettingsTab::RemoteHosts),
             ])
             .footer(if self.settings_drilled() {
                 "esc back"
@@ -204,6 +209,7 @@ impl View {
             || lane.axis.is_some()
             || lane.pick.is_some()
             || lane.is_entry()
+            || self.remote_hosts.add.is_some()
     }
 }
 
@@ -219,6 +225,7 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.settings_tab = tab;
     view.lane.reset();
     theme_import_ui::reset(view);
+    remote_hosts::cancel_add(view);
     view.reopen_settings_keeping_sel();
 }
 
@@ -242,7 +249,10 @@ pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
 /// file-picker rows take a click; acting on another row would leave the
 /// field armed under a changed page.
 pub(super) fn row_tap_allowed(view: &View, target: usize) -> bool {
-    if !(view.lane.is_entry() || theme_import_ui::is_entry(&view.theme_import)) {
+    let typing = view.lane.is_entry()
+        || theme_import_ui::is_entry(&view.theme_import)
+        || view.remote_hosts.add.is_some();
+    if !typing {
         return true;
     }
     let action = view.aux.as_ref().and_then(|m| m.actions.get(target));
@@ -264,7 +274,8 @@ pub(super) fn back(view: &mut View) -> bool {
     let stepped = (!matches!(view.theme_import, theme_import_ui::ThemeImportUi::Idle) && {
         theme_import_ui::reset(view);
         true
-    }) || lane_step(&mut view.lane);
+    }) || lane_step(&mut view.lane)
+        || remote_hosts::cancel_add(view);
     if !stepped {
         return false;
     }
@@ -310,6 +321,8 @@ pub(super) async fn field_keys(
         f.feed(bytes)
     } else if let theme_import_ui::ThemeImportUi::Entry(f) = &mut view.theme_import {
         f.feed(bytes)
+    } else if let Some(f) = view.remote_hosts.add.as_mut() {
+        f.feed(bytes)
     } else {
         return Ok(None);
     };
@@ -323,6 +336,8 @@ pub(super) async fn field_keys(
             input_field::FieldEvent::Submit(text) => {
                 let submitted = if view.lane.is_entry() {
                     lane_entry::submit(view, text).await?
+                } else if view.remote_hosts.add.is_some() {
+                    remote_hosts::submit(view, text).await
                 } else {
                     theme_import_ui::submit(view, text)
                 };
@@ -358,6 +373,7 @@ pub(super) async fn run_action(
             view.reopen_settings_keeping_sel();
         }
         AuxAction::ApplyTheme(name) => theme_ground::apply(view, &name).await?,
+        AuxAction::RemoteHost(act) => remote_hosts::act(view, act).await,
         AuxAction::ThemeImportOpen => theme_import_ui::open(view),
         AuxAction::ThemeImportSave => theme_import_ui::save(view).await?,
         AuxAction::ThemeImportCancel => theme_import_ui::cancel(view),

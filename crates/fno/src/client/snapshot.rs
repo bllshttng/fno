@@ -82,6 +82,9 @@ pub enum ViewKind {
     /// The settings modal at its top level: the tab strip the tab cycle
     /// walks.
     Settings,
+    /// Settings on the Remote hosts tab, two seeded hosts showing both
+    /// state words.
+    RemoteHosts,
     /// The which-key table, opened FROM settings: the printed key labels
     /// (`ctrl+b`) live here.
     Keys,
@@ -286,6 +289,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "composer" => Some(ViewKind::Composer),
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
+        "remote-hosts" => Some(ViewKind::RemoteHosts),
         "report" => Some(ViewKind::Report),
         "report-preview" => Some(ViewKind::ReportPreview),
         "keys" => Some(ViewKind::Keys),
@@ -1172,6 +1176,14 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
+        Some(ViewKind::RemoteHosts) => {
+            super::remote_hosts::snapshot_seam(&mut view);
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+            // The page paints rows only when settings is open on the tab;
+            // the live page re-opens itself on every probe, so nothing else
+            // to gather here.
+        }
         Some(ViewKind::Report) => runtime.block_on(super::report::snapshot(&mut view, false))?,
         Some(ViewKind::ReportPreview) => {
             runtime.block_on(super::report::snapshot(&mut view, true))?
@@ -1693,6 +1705,7 @@ mod tests {
             ("composer", ViewKind::Composer),
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
+            ("remote-hosts", ViewKind::RemoteHosts),
             ("report", ViewKind::Report),
             ("report-preview", ViewKind::ReportPreview),
             ("keys", ViewKind::Keys),

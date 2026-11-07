@@ -1642,6 +1642,13 @@
           "default": null,
           "title": "Preset"
         },
+        "remote_hosts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remote Hosts",
+          "type": "array"
+        },
         "report_parent": {
           "anyOf": [
             {

@@ -31,5 +31,6 @@ pub(super) fn chrome_hit_label(hit: &Option<ChromeHit>) -> &'static str {
         Some(ChromeHit::OpenPr(_)) => "OpenPr",
         Some(ChromeHit::TopRow(_)) => "TopRow",
         Some(ChromeHit::NeedInput) => "NeedInput",
+        Some(ChromeHit::AddRemoteHost) => "AddRemoteHost",
     }
 }

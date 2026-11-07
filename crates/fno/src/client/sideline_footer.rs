@@ -1,4 +1,4 @@
-//! The sideline footer's button row: new session, new workspace, menu.
+//! The sideline footer's button row: new session, new workspace, add host, menu.
 //! Each button opens what its key opens, and one fn lays the row out so the
 //! paint and the hit-test cannot diverge.
 
@@ -14,6 +14,7 @@ const SESSION: (&str, &str) = ("toggle-composer", "+ session");
 /// It shows only where the whole row fits; narrower rows step down.
 const TASK_PROMPT: &str = "+ describe a task for a new session";
 const WORKSPACE: (&str, &str) = ("new-workspace", "+ workspace");
+const HOST: (&str, &str) = ("add-remote-host", "+ host");
 const MENU: (&str, &str) = ("sideline-menu", "menu");
 
 /// The footer row as painted, with each button's column range. A `None`
@@ -22,17 +23,19 @@ const MENU: (&str, &str) = ("sideline-menu", "menu");
 pub(super) struct FooterButtons {
     pub(super) text: String,
     pub(super) session: Option<Range<usize>>,
+    pub(super) host: Option<Range<usize>>,
     pub(super) menu: Option<Range<usize>>,
 }
 
 impl View {
-    /// The footer at this panel width, one row of three buttons joined by
-    /// ` · `: `+ session (i) · + workspace (N) · menu (P)`, with the session
-    /// button reading the task prompt when the panel is wide. The keys resolve
-    /// through the live chord table (`key_for`), so a rebind relabels the
-    /// row. A narrow panel shows the keys only (`i · N · P`), each still a
-    /// button. Narrower still, or with a recruit-mark tally on the row, the
-    /// legacy one-button row paints.
+    /// The footer at this panel width, one row of buttons joined by ` · `:
+    /// `+ session (i) · + workspace (N) · + host (+) · menu (P)`, with the
+    /// session button reading the task prompt when the panel is wide. The keys
+    /// resolve through the live chord table (`key_for`), so a rebind relabels
+    /// the row. A narrow panel shows the keys only (`i · N · + · P`), each
+    /// still a button. When even that does not fit, `+ host` drops and the
+    /// three-button forms run again. Narrower still, or with a recruit-mark
+    /// tally on the row, the legacy one-button row paints.
     pub(super) fn footer_buttons(&self, panel_w: usize) -> FooterButtons {
         // last column is the divider
         let tw = panel_w.saturating_sub(1);
@@ -40,7 +43,11 @@ impl View {
             // Columns as the row painter counts them, so a rebound key
             // with a wide glyph cannot move a range off its label.
             let cols = |s: &str| s.chars().map(super::glyph_cols).sum::<usize>();
-            for (prompt, with_label) in [(true, true), (false, true), (false, false)] {
+            let ladder = [(true, true), (false, true), (false, false)];
+            for (with_host, (prompt, with_label)) in [true, false]
+                .into_iter()
+                .flat_map(|h| ladder.map(|step| (h, step)))
+            {
                 let label = |(action, bare): (&str, &str)| {
                     let bare = if prompt && action == SESSION.0 {
                         TASK_PROMPT
@@ -60,11 +67,21 @@ impl View {
                 else {
                     continue;
                 };
-                let text = format!("{session} \u{b7} {workspace} \u{b7} {menu}");
+                let host = if with_host { label(HOST) } else { None };
+                if with_host && host.is_none() {
+                    continue;
+                }
+                let mut parts = vec![session.clone(), workspace];
+                parts.extend(host.clone());
+                parts.push(menu.clone());
+                let text = parts.join(" \u{b7} ");
                 if cols(&text) <= tw {
                     let menu_at = cols(&text) - cols(&menu);
+                    // `+ session` and `+ workspace` and a separator each sit before the host.
+                    let host_at = cols(&parts[..2].join(" \u{b7} ")) + cols(" \u{b7} ");
                     return FooterButtons {
                         session: Some(0..cols(&session)),
+                        host: host.map(|h| host_at..host_at + cols(&h)),
                         menu: Some(menu_at..cols(&text)),
                         text,
                     };

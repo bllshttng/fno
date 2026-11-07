@@ -1702,6 +1702,13 @@
       "minimum": 1,
       "title": "Wheel Passthrough Rate",
       "type": "integer"
+     },
+     "remote_hosts": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Remote Hosts",
+      "type": "array"
      }
     },
     "title": "MuxBlock",
@@ -6796,6 +6803,15 @@
    "question": "",
    "default_source": "default",
    "doc": "Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops."
+  },
+  {
+   "path": "mux.remote_hosts",
+   "type": "list[str]",
+   "default": [],
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "ssh names the mux probes and lists on its Remote Hosts page: a tailnet name, a host or user@host. Added from the mux with + host. Default empty."
   },
   {
    "path": "dev.source",
