@@ -304,6 +304,11 @@ impl Pane {
                         self.processor.advance(&mut self.term, head_plus_bsu);
                         if self.term.mode().contains(Mode::SYNC_UPDATE) {
                             self.hold_bytes(tail);
+                        } else if !tail.is_empty() {
+                            // The parser swallowed the BSU mid-string (an
+                            // unterminated OSC from a prior chunk, say) and
+                            // no window opened: the tail flows, never drops.
+                            self.processor.advance(&mut self.term, tail);
                         }
                     } else {
                         self.processor.advance(&mut self.term, &b);
@@ -350,11 +355,16 @@ impl Pane {
         if self.sync_deadline().is_none_or(|deadline| deadline > now) {
             return false;
         }
+        let started = self.term.sync_update_started;
         let held = std::mem::take(&mut self.held);
         if !held.is_empty() {
             self.processor.advance(&mut self.term, &held);
         }
-        self.term.end_sync_update();
+        // The flushed bytes may have ended this window AND re-armed a fresh
+        // one (ESU then BSU): end only a window the flush did not renew.
+        if self.term.sync_update_started == started {
+            self.term.end_sync_update();
+        }
         true
     }
 
@@ -2324,6 +2334,29 @@ mod tests {
         assert!(frame_text(&pane.frame()).contains("held"));
         assert_eq!(pane.sync_deadline(), None);
         assert!(!pane.expire_sync(deadline));
+    }
+
+    #[test]
+    fn expire_sync_flush_keeps_a_rearmed_window() {
+        let mut pane = Pane::new(4, 20);
+        pane.feed(b"\x1b[?2026hA");
+        let deadline = pane.sync_deadline().expect("window open");
+        // A program re-arming mid-window (a fresh BSU, no ESU): still held.
+        pane.feed(b"\x1b[?2026hB");
+        assert!(!frame_text(&pane.frame()).contains("A"));
+
+        assert!(pane.expire_sync(deadline));
+        assert!(
+            frame_text(&pane.frame()).contains("AB"),
+            "flushed at expiry"
+        );
+        // The re-armed BSU survives the expiry flush with its own deadline;
+        // ending the OLD window must not close the NEW one.
+        assert!(
+            pane.sync_deadline().is_some(),
+            "re-armed window survives the flush"
+        );
+        assert!(!pane.expire_sync(deadline), "fresh window expires later");
     }
 
     #[test]
