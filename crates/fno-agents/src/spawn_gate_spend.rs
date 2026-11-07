@@ -92,4 +92,82 @@ mod tests {
         let cap = team_cost_cap(temp.path());
         assert!(matches!(cap, Some(Ok(value)) if value == 10.0));
     }
+
+    #[test]
+    fn refuses_a_child_spawn_over_the_metered_team_cap() {
+        use crate::state::{self, RegistryEntry};
+
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let agents = temp.path().join("agents");
+        let state_root = temp.path().join("state");
+        let cwd = temp.path().join("repo");
+        std::fs::create_dir_all(cwd.join(".fno")).unwrap();
+        let config = cwd.join(".fno/config.toml");
+        std::fs::write(&config, "[budget.team]\ncost_cap_usd = 10.0\n").unwrap();
+
+        struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreEnv(
+            ["FNO_AGENTS_HOME", "FNO_STATE_DIR", "FNO_CONFIG"]
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        std::env::set_var("FNO_AGENTS_HOME", &agents);
+        std::env::set_var("FNO_STATE_DIR", &state_root);
+        std::env::set_var("FNO_CONFIG", &config);
+
+        let home = crate::paths::AgentsHome::from_env();
+        home.ensure_root().unwrap();
+        std::fs::write(home.events_jsonl(), "").unwrap();
+        state::update_registry(&home.registry_json(), |registry| {
+            registry.entries.extend([
+                RegistryEntry {
+                    name: "lead".into(),
+                    harness_session_id: Some("h-root".into()),
+                    role_level: Some(0),
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    ..Default::default()
+                },
+                RegistryEntry {
+                    name: "t-unknown".into(),
+                    harness_session_id: Some("h-unknown".into()),
+                    spawned_by_session: Some("h-root".into()),
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    ..Default::default()
+                },
+            ]);
+        })
+        .unwrap();
+        let ledger = crate::paths_cli::ledger_json(&cwd);
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        std::fs::write(
+            ledger,
+            r#"{"entries":[{"fno_id":"root-run","session_id":"root-run","sessions":["h-root"],"cost_usd":10.2}]}"#,
+        )
+        .unwrap();
+
+        let input = GateInput {
+            name: "t-retry".into(),
+            caller_session: Some("h-root".into()),
+            ..Default::default()
+        };
+        let refusal = check_team_cost_cap(&cwd, &input).unwrap_err();
+        assert_eq!(refusal.exit_code, EXIT_TEAM_COST_CAP);
+        let receipt = refusal.receipt.unwrap();
+        assert_eq!(receipt["reason"], "team_cost_cap");
+        assert_eq!(receipt["summary"], "$10.20 metered of $10.00, 1 unmetered");
+    }
 }
