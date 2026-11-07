@@ -590,10 +590,12 @@ mod tests {
             true,
         );
         assert_eq!(changes.len(), 2);
-        assert!(!changes[0].pid_proven);
-        assert_eq!(changes[0].new_status, None);
-        assert!(changes[1].pid_proven);
-        assert_eq!(changes[1].new_status, Some(crate::AgentStatus::Exited));
+        let bound = changes.first().expect("two rows planned");
+        assert!(!bound.pid_proven);
+        assert_eq!(bound.new_status, None);
+        let reaped_row = changes.last().expect("two rows planned");
+        assert!(reaped_row.pid_proven);
+        assert_eq!(reaped_row.new_status, Some(crate::AgentStatus::Exited));
     }
 
     /// AC2-EDGE: an unproven walk clears a dead stored pid (the sweep must
