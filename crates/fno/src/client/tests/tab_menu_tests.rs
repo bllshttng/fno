@@ -128,8 +128,9 @@ async fn tab_menu_opens_off_a_tab_cell_with_destructive_last() {
     let mut buf: Vec<u8> = Vec::new();
     row_menu_execute_selected(&mut v, &mut buf).await.unwrap();
     assert!(buf.is_empty(), "an unannounced server gets no split");
-    assert!(v
-        .notice
+    let aux = v
+        .aux
         .as_ref()
-        .is_some_and(|(s, _)| s.contains("restart the mux server")));
+        .expect("the skew refusal opens the restart popup");
+    assert_eq!(aux.actions, vec![super::AuxAction::RestartAgents]);
 }

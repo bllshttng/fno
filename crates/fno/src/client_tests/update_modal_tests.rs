@@ -943,3 +943,55 @@ fn update_modal_keeper_count_prints_once() {
     ));
     assert!(!row_labels(&degraded_modal).contains(&"up to date".to_string()));
 }
+
+/// AC1-HP: the skew popup's only action is the update modal's restart, and
+/// its rows name the refused command and both wire versions.
+#[test]
+fn skew_popup_names_the_command_and_versions_and_offers_one_restart() {
+    let aux = super::server_skew::build_skew_popup(Some(120), "open a row from another machine");
+    assert_eq!(aux.actions, vec![AuxAction::RestartAgents]);
+    let labels = row_labels(&aux).join("\n");
+    assert!(
+        labels.contains("open a row from another machine"),
+        "the refused command renders: {labels}"
+    );
+    assert!(
+        labels.contains("v120"),
+        "the server's version renders: {labels}"
+    );
+    assert!(
+        labels.contains("v122"),
+        "the client's version renders: {labels}"
+    );
+}
+
+/// AC2-HP: the tap runs the update modal's restart path - the popup closes,
+/// the reattach arm sets, and the client unwinds to detach.
+#[tokio::test]
+async fn skew_popup_tap_detaches_like_the_update_restart() {
+    let mut v = super::tests::view_with_agents(vec![]);
+    v.server_proto = Some(120);
+    super::server_skew::offer_server_restart(&mut v, "split panes in a direction");
+    assert!(v.aux.is_some());
+    let mut buf: Vec<u8> = Vec::new();
+    let flow = execute_aux_action(&mut v, AuxAction::RestartAgents, &mut buf)
+        .await
+        .unwrap();
+    assert!(matches!(flow, DispatchFlow::Detach));
+    assert!(v.restart_pending, "the reattach exec arms");
+    assert!(v.aux.is_none(), "the tap closes the popup");
+}
+
+/// AC4-HP: on a current server the far-row reach writes its command and
+/// opens no popup - the popup is the refusal path only.
+#[tokio::test]
+async fn far_row_opens_on_a_current_server_without_a_popup() {
+    let mut v = super::tests::view_with_agents(vec![]);
+    v.server_proto = Some(crate::proto::PROTO_VERSION);
+    let mut buf: Vec<u8> = Vec::new();
+    super::machine_tree::reach(&mut v, Default::default(), Default::default(), &mut buf)
+        .await
+        .unwrap();
+    assert!(!buf.is_empty(), "ReachRemote is written");
+    assert!(v.aux.is_none(), "no skew popup on a current server");
+}

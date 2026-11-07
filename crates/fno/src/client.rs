@@ -41,10 +41,11 @@ mod open_chooser;
 mod open_link;
 mod rename_overlay;
 mod row_menu;
+mod server_skew;
 mod sweep_scope;
 mod wire_version;
 mod workspace_folder;
-use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
+use wire_version::{server_has_pane_scroll, server_has_splitdir};
 
 use self::rename_overlay::RenameTarget;
 pub use row_menu::SplitOpens;
@@ -1653,9 +1654,8 @@ pub(crate) enum AuxAction {
     /// (Locked Decision 6); the modal rendered it as a tappable Entry only
     /// because the URL existed.
     OpenPr(String),
-    /// (change 7) Queue `fno agents restart` off the UI loop. Never
-    /// `--mux`, never `--force`: the modal named what survives, and the tap
-    /// is the confirmation.
+    /// (change 7) Queue `fno agents restart --mux` off the UI loop. Never
+    /// `--force`: the modal named what survives, and the tap is the confirmation.
     RestartAgents,
     /// Queue the channel's release upgrade (`fno update`, `brew upgrade fno`).
     UpgradeRelease(release_check::Channel),
@@ -7922,7 +7922,7 @@ async fn dispatch_event(
         Event::Cmd(cmd) => {
             if let Command::SplitDir(_) = cmd {
                 if !server_has_splitdir(view.server_proto) {
-                    view.set_notice(split_skew_notice());
+                    server_skew::offer_server_restart(view, "split panes in a direction");
                     return Ok(DispatchFlow::Continue);
                 }
             }
@@ -8207,9 +8207,9 @@ async fn dispatch_event(
             // Enter keyboard scroll mode on the focused pane. Keystrokes
             // divert to scroll_mode_keys on the next read; the moves ride the
             // shared server-side scroll offset the wheel drives. A server that
-            // predates the v118 commands gets a bell, never a dead mode.
+            // predates the v118 commands gets the restart popup, never a dead mode.
             if !server_has_pane_scroll(view.server_proto) {
-                let _ = raw_out(b"\x07");
+                server_skew::offer_server_restart(view, "scroll a pane from the keyboard");
                 return Ok(DispatchFlow::Continue);
             }
             view.scroll_mode = true;
