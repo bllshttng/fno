@@ -311,12 +311,11 @@ assert_eq     "AC7: below trigger exits 0" "$RC" "0"
 assert_absent "AC7: below trigger no block" "$OUT" '"decision":"block"'
 
 # next band up (60%) blocks again after the 50% latch. The 600k rewrite is the
-# SAME LENGTH as AC5's 500k write above (only the digits differ), so when both
-# land in one stat second the probe cache's size+mtime fingerprint does NOT
-# change and this fire is served the 50% copy (measured '60% used' absent; red
-# on main 2026-11-01). sleep 1 forces a later mtime, as in the AC17 rewrite
-# below.
-sleep 1
+# SAME LENGTH as AC5's 500k write above (only the digits differ): the pair
+# that served the 50% copy when the probe fingerprint was size+mtime and both
+# writes landed in one stat second (measured '60% used' absent; red on main
+# 2026-11-01). The fingerprint is a content checksum now, so the adjacent
+# rewrite re-measures with no sleep and this pair is the regression.
 write_transcript "$SBX/t.jsonl" 600000
 run_hook "$(payload "$SBX/t.jsonl")"
 assert_contains "AC7: next band blocks again" "$OUT" '60% used'
@@ -328,11 +327,10 @@ assert_contains "AC7: next band blocks again" "$OUT" '60% used'
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_registry no no
 # This rewrite lands on the SAME LENGTH bytes as the 600k write above (only the
-# digits differ), so when it follows that write within one stat second the probe
-# cache's size+mtime fingerprint does NOT change and AC17's fire is served the
-# 600k copy (measured '60% used'; smoke-rest red 2026-10-30). sleep 1 forces a
-# later mtime, as in the AC19/AC20 pair below.
-sleep 1
+# digits differ): the pair that served the 600k copy when the probe fingerprint
+# was size+mtime and the writes shared a stat second (measured '60% used';
+# smoke-rest red 2026-10-30). The fingerprint is a content checksum now, so the
+# adjacent rewrite re-measures with no sleep.
 write_transcript "$SBX/t.jsonl" 500000   # 50% >= general trigger 50
 run_hook "$(payload "$SBX/t.jsonl")"
 assert_eq     "AC17: unpromoted past trigger exits 0" "$RC" "0"
@@ -431,14 +429,11 @@ assert_absent "AC19: small window no quality block" "$OUT" '"decision":"block"'
 # === AC20: capacity branch fires on a small window near the floor ==============
 # Same 200k window, but 60k remaining (<= RESERVE): capacity fires even though
 # quality can never fire on this window. Latches once per band like the rest.
-# The two transcripts are the SAME LENGTH (only the digits differ), so when
-# both writes land in the same stat second the probe cache's size+mtime
-# fingerprint does NOT change and AC20's fire is served AC19's 55% copy (the
-# refire trace named it: measured 110000 at the 140000 case). sleep 1 forces
-# a later mtime. Production transcripts append, so the size half of the
-# fingerprint moves; the equal-length rewrite is a fixture shape, and the
-# sleeps are the accepted fix at this granularity.
-sleep 1
+# The two transcripts are the SAME LENGTH (only the digits differ): the pair
+# that served AC19's 55% copy when the probe fingerprint was size+mtime and
+# both writes landed in the same stat second (the refire trace named it:
+# measured 110000 at the 140000 case). The fingerprint is a content checksum
+# now, so the adjacent rewrite re-measures with no sleep.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_transcript "$SBX/small.jsonl" 140000 "gpt-5-codex"   # 200k window, 70%, 60k left
 run_hook "$(payload "$SBX/small.jsonl")"

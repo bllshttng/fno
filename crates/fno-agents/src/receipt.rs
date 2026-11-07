@@ -104,8 +104,8 @@ pub struct ReapReceipt {
     /// new write stamps `Some(2)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<u32>,
-    /// The full native identity and store context: harness, session id,
-    /// store root, project dir. `None` on a v1 receipt.
+    /// The native identity, store context and team lineage needed after the
+    /// registry row leaves the live projection. `None` on a v1 receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<serde_json::Value>,
     /// Where the native history lives (transcript paths, index records), so
@@ -348,6 +348,8 @@ pub fn build_reap_receipt(
         "short_id": e.short_id,
         "store_root": store_root_for(harness).map(|p| p.to_string_lossy().to_string()),
         "cwd": e.cwd,
+        "role_level": e.role_level,
+        "spawned_by_session": e.spawned_by_session,
     });
     Ok(ReapReceipt {
         row_name: e.name.clone(),

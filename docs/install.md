@@ -21,7 +21,9 @@ The stable branch of release 0.4.4 still names its marketplace `footnote`, so th
 
 `#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
 
-If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/install/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+
+The previous stage path, `~/.fno/plugin-stage`, remains readable during migration. `fno doctor update` rebuilds the new stage, repoints configured harnesses, and keeps the old stage until earlier sessions exit and no config names that old path.
 
 `fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
 

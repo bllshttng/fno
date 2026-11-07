@@ -177,6 +177,8 @@ pub(crate) struct Settings {
     pub(super) unattended_wall_cap_minutes: Option<Result<u64, String>>,
     /// config.budget.unattended.cost_cap_usd
     pub(super) unattended_cost_cap_usd: Option<Result<f64, String>>,
+    /// config.budget.team.cost_cap_usd
+    pub(super) team_cost_cap_usd: Option<Result<f64, String>>,
     /// flat budget_cap: (folds in ) - applies as cost cap for both modes
     pub(super) flat_budget_cap: Option<Result<f64, String>>,
     /// config.ci.declared_none: true
@@ -663,6 +665,14 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
                 s.unattended_cost_cap_usd = read_f64_cap(v, "unattended.cost_cap_usd");
             }
         }
+        if let Some(team) = budget.get("team") {
+            s.team_cost_cap_usd = match team.as_table() {
+                Some(team) => team
+                    .get("cost_cap_usd")
+                    .and_then(|v| read_f64_cap(v, "team.cost_cap_usd")),
+                None => Some(Err("budget.team must be a table".into())),
+            };
+        }
     }
 
     if let Some(ci) = root.get("ci") {
@@ -828,21 +838,32 @@ pub(crate) fn ledger_file_rows(ledger_path: &Path) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Sum cost_usd for entries matching session_id. Tolerate missing/malformed as 0.
-pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> f64 {
+/// Sum numeric cost_usd values for entries matching either session identity.
+pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> Option<f64> {
     let entries = ledger_file_rows(ledger_path);
     let mut total = 0.0_f64;
+    let mut found = false;
     for entry in &entries {
         // Either key: new rows carry fno_id, pre-rename rows only session_id.
+        let session_alias =
+            entry
+                .get("sessions")
+                .and_then(Value::as_array)
+                .is_some_and(|sessions| {
+                    sessions
+                        .iter()
+                        .any(|alias| alias.as_str() == Some(session_id))
+                });
         let matches = entry.get("fno_id").and_then(|v| v.as_str()) == Some(session_id)
             || entry.get("session_id").and_then(|v| v.as_str()) == Some(session_id);
-        if matches {
+        if matches || session_alias {
             if let Some(c) = entry.get("cost_usd").and_then(|v| v.as_f64()) {
                 total += c;
+                found = true;
             }
         }
     }
-    total
+    found.then_some(total)
 }
 
 // ── transcript parsing ────────────────────────────────────────────────────────

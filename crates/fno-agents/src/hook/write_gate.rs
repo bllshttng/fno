@@ -1328,7 +1328,7 @@ mod tests {
             spelled: dir.to_string_lossy().into_owned(),
             physical: physicalize(&dir),
         };
-        let refuse = |p: &str| refuse_for(Path::new(p), &[], &state, "");
+        let refuse = |p: &str| refuse_for(&physicalize(Path::new(p)), &[], &state, "");
         // A new one-segment path keeps today's refusal.
         let r = refuse(&dir.join("foo.out").to_string_lossy())
             .expect("a new one-segment path must refuse");
@@ -1426,5 +1426,16 @@ mod tests {
         assert!(runs_the_regen(&format!(" {regen}\n"), regen));
         assert!(!runs_the_regen(&format!("{regen}; rm -rf docs"), regen));
         assert!(!runs_the_regen("echo hand edit > docs/loops.md", regen));
+    }
+
+    #[test]
+    fn installed_stage_under_install_prefix_is_refused() {
+        let path = std::env::temp_dir()
+            .join("fno-state/install/plugin-stage/fno/hooks/stop.sh")
+            .to_string_lossy()
+            .into_owned();
+        let reason = generated_target(&path, "", "").expect("installed stage edits refuse");
+        assert!(reason.contains("installed plugin copy"), "{reason}");
+        assert!(reason.contains("hooks/stop.sh"), "{reason}");
     }
 }

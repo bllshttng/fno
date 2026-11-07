@@ -234,7 +234,8 @@ if [[ "$HAS_SCCACHE" -eq 1 ]]; then
     # processes; this default covers every other footnote build. fno never
     # exports it machine-wide, so other Rust projects keep their own cache.
     if [[ -z "${SCCACHE_DIR:-}" ]]; then
-        base="${FNO_CARGO_TARGETS_BASE:-$STATE_DIR/cargo-build}"
+        # Mirrors fno_build_base in crates/fno-agents/src/cargo_build_dirs.rs.
+        base="${FNO_CARGO_TARGETS_BASE:-$STATE_DIR/cache/cargo-build}"
         case "$base" in
             "~"*) base="$HOME${base:1}" ;;
         esac
