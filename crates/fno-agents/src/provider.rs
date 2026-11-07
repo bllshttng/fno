@@ -786,12 +786,18 @@ pub(crate) fn codex_writable_roots_for(cwd: &std::path::Path, sealed: bool) -> V
     // never from the sender's `FNO_WORKER_ADD_DIRS`: a lead has none, and a
     // worker's belong to its own project.
     let granted = crate::spawn_seam::granted_dirs(cwd, sealed);
-    if granted.is_empty() {
-        roots.extend(plan_content_dir(cwd));
-    }
     for extra in granted {
         if !roots.contains(&extra) {
             roots.push(extra);
+        }
+    }
+    // The plan dir rides unconditionally, deduped: `worker_writable_dirs`
+    // keeps only EXISTING canonical roots, so a plans dir that does not
+    // exist yet drops out of the grant, and the create lane's `--add-dir`
+    // and the turn carrier both granted it before this change.
+    if let Some(plan_dir) = plan_content_dir(cwd) {
+        if !roots.contains(&plan_dir) {
+            roots.push(plan_dir);
         }
     }
     // The uv cache rides with the state dirs: a bounded worker installing
