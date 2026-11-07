@@ -63,6 +63,8 @@ pub mod client;
 #[cfg(feature = "full")]
 pub mod clipboard;
 #[cfg(feature = "full")]
+pub mod codesign;
+#[cfg(feature = "full")]
 pub mod command_names;
 #[cfg(feature = "full")]
 pub mod config_cli;

@@ -1051,6 +1051,205 @@ struct RootVerdict {
     blocker: Option<String>,
 }
 
+/// One old-name registration the rename scan found: a marketplace or plugin
+/// id that still names where fno used to live. The doctor prints the detail
+/// and the remedy verbatim; nothing here mutates the registration.
+#[derive(Serialize, Debug)]
+struct RenameFinding {
+    harness: &'static str,
+    kind: &'static str,
+    name: String,
+    detail: String,
+    command: String,
+}
+
+/// The owner/repo slug a marketplace source names, when it is a GitHub one.
+/// `github` sources carry the slug directly; a `git` url goes through the
+/// shared remote parser, which anchors the github.com host.
+fn marketplace_repo_slug(source: &Value) -> Option<String> {
+    match source.get("source").and_then(Value::as_str)? {
+        "github" => source.get("repo").and_then(Value::as_str).map(String::from),
+        "git" => {
+            let url = source.get("url").and_then(Value::as_str)?;
+            crate::ledger_register::slug_from_remote(url)
+        }
+        _ => None,
+    }
+}
+
+/// The GitHub remedy chain for an install registered under a pre-rename
+/// marketplace: uninstall the old id, drop the old marketplace, re-add and
+/// install under the current names.
+fn claude_remote_remedy(plugin_id: &str) -> String {
+    format!(
+        "claude plugin uninstall {plugin_id} && claude plugin marketplace remove \
+         {LEGACY_MARKETPLACE_NAME} && claude plugin marketplace add \
+         fnodotdev/fno@stable && claude plugin install {PLUGIN_ID}"
+    )
+}
+
+/// The old-name registrations on this machine: Claude marketplaces whose
+/// url still names a renamed repo, plugin ids registered under the
+/// pre-rename marketplace, and the Codex plugin entry that names a
+/// marketplace no longer configured. Read-only; the remedy lines name the
+/// commands that move or drop each.
+fn rename_findings() -> Vec<RenameFinding> {
+    let aliases = crate::agents_config::builtin_repo_aliases();
+    let mut findings = Vec::new();
+
+    // Claude: known_marketplaces.json names every marketplace and where it
+    // clones from; installed_plugins.json names every installed plugin id.
+    let claude = claude_config_dir();
+    let known: Option<Value> =
+        std::fs::read_to_string(claude.join("plugins/known_marketplaces.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+    let legacy_marketplace_is_local = known
+        .as_ref()
+        .and_then(|k| k.get(LEGACY_MARKETPLACE_NAME))
+        .and_then(|m| m.get("source"))
+        .and_then(|s| s.get("source"))
+        .and_then(Value::as_str)
+        == Some("directory");
+    let mut legacy_marketplace_named = false;
+    if let Some(known) = known.as_ref().and_then(Value::as_object) {
+        for (name, entry) in known {
+            let slug = entry
+                .get("source")
+                .and_then(marketplace_repo_slug)
+                .map(|s| s.to_lowercase());
+            if let Some(old_slug) = slug.as_deref() {
+                if let Some(target) = aliases.get(old_slug) {
+                    findings.push(RenameFinding {
+                        harness: "claude",
+                        kind: "marketplace-redirect",
+                        name: name.clone(),
+                        detail: format!(
+                            "claude marketplace {name} clones {old_slug}, which now answers as {target}"
+                        ),
+                        command: format!("claude plugin marketplace remove {name}"),
+                    });
+                }
+            }
+            if name == LEGACY_MARKETPLACE_NAME {
+                legacy_marketplace_named = true;
+            }
+        }
+    }
+    let registry: Option<Value> =
+        std::fs::read_to_string(claude.join("plugins/installed_plugins.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+    let mut legacy_plugin_ids: Vec<String> = Vec::new();
+    if let Some(plugins) = registry
+        .as_ref()
+        .and_then(|r| r.get("plugins"))
+        .and_then(Value::as_object)
+    {
+        for id in plugins.keys() {
+            let Some((_, market)) = id.split_once('@') else {
+                continue;
+            };
+            if !market.eq_ignore_ascii_case(LEGACY_MARKETPLACE_NAME) {
+                continue;
+            }
+            legacy_plugin_ids.push(id.clone());
+            let command = if id == LEGACY_PLUGIN_ID && legacy_marketplace_is_local {
+                // The dev install moves a stage install by itself; the
+                // manual chain would drop the stage marketplace first.
+                "fno config plugin install claude".to_string()
+            } else if id == LEGACY_PLUGIN_ID {
+                claude_remote_remedy(id)
+            } else {
+                // Nothing migrates a non-fno plugin; naming it is the fix.
+                format!("claude plugin uninstall {id}")
+            };
+            findings.push(RenameFinding {
+                harness: "claude",
+                kind: "legacy-plugin",
+                name: id.clone(),
+                detail: format!(
+                    "claude installs {id} under the pre-rename marketplace \
+                     {LEGACY_MARKETPLACE_NAME}"
+                ),
+                command,
+            });
+        }
+    }
+    if legacy_marketplace_named && legacy_plugin_ids.is_empty() {
+        let command = if legacy_marketplace_is_local {
+            "fno config plugin install claude".to_string()
+        } else {
+            format!(
+                "claude plugin marketplace remove {LEGACY_MARKETPLACE_NAME} && claude \
+                 plugin marketplace add fnodotdev/fno@stable && claude plugin install \
+                 {PLUGIN_ID}"
+            )
+        };
+        findings.push(RenameFinding {
+            harness: "claude",
+            kind: "legacy-marketplace",
+            name: LEGACY_MARKETPLACE_NAME.to_string(),
+            detail: format!(
+                "claude registers the pre-rename marketplace name \
+                 {LEGACY_MARKETPLACE_NAME} with no plugin installed under it"
+            ),
+            command,
+        });
+    }
+
+    // Codex: config.toml enables plugins per id; fno@footnote names a
+    // marketplace the config no longer carries, so the entry is dead.
+    let codex_config = crate::codex_converge::codex_home().join("config.toml");
+    let codex = std::fs::read_to_string(&codex_config)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok());
+    if let Some(table) = codex {
+        let plugins = table.get("plugins").and_then(toml::Value::as_table);
+        let has_market = table
+            .get("marketplaces")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|m| m.contains_key(LEGACY_MARKETPLACE_NAME));
+        let legacy_enabled = plugins.is_some_and(|p| {
+            p.get(LEGACY_PLUGIN_ID)
+                .and_then(|e| e.get("enabled"))
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false)
+        });
+        if legacy_enabled && !has_market {
+            let twin = plugins.is_some_and(|p| {
+                p.get(PLUGIN_ID)
+                    .and_then(|e| e.get("enabled"))
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false)
+            });
+            let detail = if twin {
+                format!(
+                    "codex enables fno twice; {LEGACY_PLUGIN_ID} names the removed \
+                     {LEGACY_MARKETPLACE_NAME} marketplace, so its hooks no longer refresh"
+                )
+            } else {
+                format!(
+                    "codex enables {LEGACY_PLUGIN_ID} but the \
+                     {LEGACY_MARKETPLACE_NAME} marketplace is gone, so the plugin \
+                     cannot load"
+                )
+            };
+            findings.push(RenameFinding {
+                harness: "codex",
+                kind: "dead-legacy-plugin",
+                name: LEGACY_PLUGIN_ID.to_string(),
+                detail,
+                command: "fno config setup run --only harness-wiring (release) or fno \
+                          config plugin install codex (dev)"
+                    .to_string(),
+            });
+        }
+    }
+
+    findings
+}
+
 /// The doctor-shaped fold: flat keys pointed at the live root, status the
 /// worst across roots, and the per-root detail under `roots`.
 #[derive(Serialize)]
@@ -1064,6 +1263,10 @@ struct RootsReport {
     detail: Option<String>,
     roots: Vec<RootVerdict>,
     enumeration_detail: Vec<String>,
+    /// Old-name registrations, appended last so the JSON prefix stays
+    /// byte-stable for the doctor fold; absent when the scan found none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    rename_findings: Vec<RenameFinding>,
 }
 
 fn root_note(live: bool, check: &StageCheck) -> String {
@@ -1182,6 +1385,7 @@ fn check_roots_report(
         detail: joined,
         enumeration_detail: detail,
         roots,
+        rename_findings: Vec::new(),
     };
     let exit = worst.map(|w| check_exit_code(w.1)).unwrap_or(4);
     (report, exit)
@@ -1195,6 +1399,9 @@ fn print_roots_report(report: &RootsReport) {
         let role = if root.live { "live" } else { "second copy" };
         println!("plugin root ({}, {role}): {}", root.origin, root.path);
         print_check(&root.check, false);
+    }
+    for f in &report.rename_findings {
+        println!("old-name install: {} fix: {}", f.detail, f.command);
     }
 }
 
@@ -2096,7 +2303,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 check_exit_code(report.status)
             } else {
                 let (roots, detail) = plugin_roots();
-                let (report, worst) = check_roots_report(&roots, detail, &source_dir);
+                let (mut report, worst) = check_roots_report(&roots, detail, &source_dir);
+                report.rename_findings = rename_findings();
                 if json {
                     match serde_json::to_string(&report) {
                         Ok(s) => println!("{s}"),
@@ -3474,6 +3682,94 @@ mod tests {
         assert!(err.contains("not the fno plugin source"), "err: {err}");
         assert_eq!(fs::read(stage.join("hooks/live.sh")).unwrap(), before);
         assert!(!stage.join("README.md").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// The rename scan names every old registration on a fixture machine:
+    /// a Claude marketplace cloning a renamed repo, plugin ids registered
+    /// under the pre-rename marketplace, and the Codex entry whose
+    /// marketplace is gone. No legacy-marketplace duplicate fires while a
+    /// plugin id already carries the story. One test flips the fixture from
+    /// populated to clean in place: the scan reads CLAUDE_CONFIG_DIR and
+    /// CODEX_HOME, which parallel tests must not see swapped mid-read.
+    #[test]
+    fn rename_scan_names_old_registrations_then_goes_quiet_on_a_clean_machine() {
+        let base = std::env::temp_dir().join(format!("pi-rename-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let claude = base.join("claude");
+        let plugins_dir = claude.join("plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+        fs::write(
+            plugins_dir.join("known_marketplaces.json"),
+            r#"{
+  "footnote": {"source": {"source": "directory", "path": "/tmp/stage"}},
+  "footnote-desktop": {"source": {"source": "git", "url": "https://github.com/bllshttng/footnote.git", "ref": "desktop-test"}}
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            r#"{
+  "plugins": {
+    "fno@footnote": [{"scope": "user", "installPath": "/tmp/cache/fno/0.4.1"}],
+    "buddy@footnote": [{"scope": "user", "installPath": "/tmp/cache/buddy/0.0.7"}]
+  }
+}"#,
+        )
+        .unwrap();
+        let codex = base.join("codex");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "[marketplaces.fno]\nsource = \"/tmp/stage\"\n\n[plugins.\"fno@footnote\"]\nenabled = true\n\n[plugins.\"fno@fno\"]\nenabled = true\n",
+        )
+        .unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", &claude);
+        std::env::set_var("CODEX_HOME", &codex);
+        let findings = rename_findings();
+        let kind_of = |name: &str| findings.iter().find(|f| f.name == name).map(|f| f.kind);
+        assert_eq!(kind_of("fno@footnote"), Some("legacy-plugin"));
+        assert_eq!(kind_of("buddy@footnote"), Some("legacy-plugin"));
+        assert_eq!(kind_of("footnote-desktop"), Some("marketplace-redirect"));
+        // The installed ids already carry the story; no marketplace duplicate.
+        assert!(findings.iter().all(|f| f.kind != "legacy-marketplace"));
+        let codex_finding = findings
+            .iter()
+            .find(|f| f.kind == "dead-legacy-plugin")
+            .expect("the codex dead entry is named");
+        assert!(
+            codex_finding.detail.contains("twice"),
+            "the twin fno@fno install is the story: {}",
+            codex_finding.detail
+        );
+        assert!(codex_finding.command.contains("harness-wiring"));
+        let claude_finding = findings.iter().find(|f| f.name == "fno@footnote").unwrap();
+        assert!(
+            claude_finding
+                .command
+                .contains("fno config plugin install claude"),
+            "a directory-sourced footnote marketplace moves by the dev install: {}",
+            claude_finding.command
+        );
+
+        // The clean machine: the same dirs rewritten in place, so no env
+        // swap can interleave. A moved-nowhere marketplace names nothing.
+        fs::write(
+            plugins_dir.join("known_marketplaces.json"),
+            r#"{"claude-code-plugins": {"source": {"source": "github", "repo": "anthropics/skills"}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            r#"{"plugins": {}}"#,
+        )
+        .unwrap();
+        fs::write(codex.join("config.toml"), "").unwrap();
+        let findings = rename_findings();
+        assert!(
+            findings.is_empty(),
+            "a clean machine names nothing: {findings:?}"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 

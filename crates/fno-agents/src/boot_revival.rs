@@ -224,72 +224,114 @@ fn reseat_vacated_roles(home: &AgentsHome, revived: &[String]) {
     let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
         return;
     };
-    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
     for name in revived {
-        let Some(row) = registry.entries.iter().find(|e| e.name == *name) else {
+        if let Err(reason) = reseat_one_name(home, &registry.entries, name, "daemon") {
+            eprintln!("boot revival: {reason}");
+        }
+    }
+}
+
+/// The manual resume's share of the re-seat: a revival by session id must
+/// come back holding the seat its vacate set aside, not wait for the next
+/// boot or a fresh grant. Best effort like the boot pass: a refusal prints
+/// on the resume's stderr and the resume stands.
+pub(crate) fn reseat_resumed_row(home: &AgentsHome, row_name: &str) {
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return;
+    };
+    if let Err(reason) = reseat_one_name(home, &registry.entries, row_name, "agents") {
+        eprintln!("fno agents resume: {reason}");
+    }
+}
+
+/// One row's re-seat scan: every `.md.vacated` lead manifest in the row's
+/// space whose `harness_session_id` names the row's session gets restored
+/// onto the row, with one `agent_team_reseated` event per restore stamped
+/// `source` (the boot pass and the resume door stay distinguishable in the
+/// journal). A row with no session, no leads dir, or no matching manifest
+/// answers `Ok` - the common no-op for a worker resume.
+fn reseat_one_name(
+    home: &AgentsHome,
+    entries: &[RegistryEntry],
+    name: &str,
+    source: &str,
+) -> Result<(), String> {
+    let Some(row) = entries.iter().find(|e| e.name == name) else {
+        return Ok(());
+    };
+    let Some(sid) = row.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let leads = crate::paths::space_dir(std::path::Path::new(&row.cwd)).join("leads");
+    let Ok(read) = std::fs::read_dir(&leads) else {
+        return Ok(());
+    };
+    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), source);
+    let mut first: Option<String> = None;
+    let mut vacated: Vec<std::path::PathBuf> = read.flatten().map(|e| e.path()).collect();
+    vacated.sort();
+    for path in vacated {
+        let is_vacated = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".md.vacated"));
+        if !is_vacated {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Some(sid) = row.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {
+        if crate::claude_adopt::manifest_field(&content, "harness_session_id").as_deref()
+            != Some(sid)
+        {
+            continue;
+        }
+        let Some(scope) = crate::claude_adopt::manifest_field(&content, "role_scope")
+            .filter(|s| !s.trim().is_empty())
+        else {
             continue;
         };
-        let leads = crate::paths::space_dir(std::path::Path::new(&row.cwd)).join("leads");
-        let Ok(read) = std::fs::read_dir(&leads) else {
+        let Some(level) = crate::claude_adopt::manifest_field(&content, "role_level")
+            .and_then(|l| l.parse::<u32>().ok())
+        else {
             continue;
         };
-        let mut vacated: Vec<std::path::PathBuf> = read.flatten().map(|e| e.path()).collect();
-        vacated.sort();
-        for path in vacated {
-            let is_vacated = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".md.vacated"));
-            if !is_vacated {
-                continue;
+        let grantor = crate::claude_adopt::manifest_field(&content, "role_grantor")
+            .filter(|g| !g.trim().is_empty())
+            .unwrap_or_else(|| "spawn".to_string());
+        match reseat_one(
+            &home.registry_json(),
+            &row.name,
+            &scope,
+            level,
+            &grantor,
+            &path,
+        ) {
+            Ok(()) => {
+                let _ = emitter.emit(
+                    "agent_team_reseated",
+                    &serde_json::json!({
+                        "scope": scope, "level": level, "holder_session": sid,
+                        "grantor": grantor, "row": row.name,
+                    }),
+                );
             }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if crate::claude_adopt::manifest_field(&content, "harness_session_id").as_deref()
-                != Some(sid)
-            {
-                continue;
-            }
-            let Some(scope) = crate::claude_adopt::manifest_field(&content, "role_scope")
-                .filter(|s| !s.trim().is_empty())
-            else {
-                continue;
-            };
-            let Some(level) = crate::claude_adopt::manifest_field(&content, "role_level")
-                .and_then(|l| l.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            let grantor = crate::claude_adopt::manifest_field(&content, "role_grantor")
-                .filter(|g| !g.trim().is_empty())
-                .unwrap_or_else(|| "spawn".to_string());
-            match reseat_one(
-                &home.registry_json(),
-                &row.name,
-                &scope,
-                level,
-                &grantor,
-                &path,
-            ) {
-                Ok(()) => {
-                    let _ = emitter.emit(
-                        "agent_team_reseated",
-                        &serde_json::json!({
-                            "scope": scope, "level": level, "holder_session": sid,
-                            "grantor": grantor, "row": row.name,
-                        }),
-                    );
+            Err(reason) => {
+                // One refused manifest never stops the scan: the boot loop
+                // printed and kept going, so the first refusal is held and
+                // the remaining manifests still get their pass.
+                if first.is_none() {
+                    first = Some(format!(
+                        "re-seat for {} over {scope} refused ({reason})",
+                        row.name
+                    ));
                 }
-                Err(reason) => eprintln!(
-                    "boot revival: re-seat for {} over {scope} refused ({reason})",
-                    row.name
-                ),
             }
         }
+    }
+    match first {
+        Some(reason) => Err(reason),
+        None => Ok(()),
     }
 }
 
@@ -1340,6 +1382,83 @@ mod tests {
         let rows = crate::state::load_registry(&registry).unwrap().entries;
         let l2 = rows.iter().find(|r| r.name == "l2").unwrap();
         assert!(l2.role_scope.is_none(), "{:?}", l2.role_scope);
+        std::fs::remove_dir_all(dir.path()).ok();
+        match saved {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
+    }
+
+    /// A revival by session id re-seats the role its vacate set aside, the
+    /// same treatment the boot pass gives a revived holder: the resumed
+    /// lead's own check-in must find its team live, not wait for a reboot
+    /// or a fresh grant.
+    #[test]
+    fn a_resume_revived_lead_reseats_its_role_and_the_checkin_passes() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_SPACES_DIR");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        let space = crate::paths::space_dir(&cwd);
+        let leads = space.join("leads");
+        std::fs::create_dir_all(&leads).unwrap();
+        let sid = "33333333-4444-4555-8666-777777777777";
+        let manifest = "---\nscope: fno-web\nharness: claude\n".to_string()
+            + "harness_session_id: "
+            + sid
+            + "\ncreated_at: 2026-11-06T00:00:00Z\nrole_scope: fno-web\nrole_level: 1\n"
+            + "role_grantor: operator\n---\n";
+        // The vacate's own product: the manifest set aside, the row's team
+        // fields cleared. The resume leaves the row liveish but roleless.
+        std::fs::write(leads.join("rosa.md.vacated"), manifest).unwrap();
+        let agents = dir.path().join("agents");
+        let home = AgentsHome::at(&agents);
+        std::fs::create_dir_all(home.root()).unwrap();
+        let registry = home.registry_json();
+        crate::registry_store::seed_raw(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [{
+                    "name": "rosa",
+                    "cwd": cwd,
+                    "status": "busy",
+                    "harness": "claude",
+                    "harness_session_id": sid,
+                }],
+            })
+            .to_string(),
+        );
+        let state = || {
+            crate::lead_state::lead_state(space.as_path(), Some("fno-web"), None, None, &registry)
+        };
+        assert_eq!(
+            state().teamed,
+            Some(false),
+            "the vacated lead reads unteamed before the re-seat"
+        );
+
+        crate::boot_revival::reseat_resumed_row(&home, "rosa");
+
+        let live = leads.join("rosa.md");
+        assert!(live.exists(), "the manifest is restored");
+        assert!(!leads.join("rosa.md.vacated").exists());
+        let row = crate::state::load_registry(&registry).unwrap().entries[0].clone();
+        assert_eq!(row.role_scope.as_deref(), Some("fno-web"));
+        assert_eq!(row.role_level, Some(1));
+        assert_eq!(row.role_grantor.as_deref(), Some("operator"));
+        // The check-in passes: the team reads live, held by this session.
+        let state = state();
+        assert_eq!(state.teamed, Some(true), "{:?}", state.unknown_reason);
+        assert_eq!(state.live, Some(true));
+        let team = crate::team_names::live_index(&registry)
+            .unwrap()
+            .remove("fno-web");
+        assert_eq!(team.map(|t| t.holder_session), Some(Some(sid.to_string())));
         std::fs::remove_dir_all(dir.path()).ok();
         match saved {
             Some(v) => std::env::set_var("FNO_SPACES_DIR", v),

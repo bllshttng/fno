@@ -199,9 +199,13 @@ jobs:
       shard_array: ${{ steps.estimate.outputs.shard_array }}
 
   # The Rust selector owns lane routing. Main, the nightly and an unreadable
-  # diff select every lane. A PR diff confined to crates/ selects its cargo
-  # lanes (fno-agents only skips the mux lanes) and the smoke-seam leg in
-  # place of the full Python shards.
+  # diff select every lane. A light-only PR diff (prose, skills, hooks,
+  # images) runs no full lane; every heavy diff runs every lane: the fno
+  # crate's tests read the fno-agents surface (menu caps, command baselines)
+  # and the Python suite reaches Rust through the native doors, so the narrow
+  # crates-only selections kept skipping lanes that then failed on main
+  # (2026-11-06). When the selector cannot prove a lane unaffected, it runs
+  # it.
   pr-affected:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
@@ -210,7 +214,6 @@ jobs:
       cargo_agents: ${{ steps.select.outputs.cargo_agents }}
       cargo_mux: ${{ steps.select.outputs.cargo_mux }}
       python_full: ${{ steps.select.outputs.python_full }}
-      python_seam: ${{ steps.select.outputs.python_seam }}
       skill_bundles: ${{ steps.select.outputs.skill_bundles }}
     steps:
       - name: Checkout
@@ -412,11 +415,9 @@ jobs:
   # holds the per-test timeout, and
   # tests/py/unit/test_pytest_timeout_configured.py keeps it and every
   # timeout marker at or under one fifth of the 12-minute step cap.
-  # tests/py drives the built binaries, so a crates-only PR (the seam lane)
-  # runs it too.
   tests-py:
     needs: [pr-affected]
-    if: ${{ !cancelled() && (needs.pr-affected.outputs.python_full == 'true' || needs.pr-affected.outputs.python_seam == 'true') }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.python_full == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -509,31 +510,6 @@ jobs:
       - name: Dead import paths (module-move guard)
         run: bash scripts/ci/check-import-paths.sh
 
-  # A crates-only PR skips the full Python shards, but the Python suite
-  # reaches Rust through the native doors. This leg runs the registry's seam
-  # steps (the @requires_rust parity suites, the keyless smoke, the heal
-  # harness) with the binaries built. Main still runs the full shards.
-  smoke-seam:
-    needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.python_seam == 'true' }}
-    runs-on: ubuntu-24.04
-    # Same 12-minute step cap and 15-minute backstop as a pytest shard.
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Provision the smoke runner
-        uses: ./.github/actions/smoke-setup
-
-      - name: "Smoke seam: Rust/Python seam steps"
-        timeout-minutes: 12
-        run: |
-          start=$SECONDS
-          trap 'bash scripts/ci/smoke-duration-report.sh smoke-seam "$(( SECONDS - start ))" 12 || true' EXIT
-          : "$start"
-          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Build fno-agents debug binary*,Build the fno front door*,registry-miss heal*'
-
   # Keeps the required check named `smoke`. Branch protection and the review
   # gate key on that exact name, so publishing only `tests-py` and
   # `smoke-rest` would make the required check stop appearing rather than fail
@@ -550,10 +526,9 @@ jobs:
   # does not make the run cancelled, so the gate still runs and still blocks.
   #
   # Each shard must pass unless the PR selector deliberately skipped the full
-  # Python lane. smoke-seam must pass whenever the selector chose it. Cancelled
-  # and unexpected skipped results still block.
+  # Python lane. Cancelled and unexpected skipped results still block.
   smoke:
-    needs: [pr-affected, tests-py, smoke-rest, smoke-seam]
+    needs: [pr-affected, tests-py, smoke-rest]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # These result checks stay in a short aggregator. A cap this tight is a
@@ -579,7 +554,7 @@ jobs:
             echo "$1 outran the job-level timeout-minutes cap; the run was never cancelled."
             echo "Read the shard's smoke-duration line: the EXIT trap prints it on every exit, with seconds and verdict."
           }
-          echo "pr-affected=${{ needs.pr-affected.result }} tests-py=${{ needs.tests-py.result }} smoke-rest=${{ needs.smoke-rest.result }} smoke-seam=${{ needs.smoke-seam.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} tests-py=${{ needs.tests-py.result }} smoke-rest=${{ needs.smoke-rest.result }}"
           capped tests-py "${{ needs.tests-py.result }}"
           capped smoke-rest "${{ needs.smoke-rest.result }}"
           # A cancelled selector (queue-storm cancellation, or its own job
@@ -598,11 +573,6 @@ jobs:
             [ "${{ needs.smoke-rest.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
-          } || exit 1
-          [ "${{ needs.smoke-seam.result }}" = "success" ] || {
-            [ "${{ needs.smoke-seam.result }}" = "skipped" ] \
-              && { [ "${{ needs.pr-affected.outputs.python_seam }}" != "true" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
