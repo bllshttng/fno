@@ -176,17 +176,27 @@ fn a_hold_past_two_seconds_journals_one_graph_lock_held_row() {
     .expect("the event store reads");
     let row = rows.first().expect("one graph_lock_held row lands");
     let envelope: Value = serde_json::from_str(&row.line).expect("the envelope parses");
-    let data = &envelope["data"];
-    assert!(
-        data["hold_ms"].as_u64().unwrap() >= 2_000,
-        "hold_ms records the hold: {data}"
+    let data = envelope.get("data").cloned().unwrap_or(Value::Null);
+    let hold_ms = data
+        .get("hold_ms")
+        .and_then(Value::as_u64)
+        .expect("hold_ms records the hold");
+    assert!(hold_ms >= 2_000, "hold_ms records the hold: {data}");
+    assert_eq!(
+        data.get("pid").and_then(Value::as_u64),
+        Some(u64::from(std::process::id()))
     );
-    assert_eq!(data["pid"].as_u64(), Some(u64::from(std::process::id())));
     assert!(
-        data["command"].as_str().is_some_and(|c| !c.is_empty()),
+        data.get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|c| !c.is_empty()),
         "the holder's command line is named: {data}"
     );
-    let phase_ms = data["phases_ms"]["test_phase_ms"].as_u64().unwrap();
+    let phase_ms = data
+        .get("phases_ms")
+        .and_then(|p| p.get("test_phase_ms"))
+        .and_then(Value::as_u64)
+        .expect("the named phase records its time");
     assert!(phase_ms >= 40, "the named phase records its time: {data}");
 }
 
