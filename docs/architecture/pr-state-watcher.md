@@ -28,7 +28,7 @@ The implementation is the `crates/fno-agents/src/pr_watch/` module. Its outside 
 2. **Discover open PRs** from the global graph: backlog nodes with no `completed_at` carrying a `pr_number`. Each node's own `cwd` field resolves its local checkout. A PR whose repo is not checked out locally is skipped. A headless skill needs a working tree.
 3. **Read PR state** per PR with `gh` (state + reviews/comments, handling the `[bot]` login suffix).
 4. **Decide** (at most one action per PR per tick), in precedence order:
-   - merged and not yet dispatched, and the post-merge readiness oracle passes -> run `fno do pr ritual <n> --autonomous`. The route is warm-inject into a live origin, else the cold subprocess. The command owns its own conditional headless judgment leg. The watcher adds no model layer of its own and creates no background thread.
+   - merged and not yet dispatched, and the post-merge readiness oracle passes -> run `fno do pr ritual <n> --autonomous`. The route is warm-inject into a live origin, else the cold subprocess. A lead with the operator chatting, or any session with a fresh user turn, is never borrowed. It takes the cold path. The command owns its own conditional headless judgment leg. The watcher adds no model layer of its own and creates no background thread.
    - closed-without-merge, or open past the max-age window -> park (poll it no further).
    - a configured reviewer posted activity newer than the watermark -> fire `/fno:ship pr check`.
    - otherwise no-op.
@@ -52,7 +52,7 @@ The coupling is enforced on both ends: arming `auto_merge.grant = dispatch` thro
 
 The review poll fires `claude --print --output-format json --dangerously-skip-permissions "/fno:ship pr check <n>"`, run with `cwd` set to the PR's repo, default model Haiku. The plist carries `PATH` (captured at install time) + `HOME` in `EnvironmentVariables`. Authentication rides the macOS keychain OAuth, so no API key is injected, and `--bare` is never used.
 
-A merge is not a headless claude fire. When the origin session is live, the mechanical `fno do pr ritual <n> --autonomous` command is warm-injected there. Otherwise it runs as a bounded `fno-py` subprocess from the repo's canonical root. The command owns the ritual's mechanical legs and its own conditional headless judgment one-shot. The watcher never wraps the ritual in a `/fno:ship pr merged` LLM session, and it never spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting. That receipt is attribution and correlation only, and route selection never reads it.
+A merge is not a headless claude fire. When the origin session is live, the mechanical `fno do pr ritual <n> --autonomous` command is warm-injected there. A session holding a lead role, or with a user turn from the last ten minutes, is never borrowed. The command takes the cold path instead. Otherwise it runs as a bounded `fno-py` subprocess from the repo's canonical root. The command owns the ritual's mechanical legs and its own conditional headless judgment one-shot. The watcher never wraps the ritual in a `/fno:ship pr merged` LLM session, and it never spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting. That receipt is attribution and correlation only, and route selection never reads it.
 
 ## The park sweep
 

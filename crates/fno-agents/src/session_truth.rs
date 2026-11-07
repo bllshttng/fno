@@ -297,7 +297,7 @@ fn boundary_stamp(line: &str) -> Option<f64> {
     parse_stamp(v.get("timestamp")?.as_str()?)
 }
 
-fn parse_stamp(ts: &str) -> Option<f64> {
+pub(crate) fn parse_stamp(ts: &str) -> Option<f64> {
     chrono::DateTime::parse_from_rfc3339(&ts.replace('Z', "+00:00"))
         .ok()
         .map(|dt| dt.timestamp() as f64)
