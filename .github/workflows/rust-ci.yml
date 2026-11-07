@@ -27,6 +27,9 @@ on:
       - schemas/**
       - crates/fno-agents/src/event_store/schema.yaml
       - scripts/ci/preflight.sh
+      - scripts/ci/clippy-check.sh
+      - tests/ci/clippy-baseline.txt
+      - tests/ci/test_clippy_check.sh
       - scripts/tests/stress-rust-e2e-concurrency.sh
       - cli/src/fno/config/__init__.py
       - cli/src/fno/pr/_reviews.py
@@ -117,6 +120,67 @@ jobs:
       - name: cargo check --all-targets (fno)
         working-directory: crates/fno
         run: cargo check --all-targets --locked
+
+  clippy:
+    name: cargo clippy (correctness deny + ratchet lints)
+    # The regression audit asked for clippy coverage that would have caught
+    # the shipped lookahead-regex and raw-slice regressions:
+    # clippy::correctness denied, plus clippy::invalid_regex,
+    # clippy::indexing_slicing and clippy::disallowed_methods (bare
+    # Command::output, configured in each crate's clippy.toml) held by the
+    # tests/ci/clippy-baseline.txt ratchet. A hit is keyed by its line's
+    # text, so editing a flagged line fails even though the hit itself is
+    # baselined - deny-on-changed-lines with no merge-base diff. All four
+    # lints run as WARN through clippy, because a deny-level lint stops the
+    # compile and hides every later diagnostic; the baseline verdict is what
+    # denies. The toolchain is PINNED to the one that wrote the baseline: a
+    # newer clippy can flag untouched lines, which would red as new hits.
+    # Bump the pin and re-run `clippy-check.sh --write-baseline` together,
+    # never apart (same contract as the fmt job's RUSTFMT_TOOLCHAIN).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CLIPPY_TOOLCHAIN: "1.99.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install pinned clippy toolchain
+        run: |
+          rustup toolchain install "$CLIPPY_TOOLCHAIN" --component clippy --profile minimal --no-self-update
+          rustup default "$CLIPPY_TOOLCHAIN"
+          cargo clippy --version
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          # Key prefix deliberately OUTSIDE the `warnings` job's warncheck-
+          # and the `test` job's cargo- save prefixes (the asymmetry those
+          # comments record): clippy fingerprints differ from check, so the
+          # big jobs must never restore this cache. It still WARMS from the
+          # big cache via restore-keys.
+          key: ${{ runner.os }}-clippycheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-clippycheck-
+            ${{ runner.os }}-cargo-
+
+      - name: clippy gate selftest
+        # A gate nobody has watched fail is not known to work; the positive
+        # control exercises the parser and the baseline verdict without a
+        # cargo build.
+        run: bash tests/ci/test_clippy_check.sh
+
+      - name: clippy gate (fno-agents)
+        run: bash scripts/ci/clippy-check.sh crates/fno-agents
+
+      - name: clippy gate (fno)
+        run: bash scripts/ci/clippy-check.sh crates/fno
 
   bell-shots:
     name: bell panel snapshot shots
