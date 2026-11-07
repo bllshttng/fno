@@ -132,21 +132,20 @@ fn drop_seen(ruling: &mut crate::rules_source::Ruling, session: Option<&str>) {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let mut seen = crate::announce::load_cursor(&root, "rules-seen", session);
-    let before = seen.len();
-    let decision = &mut ruling.decision;
-    decision
-        .fires
-        .retain(|f| f.action != "inform" || seen.insert(f.rule.clone()));
-    ruling
-        .unread
-        .retain(|reason| seen.insert(format!("unread:{reason}")));
-    if seen.len() != before {
-        crate::announce::save_cursor(&root, "rules-seen", session, &seen);
-    }
-    if decision.verdict == "inject" && decision.fires.iter().all(|f| f.deliver != "context") {
-        decision.verdict = "allow";
-    }
+    crate::announce::update_cursor(&root, "rules-seen", session, |seen| {
+        let before = seen.len();
+        let decision = &mut ruling.decision;
+        decision
+            .fires
+            .retain(|f| f.action != "inform" || seen.insert(f.rule.clone()));
+        ruling
+            .unread
+            .retain(|reason| seen.insert(format!("unread:{reason}")));
+        if decision.verdict == "inject" && decision.fires.iter().all(|f| f.deliver != "context") {
+            decision.verdict = "allow";
+        }
+        seen.len() != before
+    });
 }
 
 enum Rendered {
