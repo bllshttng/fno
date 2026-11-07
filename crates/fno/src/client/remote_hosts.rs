@@ -346,9 +346,8 @@ pub(super) async fn act(view: &mut View, act: Act) {
 
 /// The snapshot seam: two configured hosts in opposite states, so the shot
 /// shows both words. The demo root configures no hosts of its own.
-#[cfg(test)]
 pub(super) fn snapshot_seam(view: &mut View) {
-    view.remote_hosts = Self::from_names(vec!["r2d2".into(), "nohost".into()]);
+    view.remote_hosts = RemoteHosts::from_names(vec!["r2d2".into(), "nohost".into()]);
     view.remote_hosts.hosts[0].state = HostState::Reachable("fno 0.4.7".into());
     view.remote_hosts.hosts[1].state =
         HostState::Unreachable("could not reach nohost: Connection refused".into());
