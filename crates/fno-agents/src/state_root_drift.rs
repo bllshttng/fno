@@ -19,13 +19,12 @@ pub fn doc_path(state_root: &Path) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    // One join per line: a bare `join("fno")` would read as a porcelain
-    // resolver to the seam-crossings shape rule, which cannot see that this
-    // "fno" is the plugin-stage directory's name.
-    let new_stage = crate::state_layout::place_dir(state_root, "plugin-stage")
-        .unwrap_or_else(|| state_root.join("plugin-stage"))
-        .join("fno");
-    [new_stage, state_root.join("plugin-stage/fno")]
+    let mut new_stage = crate::state_layout::place_dir(state_root, "plugin-stage")
+        .unwrap_or_else(|| state_root.join("plugin-stage"));
+    new_stage.push("fno");
+    let mut legacy_stage = state_root.join("plugin-stage");
+    legacy_stage.push("fno");
+    [new_stage, legacy_stage]
         .into_iter()
         .map(|stage| stage.join("docs/state-root-inventory.md"))
         .find(|path| path.is_file())

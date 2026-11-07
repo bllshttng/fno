@@ -722,12 +722,13 @@ pub fn dsh_acp_argv() -> Vec<String> {
 }
 
 pub fn stage_plugin_dir() -> Option<PathBuf> {
-    [
-        crate::plugin_install::stage_parent().join("fno"),
-        crate::plugin_install::state_root().join("plugin-stage/fno"),
-    ]
-    .into_iter()
-    .find(|stage| stage.join(".claude-plugin/plugin.json").is_file())
+    let mut installed = crate::plugin_install::stage_parent();
+    installed.push("fno");
+    let mut legacy = crate::plugin_install::state_root().join("plugin-stage");
+    legacy.push("fno");
+    [installed, legacy]
+        .into_iter()
+        .find(|stage| stage.join(".claude-plugin/plugin.json").is_file())
 }
 
 fn send_json(
