@@ -29,7 +29,7 @@ A named workspace with no folder binds one on its own. Say a live row's project 
 
 A new tab opens in the workspace folder. With no folder, it opens in the cwd of the focused row, then in the project root of any live member row, then in HOME. A new tab never opens in the server's own directory.
 
-The section menu of a named workspace has Group sessions from a folder. It opens a numbered list of the same live-row folders, and the digit adds one folder to the workspace. The entry only groups: sessions started under that folder join this workspace, and it grants no access to the folder. A workspace takes several folders. Each one you add joins the list, and a folder already on the list stays once. It is the same edit as `fno mux workspace origin add`. An older mux server refuses the add and opens a popup that offers the in-mux server restart; nothing is sent.
+The section menu of a named workspace has Group sessions from a folder. It opens a numbered list of the same live-row folders, and the digit adds one folder to the workspace. The entry only groups: sessions started under that folder join this workspace, and it grants no access to the folder. A workspace takes several folders. Each one you add joins the list, and a folder already on the list stays once. It is the same edit as `fno mux workspace origin add`. An older mux server refuses the add and opens a popup that offers the in-mux server restart. Nothing is sent.
 
 To change the folder of an open workspace, run:
 
