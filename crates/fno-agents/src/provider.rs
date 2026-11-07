@@ -767,18 +767,30 @@ pub(crate) fn codex_sandbox_config_args_resume(cwd: &std::path::Path) -> Vec<Str
 }
 
 /// The root list the interactive resume and turn/start lanes grant: the repo's
-/// git write roots, the plan content dir, and the seam-published state dirs.
-/// Empty when none resolve.
+/// git write roots, the state and plan dirs resolved from `cwd`, and the uv
+/// cache. Empty when none resolve.
 pub(crate) fn codex_writable_roots(cwd: &std::path::Path) -> Vec<String> {
+    let sealed = std::env::var_os(crate::spawn_seam::EVALS_SEALED_ENV).is_some_and(|v| v == "1");
+    codex_writable_roots_for(cwd, sealed)
+}
+
+/// [`codex_writable_roots`] with the sealed verdict supplied. A caller that
+/// holds the thread's registry row reads it there, because the sender's own env
+/// says nothing about the thread being steered.
+pub(crate) fn codex_writable_roots_for(cwd: &std::path::Path, sealed: bool) -> Vec<String> {
     let mut roots: Vec<String> = git_write_roots(cwd);
-    roots.extend(plan_content_dir(cwd));
     // The state root rides here too, and it MUST: `writable_roots` is a
     // whole-value override, so a list that omits ~/.fno leaves a resumed bounded
     // worker unable to create its claim lockfile. It then holds no claim and the
-    // graph reads that node free while it runs. The create lane grants the same
-    // set through `--add-dir`.
-    for extra in crate::claude_ask::state_dirs_from_env() {
-        if !extra.is_empty() && !roots.contains(&extra) {
+    // graph reads that node free while it runs. The dirs resolve from `cwd`,
+    // never from the sender's `FNO_WORKER_ADD_DIRS`: a lead has none, and a
+    // worker's belong to its own project.
+    let granted = crate::spawn_seam::granted_dirs(cwd, sealed);
+    if granted.is_empty() {
+        roots.extend(plan_content_dir(cwd));
+    }
+    for extra in granted {
+        if !roots.contains(&extra) {
             roots.push(extra);
         }
     }
