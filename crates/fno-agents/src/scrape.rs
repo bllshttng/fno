@@ -1149,10 +1149,10 @@ mod tests {
     #[test]
     fn the_sibling_fno_beats_the_bare_path_name() {
         // A task PATH once put the uv venv first, so bare `fno` answered as
-        // fno-py and refused doctor verbs, and the gate wrote no grade. The
-        // sibling leg rides the complete install (fno and fno-agents in one
-        // bin dir). A dropped or deordered leg fails here instead of as a
-        // gate with no grade.
+        // fno-py and refused doctor commands, and the gate wrote no grade.
+        // The sibling leg rides the complete install (fno and fno-agents in
+        // one bin dir). A dropped or deordered leg fails here instead of as
+        // a gate with no grade.
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("fno-agents");
         std::fs::write(&exe, b"").unwrap();

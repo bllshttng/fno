@@ -3909,9 +3909,17 @@ mod tests {
         // rename or a path slip fails here instead of as a gate with no grade.
         let w = World::first_launch_world();
         let spawns = w.spawns.borrow();
-        let argv = &spawns[0];
-        assert_eq!(&argv[1..4], ["doctor", "evals", "run"], "{argv:?}");
-        let lane = &argv[argv.iter().position(|a| a == "--lane").unwrap() + 1];
+        let argv = spawns.first().expect("the launch spawned once");
+        for (i, word) in ["doctor", "evals", "run"].iter().enumerate() {
+            assert_eq!(argv.get(i + 1).map(String::as_str), Some(*word), "{argv:?}");
+        }
+        let lane_pos = argv
+            .iter()
+            .position(|a| a == "--lane")
+            .expect("the launch names a lane");
+        let lane = argv
+            .get(lane_pos + 1)
+            .expect("the lane value follows --lane");
         let inventory = crate::route_gather::inventory(w.dir.path());
         for name in [lane.as_str(), FALLBACK_LANE] {
             crate::evals::runner::lane_from_inventory(&inventory, name)
