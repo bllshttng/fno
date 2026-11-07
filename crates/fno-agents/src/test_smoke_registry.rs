@@ -7,7 +7,7 @@
 /// (name, cwd, cmd). cwd is repo-relative ("." = root). A multi-line cmd
 /// runs under `bash -eo pipefail -c`, matching GitHub's default shell.
 pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
-    ("Pytest (unit + integration)", ".", "uv run --with pytest --with pytest-timeout --with pyyaml pytest tests/py --tb=short -q -m 'not slow_e2e'"),
+    ("Pytest (unit + integration)", ".", "uv run --with pytest --with pytest-timeout --with pyyaml --with psutil pytest tests/py --tb=short -q -m 'not slow_e2e'"),
     ("Bash events-validate harness", ".", "bash tests/events/test-bash-validator.sh"),
     ("frontend-craft gate harness", ".", "bash tests/lib/test_frontend_surface.sh\nbash tests/lib/test_infer_has_ui.sh\nbash tests/lib/test_resolve_plan_executor.sh"),
     ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh\nbash tests/lib/test_config_plans_chain.sh"),
@@ -44,7 +44,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("No stale skill refs (consolidation audit)", ".", "bash scripts/ci/check-no-stale-skill-refs.sh"),
     ("Plugin function-agnosticism check", ".", "bash scripts/ci/check-plugins-function-agnostic.sh"),
     ("Company module boundary self-test", ".", "bash tests/ci/test_check_company_boundaries.sh"),
-    ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh --baseline"),
+    ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh"),
     ("Skill snippet hazard lint", ".", "bash scripts/ci/check-skill-snippets.sh"),
     ("Skill snippet lint self-test", ".", "bash tests/ci/test_check_skill_snippets.sh"),
     ("Pitfalls corpus cap", ".", "bash scripts/ci/check-pitfalls.sh"),
