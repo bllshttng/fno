@@ -705,7 +705,10 @@ fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     let waiter_row = text.lines().find(|line| line.contains("waiter")).unwrap();
     assert!(
         waiter_row.contains("\u{29d7}2"),
-        "waiting paints the hourglass and queue position: {waiter_row:?}"
+        "waiting paints the hourglass and queue position: row {waiter_row:?} in frame (layout {:?} density {:?} panel {}): {text:?}",
+        v.sideline_layout,
+        v.density,
+        v.panel_w()
     );
     let plain_row = text.lines().find(|line| line.contains("plain")).unwrap();
     assert!(
@@ -780,17 +783,20 @@ fn overlay_build_marks_stamps_live_sidecars_and_ages_out_stale_ones() {
         },
     ];
     crate::agents_view::overlay_build_marks_at(&mut rows, &dir, now);
+    assert_eq!(rows.len(), 3, "one row per registry agent");
     assert_eq!(
-        rows[0].build.map(|b| b.stage),
+        rows.get(0).and_then(|r| r.build.map(|b| b.stage)),
         Some(crate::proto::BuildStage::Compiling),
         "a fresh sidecar stamps the row"
     );
     assert_eq!(
-        rows[1].build, None,
+        rows.get(1).and_then(|r| r.build),
+        None,
         "a stale sidecar ages out: no mark, never a frozen hourglass"
     );
     assert_eq!(
-        rows[2].build, None,
+        rows.get(2).and_then(|r| r.build),
+        None,
         "a session with no sidecar carries no mark"
     );
     let _ = std::fs::remove_dir_all(&dir);
