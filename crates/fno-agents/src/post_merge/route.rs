@@ -102,7 +102,7 @@ struct RouteDecision {
     origin_dead: bool,
 }
 
-fn decide<R, D>(
+fn decide<R, B, D>(
     auto_run: bool,
     ship_session_id: Option<&str>,
     ship_harness: Option<&str>,
@@ -110,10 +110,12 @@ fn decide<R, D>(
     source_harness: Option<&str>,
     source_cwd: Option<&str>,
     resolve_warm: R,
+    borrow_block: B,
     death_confirmed: D,
 ) -> RouteDecision
 where
     R: Fn(&str, Option<&str>) -> Option<String>,
+    B: Fn(&str, Option<&str>) -> Option<String>,
     D: Fn(&str, Option<&str>, &str) -> bool,
 {
     if !auto_run {
@@ -138,7 +140,18 @@ where
         }
     }
     let mut cold_reason = "no-live-source-session".to_string();
+    let mut block_named = false;
     for (sid, harness) in &candidates {
+        // A session the ritual must never type into (a lead the operator is
+        // chatting with) is disqualified before resolvability is even asked,
+        // and the first block reason names the cold receipt.
+        if let Some(reason) = borrow_block(sid, *harness) {
+            if !block_named {
+                cold_reason = reason;
+                block_named = true;
+            }
+            continue;
+        }
         if let Some(warm_sid) = resolve_warm(sid, *harness) {
             return RouteDecision {
                 route: "warm",
@@ -291,10 +304,11 @@ fn result(outcome: &str, pr: i64) -> DispatchResult {
 }
 
 /// The transport seams, split from the decision so tests fake the edges the
-/// oracle faked (resolver, inject, command runner, finalize, receipt) and the
-/// dedup layers stay real on-disk state.
+/// oracle faked (resolver, borrow guard, inject, command runner, finalize,
+/// receipt) and the dedup layers stay real on-disk state.
 struct Seams {
     resolve_warm: Box<dyn Fn(&str, Option<&str>) -> Option<String>>,
+    borrow_block: Box<dyn Fn(&str, Option<&str>) -> Option<String>>,
     death_confirmed: Box<dyn Fn(&str, Option<&str>, &str) -> bool>,
     inject: Box<dyn Fn(&str, i64, Option<&str>) -> (bool, String)>,
     run_command: Box<dyn Fn(i64, &Path, f64) -> (bool, String)>,
@@ -573,6 +587,7 @@ fn run_dispatch(
         source_harness,
         source_cwd,
         |sid, h| (seams.resolve_warm)(sid, h),
+        |sid, h| (seams.borrow_block)(sid, h),
         |sid, h, cwd| (seams.death_confirmed)(sid, h, cwd),
     );
     let attempt = new_attempt_id();
@@ -893,11 +908,90 @@ fn candidate_dir_names(cwd: &str) -> Vec<String> {
     names
 }
 
+/// How fresh a real user turn blocks a borrow. A lead the operator is
+/// actively typing into must never receive the injected ritual turn; every
+/// incident that filed this guard landed within minutes of the user's own
+/// turns.
+const USER_TURN_BORROW_BLOCK_S: i64 = 10 * 60;
+
+/// The warm-borrow guard: the two sessions a ritual never types into. A lead
+/// role holder is never borrowed, because the injected command lands as a
+/// user turn in the operator's live conversation; neither is a session whose
+/// transcript carries a real user turn inside the window. Both take the cold
+/// path, and the named reason rides the receipt instead of the generic
+/// no-live default.
+fn borrow_block_reason(sid: &str, harness: &str) -> Option<String> {
+    let home = crate::paths::AgentsHome::from_env();
+    let rows = crate::whoami::registry_rows(&home);
+    if crate::session_role::session_role(&rows, sid, harness)
+        .is_some_and(|r| r.kind == crate::session_role::RoleKind::Lead)
+    {
+        return Some("lead-role-holder".to_string());
+    }
+    recent_user_turn(sid, USER_TURN_BORROW_BLOCK_S).then(|| "recent-user-turn".to_string())
+}
+
+/// True when the newest real user turn in the session's transcript sits
+/// inside the window. A mail-framed turn is the peer's and a command framing
+/// is the harness's; neither is the operator typing. A real user turn with
+/// no readable stamp fails closed: the cold path costs nothing the warm
+/// path saves.
+fn recent_user_turn(sid: &str, window_s: i64) -> bool {
+    let home = crate::paths::AgentsHome::from_env();
+    let rows = crate::state::load_registry(&home.registry_json())
+        .ok()
+        .map(|r| r.entries);
+    let stores = crate::session_truth::Stores::ambient();
+    let Some(session) = crate::session_truth::resolve_session(rows.as_deref(), sid, &stores) else {
+        return false;
+    };
+    let records = match crate::session_truth::session_records(
+        &session,
+        &stores,
+        crate::session_truth::TAIL_N,
+    ) {
+        Ok(records) => records,
+        Err(_) => return false,
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    for record in records.iter().rev() {
+        if record.role != "user" {
+            continue;
+        }
+        if crate::mail_header::classify(&record.text) != crate::mail_header::Framing::Bare {
+            continue;
+        }
+        if crate::session_truth::injected_record_text(&record.text) {
+            continue;
+        }
+        let age = record
+            .timestamp
+            .as_deref()
+            .and_then(stamp_epoch)
+            .map(|ts| now.saturating_sub(ts))
+            .unwrap_or(0);
+        return age <= window_s;
+    }
+    false
+}
+
+fn stamp_epoch(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(&ts.replace('Z', "+00:00"))
+        .ok()
+        .map(|dt| dt.timestamp())
+}
+
 /// The production seams: roster-backed claude probe+inject, the codex
 /// registry row (pane lane first), the self-exec cold command, in-process
 /// finalize, and the global events log.
 fn real_seams() -> Seams {
     Seams {
+        borrow_block: Box::new(|sid, harness| {
+            borrow_block_reason(sid, harness.unwrap_or("claude"))
+        }),
         resolve_warm: Box::new(|sid, harness| {
             let harness = harness.unwrap_or("claude");
             match harness {
@@ -953,6 +1047,7 @@ mod tests {
         (
             Seams {
                 resolve_warm: Box::new(|_, _| None),
+                borrow_block: Box::new(|_, _| None),
                 death_confirmed: Box::new(|_, _, _| false),
                 inject: Box::new(|_, _, _| (false, "not-live".to_string())),
                 run_command: Box::new(move |_, _, _| {
@@ -991,11 +1086,52 @@ mod tests {
                 }
                 (sid == "ship-1").then(|| sid.to_string())
             },
+            |_, _| None,
             |_, _, _| false,
         );
         assert_eq!(d.route, "warm");
         assert_eq!(d.borrowed_session_id.as_deref(), Some("ship-1"));
         assert_eq!(seen.lock().unwrap().as_slice(), ["ship-1"]);
+    }
+
+    /// A blocked ship candidate falls through to a clean source candidate:
+    /// the guard disqualifies only its own leg, so the block never costs
+    /// more than the blocked borrow.
+    #[test]
+    fn decide_blocked_ship_borrow_falls_through_to_a_clean_source() {
+        let d = decide(
+            true,
+            Some("ship-1"),
+            Some("claude"),
+            Some("src-1"),
+            Some("claude"),
+            None,
+            |sid, _| Some(sid.to_string()),
+            |sid, _| (sid == "ship-1").then(|| "lead-role-holder".to_string()),
+            |_, _, _| false,
+        );
+        assert_eq!(d.route, "warm");
+        assert_eq!(d.borrowed_session_id.as_deref(), Some("src-1"));
+    }
+
+    /// Two blocked candidates still go cold naming the first block, not the
+    /// second, so the receipt reads the walk in order.
+    #[test]
+    fn decide_all_candidates_blocked_goes_cold_naming_the_first_block() {
+        let d = decide(
+            true,
+            Some("ship-1"),
+            Some("claude"),
+            Some("src-1"),
+            Some("claude"),
+            None,
+            |sid, _| Some(sid.to_string()),
+            |_sid, _| Some("lead-role-holder".to_string()),
+            |_, _, _| false,
+        );
+        assert_eq!(d.route, "cold");
+        assert_eq!(d.borrowed_session_id, None);
+        assert_eq!(d.reason, "lead-role-holder");
     }
 
     #[test]
@@ -1007,6 +1143,7 @@ mod tests {
             Some("dead-1"),
             Some("claude"),
             Some("/repo"),
+            |_, _| None,
             |_, _| None,
             |sid, _, _| sid == "dead-1",
         );
@@ -1131,5 +1268,64 @@ mod tests {
             bad_log.lock().unwrap().as_slice(),
             ["reserved:reserved", "failed:command-nonzero"]
         );
+    }
+
+    /// The borrowed session that holds a lead role gets the cold path: the
+    /// node's own test. The guard reads the lead from the registry's role
+    /// fields, not from the roster's resolvability.
+    #[test]
+    fn borrow_guard_refuses_a_lead_role_holder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _home = crate::AgentsHomeEnvGuard::set(&dir.path().join("agents"));
+        let reg = crate::paths::AgentsHome::from_env().registry_json();
+        let mut lead = crate::state::RegistryEntry::default();
+        lead.name = "zenobia".into();
+        lead.harness = Some("claude".into());
+        lead.harness_session_id = Some("s-lead".into());
+        lead.created_at = "t1".into();
+        lead.role_scope = Some("fno".into());
+        crate::client_commands::upsert_synthesized_row(&reg, lead).expect("seed registry");
+        assert_eq!(
+            borrow_block_reason("s-lead", "claude").as_deref(),
+            Some("lead-role-holder")
+        );
+    }
+
+    /// A fresh real user turn blocks the borrow; one past the window does
+    /// not, and a mail-framed turn never counts as the operator typing.
+    #[test]
+    fn borrow_guard_refuses_a_fresh_user_turn_and_allows_a_stale_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _home = crate::AgentsHomeEnvGuard::set(&dir.path().join("agents"));
+        let reg = crate::paths::AgentsHome::from_env().registry_json();
+        let transcript = dir.path().join("t.jsonl");
+        let mut worker = crate::state::RegistryEntry::default();
+        worker.name = "shipper".into();
+        worker.harness = Some("claude".into());
+        worker.harness_session_id = Some("s-wk".into());
+        worker.created_at = "t1".into();
+        worker.transcript_path = Some(transcript.to_string_lossy().to_string());
+        crate::client_commands::upsert_synthesized_row(&reg, worker).expect("seed registry");
+        let now = chrono::Utc::now();
+        let stamp = |age_s: i64| (now - chrono::Duration::seconds(age_s)).to_rfc3339();
+        let user_line = |ts: &str| {
+            format!(
+                r#"{{"type":"user","timestamp":"{ts}","message":{{"role":"user","content":"are you serious?"}}}}"#,
+            )
+        };
+        std::fs::write(&transcript, user_line(&stamp(60)) + "\n").expect("write transcript");
+        assert_eq!(
+            borrow_block_reason("s-wk", "claude").as_deref(),
+            Some("recent-user-turn")
+        );
+        std::fs::write(&transcript, user_line(&stamp(2 * 3600)) + "\n")
+            .expect("rewrite transcript");
+        assert_eq!(borrow_block_reason("s-wk", "claude"), None);
+        let mail_line = format!(
+            r#"{{"type":"user","timestamp":"{}","message":{{"role":"user","content":"<fno_mail from=\"peer\">hello</fno_mail>"}}}}"#,
+            stamp(60)
+        );
+        std::fs::write(&transcript, mail_line + "\n").expect("rewrite transcript");
+        assert_eq!(borrow_block_reason("s-wk", "claude"), None);
     }
 }
