@@ -382,6 +382,16 @@ fn bearer_verdict(ctx: &Ctx<'_>, record: &Record, bearer: &str, now: f64) -> &'s
     };
     if !attributed_dir(ctx, record).0 {
         let want = binding::record_principal(&record.id, root).map(|p| binding::identity_key(&p));
+        // The record's own stored credential needs no endpoint: a token
+        // belongs to one account forever, so its usage files under the
+        // record that holds it, expired or not.
+        if want.is_some()
+            && store::read_blob(root, &record.id)
+                .and_then(|b| binding::bearer_of(&b))
+                .is_some_and(|t| t == bearer)
+        {
+            return "match";
+        }
         let got = ctx
             .slot
             .profile(bearer)

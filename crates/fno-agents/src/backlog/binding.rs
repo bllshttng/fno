@@ -47,6 +47,11 @@ impl PrRowBindResult {
 
 /// Validate and bind every PR claim as one mutation. Callers may run this
 /// against a copy for a dry-run or under the graph lock for persistence.
+///
+/// `open_pr` marks a claim from an open-binding heal (the PR is open on
+/// GitHub). A finished node then records it in `additional_prs`, the same
+/// state `--add-pr` writes by hand, instead of answering `already_done`.
+/// A closing PR's claim still skips: closure never re-binds a done row.
 pub(crate) fn bind_pr_rows(
     entries: &mut [Value],
     claimed_ids: &[String],
@@ -54,6 +59,7 @@ pub(crate) fn bind_pr_rows(
     pr_url: Option<&str>,
     repo: Option<&str>,
     rebind: bool,
+    open_pr: bool,
     aliases: &BTreeMap<String, String>,
 ) -> PrRowBindResult {
     if claimed_ids.is_empty() {
@@ -130,7 +136,22 @@ pub(crate) fn bind_pr_rows(
         } else if bound {
             "already_bound"
         } else if !node_is_open(node) {
-            "already_done"
+            // A finished row keeps its primary untouched: the follow-up
+            // lands in additional_prs, where the openness machinery judges
+            // whether it still holds a worker.
+            if open_pr {
+                let obj = node.as_object_mut().expect("graph rows are objects");
+                let mut additional: Vec<Value> = obj
+                    .get("additional_prs")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                additional.push(json!({"number": pr_number, "url": pr_url}));
+                obj.insert("additional_prs".into(), Value::Array(additional));
+                "appended_additional"
+            } else {
+                "already_done"
+            }
         } else if rebind && node.get("pr_number").map(Value::is_i64).unwrap_or(false) {
             let obj = node.as_object_mut().expect("graph rows are objects");
             let old = json!({
@@ -256,6 +277,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             &BTreeMap::new(),
         );
         assert_eq!(result.outcome, "refused");
@@ -279,6 +301,7 @@ mod tests {
             Some("https://github.com/o/r/pull/7"),
             Some("o/r"),
             false,
+            false,
             &BTreeMap::new(),
         );
         assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
@@ -290,5 +313,63 @@ mod tests {
         assert_eq!(additional[0]["number"], 7);
         // The pre-existing primary stays put.
         assert_eq!(entries[1]["pr_number"], 2);
+    }
+
+    #[test]
+    fn an_open_pr_on_a_finished_node_records_as_additional() {
+        let mut entries = vec![node(json!({
+            "id": "x-aaaa",
+            "status": "done",
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+            "merge_status": "merged",
+        }))];
+        let claimed = vec!["x-aaaa".to_string()];
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            1813,
+            Some("https://github.com/o/r/pull/1813"),
+            Some("o/r"),
+            false,
+            true,
+            &BTreeMap::new(),
+        );
+        assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
+        assert_eq!(result.bindings[0].action, "appended_additional");
+        // The finished row's primary and closure facts stay untouched.
+        assert_eq!(entries[0]["pr_number"], 1720);
+        assert_eq!(entries[0]["merge_status"], "merged");
+        let additional = &entries[0]["additional_prs"];
+        assert_eq!(additional[0]["number"], 1813);
+        assert_eq!(additional[0]["url"], "https://github.com/o/r/pull/1813");
+    }
+
+    #[test]
+    fn a_closing_claim_on_a_finished_node_still_skips() {
+        let mut entries = vec![node(json!({
+            "id": "x-aaaa",
+            "status": "done",
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+        }))];
+        let claimed = vec!["x-aaaa".to_string()];
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            1813,
+            Some("https://github.com/o/r/pull/1813"),
+            Some("o/r"),
+            false,
+            false,
+            &BTreeMap::new(),
+        );
+        assert_eq!(result.outcome, "bound");
+        assert_eq!(result.bindings[0].action, "already_done");
+        assert!(result.bound_ids().is_empty());
+        assert!(entries[0].get("additional_prs").is_none(), "no write");
+        assert_eq!(entries[0]["pr_number"], 1720);
     }
 }

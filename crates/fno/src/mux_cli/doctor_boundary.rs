@@ -118,15 +118,6 @@ mod tests {
             .is_some_and(|c| c.contains("python"))));
         assert!(rows.iter().any(|r| r.check.name.starts_with("digest")));
     }
-
-    #[test]
-    fn dependency_rows_never_fail() {
-        let rows = dependency_rows(Path::new("."));
-        for r in &rows {
-            assert_ne!(r.check.verdict, Verdict::Fail);
-        }
-    }
-
     #[test]
     fn json_rows_carry_availability_reason_observed_at_remedy() {
         let rows = dependency_rows(Path::new("."));

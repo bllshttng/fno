@@ -25,7 +25,7 @@ use crate::model_catalog::state_dir;
 /// They MUST stay a coherent same-build set in every install location; a
 /// mixed-version pair is the worse bug, so update syncs all three or none
 /// per location.
-const TRIAD_STEMS: [&str; 3] = ["fno-agents", "fno-agents-daemon", "fno-agents-worker"];
+pub(crate) const TRIAD_STEMS: [&str; 3] = ["fno-agents", "fno-agents-daemon", "fno-agents-worker"];
 
 const GUARD_MSG: &str = "[fno doctor update] refused: target-state.md shows status: IN_PROGRESS. Updating mid-loop risks binary skew across subprocesses. Pass --force to override.";
 
@@ -41,7 +41,7 @@ const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UV_INSTALL_ATTEMPTS: u32 = 3;
 const UPDATE_BUDGET_SECS: u64 = 60;
 
-fn exe_suffix() -> &'static str {
+pub(crate) fn exe_suffix() -> &'static str {
     if cfg!(windows) {
         ".exe"
     } else {
@@ -277,7 +277,7 @@ fn run_bounded(
 /// Unbounded foreground run for installer-shaped children (cargo, uv, pip):
 /// inherit stdio so progress streams, return the exit code. The Python exec
 /// had no timeout either.
-fn run_inherit(bin: &Path, args: &[String]) -> i32 {
+pub(crate) fn run_inherit(bin: &Path, args: &[String]) -> i32 {
     let status = command_for(bin, args);
     match status {
         Ok(mut cmd) => match cmd.status() {
@@ -433,6 +433,7 @@ fn install_newest_published_arm(
             "the newest published build failed to deploy ({why})"
         ));
     }
+    crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_triad(&bin_dir, false) {
         eprintln!("{e}");
         failed.push("triad sync".into());
@@ -750,7 +751,7 @@ pub(crate) fn write_marker(path: &Path, rev: &str) -> std::io::Result<()> {
 /// The cargo-installed fno-agents binary, or None. Deliberately the cargo
 /// install location, NOT the resolver: a bundled-wheel binary refreshes via
 /// pip, not cargo.
-fn cargo_installed_bin() -> Option<PathBuf> {
+pub(crate) fn cargo_installed_bin() -> Option<PathBuf> {
     cargo_bin(&format!("fno-agents{}", exe_suffix()))
 }
 
@@ -1761,6 +1762,7 @@ fn refresh_rust_bins(
     if prebuilt.is_err() {
         install_mux_front_door(source, &install_root, false);
     }
+    crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_triad(&bin_dir, false) {
         eprintln!("{e}");
         failed.push("triad sync".into());
@@ -1872,6 +1874,9 @@ fn refresh_fresh_path(
             println!("{line}");
         }
     }
+    if !mux_fresh {
+        crate::codesign::sign_placed(installed_bin.parent().unwrap_or(installed_bin), dry_run);
+    }
     if let Err(e) = sync_triad(installed_bin.parent().unwrap_or(installed_bin), dry_run) {
         eprintln!("{e}");
         failed.push("triad sync".into());
@@ -1980,12 +1985,14 @@ fn await_fno_py(fno_py: &Path, dry_run: bool) -> bool {
 /// Best-effort commands chained after a successful install, each command
 /// self-gating. The plugin-stage restage rides last: live sessions exec
 /// hooks straight from the stage, so a restage IS the deploy; the codex
-/// refresh follows the restage when its channel marker says dev.
-fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
+/// refresh follows the restage when its channel marker says dev. Returns
+/// whether the codex refresh ran (the update then runs the janitor itself,
+/// outside its budget).
+fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
     let fno_py = resolve_fno_py();
     if !await_fno_py(&fno_py, false) {
         failed.push("fno-py reappearance (launchd refresh skipped)".into());
-        return;
+        return false;
     }
     let args: Vec<String> = vec!["do".into(), "pr".into(), "watch".into(), "refresh".into()];
     let code = run_inherit(&fno_py, &args);
@@ -2005,14 +2012,18 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         );
         failed.push("post-install groom agent refresh".into());
     }
-    restage_plugin(resolved, failed);
+    restage_plugin(resolved, failed)
 }
 
 /// The plugin-stage restage, plus the codex refresh when its channel marker
 /// says dev. The stage holds skills, hooks and scripts, none of them
 /// compiled, so it also rides a Python hold: a skill fix never waits on a
-/// Rust tarball.
-fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
+/// Rust tarball. Returns whether the codex refresh ran; that refresh used to
+/// chain the reclaim inline (plugin-install chains it after every full
+/// install), and the update passes --no-reclaim and runs the janitor after
+/// its budget fold instead.
+fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) -> bool {
+    let mut codex_refresh_ran = false;
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [
             "plugin-install".into(),
@@ -2031,10 +2042,12 @@ fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
         // A restage keeps the version; codex re-copies its cache only on a
         // forced converge, so the dev-channel marker gates the refresh.
         if codex_channel_is_dev() {
+            codex_refresh_ran = true;
             let args: Vec<String> = [
                 "plugin-install".into(),
                 "codex".into(),
                 "--force".into(),
+                "--no-reclaim".into(),
                 "--source".into(),
                 resolved.to_string_lossy().into_owned(),
             ]
@@ -2048,6 +2061,7 @@ fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
             }
         }
     }
+    codex_refresh_ran
 }
 
 /// The codex dev-channel marker: `$CODEX_HOME/footnote/plugin-channel.json`
@@ -2298,6 +2312,24 @@ pub(crate) fn is_release_install(pin: &Value, installed_rev: Option<&str>) -> bo
     pin.get("eligibility").and_then(Value::as_str) == Some("no_source") && installed_rev.is_none()
 }
 
+/// The install channel comes from the receipt (the running exe beside its uv
+/// receipt), never from the cwd. A wheel or binary install run inside any
+/// footnote checkout follows the release path even when the pin resolved that
+/// checkout: the 2026-11-06 repro saw such a run fast-forward the checkout
+/// the shell sat in, replace the wheel's links, and leave fno-agents missing.
+/// Deliberate input (`--source`, `$FNO_SOURCE`) and a source-channel exe keep
+/// the source path, so only the cwd-derived pin origin yields.
+pub(crate) fn receipt_channel_wins(
+    channel: &crate::release_install::InstallChannel,
+    pin_origin: Option<&str>,
+) -> bool {
+    matches!(
+        channel,
+        crate::release_install::InstallChannel::Wheel { .. }
+            | crate::release_install::InstallChannel::Binary
+    ) && pin_origin == Some("checkout")
+}
+
 fn upgrade_release(dry_run: bool) -> i32 {
     let Some(uv) = which_uv() else {
         eprintln!("fno update: FAILED: release install, and `uv` is not on PATH. Install uv, then run `uv tool upgrade fno`.");
@@ -2368,10 +2400,14 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             return 1;
         }
     };
+    let channel = crate::release_install::current_channel();
+    if receipt_channel_wins(&channel, pin.get("origin").and_then(Value::as_str)) {
+        return crate::release_install::update(&channel, flags.dry_run);
+    }
     if is_release_install(&pin, read_marker(&installed_rev_file()).as_deref()) {
-        return match crate::release_install::current_channel() {
+        return match &channel {
             crate::release_install::InstallChannel::Other => upgrade_release(flags.dry_run),
-            channel => crate::release_install::update(&channel, flags.dry_run),
+            _ => crate::release_install::update(&channel, flags.dry_run),
         };
     }
     if pin.get("decision").and_then(Value::as_str) == Some("refuse") {
@@ -2588,6 +2624,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         }
     }
 
+    // The codex dev refresh used to chain the reclaim inline (plugin-install
+    // chains it after every full install), and a big reclaim (6.3 GB) was
+    // charged to this update's 60 s budget. The refresh passes --no-reclaim;
+    // the janitor runs after the budget fold below.
+    let mut codex_refresh_ran = false;
     let cmd: Vec<String> = if held.is_some() {
         Vec::new()
     } else if which_uv().is_some() {
@@ -2666,11 +2707,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             eprintln!("fno doctor update: ERROR: {e}");
             failed.push("source-pin record".into());
         }
-        post_install_steps(&resolved, &mut failed);
+        codex_refresh_ran = post_install_steps(&resolved, &mut failed);
     } else if held.is_none() {
         failed.push("uv install".into());
     } else {
-        restage_plugin(&resolved, &mut failed);
+        codex_refresh_ran = restage_plugin(&resolved, &mut failed);
     }
 
     release_update_claim();
@@ -2723,6 +2764,14 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let took = started.elapsed().as_secs();
     if took > UPDATE_BUDGET_SECS {
         failed.push(format!("the {UPDATE_BUDGET_SECS}s budget (took {took}s)"));
+    }
+    // The janitor runs after the budget fold: a big reclaim (6.3 GB measured)
+    // is the janitor's time, not the update's. Best-effort, bounded: its
+    // failure never fails the update (the inline chain ignored it too), and
+    // the receipt lives in <state>/state/reclaim/last-run.json.
+    if codex_refresh_ran {
+        let args: Vec<String> = vec!["reclaim".into(), "--apply".into(), "--no-uv-prune".into()];
+        let _ = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(600), None);
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {

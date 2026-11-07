@@ -1,9 +1,10 @@
 //! `fno-agents plugin-install <harness> [--force]`, surfaced as
 //! `fno config plugin install`. One local-dev install door for every
 //! plugin harness. Everything installs from the FILTERED stage
-//! (`<state-root>/plugin-stage/fno`: git-tracked + untracked-but-not-ignored
+//! (`<state-root>/install/plugin-stage/fno`: git-tracked + untracked-but-not-ignored
 //! files only, rebuilt wholesale), never from the repo root, because harness
-//! caches copy what they are pointed at.
+//! caches copy what they are pointed at. The previous root-level stage stays
+//! readable during the direct-session drain.
 //!
 //! This module owns stage build, the `--check`/`--restage` deploy commands, the
 //! claude, opencode and agy arms plus the old env-export cleanup. The codex arm
@@ -34,6 +35,18 @@ pub(crate) fn state_root() -> PathBuf {
     std::env::var_os("FNO_RECLAIM_STATE_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_home().join(".fno"))
+}
+
+pub(crate) fn stage_parent() -> PathBuf {
+    crate::state_layout::place_dir(&state_root(), "plugin-stage")
+        .unwrap_or_else(|| state_root().join("plugin-stage"))
+}
+
+fn legacy_stage_parent() -> Option<PathBuf> {
+    let legacy = state_root().join("plugin-stage");
+    let is_real_dir = std::fs::symlink_metadata(&legacy)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+    (legacy != stage_parent() && is_real_dir).then_some(legacy)
 }
 
 fn run_checked(cmd: &[String], cwd: Option<&Path>) -> Result<String, String> {
@@ -283,7 +296,77 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     build_stage_as(source_root, stage_parent, Profile::Full)
 }
 
-/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// The trees the codex dev stage drops: no codex hook, skill or command
+/// reads them at run time (measured by sweep 2026-11-06), and they are 9,394
+/// of the dev stage's 11,676 entries. codex fingerprints the whole stage
+/// inside each hook's own timeout, so every entry is paid on every hook call.
+fn codex_dropped_tree(rel: &str) -> bool {
+    const DROPPED: [&str; 4] = ["crates", "cli", "tests", "evals"];
+    DROPPED
+        .iter()
+        .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
+}
+
+/// First `PLUGIN_ROOT/<dropped tree>` read in `text`. The regex crate has no
+/// look-around, so the "not followed by `-` or a word character" boundary is
+/// checked by hand after each match.
+fn dropped_tree_read(text: &str) -> Option<&str> {
+    let pattern = regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)"#)
+        .expect("valid tree-read pattern");
+    let hit = pattern.find_iter(text).find_map(|m| {
+        let next = text[m.end()..].chars().next();
+        let continues = next.is_some_and(|c| c == '-' || c == '_' || c.is_alphanumeric());
+        (!continues).then(|| &text[m.range()])
+    });
+    hit
+}
+
+/// Refuse a codex stage whose hooks, skills, agents or commands name a
+/// dropped tree at run time: the guard turns a future runtime read into a
+/// build refusal naming the file and the path (AC8), not a broken hook at
+/// runtime.
+fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
+    for dir in ["hooks", "skills", "agents", "commands"] {
+        let root = source_root.join(dir);
+        if !root.is_dir() {
+            continue;
+        }
+        // Depth ≤ 2: skills nest one level (skills/<name>/references/);
+        // deeper nesting is docs, not runtime reads.
+        let mut stack: Vec<std::path::PathBuf> = vec![root];
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if let Some(hit) = dropped_tree_read(&text) {
+                let rel = path.strip_prefix(source_root).unwrap_or(path);
+                return Err(format!(
+                    "codex stage: {} names dropped tree path {:?} at run time; \
+                     widen the keep set or fix the reference",
+                    rel.display(),
+                    hit
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `build_stage` for one profile. A pack stage lives at `install/plugin-stage/fno-pack`
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
     source_root: &Path,
@@ -291,8 +374,11 @@ fn build_stage_as(
     profile: Profile,
 ) -> Result<(PathBuf, usize), String> {
     require_fno_source(source_root)?;
+    if matches!(profile, Profile::Codex) {
+        codex_runtime_read_guard(source_root)?;
+    }
     let mux = match profile {
-        Profile::Full => None,
+        Profile::Full | Profile::Codex => None,
         Profile::Pack => Some(MuxPaths::load(source_root)?),
     };
     let listed = run_checked(
@@ -318,6 +404,9 @@ fn build_stage_as(
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
             if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
+            if matches!(profile, Profile::Codex) && codex_dropped_tree(rel) {
                 continue;
             }
             let src = source_root.join(rel);
@@ -363,7 +452,11 @@ fn build_stage_as(
         let stamp = json!({
             "source_head": head,
             "built_at": chrono::Utc::now().to_rfc3339(),
-            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+            "profile": match profile {
+                Profile::Pack => "pack",
+                Profile::Codex => "codex",
+                Profile::Full => "full",
+            },
         });
         let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
     }
@@ -958,6 +1051,205 @@ struct RootVerdict {
     blocker: Option<String>,
 }
 
+/// One old-name registration the rename scan found: a marketplace or plugin
+/// id that still names where fno used to live. The doctor prints the detail
+/// and the remedy verbatim; nothing here mutates the registration.
+#[derive(Serialize, Debug)]
+struct RenameFinding {
+    harness: &'static str,
+    kind: &'static str,
+    name: String,
+    detail: String,
+    command: String,
+}
+
+/// The owner/repo slug a marketplace source names, when it is a GitHub one.
+/// `github` sources carry the slug directly; a `git` url goes through the
+/// shared remote parser, which anchors the github.com host.
+fn marketplace_repo_slug(source: &Value) -> Option<String> {
+    match source.get("source").and_then(Value::as_str)? {
+        "github" => source.get("repo").and_then(Value::as_str).map(String::from),
+        "git" => {
+            let url = source.get("url").and_then(Value::as_str)?;
+            crate::ledger_register::slug_from_remote(url)
+        }
+        _ => None,
+    }
+}
+
+/// The GitHub remedy chain for an install registered under a pre-rename
+/// marketplace: uninstall the old id, drop the old marketplace, re-add and
+/// install under the current names.
+fn claude_remote_remedy(plugin_id: &str) -> String {
+    format!(
+        "claude plugin uninstall {plugin_id} && claude plugin marketplace remove \
+         {LEGACY_MARKETPLACE_NAME} && claude plugin marketplace add \
+         fnodotdev/fno@stable && claude plugin install {PLUGIN_ID}"
+    )
+}
+
+/// The old-name registrations on this machine: Claude marketplaces whose
+/// url still names a renamed repo, plugin ids registered under the
+/// pre-rename marketplace, and the Codex plugin entry that names a
+/// marketplace no longer configured. Read-only; the remedy lines name the
+/// commands that move or drop each.
+fn rename_findings() -> Vec<RenameFinding> {
+    let aliases = crate::agents_config::builtin_repo_aliases();
+    let mut findings = Vec::new();
+
+    // Claude: known_marketplaces.json names every marketplace and where it
+    // clones from; installed_plugins.json names every installed plugin id.
+    let claude = claude_config_dir();
+    let known: Option<Value> =
+        std::fs::read_to_string(claude.join("plugins/known_marketplaces.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+    let legacy_marketplace_is_local = known
+        .as_ref()
+        .and_then(|k| k.get(LEGACY_MARKETPLACE_NAME))
+        .and_then(|m| m.get("source"))
+        .and_then(|s| s.get("source"))
+        .and_then(Value::as_str)
+        == Some("directory");
+    let mut legacy_marketplace_named = false;
+    if let Some(known) = known.as_ref().and_then(Value::as_object) {
+        for (name, entry) in known {
+            let slug = entry
+                .get("source")
+                .and_then(marketplace_repo_slug)
+                .map(|s| s.to_lowercase());
+            if let Some(old_slug) = slug.as_deref() {
+                if let Some(target) = aliases.get(old_slug) {
+                    findings.push(RenameFinding {
+                        harness: "claude",
+                        kind: "marketplace-redirect",
+                        name: name.clone(),
+                        detail: format!(
+                            "claude marketplace {name} clones {old_slug}, which now answers as {target}"
+                        ),
+                        command: format!("claude plugin marketplace remove {name}"),
+                    });
+                }
+            }
+            if name == LEGACY_MARKETPLACE_NAME {
+                legacy_marketplace_named = true;
+            }
+        }
+    }
+    let registry: Option<Value> =
+        std::fs::read_to_string(claude.join("plugins/installed_plugins.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+    let mut legacy_plugin_ids: Vec<String> = Vec::new();
+    if let Some(plugins) = registry
+        .as_ref()
+        .and_then(|r| r.get("plugins"))
+        .and_then(Value::as_object)
+    {
+        for id in plugins.keys() {
+            let Some((_, market)) = id.split_once('@') else {
+                continue;
+            };
+            if !market.eq_ignore_ascii_case(LEGACY_MARKETPLACE_NAME) {
+                continue;
+            }
+            legacy_plugin_ids.push(id.clone());
+            let command = if id == LEGACY_PLUGIN_ID && legacy_marketplace_is_local {
+                // The dev install moves a stage install by itself; the
+                // manual chain would drop the stage marketplace first.
+                "fno config plugin install claude".to_string()
+            } else if id == LEGACY_PLUGIN_ID {
+                claude_remote_remedy(id)
+            } else {
+                // Nothing migrates a non-fno plugin; naming it is the fix.
+                format!("claude plugin uninstall {id}")
+            };
+            findings.push(RenameFinding {
+                harness: "claude",
+                kind: "legacy-plugin",
+                name: id.clone(),
+                detail: format!(
+                    "claude installs {id} under the pre-rename marketplace \
+                     {LEGACY_MARKETPLACE_NAME}"
+                ),
+                command,
+            });
+        }
+    }
+    if legacy_marketplace_named && legacy_plugin_ids.is_empty() {
+        let command = if legacy_marketplace_is_local {
+            "fno config plugin install claude".to_string()
+        } else {
+            format!(
+                "claude plugin marketplace remove {LEGACY_MARKETPLACE_NAME} && claude \
+                 plugin marketplace add fnodotdev/fno@stable && claude plugin install \
+                 {PLUGIN_ID}"
+            )
+        };
+        findings.push(RenameFinding {
+            harness: "claude",
+            kind: "legacy-marketplace",
+            name: LEGACY_MARKETPLACE_NAME.to_string(),
+            detail: format!(
+                "claude registers the pre-rename marketplace name \
+                 {LEGACY_MARKETPLACE_NAME} with no plugin installed under it"
+            ),
+            command,
+        });
+    }
+
+    // Codex: config.toml enables plugins per id; fno@footnote names a
+    // marketplace the config no longer carries, so the entry is dead.
+    let codex_config = crate::codex_converge::codex_home().join("config.toml");
+    let codex = std::fs::read_to_string(&codex_config)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok());
+    if let Some(table) = codex {
+        let plugins = table.get("plugins").and_then(toml::Value::as_table);
+        let has_market = table
+            .get("marketplaces")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|m| m.contains_key(LEGACY_MARKETPLACE_NAME));
+        let legacy_enabled = plugins.is_some_and(|p| {
+            p.get(LEGACY_PLUGIN_ID)
+                .and_then(|e| e.get("enabled"))
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false)
+        });
+        if legacy_enabled && !has_market {
+            let twin = plugins.is_some_and(|p| {
+                p.get(PLUGIN_ID)
+                    .and_then(|e| e.get("enabled"))
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false)
+            });
+            let detail = if twin {
+                format!(
+                    "codex enables fno twice; {LEGACY_PLUGIN_ID} names the removed \
+                     {LEGACY_MARKETPLACE_NAME} marketplace, so its hooks no longer refresh"
+                )
+            } else {
+                format!(
+                    "codex enables {LEGACY_PLUGIN_ID} but the \
+                     {LEGACY_MARKETPLACE_NAME} marketplace is gone, so the plugin \
+                     cannot load"
+                )
+            };
+            findings.push(RenameFinding {
+                harness: "codex",
+                kind: "dead-legacy-plugin",
+                name: LEGACY_PLUGIN_ID.to_string(),
+                detail,
+                command: "fno config setup run --only harness-wiring (release) or fno \
+                          config plugin install codex (dev)"
+                    .to_string(),
+            });
+        }
+    }
+
+    findings
+}
+
 /// The doctor-shaped fold: flat keys pointed at the live root, status the
 /// worst across roots, and the per-root detail under `roots`.
 #[derive(Serialize)]
@@ -971,6 +1263,10 @@ struct RootsReport {
     detail: Option<String>,
     roots: Vec<RootVerdict>,
     enumeration_detail: Vec<String>,
+    /// Old-name registrations, appended last so the JSON prefix stays
+    /// byte-stable for the doctor fold; absent when the scan found none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    rename_findings: Vec<RenameFinding>,
 }
 
 fn root_note(live: bool, check: &StageCheck) -> String {
@@ -1089,6 +1385,7 @@ fn check_roots_report(
         detail: joined,
         enumeration_detail: detail,
         roots,
+        rename_findings: Vec::new(),
     };
     let exit = worst.map(|w| check_exit_code(w.1)).unwrap_or(4);
     (report, exit)
@@ -1102,6 +1399,9 @@ fn print_roots_report(report: &RootsReport) {
         let role = if root.live { "live" } else { "second copy" };
         println!("plugin root ({}, {role}): {}", root.origin, root.path);
         print_check(&root.check, false);
+    }
+    for f in &report.rename_findings {
+        println!("old-name install: {} fix: {}", f.detail, f.command);
     }
 }
 
@@ -1120,11 +1420,15 @@ enum RestageOutcome {
 /// up the directory marketplace has no stage and gets a no-op. Each profile
 /// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
-        .into_iter()
-        .filter(|p| stage_parent.join(p.stage_dir()).exists())
-        .collect();
-    if present.is_empty() {
+    let legacy_parent = (stage_parent == crate::plugin_install::stage_parent())
+        .then(legacy_stage_parent)
+        .flatten();
+    let new_present = present_profiles(stage_parent);
+    let legacy_present = legacy_parent
+        .as_deref()
+        .map(present_profiles)
+        .unwrap_or_default();
+    if new_present.is_empty() && legacy_present.is_empty() {
         return Ok(RestageOutcome::Absent);
     }
     let root = repo_root(source_dir)?;
@@ -1136,14 +1440,41 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         ],
         Some(&root),
     )?;
-    let mut files = 0;
-    let mut full_stage: Option<std::path::PathBuf> = None;
-    for profile in present {
-        let (stage, count) = build_stage_as(&root, stage_parent, profile)?;
-        files += count;
-        if profile == Profile::Full {
-            full_stage = Some(stage);
+    let mut files = restage_profiles(&root, stage_parent, &new_present)?;
+    let migrating = !legacy_present.is_empty() && !stage_parent.join(".legacy-flip.at").is_file();
+    let mut full_stage = stage_parent.join(Profile::Full.stage_dir());
+    if migrating {
+        // The first deploy flips new consumers while preserving the old tree
+        // for sessions that already loaded hooks from it.
+        files += restage_profiles(&root, stage_parent, &legacy_present)?;
+        let legacy = legacy_parent.as_ref().unwrap();
+        files += restage_profiles(&root, legacy, &legacy_present)?;
+        repoint_legacy_harnesses(legacy, &root);
+        write_legacy_flip_stamp(stage_parent)?;
+        println!(
+            "plugin stage: keeping legacy stage {}; first cutover drain started",
+            legacy.display()
+        );
+    } else if let Some(legacy) = legacy_parent.clone() {
+        files += restage_profiles(&root, &legacy, &legacy_present)?;
+        repoint_legacy_harnesses(&legacy, &root);
+        let still_configured = legacy_harnesses(&legacy);
+        if still_configured.is_empty() {
+            drain_legacy_stage(&legacy, pre_flip_harness_processes(stage_parent))?;
+        } else {
+            println!(
+                "plugin stage: keeping legacy stage {}; harness configs still name it: {}",
+                legacy.display(),
+                still_configured.join(",")
+            );
         }
+    }
+    if !full_stage.exists() {
+        full_stage = legacy_parent
+            .as_ref()
+            .map(|p| p.join(Profile::Full.stage_dir()))
+            .filter(|p| p.exists())
+            .unwrap_or(full_stage);
     }
     // A restage rewrites the full stage in place with no install attached, so
     // without this the pointer keeps naming whatever copy primed last and an
@@ -1152,14 +1483,162 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
     // and a worker's init resolved the stale copy). Same rule as
     // install_harness: a pack restage never moves the pointer off a full
     // stage, and a manifest-less stage writes nothing (the prime checks).
-    if let Some(stage) = full_stage {
-        prime_plugin_root_pointer(&stage);
+    if full_stage.exists() {
+        prime_plugin_root_pointer(&full_stage);
     }
     Ok(RestageOutcome::Restaged {
         files,
         root,
         head12: head.chars().take(12).collect(),
     })
+}
+
+fn present_profiles(parent: &Path) -> Vec<Profile> {
+    [Profile::Full, Profile::Pack, Profile::Codex]
+        .into_iter()
+        .filter(|profile| parent.join(profile.stage_dir()).exists())
+        .collect()
+}
+
+fn restage_profiles(root: &Path, parent: &Path, profiles: &[Profile]) -> Result<usize, String> {
+    let mut files = 0;
+    for profile in profiles {
+        files += build_stage_as(root, parent, *profile)?.1;
+    }
+    Ok(files)
+}
+
+fn write_legacy_flip_stamp(parent: &Path) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system clock before epoch: {e}"))?
+        .as_secs_f64();
+    let stamp = parent.join(".legacy-flip.at");
+    std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    std::fs::write(&stamp, format!("{now:.6}\n"))
+        .map_err(|e| format!("write {}: {e}", stamp.display()))
+}
+
+fn repoint_legacy_harnesses(legacy: &Path, source: &Path) {
+    for harness in legacy_harnesses(legacy) {
+        match install_harness(harness, harness == "codex", source, Profile::Full) {
+            Ok(receipt) => println!("plugin stage: repointed {harness}: {receipt}"),
+            Err(error) => println!("plugin stage: repoint {harness} failed: {error}"),
+        }
+    }
+}
+
+fn legacy_harnesses(legacy: &Path) -> Vec<&'static str> {
+    let home = dirs_home();
+    let legacy_text = legacy.display().to_string();
+    let mentions = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .any(|path| std::fs::read_to_string(path).is_ok_and(|text| text.contains(&legacy_text)))
+    };
+    let link_points_at =
+        |path: PathBuf| std::fs::read_link(path).is_ok_and(|target| target.starts_with(legacy));
+    let codex = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let claude = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    let mut configured = Vec::new();
+    if mentions(&[claude.join("plugins/known_marketplaces.json")]) {
+        configured.push("claude");
+    }
+    if mentions(&[
+        codex.join("config.toml"),
+        codex.join("footnote/plugin-channel.json"),
+    ]) {
+        configured.push("codex");
+    }
+    if link_points_at(crate::grok_store::grok_home().join("plugins/fno")) {
+        configured.push("grok");
+    }
+    if mentions(&[
+        home.join(".gemini/config/hooks.json"),
+        home.join(".gemini/config/settings.json"),
+    ]) || link_points_at(home.join(".gemini/config/plugins/footnote"))
+    {
+        configured.push("agy");
+    }
+    if link_points_at(home.join(".footnote/plugins/fno")) {
+        configured.push("footnote");
+    }
+    configured
+}
+
+fn pre_flip_harness_processes(parent: &Path) -> Result<Vec<u32>, String> {
+    let stamp = parent.join(".legacy-flip.at");
+    let flip = std::fs::read_to_string(&stamp)
+        .map_err(|e| format!("read {}: {e}", stamp.display()))?
+        .trim()
+        .parse::<f64>()
+        .map_err(|e| format!("parse {}: {e}", stamp.display()))?;
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,comm="])
+        .output()
+        .map_err(|e| format!("ps: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("ps exited {}", output.status.code().unwrap_or(-1)));
+    }
+    harness_processes_before_flip(&String::from_utf8_lossy(&output.stdout), flip)
+}
+
+fn harness_processes_before_flip(ps_output: &str, flip: f64) -> Result<Vec<u32>, String> {
+    let candidates = ["claude", "opencode", "grok", "agy", "pi", "footnote"];
+    let mut blockers = Vec::new();
+    for line in ps_output.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(command) = parts.next() else {
+            continue;
+        };
+        let name = Path::new(command)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or(command);
+        if !candidates.contains(&name.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        match crate::process_probe::process_started_epoch(pid) {
+            Some(started) if started <= flip => blockers.push(pid),
+            Some(_) => {}
+            None => return Err(format!("start time unavailable for candidate pid {pid}")),
+        }
+    }
+    Ok(blockers)
+}
+
+fn drain_legacy_stage(legacy: &Path, blockers: Result<Vec<u32>, String>) -> Result<(), String> {
+    match blockers {
+        Ok(blockers) if blockers.is_empty() => {
+            std::fs::remove_dir_all(legacy)
+                .map_err(|e| format!("remove drained legacy stage {}: {e}", legacy.display()))?;
+            println!(
+                "plugin stage: removed drained legacy stage {}",
+                legacy.display()
+            );
+        }
+        Ok(blockers) => println!(
+            "plugin stage: keeping legacy stage {}; pre-flip harness pids {}",
+            legacy.display(),
+            blockers
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Err(reason) => println!(
+            "plugin stage: keeping legacy stage {}; process check unknown: {reason}",
+            legacy.display()
+        ),
+    }
+    Ok(())
 }
 
 fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
@@ -1603,10 +2082,18 @@ struct PluginInstallArgs {
     dry_run: bool,
     /// Consent to replace a release-channel plugin with the local checkout.
     dev: bool,
+    /// Read or refresh codex plugin-hook trust rows (`codex --trust-hooks`).
+    trust_hooks: bool,
+    /// `--trust-hooks --check`: read-only verdict, no writes.
+    trust_hooks_check: bool,
     /// Converge codex onto the release channel (setup's wiring).
     release: bool,
     /// Install the pack profile: no mux skills, no mux hooks.
     pack: bool,
+    /// Skip the post-install reclaim chain. `fno doctor update`'s codex
+    /// refresh runs the janitor itself, after its budget fold, so a big
+    /// reclaim (6.3 GB measured) is not charged to the update's 60 s budget.
+    no_reclaim: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1634,8 +2121,11 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         yes: false,
         dry_run: false,
         dev: false,
+        trust_hooks: false,
+        trust_hooks_check: false,
         release: false,
         pack: false,
+        no_reclaim: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1682,12 +2172,20 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dev = true;
                 i += 1;
             }
+            "--trust-hooks" => {
+                parsed.trust_hooks = true;
+                i += 1;
+            }
             "--release" => {
                 parsed.release = true;
                 i += 1;
             }
             "--pack" => {
                 parsed.pack = true;
+                i += 1;
+            }
+            "--no-reclaim" => {
+                parsed.no_reclaim = true;
                 i += 1;
             }
             "--json" | "-J" => {
@@ -1719,7 +2217,9 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             "--check" | "--restage" => {
-                if parsed.mode.is_none() {
+                if parsed.trust_hooks {
+                    parsed.trust_hooks_check = true;
+                } else if parsed.mode.is_none() {
                     parsed.mode = Some(args[i].clone());
                 } else {
                     parsed.dropped_mode = Some(args[i].clone());
@@ -1760,8 +2260,11 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         yes,
         dry_run,
         dev,
+        trust_hooks,
+        trust_hooks_check,
         release,
         pack,
+        no_reclaim,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1800,7 +2303,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 check_exit_code(report.status)
             } else {
                 let (roots, detail) = plugin_roots();
-                let (report, worst) = check_roots_report(&roots, detail, &source_dir);
+                let (mut report, worst) = check_roots_report(&roots, detail, &source_dir);
+                report.rename_findings = rename_findings();
                 if json {
                     match serde_json::to_string(&report) {
                         Ok(s) => println!("{s}"),
@@ -1818,7 +2322,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         // this after a successful install.
         Some("--restage") => {
             let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
-            let stage_parent = state_root().join("plugin-stage");
+            let stage_parent = stage_parent();
             match restage_stage(&source_dir, &stage_parent) {
                 Ok(RestageOutcome::Absent) => {
                     println!("plugin stage: absent, skipped");
@@ -1852,11 +2356,16 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             if harness == "codex" && status {
                 return crate::codex_converge::run_status();
             }
+            if harness == "codex" && trust_hooks {
+                return crate::codex_hook_trust::run_cli(trust_hooks_check, json);
+            }
             if harness == "codex" && release {
                 return crate::codex_converge::run_release(json);
             }
             if harness == "opencode" {
-                return run_opencode_arm(harness, json, uninstall, status, quick, yes, dry_run);
+                return run_opencode_arm(
+                    harness, json, uninstall, status, quick, yes, dry_run, no_reclaim,
+                );
             }
             if harness == "grok" && status {
                 let receipt = grok_status_receipt();
@@ -1897,9 +2406,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                             stale.iter().map(|p| p.display().to_string()).collect();
                         println!("removed stale copies: {}", joined.join(", "));
                     }
-                    let home = AgentsHome::from_env();
-                    let _ =
-                        crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+                    if !no_reclaim {
+                        let home = AgentsHome::from_env();
+                        let _ = crate::reclaim::run_reclaim(
+                            &RECLAIM_ON_INSTALL.map(String::from),
+                            &home,
+                        );
+                    }
                     0
                 }
                 Err(e) => {
@@ -1910,7 +2423,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--source <dir>]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--no-reclaim] [--source <dir>]"
             );
             eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
@@ -1935,6 +2448,7 @@ fn run_opencode_arm(
     quick: bool,
     yes: bool,
     dry_run: bool,
+    no_reclaim: bool,
 ) -> i32 {
     let say = |line: String| {
         if json {
@@ -2101,10 +2615,12 @@ fn run_opencode_arm(
                 let joined: Vec<String> = stale.iter().map(|p| p.display().to_string()).collect();
                 say(format!("removed stale copies: {}", joined.join(", ")));
             }
-            let home = AgentsHome::from_env();
-            let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            if !no_reclaim {
+                let home = AgentsHome::from_env();
+                let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            }
             let full = Profile::Full.stage_dir();
-            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
+            prime_plugin_root_pointer(&stage_parent().join(full));
             if receipt.status == "partial" {
                 3
             } else {
@@ -2440,8 +2956,16 @@ fn install_harness(
     source_dir: &Path,
     profile: Profile,
 ) -> Result<String, String> {
+    // The codex dev install gets the slim profile unless --pack asked for
+    // the mux-free pack; the shared full stage stays for every other
+    // harness.
+    let profile = if harness == "codex" && profile == Profile::Full {
+        Profile::Codex
+    } else {
+        profile
+    };
     let root = repo_root(source_dir)?;
-    let parent = state_root().join("plugin-stage");
+    let parent = stage_parent();
     let (stage, _) = build_stage_as(&root, &parent, profile)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
@@ -2666,9 +3190,10 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
 /// then the filtered stage. `None` when neither carries it.
 pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
     const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
-    let stage = state_root()
-        .join("plugin-stage")
-        .join(Profile::Full.stage_dir());
+    let stage = [stage_parent(), state_root().join("plugin-stage")]
+        .into_iter()
+        .map(|parent| parent.join(Profile::Full.stage_dir()))
+        .find(|path| path.join(REL).is_file())?;
     crate::provider::plugin_root()
         .into_iter()
         .chain(std::iter::once(stage))
@@ -2742,7 +3267,7 @@ pub(crate) fn loop_install_probe(
                 Ok(root) => root,
                 Err(reason) => return Some(Err(reason)),
             };
-            let stage = match build_stage(&root, &state_root().join("plugin-stage")) {
+            let stage = match build_stage(&root, &stage_parent()) {
                 Ok(stage) => stage.0,
                 Err(reason) => return Some(Err(reason)),
             };
@@ -2914,7 +3439,11 @@ fn install_grok(stage: &Path, _force: bool) -> Result<String, String> {
     let read = grok_reachability();
     let read_is_copy = trusted_path_is_copy(&read, &home);
     match read {
-        GrokReachability::Reachable { path } if !read_is_copy => {
+        GrokReachability::Reachable { path }
+            if !read_is_copy
+                && std::fs::read_link(home.join("plugins").join(PLUGIN_LINK_NAME))
+                    .is_ok_and(|target| target == stage) =>
+        {
             Ok(format!("already installed, reachable: {path}"))
         }
         GrokReachability::Unknown { reason } => Err(format!("unknown: {reason}")),
@@ -3032,57 +3561,22 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // Install removes the machine-wide exports older installs wrote, and
-    // nothing else: a user's own keys, comments and tables survive.
     #[test]
-    fn env_strippers_remove_only_fno_exports() {
-        let fno = |_: &str, v: &str| v.contains(".fno");
-
-        // rc: the legacy one-line block, the two-line block, and a block at
-        // EOF with no trailing newline all go; the next export stays.
-        let mark = "# fno: cargo build-dir\n";
-        let cargo = "export CARGO_BUILD_BUILD_DIR=\"/u/.fno/b\"\n";
-        let sccache = "export SCCACHE_DIR=\"/u/.fno/b/sccache\"\n";
-        let keep = "alias ll=ls\nexport KEEP=1\n";
-        for block in [[mark, cargo].concat(), [mark, cargo, sccache].concat()] {
-            let rc = ["alias ll=ls\n", block.as_str(), "export KEEP=1\n"].concat();
-            assert_eq!(strip_rc_block(&rc).as_deref(), Some(keep));
-        }
-        let bare = ["alias ll=ls\n", mark, cargo.trim_end()].concat();
-        assert_eq!(strip_rc_block(&bare).as_deref(), Some("alias ll=ls\n"));
-        assert_eq!(strip_rc_block(keep), None);
-
-        // claude: fno's keys go, a user's own value for the same key stays,
-        // and an env this pass empties goes too.
-        let mut data: serde_json::Map<String, Value> = serde_json::from_str(
-            r#"{"env": {"CARGO_BUILD_BUILD_DIR": "/u/.fno/b", "SCCACHE_DIR": "/mine", "KEEP": "1"}}"#,
-        )
-        .unwrap();
-        assert_eq!(strip_claude_env(&mut data, fno), 1);
+    fn dropped_tree_read_pattern_compiles_and_checks_boundary() {
         assert_eq!(
-            Value::Object(data),
-            json!({"env": {"SCCACHE_DIR": "/mine", "KEEP": "1"}})
+            dropped_tree_read("run ${CLAUDE_PLUGIN_ROOT}/cli/x"),
+            Some("CLAUDE_PLUGIN_ROOT}/cli")
         );
-        let mut only: serde_json::Map<String, Value> =
-            serde_json::from_str(r#"{"env": {"SCCACHE_DIR": "/u/.fno/b/sccache"}, "x": 1}"#)
-                .unwrap();
-        assert_eq!(strip_claude_env(&mut only, fno), 1);
-        assert_eq!(Value::Object(only), json!({"x": 1}));
-
-        // codex: an emptied set table loses its header; a table that keeps a
-        // key keeps it; keys outside the set table are never touched.
-        let codex = "model = \"x\"\n# mine\n\n[shell_environment_policy.set]\nCARGO_BUILD_BUILD_DIR = \"/u/.fno/b/{workspace-path-hash}\"\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n\n[plugins.\"other@x\"]\nenabled = true\nSCCACHE_DIR = \"/u/.fno/b\"\n";
         assert_eq!(
-            strip_codex_env(codex, fno).as_deref(),
-            Some("model = \"x\"\n# mine\n\n\n[plugins.\"other@x\"]\nenabled = true\nSCCACHE_DIR = \"/u/.fno/b\"\n")
+            dropped_tree_read("PLUGIN_ROOT/cli"),
+            Some("PLUGIN_ROOT/cli")
         );
-        let shared =
-            "[shell_environment_policy.set]\nFOO = \"1\"\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n";
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/cli-x"), None);
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/clix"), None);
         assert_eq!(
-            strip_codex_env(shared, fno).as_deref(),
-            Some("[shell_environment_policy.set]\nFOO = \"1\"\n")
+            dropped_tree_read("PLUGIN_ROOT/cli-x PLUGIN_ROOT/tests"),
+            Some("PLUGIN_ROOT/tests")
         );
-        assert_eq!(strip_codex_env("model = \"x\"\n", fno), None);
     }
 
     // zcode install: a malformed config is refused byte-identical.
@@ -3147,185 +3641,6 @@ mod tests {
         (source, stage)
     }
 
-    /// AC3/AC4: a pack stage drops mux paths and mux hook entries, checks
-    /// fresh against its own source, and a manifest naming a missing path
-    /// refuses before any temp dir exists.
-    #[test]
-    fn pack_stage_drops_mux_paths_and_checks_fresh() {
-        let base = std::env::temp_dir().join(format!("pi-pack-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let source = base.join("source");
-        new_repo(&source);
-        fs::create_dir_all(source.join("skills/mail")).unwrap();
-        fs::write(source.join("skills/mail/SKILL.md"), "mail\n").unwrap();
-        fs::write(source.join("hooks/mail.sh"), "mail\n").unwrap();
-        fs::write(
-            source.join("hooks/hooks.json"),
-            r#"{"hooks":{"Stop":[{"hooks":[{"command":"${R}/hooks/mail.sh"},{"command":"${R}/hooks/live.sh"}]}]}}"#,
-        )
-        .unwrap();
-        let manifest = r#"{"mux":["hooks/mail.sh","skills/mail"]}"#;
-        fs::write(source.join(crate::pack_profile::MANIFEST), manifest).unwrap();
-        git_in(&source, &["add", "-A"]);
-        git_in(&source, &["commit", "-q", "-m", "c2"]);
-        let parent = base.join("stage-parent");
-        fs::create_dir_all(&parent).unwrap();
-
-        let (stage, _) = build_stage_as(&source, &parent, Profile::Pack).unwrap();
-        assert!(stage.ends_with("fno-pack"));
-        assert!(!stage.join("skills/mail").exists());
-        assert!(!stage.join("hooks/mail.sh").exists());
-        let hooks = fs::read_to_string(stage.join("hooks/hooks.json")).unwrap();
-        assert!(
-            !hooks.contains("mail.sh") && hooks.contains("live.sh"),
-            "{hooks}"
-        );
-        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-
-        fs::write(
-            source.join(crate::pack_profile::MANIFEST),
-            r#"{"mux":["skills/gone"]}"#,
-        )
-        .unwrap();
-        let err = build_stage_as(&source, &parent, Profile::Pack).unwrap_err();
-        assert!(err.contains("skills/gone"), "{err}");
-        let temp = fs::read_dir(&parent)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .any(|e| e.file_name().to_string_lossy().starts_with(".fno-pack."));
-        assert!(!temp, "a refused pack build left a temp dir");
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC1-HP: the swap is atomic (no temp dirs left), new bytes land, and a
-    /// handle opened before the rebuild still reads the old bytes.
-    #[test]
-    fn rebuild_swaps_atomically_and_keeps_open_handle_stable() {
-        let base = std::env::temp_dir().join(format!("pi-ac1hp-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        let live = stage.join("hooks/live.sh");
-        let old_handle = fs::File::open(&live).unwrap();
-
-        let built_from = run_checked(
-            &["git".to_string(), "rev-parse".into(), "HEAD".into()],
-            Some(&source),
-        )
-        .unwrap();
-        fs::write(source.join("hooks/live.sh"), "updated\n").unwrap();
-        git_in(&source, &["add", "-A"]);
-        git_in(&source, &["commit", "-q", "-m", "c2"]);
-
-        // Before the rebuild the stage trails by one commit in hooks/, and
-        // the check says so from the stamp.
-        let lag = check_stage_report(&stage, &source);
-        assert_eq!(lag.status, "stale");
-        assert_eq!(lag.stage_head.as_deref(), Some(built_from.as_str()));
-        assert_eq!(lag.commits_behind, Some(1));
-        let summary = lag.lag_summary();
-        assert!(summary.starts_with("hooks 1; staged from "), "{summary}");
-        assert!(summary.ends_with(", 1 commit(s) behind"), "{summary}");
-
-        let stage_parent = stage.parent().unwrap().to_path_buf();
-        let (_, copied) = build_stage(&source, &stage_parent).unwrap();
-        assert!(copied >= 2);
-        assert_eq!(fs::read_to_string(&live).unwrap(), "updated\n");
-        let mut old_text = String::new();
-        use std::io::Read;
-        let mut old_handle2 = old_handle;
-        old_handle2.read_to_string(&mut old_text).unwrap();
-        assert_eq!(old_text, "live\n");
-        let leftovers: Vec<_> = fs::read_dir(&stage_parent)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with(".fno.new-") || n.starts_with(".fno.old-"))
-            .collect();
-        assert!(leftovers.is_empty(), "temp dirs left behind: {leftovers:?}");
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// The staged manifest serves the fno entry from the stage itself while
-    /// the source checkout keeps the public GitHub pins, and the rewrite is
-    /// not reported as drift.
-    #[test]
-    fn stage_serves_fno_entry_locally_without_drift() {
-        // The env mutations below (FNO_HOME, FNO_RECLAIM_STATE_ROOT) race
-        // every guarded hermetic fixture unless this test holds the shared
-        // lock; an unguarded FNO_HOME removal mid-test once erased a seeded
-        // law and flipped a spared door.
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = std::env::temp_dir().join(format!("pi-mkt-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        fs::create_dir_all(source.join(".agents/plugins")).unwrap();
-        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/fnodotdev/fno.git","ref":"stable"}}]}"#).unwrap();
-        git_in(&source, &["add", CODEX_MARKETPLACE_REL]);
-        git_in(&source, &["commit", "-q", "-m", "codex marketplace"]);
-        let (stage, _) = build_stage(&source, stage.parent().unwrap()).unwrap();
-        let codex: Value =
-            serde_json::from_str(&fs::read_to_string(stage.join(CODEX_MARKETPLACE_REL)).unwrap())
-                .unwrap();
-        assert_eq!(
-            codex["plugins"][0]["source"],
-            json!({"source":"local","path":"."})
-        );
-        let staged: Value =
-            serde_json::from_str(&fs::read_to_string(stage.join(MARKETPLACE_REL)).unwrap())
-                .unwrap();
-        let entries = staged["plugins"].as_array().unwrap();
-        let fno = entries.iter().find(|p| p["name"] == "fno").unwrap();
-        assert_eq!(fno["source"], json!("./"));
-        let nightly = entries.iter().find(|p| p["name"] == "fno-nightly").unwrap();
-        assert_eq!(nightly["source"]["ref"], json!("nightly"));
-        let public: Value =
-            serde_json::from_str(&fs::read_to_string(source.join(MARKETPLACE_REL)).unwrap())
-                .unwrap();
-        assert_eq!(public["plugins"][0]["source"]["ref"], json!("stable"));
-        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-        // The install command primes the plugin-root pointer from the built
-        // stage and ignores a manifest-less one, so the same contract rides
-        // this real stage: the pointer lands at <state>/install/plugin-root.
-        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
-        let previous_home = std::env::var_os("FNO_HOME");
-        // The fixture stage carries only the marketplace manifest, and the
-        // prime ignores a stage without the plugin manifest - make it a real
-        // plugin root first.
-        fs::create_dir_all(stage.join(".claude-plugin")).unwrap();
-        fs::write(stage.join(".claude-plugin").join("plugin.json"), b"{}").unwrap();
-        std::env::remove_var("FNO_HOME");
-        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &base);
-        prime_plugin_root_pointer(&stage);
-        assert_eq!(
-            fs::read_to_string(base.join("install").join("plugin-root"))
-                .unwrap()
-                .trim(),
-            stage.to_str().unwrap(),
-            "the primed pointer names the built stage"
-        );
-        let bare = base.join("bare");
-        fs::create_dir_all(&bare).unwrap();
-        prime_plugin_root_pointer(&bare);
-        assert_eq!(
-            fs::read_to_string(base.join("install").join("plugin-root"))
-                .unwrap()
-                .trim(),
-            stage.to_str().unwrap(),
-            "a manifest-less stage writes nothing"
-        );
-        match previous_root {
-            Some(v) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", v),
-            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
-        }
-        match previous_home {
-            Some(v) => std::env::set_var("FNO_HOME", v),
-            None => std::env::remove_var("FNO_HOME"),
-        }
-        let _ = fs::remove_dir_all(&base);
-    }
-
     /// A manifest that cannot serve the fno entry (entry renamed away) fails
     /// the build loud instead of silently shipping the github pin back.
     #[test]
@@ -3370,12 +3685,103 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// The rename scan names every old registration on a fixture machine:
+    /// a Claude marketplace cloning a renamed repo, plugin ids registered
+    /// under the pre-rename marketplace, and the Codex entry whose
+    /// marketplace is gone. No legacy-marketplace duplicate fires while a
+    /// plugin id already carries the story. One test flips the fixture from
+    /// populated to clean in place: the scan reads CLAUDE_CONFIG_DIR and
+    /// CODEX_HOME, which parallel tests must not see swapped mid-read.
+    #[test]
+    fn rename_scan_names_old_registrations_then_goes_quiet_on_a_clean_machine() {
+        let base = std::env::temp_dir().join(format!("pi-rename-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let claude = base.join("claude");
+        let plugins_dir = claude.join("plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+        fs::write(
+            plugins_dir.join("known_marketplaces.json"),
+            r#"{
+  "footnote": {"source": {"source": "directory", "path": "/tmp/stage"}},
+  "footnote-desktop": {"source": {"source": "git", "url": "https://github.com/bllshttng/footnote.git", "ref": "desktop-test"}}
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            r#"{
+  "plugins": {
+    "fno@footnote": [{"scope": "user", "installPath": "/tmp/cache/fno/0.4.1"}],
+    "buddy@footnote": [{"scope": "user", "installPath": "/tmp/cache/buddy/0.0.7"}]
+  }
+}"#,
+        )
+        .unwrap();
+        let codex = base.join("codex");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "[marketplaces.fno]\nsource = \"/tmp/stage\"\n\n[plugins.\"fno@footnote\"]\nenabled = true\n\n[plugins.\"fno@fno\"]\nenabled = true\n",
+        )
+        .unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", &claude);
+        std::env::set_var("CODEX_HOME", &codex);
+        let findings = rename_findings();
+        let kind_of = |name: &str| findings.iter().find(|f| f.name == name).map(|f| f.kind);
+        assert_eq!(kind_of("fno@footnote"), Some("legacy-plugin"));
+        assert_eq!(kind_of("buddy@footnote"), Some("legacy-plugin"));
+        assert_eq!(kind_of("footnote-desktop"), Some("marketplace-redirect"));
+        // The installed ids already carry the story; no marketplace duplicate.
+        assert!(findings.iter().all(|f| f.kind != "legacy-marketplace"));
+        let codex_finding = findings
+            .iter()
+            .find(|f| f.kind == "dead-legacy-plugin")
+            .expect("the codex dead entry is named");
+        assert!(
+            codex_finding.detail.contains("twice"),
+            "the twin fno@fno install is the story: {}",
+            codex_finding.detail
+        );
+        assert!(codex_finding.command.contains("harness-wiring"));
+        let claude_finding = findings.iter().find(|f| f.name == "fno@footnote").unwrap();
+        assert!(
+            claude_finding
+                .command
+                .contains("fno config plugin install claude"),
+            "a directory-sourced footnote marketplace moves by the dev install: {}",
+            claude_finding.command
+        );
+
+        // The clean machine: the same dirs rewritten in place, so no env
+        // swap can interleave. A moved-nowhere marketplace names nothing.
+        fs::write(
+            plugins_dir.join("known_marketplaces.json"),
+            r#"{"claude-code-plugins": {"source": {"source": "github", "repo": "anthropics/skills"}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            r#"{"plugins": {}}"#,
+        )
+        .unwrap();
+        fs::write(codex.join("config.toml"), "").unwrap();
+        let findings = rename_findings();
+        assert!(
+            findings.is_empty(),
+            "a clean machine names nothing: {findings:?}"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
     /// A restage rewrites the full stage in place, so it must move the
     /// plugin-root pointer to the fresh stage: the deploy path once left the
     /// pointer a day behind the stage and a worker's env-less init resolved
     /// the stale copy. A pack-only restage never moves the pointer.
     #[test]
     fn restage_primes_pointer_from_full_stage() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("pi-restage-ptr-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
@@ -3424,38 +3830,178 @@ mod tests {
         let _ = fs::remove_dir_all(&pack_base);
     }
 
-    /// Regression: the --force arm once skipped `i += 1`, so the parse loop
-    /// spun on the flag forever. The test returning at all is the proof.
-    /// Also pins B5 at the same parser boundary: a mode flag after a harness
-    /// positional is recorded, and the command refuses before any install work -
-    /// `plugin-install claude --check` once dropped the flag and ran the full
-    /// mutating install.
     #[test]
-    fn parse_force_flag_returns_and_sets_flags() {
-        let args: Vec<String> = ["--force", "--status"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert!(parsed.force);
-        assert!(parsed.status);
+    fn restage_flips_legacy_stage_and_keeps_it_for_the_first_cutover() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("pi-stage-flip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        let state = base.join("state");
+        let legacy = state.join("plugin-stage");
+        let new = state.join("install/plugin-stage");
+        let mut legacy_fno = legacy.clone();
+        legacy_fno.push("fno");
+        let mut new_fno = new.clone();
+        new_fno.push("fno");
+        fs::write(source.join("version.txt"), "before\n").unwrap();
+        git_in(&source, &["add", "version.txt"]);
+        git_in(&source, &["commit", "-q", "-m", "before flip"]);
+        build_stage(&source, &legacy).unwrap();
+        fs::write(source.join("version.txt"), "after\n").unwrap();
+        git_in(&source, &["add", "version.txt"]);
+        git_in(&source, &["commit", "-q", "-m", "after flip"]);
 
-        let args: Vec<String> = ["claude", "--check"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("claude"));
-        assert_eq!(parsed.dropped_mode.as_deref(), Some("--check"));
-        assert_eq!(run_plugin_install(&args), 2);
+        let claude_dir = base.join("claude");
+        fs::create_dir_all(claude_dir.join("plugins")).unwrap();
+        fs::write(
+            claude_dir.join("plugins/known_marketplaces.json"),
+            serde_json::to_vec(&json!({"fno": {
+                "installLocation": legacy_fno.clone(),
+                "source": {"source": "directory", "path": legacy_fno.clone()}
+            }}))
+            .unwrap(),
+        )
+        .unwrap();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let log = base.join("claude.log");
+        crate::write_exec_stub(
+            &bin,
+            "claude",
+            &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        );
+        let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
+        let previous_home = std::env::var_os("FNO_HOME");
+        let previous_user_home = std::env::var_os("HOME");
+        let previous_claude = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let previous_path = std::env::var_os("PATH");
+        let test_home = base.join("home");
+        fs::create_dir_all(&test_home).unwrap();
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &state);
+        std::env::set_var("FNO_HOME", &state);
+        std::env::set_var("HOME", &test_home);
+        std::env::set_var("CLAUDE_CONFIG_DIR", &claude_dir);
+        let test_path = previous_path
+            .as_ref()
+            .map(|path| format!("{}:{}", bin.display(), path.to_string_lossy()))
+            .unwrap_or_else(|| bin.display().to_string());
+        std::env::set_var("PATH", test_path);
+        build_stage_as(&source, &new, Profile::Codex).unwrap();
 
-        let args: Vec<String> = ["--json", "--release", "codex", "-F"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("codex"));
-        assert!(parsed.release && parsed.json && parsed.force && !parsed.dev);
+        restage_stage(&source, &new).unwrap();
+
+        assert!(new.join("fno/.claude-plugin/plugin.json").is_file());
+        assert!(legacy.join("fno/.claude-plugin/plugin.json").is_file());
+        assert_eq!(
+            fs::read_to_string(new.join("fno/version.txt")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(
+            fs::read_to_string(legacy.join("fno/version.txt")).unwrap(),
+            "after\n"
+        );
+        assert!(new.join(".legacy-flip.at").is_file());
+        assert!(fs::read_to_string(&log)
+            .unwrap()
+            .contains(&format!("marketplace add {}", new_fno.display())));
+        assert_eq!(
+            fs::read_to_string(state.join("install/plugin-root"))
+                .unwrap()
+                .trim(),
+            new_fno.to_str().unwrap()
+        );
+        fs::write(new.join(".legacy-flip.at"), "0\n").unwrap();
+        restage_stage(&source, &new).unwrap();
+        assert!(
+            legacy.exists(),
+            "a harness config that still names legacy must keep it"
+        );
+        fs::write(
+            claude_dir.join("plugins/known_marketplaces.json"),
+            serde_json::to_vec(&json!({"fno": {
+                "installLocation": new_fno.clone(),
+                "source": {"source": "directory", "path": new_fno.clone()}
+            }}))
+            .unwrap(),
+        )
+        .unwrap();
+        restage_stage(&source, &new).unwrap();
+        assert!(
+            !legacy.exists(),
+            "drain completes after the config repoints"
+        );
+        let symlink_state = state.join("symlink-state");
+        let external_stage = base.join("external-stage");
+        fs::create_dir_all(&symlink_state).unwrap();
+        fs::create_dir_all(&external_stage).unwrap();
+        std::os::unix::fs::symlink(&external_stage, symlink_state.join("plugin-stage")).unwrap();
+        std::env::set_var("FNO_RECLAIM_STATE_ROOT", &symlink_state);
+        assert!(
+            legacy_stage_parent().is_none(),
+            "legacy symlinks are not writable roots"
+        );
+        let hook = source.join("hooks/runtime.sh");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(&hook, "cat ${PLUGIN_ROOT}/cli/path\n").unwrap();
+        assert!(codex_runtime_read_guard(&source).is_err());
+        for path in ["cli-extra", "cli_extra", "cli2"] {
+            fs::write(&hook, format!("cat ${{PLUGIN_ROOT}}/{path}\n")).unwrap();
+            assert!(codex_runtime_read_guard(&source).is_ok());
+        }
+        match previous_root {
+            Some(value) => std::env::set_var("FNO_RECLAIM_STATE_ROOT", value),
+            None => std::env::remove_var("FNO_RECLAIM_STATE_ROOT"),
+        }
+        match previous_home {
+            Some(value) => std::env::set_var("FNO_HOME", value),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        match previous_user_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_claude {
+            Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn legacy_drain_waits_for_a_clear_process_reading() {
+        let base = std::env::temp_dir().join(format!("pi-stage-drain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let legacy = base.join("plugin-stage");
+        fs::create_dir_all(&legacy).unwrap();
+        let started = crate::process_probe::process_started_epoch(std::process::id()).unwrap();
+        let pid = std::process::id();
+        let before_flip =
+            harness_processes_before_flip(&format!("{pid} claude"), started + 0.001).unwrap();
+        assert_eq!(before_flip, vec![pid]);
+        assert!(harness_processes_before_flip("4294967295 claude", started + 5.0).is_err());
+        assert!(
+            harness_processes_before_flip(&format!("{pid} claude"), started - 0.001)
+                .unwrap()
+                .is_empty()
+        );
+
+        drain_legacy_stage(&legacy, Err("process check unavailable".into())).unwrap();
+        assert!(
+            legacy.exists(),
+            "an unknown process reading must keep legacy"
+        );
+        drain_legacy_stage(&legacy, Ok(before_flip)).unwrap();
+        assert!(legacy.exists(), "a pre-flip harness must keep legacy");
+        drain_legacy_stage(&legacy, Ok(Vec::new())).unwrap();
+        assert!(!legacy.exists(), "a drained legacy stage should be removed");
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// A GitHub-sourced claude marketplace or a codex release marker is a
@@ -3538,141 +4084,6 @@ mod tests {
             serde_json::to_string(&v).unwrap(),
         )
         .unwrap();
-    }
-
-    /// An install made under the old marketplace name keeps reading as fno,
-    /// and a dev install retires the old registration before it adds fno@fno.
-    #[test]
-    fn legacy_footnote_marketplace_is_read_and_migrated() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = fixture_home(tmp.path());
-        let claude = home.join(".claude");
-        assert!(legacy_claude_migration(&claude).is_empty());
-
-        let known = json!({"footnote": {"source": {"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}}});
-        fs::write(
-            claude.join("plugins/known_marketplaces.json"),
-            known.to_string(),
-        )
-        .unwrap();
-        let registry = json!({"version": 2, "plugins": {"fno@footnote": [
-            {"scope": "user", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
-        fs::write(
-            claude.join("plugins/installed_plugins.json"),
-            registry.to_string(),
-        )
-        .unwrap();
-
-        assert_eq!(marketplace_source_kind(&home).as_deref(), Some("github"));
-        assert_eq!(
-            registry_install_paths(&home),
-            vec![PathBuf::from("/c/cache/footnote/fno/0.4.3")]
-        );
-        assert_eq!(
-            release_channel("claude", &claude, &home.join(".codex")).as_deref(),
-            Some("stable (github:fnodotdev/fno#stable)")
-        );
-        // A failed migration leaves both ids registered; the guard sees both.
-        let both = json!({"version": 2, "plugins": {
-            "fno@fno": [{"scope": "user", "installPath": "/c/cache/fno/fno/0.5.0"}],
-            "fno@footnote": [{"scope": "project", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
-        fs::write(
-            claude.join("plugins/installed_plugins.json"),
-            both.to_string(),
-        )
-        .unwrap();
-        assert_eq!(
-            registry_install_paths(&home),
-            vec![
-                PathBuf::from("/c/cache/fno/fno/0.5.0"),
-                PathBuf::from("/c/cache/footnote/fno/0.4.3")
-            ]
-        );
-        assert_eq!(
-            legacy_claude_migration(&claude),
-            vec![
-                vec!["claude", "plugin", "uninstall", "fno@footnote"],
-                vec!["claude", "plugin", "marketplace", "remove", "footnote"],
-            ]
-        );
-
-        // Once the new name is registered, nothing is left to migrate.
-        let known = json!({"fno": {"source": {"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}}});
-        fs::write(
-            claude.join("plugins/known_marketplaces.json"),
-            known.to_string(),
-        )
-        .unwrap();
-        assert!(legacy_claude_migration(&claude).is_empty());
-    }
-
-    /// AC2-HP: trust reads from the location, not from the name alone.
-    #[test]
-    fn grok_parse_trust_comes_from_location() {
-        let gh = Path::new("/gh");
-        let linked = serde_json::json!({
-            "name": "footnote", "scope": "user", "enabled": true,
-            "path": "/gh/plugins/fno",
-            "provides": {"skills": 25, "agents": 1, "hooks": true, "mcpServers": 0}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [linked] })).unwrap();
-        match parse_grok_inspect(&text, gh) {
-            GrokReachability::Reachable { path } => assert_eq!(path, "/gh/plugins/fno"),
-            other => panic!("want Reachable, got {other:?}"),
-        }
-        // grok's own installer path is trusted too.
-        let installed = serde_json::json!({
-            "name": "fno", "scope": "user", "enabled": true,
-            "path": "/gh/installed-plugins/fno-1a2b",
-            "provides": {"hooks": true}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [installed] })).unwrap();
-        assert!(matches!(
-            parse_grok_inspect(&text, gh),
-            GrokReachability::Reachable { .. }
-        ));
-        // Both a compat copy and a linked copy: the trusted one wins.
-        let both = {
-            let compat = serde_json::json!({
-                "name": "fno", "enabled": true,
-                "path": "/claude/plugins/cache/footnote/fno/0.3.2",
-                "provides": {"hooks": true}
-            });
-            let linked_copy = serde_json::json!({
-                "name": "footnote", "enabled": true,
-                "path": "/gh/plugins/fno",
-                "provides": {"hooks": true}
-            });
-            serde_json::json!({ "plugins": [compat, linked_copy] })
-        };
-        let text = serde_json::to_string(&both).unwrap();
-        match parse_grok_inspect(&text, gh) {
-            GrokReachability::Reachable { path } => assert_eq!(path, "/gh/plugins/fno"),
-            other => panic!("want the trusted entry, got {other:?}"),
-        }
-        // A .. inside the reported path resolves outside the trusted root,
-        // so the raw prefix must not match.
-        let escape = serde_json::json!({
-            "name": "fno", "enabled": true,
-            "path": "/gh/plugins/../evil/fno",
-            "provides": {"hooks": true}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [escape] })).unwrap();
-        assert!(matches!(
-            parse_grok_inspect(&text, gh),
-            GrokReachability::Untrusted { .. }
-        ));
-        // A .. that stays inside the trusted root still reads trusted.
-        let inner = serde_json::json!({
-            "name": "fno", "enabled": true,
-            "path": "/gh/plugins/sub/../fno",
-            "provides": {"hooks": true}
-        });
-        let text = serde_json::to_string(&serde_json::json!({ "plugins": [inner] })).unwrap();
-        assert!(matches!(
-            parse_grok_inspect(&text, gh),
-            GrokReachability::Reachable { .. }
-        ));
     }
 
     /// AC4-HP/AC5-EDGE/AC6-ERR: the link installs, relinks, and refuses a
@@ -3864,58 +4275,6 @@ mod tests {
             install_path.exists(),
             "the registered installPath must survive the sweep"
         );
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// Each stage arm's spawn-time presence read is three-state: a measured
-    /// absent refuses, a readable naming record passes, and an unreadable
-    /// record fails open so a spawn that would work is never blocked.
-    #[test]
-    fn pack_status_reads_are_three_state_per_arm() {
-        let base = std::env::temp_dir().join(format!("pi-pack-status-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).unwrap();
-        // claude: absent registry reads missing, a naming registry reads ok,
-        // and an unparseable registry fails open.
-        let registry = base.join("installed_plugins.json");
-        assert_eq!(claude_pack_status(&registry).as_deref(), Some("missing"));
-        fs::write(
-            &registry,
-            r#"{"plugins":{"fno@fno":[{"installPath":"/x"}]}}"#,
-        )
-        .unwrap();
-        assert_eq!(claude_pack_status(&registry).as_deref(), Some("ok"));
-        fs::write(&registry, "{not json").unwrap();
-        assert_eq!(claude_pack_status(&registry), None);
-        // footnote and grok share the link read: absent then linked.
-        let link = base.join("plugins/fno");
-        assert_eq!(link_pack_status(&link).as_deref(), Some("missing"));
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&base, &link).unwrap();
-        assert_eq!(link_pack_status(&link).as_deref(), Some("ok"));
-        // zcode: absent config, an enabled dir that exists, a dirs entry that
-        // points nowhere, and an unparseable config.
-        let config = base.join("config.json");
-        assert_eq!(zcode_pack_status(&config).as_deref(), Some("missing"));
-        let stage = base.join("stage");
-        fs::create_dir_all(&stage).unwrap();
-        fs::write(
-            &config,
-            format!(
-                r#"{{"plugins":{{"enabled":true,"dirs":["{}"]}}}}"#,
-                stage.display()
-            ),
-        )
-        .unwrap();
-        assert_eq!(zcode_pack_status(&config).as_deref(), Some("ok"));
-        fs::write(
-            &config,
-            r#"{"plugins":{"enabled":true,"dirs":["/nowhere/fno"]}}"#,
-        )
-        .unwrap();
-        assert_eq!(zcode_pack_status(&config).as_deref(), Some("missing"));
-        fs::write(&config, "not json").unwrap();
-        assert_eq!(zcode_pack_status(&config), None);
         let _ = fs::remove_dir_all(&base);
     }
 }

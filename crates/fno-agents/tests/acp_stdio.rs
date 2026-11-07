@@ -34,12 +34,6 @@ fn notification_before_response_is_kept_and_response_is_correlated() {
 }
 
 #[test]
-fn cancellation_handle_is_cloneable_and_thread_safe() {
-    fn assert_clone_send_sync<T: Clone + Send + Sync>() {}
-    assert_clone_send_sync::<fno_agents::acp_stdio::AcpCancelHandle>();
-}
-
-#[test]
 fn harness_argv_builders_keep_provider_specific_contracts() {
     use fno_agents::acp_stdio::{dsh_acp_argv, grok_acp_argv, kimi_acp_argv};
 

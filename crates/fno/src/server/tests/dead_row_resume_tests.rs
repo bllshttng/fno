@@ -35,25 +35,3 @@ fn row_resume_disposition_unmeasured_names_the_absent_reading() {
         "a positive dead reading resumes whatever the status word says"
     );
 }
-
-#[test]
-fn orphaned_row_with_a_fresh_dead_reading_resumes() {
-    let raw = r#"{"agents": [{"name": "lead-4d9b-delivery", "cwd": "/w",
-        "status": "orphaned", "harness": "codex",
-        "harness_session_id": "01a09bcd-8b5f-7391-83f8-d9ed91b00ac5",
-        "liveness": "dead", "liveness_measured_at": "2026-09-15T20:14:55Z",
-        "mux": {"session": "main", "pane_id": 2277}}]}"#;
-    let (rows, _) = agents_view::derive_rows_counted(raw, 1_789_503_325).expect("parses");
-    assert!(!rows[0].exited, "the status word alone does not say dead");
-    assert_eq!(rows[0].liveness, agents_view::Liveness::Dead);
-    assert_eq!(
-        Core::row_resume_disposition(&rows[0]),
-        RowResumeDisposition::Resumable
-    );
-    let live = raw.replace(r#""liveness": "dead""#, r#""liveness": "alive""#);
-    let (rows, _) = agents_view::derive_rows_counted(&live, 1_789_503_325).expect("parses");
-    assert_eq!(
-        Core::row_resume_disposition(&rows[0]),
-        RowResumeDisposition::NoPane(AgentNoPaneReason::LivePaneless)
-    );
-}

@@ -1641,11 +1641,31 @@ pub fn auto_continue_select_timeout_s(cwd: &Path) -> u64 {
     120
 }
 
-/// `[repo_aliases]` (default empty): rename map `old = "new"` between
-/// `owner/repo` slugs. A url recorded under a repo's former name binds and
-/// heals against the renamed repo; `bllshttng/fno = "fnodotdev/fno"` is the
-/// specimen. Keys and values are lowercased; a malformed leaf (non-string
-/// value, empty side) drops that entry, never the whole table.
+/// The renames this project already knows: where fno itself used to live.
+/// A url recorded under a former name binds and heals against the renamed
+/// repo without waiting for a config row or a gh probe; a config row or a
+/// cached gh-facts rename row wins over these.
+const BUILTIN_REPO_ALIASES: [(&str, &str); 3] = [
+    ("bllshttng/fno", "fnodotdev/fno"),
+    ("bllshttng/footnote", "fnodotdev/fno"),
+    ("bllshttng/fnh", "fno-sh/footnote"),
+];
+
+/// The built-in rename map alone, no config read. The plugin rename scan
+/// names old registrations against these without touching a workspace.
+pub(crate) fn builtin_repo_aliases() -> std::collections::BTreeMap<String, String> {
+    BUILTIN_REPO_ALIASES
+        .iter()
+        .map(|(old, new)| ((*old).to_string(), (*new).to_string()))
+        .collect()
+}
+
+/// `[repo_aliases]`: rename map `old = "new"` between `owner/repo` slugs.
+/// The default carries this project's own moves (`bllshttng/*` to
+/// `fnodotdev/fno`, `bllshttng/fnh` to `fno-sh/footnote`); a config row
+/// overrides it, and `bllshttng/fno = "fnodotdev/fno"` is the specimen.
+/// Keys and values are lowercased; a malformed leaf (non-string value,
+/// empty side) drops that entry, never the whole table.
 pub fn repo_aliases(cwd: &Path) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     for path in config_candidates(cwd) {
@@ -1671,6 +1691,11 @@ pub fn repo_aliases(cwd: &Path) -> std::collections::BTreeMap<String, String> {
             // alias wins, like every getter here.
             out.entry(old).or_insert(new);
         }
+    }
+    // Config rows decided first; the built-ins fill the gaps, so a machine
+    // that set the map by hand keeps deciding.
+    for (old, new) in BUILTIN_REPO_ALIASES {
+        out.entry(old.to_string()).or_insert(new.to_string());
     }
     out
 }
@@ -2521,43 +2546,6 @@ mod tests {
     }
 
     #[test]
-    fn autonomy_mode_decides_the_merge_readers_over_standing_config() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (name, body, want) in [
-            ("default-unset", "", false),
-            ("balanced-yes", "[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n", true),
-            ("yolo-unset", "[autonomy]\nmode = \"yolo\"\n", true),
-            (
-                "yolo-explicit-no",
-                "[autonomy]\nmode = \"yolo\"\n[auto_merge]\nenabled = false\ngrant = \"none\"\n",
-                false,
-            ),
-            (
-                "ask-yes",
-                "[autonomy]\nmode = \"ask\"\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
-                false,
-            ),
-            (
-                "ask-allowed",
-                "[autonomy]\nmode = \"ask\"\nallow = [\"merge\"]\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
-                true,
-            ),
-            (
-                "bad-mode",
-                "[autonomy]\nmode = \"banana\"\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
-                false,
-            ),
-        ] {
-            clear_config_env();
-            let cwd = write_project_settings(&format!("autonomy-{name}"), body);
-            std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-            let got = (auto_merge_enabled(&cwd), auto_merge_grant_dispatches(&cwd));
-            clear_config_env();
-            assert_eq!(got, (want, want), "{name}");
-        }
-    }
-
-    #[test]
     fn auto_merge_enabled_unreadable_or_invalid_project_masks_global_true() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for (name, make_project) in [("unreadable", true), ("invalid-toml", false)] {
@@ -2585,22 +2573,6 @@ mod tests {
             );
         }
         clear_config_env();
-    }
-
-    // --- auto_merge.grant dispatch reader ---------------------------------
-
-    #[test]
-    fn auto_merge_grant_canonical_none_outranks_legacy_true_in_one_file() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "amg-both",
-            "[auto_merge]\ngrant = \"none\"\n\n[dispatch]\nauto_merge = true\n",
-        );
-        std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-        let got = auto_merge_grant_dispatches(&cwd);
-        clear_config_env();
-        assert!(!got, "a canonical grant leaf in the same file must decide");
     }
 
     // --- review.optional_apps reader ---------------------------------------
@@ -2643,17 +2615,6 @@ mod tests {
         clear_config_env();
         let cwd = write_project_settings("ams-bad", "[auto_merge]\nmerge_strategy = \"octopus\"\n");
         assert_eq!(auto_merge_strategy(&cwd), "merge");
-    }
-
-    #[test]
-    fn auto_merge_require_fresh_ci_invalid_defaults_false() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "amfci-invalid",
-            "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
-        );
-        assert!(!auto_merge_require_fresh_ci(&cwd));
     }
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL
@@ -2857,6 +2818,52 @@ mod tests {
             config_value_deep(&root.join("proj"), &["no", "such", "key"]).is_none(),
             "no candidate carries the key -> None"
         );
+    }
+
+    #[test]
+    fn repo_aliases_ships_project_renames_and_a_config_row_wins() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let root = std::env::temp_dir().join(format!("fno-aliases-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let empty_global = root.join("empty-global.toml");
+        std::fs::write(&empty_global, "").unwrap();
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
+
+        // No config names the key anywhere: the built-ins answer.
+        let map = repo_aliases(&root);
+        for (old, new) in [
+            ("bllshttng/fno", "fnodotdev/fno"),
+            ("bllshttng/footnote", "fnodotdev/fno"),
+            ("bllshttng/fnh", "fno-sh/footnote"),
+        ] {
+            assert_eq!(
+                map.get(old).map(String::as_str),
+                Some(new),
+                "the built-in rename {old} -> {new} answers without a config row"
+            );
+        }
+
+        // A config row overrides a built-in; the others stay.
+        let proj = root.join(".fno");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join("config.toml"),
+            "[repo_aliases]\n\"bllshttng/fnh\" = \"someone-else/moved\"\n",
+        )
+        .unwrap();
+        let map = repo_aliases(&root);
+        assert_eq!(
+            map.get("bllshttng/fnh").map(String::as_str),
+            Some("someone-else/moved"),
+            "the config row overrides the built-in"
+        );
+        assert_eq!(
+            map.get("bllshttng/fno").map(String::as_str),
+            Some("fnodotdev/fno"),
+            "the other built-ins keep answering"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

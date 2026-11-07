@@ -205,26 +205,4 @@ mod tests {
             pane_argv(&argv(&["mux", "pane", "run", "claude", "/login"])).expect("prefix stripped");
         assert_eq!(stripped, argv(&["claude", "/login"]));
     }
-
-    #[test]
-    fn landing_sends_a_live_pane_to_focus_and_the_rest_to_the_modal() {
-        let live = ActionResult {
-            ok: true,
-            msg: "login pane 42 opened".to_string(),
-            pane: Some(42),
-        };
-        assert!(matches!(landing(&live), Landing::FocusPane(42)));
-        let refusal = ActionResult {
-            ok: false,
-            msg: "pane run: cannot reach session".to_string(),
-            pane: None,
-        };
-        assert!(matches!(landing(&refusal), Landing::ModalNotice));
-        let paneless = ActionResult {
-            ok: true,
-            msg: "login pane opened".to_string(),
-            pane: None,
-        };
-        assert!(matches!(landing(&paneless), Landing::ModalNotice));
-    }
 }

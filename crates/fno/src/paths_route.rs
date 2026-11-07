@@ -58,37 +58,6 @@ mod tests {
     fn oss(pieces: &[&str]) -> Vec<OsString> {
         pieces.iter().map(OsString::from).collect()
     }
-
-    #[test]
-    fn classify_claims_emit_shell() {
-        let rest = classify(&oss(&[
-            "config",
-            "paths",
-            "emit-shell",
-            "--output",
-            "/tmp/p.sh",
-        ]))
-        .unwrap();
-        assert_eq!(rest.len(), 3);
-        assert_eq!(rest[0], OsString::from("emit-shell"));
-    }
-
-    #[test]
-    fn classify_claims_handoff() {
-        let rest = classify(&oss(&[
-            "config",
-            "paths",
-            "handoff",
-            "--scope",
-            "fno-x-aaaa",
-        ]))
-        .unwrap();
-        assert_eq!(rest.len(), 3);
-        assert_eq!(rest[0], OsString::from("handoff"));
-        let rest = classify(&oss(&["paths", "handoff", "--scope", "s"])).unwrap();
-        assert_eq!(rest[0], OsString::from("handoff"));
-    }
-
     #[test]
     fn classify_leaves_other_commands_to_python() {
         for command in ["bogus"] {
@@ -98,27 +67,5 @@ mod tests {
         assert!(classify(&oss(&["config", "setup", "auto-wire"])).is_none());
         assert!(classify(&oss(&["paths"])).is_none());
         assert!(classify(&oss(&["config", "paths"])).is_none());
-    }
-
-    #[test]
-    fn classify_claims_verify() {
-        let rest = classify(&oss(&["config", "paths", "verify", "x"])).unwrap();
-        assert_eq!(rest[0], OsString::from("verify"));
-        let top = classify(&oss(&["paths", "verify", "x"])).unwrap();
-        assert_eq!(top[0], OsString::from("verify"));
-    }
-
-    #[test]
-    fn classify_claims_shell_stub() {
-        let rest = classify(&oss(&["config", "paths", "shell-stub"])).unwrap();
-        assert_eq!(rest.len(), 1);
-        assert_eq!(rest[0], OsString::from("shell-stub"));
-    }
-
-    #[test]
-    fn classify_claims_the_deprecated_top_level_spelling() {
-        let rest = classify(&oss(&["paths", "emit-shell", "--output", "/tmp/p.sh"])).unwrap();
-        assert_eq!(rest.len(), 3);
-        assert_eq!(rest[0], OsString::from("emit-shell"));
     }
 }

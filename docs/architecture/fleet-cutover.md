@@ -17,7 +17,7 @@ The command does these steps in order:
 1. It arms the fleet incident with every scope held (spawns, tests, merges, loops).
 2. It waits until no registry row is `Spawning`, `Busy` or `Restarting`. The default bound is 600 seconds. At the bound it refuses and leaves the incident armed.
 3. It stops the daemon with SIGTERM, then SIGKILL after the grace. If the daemon survives, the command refuses.
-4. It copies every SQLite store under the state root with the SQLite backup API. The walk skips `cargo-build/` and `cutover/` and follows no symlink. It takes only files whose header reads as SQLite. An empty file such as the `graph.db` path anchor is not a store.
+4. It copies every SQLite store under the state root with the SQLite backup API. The walk skips `cargo-build/`, `cache/cargo-build/` and `cutover/` and follows no symlink. It takes only files whose header reads as SQLite. An empty file such as the `graph.db` path anchor is not a store.
 5. For each copy it runs `PRAGMA integrity_check` and compares per-table row counts with the live store. A mismatch refuses the whole save.
 6. It checks that no daemon took the lock back during the copy.
 
@@ -27,7 +27,7 @@ The source is read-only after a save. The incident stays armed, and a daemon tha
 
 ## Restore, on the target
 
-1. Copy the rest of the state root: `rsync -a --exclude '/cargo-build/' <root>/ <target>:<root>/`.
+1. Copy the rest of the state root: `rsync -a --exclude '/cargo-build/' --exclude '/cache/cargo-build/' <root>/ <target>:<root>/`.
 2. Run `fno agents audit incident cutover restore <bundle>`.
 3. Run `fno agents session restart` to start the daemon.
 4. Run `fno agents audit incident clear --reason 'cutover complete'`.

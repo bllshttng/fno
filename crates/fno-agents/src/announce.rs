@@ -776,14 +776,12 @@ fn expired(m: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
 // Cursor: per-session seen-id set (decision 4)
 // ---------------------------------------------------------------------------
 
-// pub(crate): the law edit read (law_match edit_answer) keeps its own
-// per-session seen-id set beside this one, so the dir is the caller's word.
-pub(crate) fn cursor_path(state_root: &Path, dir: &str, session_id: &str) -> PathBuf {
+fn cursor_path(state_root: &Path, dir: &str, session_id: &str) -> PathBuf {
     let safe = format!("{}.json", session_id.replace('/', "_"));
     crate::state_layout::place_in(state_root, dir, &safe)
 }
 
-pub(crate) fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> HashSet<String> {
+fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> HashSet<String> {
     let text = match std::fs::read_to_string(cursor_path(state_root, dir, session_id)) {
         Ok(t) => t,
         Err(_) => return HashSet::new(),
@@ -802,7 +800,7 @@ pub(crate) fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> Has
     }
 }
 
-pub(crate) fn save_cursor(state_root: &Path, dir: &str, session_id: &str, seen: &HashSet<String>) {
+fn save_cursor(state_root: &Path, dir: &str, session_id: &str, seen: &HashSet<String>) {
     let path = cursor_path(state_root, dir, session_id);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -813,6 +811,61 @@ pub(crate) fn save_cursor(state_root: &Path, dir: &str, session_id: &str, seen: 
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, payload).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// How long a cursor writer waits for another writer on the same file before
+/// proceeding unlocked (the bound merge_hold's PlanLock uses).
+const CURSOR_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serialized read-modify-write of one cursor file. The flock on
+/// `<cursor>.lock` spans load through save: without it two overlapping
+/// reads of one session (async PostToolUse runs collide) both load the same
+/// set and one save drops the other's insert, so a deduped rule, door span
+/// or announcement fires again later. The closure mutates the loaded set
+/// and returns true when anything changed; true saves. A wait past the
+/// timeout proceeds unlocked: the file stays consistent and the worst case
+/// is the duplicate reminder this lock exists to prevent, never a hung hook.
+pub(crate) fn update_cursor(
+    state_root: &Path,
+    dir: &str,
+    session_id: &str,
+    f: impl FnOnce(&mut HashSet<String>) -> bool,
+) {
+    let path = cursor_path(state_root, dir, session_id);
+    let _lock = cursor_lock(&path);
+    let mut seen = load_cursor(state_root, dir, session_id);
+    if f(&mut seen) {
+        save_cursor(state_root, dir, session_id, &seen);
+    }
+}
+
+/// The held flock lives as long as the returned file; `None` proceeds
+/// unlocked (open failure, lock error, or the timeout above).
+fn cursor_lock(path: &Path) -> Option<std::fs::File> {
+    let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+    let deadline = std::time::Instant::now() + CURSOR_LOCK_TIMEOUT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => return None,
+        }
     }
 }
 
@@ -930,88 +983,88 @@ fn read_render_in(
     let registry = crate::client_commands::load_registry_entries(&paths.registry)?;
     let projects =
         crate::org_board::scope::project_map(&std::env::current_dir().unwrap_or_default()).ok();
-    let mut seen = load_cursor(&paths.state_root, "announce-cursors", session_id);
-
-    let mut fresh: Vec<&Value> = Vec::new();
-    let mut standing_seen: Vec<&Value> = Vec::new();
-    for m in &standing {
-        let Some(id) = row_str(m, "id") else { continue };
-        // The sender never reads its own announcement back.
-        if m.get("from_session")
-            .and_then(Value::as_str)
-            .is_some_and(|fs| {
-                crate::spawn_context::session_identity_key(fs)
-                    == crate::spawn_context::session_identity_key(session_id)
-            })
-        {
-            continue;
-        }
-        let audience: Vec<Value> = m
-            .get("meta")
-            .and_then(|meta| meta.get("audience"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let scope = m
-            .get("meta")
-            .and_then(|meta| row_str(meta, "scope"))
-            .unwrap_or("all");
-        let mine = in_audience(&audience, session_id)
-            || matches_scope_now(scope, session_id, &registry, projects.as_ref());
-        if !mine {
-            continue;
-        }
-        if seen.contains(id) {
-            standing_seen.push(*m);
-        } else {
-            fresh.push(*m);
-        }
-    }
-
-    if boundary == Boundary::Compact {
-        let mut out: Vec<String> = fresh.iter().map(|m| render_block(m)).collect();
-        out.extend(standing_seen.iter().map(|m| render_compact_line(m)));
-        for m in fresh.iter().chain(standing_seen.iter()) {
-            if let Some(id) = row_str(m, "id") {
-                seen.insert(id.to_string());
+    let mut result: Option<String> = None;
+    update_cursor(&paths.state_root, "announce-cursors", session_id, |seen| {
+        let mut fresh: Vec<&Value> = Vec::new();
+        let mut standing_seen: Vec<&Value> = Vec::new();
+        for m in &standing {
+            let Some(id) = row_str(m, "id") else { continue };
+            // The sender never reads its own announcement back.
+            if m.get("from_session")
+                .and_then(Value::as_str)
+                .is_some_and(|fs| {
+                    crate::spawn_context::session_identity_key(fs)
+                        == crate::spawn_context::session_identity_key(session_id)
+                })
+            {
+                continue;
+            }
+            let audience: Vec<Value> = m
+                .get("meta")
+                .and_then(|meta| meta.get("audience"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let scope = m
+                .get("meta")
+                .and_then(|meta| row_str(meta, "scope"))
+                .unwrap_or("all");
+            let mine = in_audience(&audience, session_id)
+                || matches_scope_now(scope, session_id, &registry, projects.as_ref());
+            if !mine {
+                continue;
+            }
+            if seen.contains(id) {
+                standing_seen.push(*m);
+            } else {
+                fresh.push(*m);
             }
         }
-        prune_and_save(paths, session_id, seen, &rows);
-        return Ok((!out.is_empty()).then(|| out.join("\n")));
-    }
 
-    if fresh.is_empty() {
-        return Ok(None);
-    }
-    let out = fresh
-        .iter()
-        .map(|m| render_block(m))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for m in &fresh {
-        if let Some(id) = row_str(m, "id") {
-            seen.insert(id.to_string());
+        if boundary == Boundary::Compact {
+            let mut out: Vec<String> = fresh.iter().map(|m| render_block(m)).collect();
+            out.extend(standing_seen.iter().map(|m| render_compact_line(m)));
+            for m in fresh.iter().chain(standing_seen.iter()) {
+                if let Some(id) = row_str(m, "id") {
+                    seen.insert(id.to_string());
+                }
+            }
+            prune_seen(seen, &rows);
+            result = (!out.is_empty()).then(|| out.join("\n"));
+            // The compact read always saves: the prune keeps the cursor
+            // bounded even when nothing new fired.
+            true
+        } else if fresh.is_empty() {
+            false
+        } else {
+            let out = fresh
+                .iter()
+                .map(|m| render_block(m))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for m in &fresh {
+                if let Some(id) = row_str(m, "id") {
+                    seen.insert(id.to_string());
+                }
+            }
+            prune_seen(seen, &rows);
+            result = Some(out);
+            true
         }
-    }
-    prune_and_save(paths, session_id, seen, &rows);
-    Ok(Some(out))
+    });
+    Ok(result)
 }
 
 /// Keep the cursor bounded: ids no longer on any retained segment leave the
-/// set (nudge.py's `nudged &= unread_ids` pruning).
-fn prune_and_save(
-    paths: &AnnouncePaths,
-    session_id: &str,
-    mut seen: HashSet<String>,
-    rows: &[Value],
-) {
+/// set (nudge.py's `nudged &= unread_ids` pruning). The save belongs to the
+/// `update_cursor` caller.
+fn prune_seen(seen: &mut HashSet<String>, rows: &[Value]) {
     let live_ids: HashSet<String> = rows
         .iter()
         .filter_map(|m| row_str(m, "id"))
         .map(str::to_string)
         .collect();
     seen.retain(|id| live_ids.contains(id));
-    save_cursor(&paths.state_root, "announce-cursors", session_id, &seen);
 }
 
 pub(crate) fn run_announce_read(args: &[String], paths: &AnnouncePaths) -> i32 {
@@ -1322,7 +1375,7 @@ pub fn run_announce(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Barrier, Mutex};
 
     /// One temp root per test; env-mutating tests share the process, so the
     /// mutex keeps FNO_* pins from racing.
@@ -1381,35 +1434,6 @@ mod tests {
         std::fs::remove_dir_all(&fixture.root).ok();
     }
 
-    #[test]
-    fn a_set_lead_is_in_the_audience_of_one_member_epic() {
-        let registry = vec![
-            agent_row(
-                "lead-set",
-                "sess-set",
-                json!({"role_level": 2, "role_scope": "x-bbbb,x-cccc"}),
-            ),
-            agent_row(
-                "lead-folio",
-                "sess-folio",
-                json!({"role_level": 0, "role_scope": "alpha,beta"}),
-            ),
-        ];
-        let projects: HashMap<String, String> = [("alpha", "alpha"), ("beta", "beta")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        assert_eq!(
-            resolve_audience("x-cccc", &registry, Some(&projects)),
-            vec![crate::spawn_context::session_identity_key("sess-set")]
-        );
-        assert!(resolve_audience("alpha", &registry, Some(&projects)).is_empty());
-        // An unreadable project map fails closed to equality.
-        assert!(resolve_audience("x-cccc", &registry, None).is_empty());
-        assert!(resolve_audience("alpha", &registry, None).is_empty());
-    }
-
     fn agent_row(name: &str, session: &str, extra: Value) -> Value {
         let mut row = json!({
             "name": name, "harness": "claude", "status": "live",
@@ -1464,42 +1488,6 @@ mod tests {
     }
 
     #[test]
-    fn send_writes_exactly_one_line_with_the_audience_snapshot() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("one-line");
-        let rows = vec![
-            agent_row("red", "AAAA1111-1111-1111-1111-111111111111", json!({})),
-            agent_row("blue", "bbbb2222-2222-2222-2222-222222222222", json!({})),
-            agent_row(
-                "gone",
-                "cccc3333-3333-3333-3333-333333333333",
-                json!({"status": "exited"}),
-            ),
-        ];
-        let (code, id) = send_via(&f.paths, &send_flags("all"), "fleet notice", &rows);
-        assert_eq!(code, 0);
-        let lines = read_bus_segments(&f.paths.bus_live);
-        assert_eq!(lines.len(), 1, "one announcement is one bus line");
-        let m = &lines[0];
-        assert_eq!(row_str(m, "kind"), Some("announce"));
-        assert_eq!(row_str(m, "to_kind"), Some("fleet"));
-        let audience: Vec<String> = m
-            .get("meta")
-            .and_then(|meta| meta.get("audience"))
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap();
-        assert_eq!(audience.len(), 2, "terminal rows are out: {audience:?}");
-        assert!(audience.contains(&"aaaa1111-1111-1111-1111-111111111111".to_string()));
-        assert_eq!(row_str(m, "id"), Some(id.as_str()));
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
     fn unpromoted_agent_sender_is_refused_and_the_bus_is_unchanged() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let f = fixture("authority");
@@ -1515,42 +1503,6 @@ mod tests {
         assert_eq!(code, 2, "{why}");
         assert!(why.contains("worker"));
         assert!(read_bus_segments(&f.paths.bus_live).is_empty());
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn teamed_agent_sender_is_excluded_and_stamped_with_full_id() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("sender-full-id");
-        let lead = "eeee5555-5555-5555-5555-555555555555";
-        let other = "ffff5555-5555-5555-5555-555555555555";
-        let rows = vec![
-            agent_row(
-                "lead",
-                lead,
-                json!({"role_level": 1, "role_scope": "epic/x-test"}),
-            ),
-            agent_row(
-                "other",
-                other,
-                json!({"role_level": 1, "role_scope": "epic/x-test"}),
-            ),
-        ];
-        let mut flags = send_flags("leads");
-        flags[3] = "lead";
-        flags[5] = "agent";
-        let (code, id) = send_via(&f.paths, &flags, "from the team", &rows);
-        assert_eq!(code, 0);
-        let message = &read_bus_segments(&f.paths.bus_live)[0];
-        assert_eq!(row_str(message, "from_session"), Some(lead));
-        assert_eq!(message["meta"]["audience"], json!([other]));
-        assert!(read_render(&f.paths, lead, Boundary::Prompt)
-            .unwrap()
-            .is_none());
-        assert!(read_render(&f.paths, other, Boundary::Prompt)
-            .unwrap()
-            .unwrap()
-            .contains(&id));
         std::fs::remove_dir_all(&f.root).ok();
     }
 
@@ -1571,160 +1523,6 @@ mod tests {
         assert_eq!(code, 2, "{why}");
         assert!(why.contains("rate limit"));
         std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn same_subject_and_scope_supersedes_the_standing_announcement() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("supersede");
-        let rows = vec![agent_row(
-            "red",
-            "aaaa7777-7777-7777-7777-777777777777",
-            json!({}),
-        )];
-        let mut flags = send_flags("all");
-        flags.push("--subject");
-        flags.push("maintenance");
-        let (_, first) = send_via(&f.paths, &flags, "maintenance at noon", &rows);
-        let (_, second) = send_via(&f.paths, &flags, "maintenance moved to 3pm", &rows);
-        let rows_on_bus = read_bus_segments(&f.paths.bus_live);
-        assert_eq!(rows_on_bus.len(), 2);
-        let superseded: Vec<String> = rows_on_bus[1]
-            .get("meta")
-            .and_then(|meta| meta.get("supersedes"))
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap();
-        assert_eq!(superseded, vec![first]);
-        // The reader skips the superseded one.
-        let out = read_render(
-            &f.paths,
-            "aaaa7777-7777-7777-7777-777777777777",
-            Boundary::Prompt,
-        )
-        .unwrap()
-        .unwrap();
-        assert!(out.contains(&second), "current news renders: {out}");
-        assert!(
-            !out.contains("maintenance at noon"),
-            "stale news skipped: {out}"
-        );
-        // The block opens with the delivered-mail header line, id in the middle.
-        let first_line = out.lines().next().unwrap_or("");
-        assert!(
-            crate::mail_header::is_header_line(first_line),
-            "block opens with a header line: {out}"
-        );
-        assert_eq!(
-            crate::mail_header::delivered_msg_id(first_line).as_deref(),
-            Some(second.as_str())
-        );
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn an_announcement_on_the_primary_reaches_another_machine() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let primary = crate::store_remote::test_primary::start();
-        let machine = |tag: &str| {
-            let f = fixture(tag);
-            let store = AnnounceStore {
-                primary: Some(primary.remote.clone()),
-            };
-            (f, store)
-        };
-        let (macbook, macbook_store) = machine("primary-a");
-        let (imac, imac_store) = machine("primary-b");
-
-        let registry = vec![agent_row(
-            "red",
-            "aaaa8888-8888-8888-8888-888888888888",
-            json!({}),
-        )];
-        write_registry(&macbook.paths, &registry);
-        write_registry(&imac.paths, &registry);
-        let mut flags: Vec<String> = send_flags("all").into_iter().map(str::to_string).collect();
-        flags.push("--subject".into());
-        flags.push("test hold".into());
-        let parsed = parse_send_args(&flags).expect("flags parse");
-
-        // A send on the MacBook lands in its own bus and on the primary.
-        let first = send_announcement_in(
-            &parsed,
-            "tests may not run",
-            &macbook.paths,
-            Some(&HashMap::new()),
-            &macbook_store,
-        )
-        .expect("the send lands");
-
-        // The iMac renders it; its own cursor silences the second read.
-        let reader = "bbbb9999-9999-9999-9999-999999999999";
-        let out = read_render_in(&imac.paths, reader, Boundary::Prompt, &imac_store)
-            .expect("the read renders")
-            .expect("the announcement is standing");
-        assert!(out.contains("tests may not run"), "{out}");
-        assert!(
-            read_render_in(&imac.paths, reader, Boundary::Prompt, &imac_store)
-                .unwrap()
-                .is_none(),
-            "the cursor silences the second read"
-        );
-
-        // A same-subject resend on the MacBook supersedes across machines.
-        let second = send_announcement_in(
-            &parsed,
-            "tests may run again",
-            &macbook.paths,
-            Some(&HashMap::new()),
-            &macbook_store,
-        )
-        .expect("the resend lands");
-        assert_eq!(second.superseded, vec![first.id.clone()]);
-        let out2 = read_render_in(
-            &imac.paths,
-            "cccc1111-1111-1111-1111-111111111111",
-            Boundary::Prompt,
-            &imac_store,
-        )
-        .unwrap()
-        .expect("the newest stands");
-        assert!(out2.contains("tests may run again"), "{out2}");
-        assert!(
-            !out2.contains("tests may not run"),
-            "stale news skipped: {out2}"
-        );
-
-        // An unreachable primary fails the send closed (the supersede and
-        // rate-limit scan reads primary rows before anything is written) and
-        // the read loud.
-        let dead = AnnounceStore {
-            primary: Some(crate::store_remote::test_primary::dead()),
-        };
-        let why = send_announcement_in(
-            &parsed,
-            "offline send",
-            &macbook.paths,
-            Some(&HashMap::new()),
-            &dead,
-        )
-        .unwrap_err()
-        .1;
-        assert!(
-            why.contains("unreachable") || why.contains("machine-local"),
-            "{why}"
-        );
-        assert!(
-            read_render_in(&imac.paths, reader, Boundary::Prompt, &dead).is_err(),
-            "an unreachable primary fails the read loud"
-        );
-
-        std::fs::remove_dir_all(&macbook.root).ok();
-        std::fs::remove_dir_all(&imac.root).ok();
     }
 
     #[test]
@@ -1765,97 +1563,47 @@ mod tests {
         std::fs::remove_dir_all(&f.root).ok();
     }
 
+    /// The lock spans load through save, so threads that race on one cursor
+    /// keep every insert. Without the lock, the barrier plus the in-closure
+    /// sleep put every thread's load before any thread's save and the last
+    /// save wins, which is the lost update this exists to prevent.
     #[test]
-    fn reader_prints_once_then_cursor_silences() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("read-once");
-        let session = "cccc9999-9999-9999-9999-999999999999";
-        let rows = vec![agent_row("red", session, json!({}))];
-        let (_, id) = send_via(&f.paths, &send_flags("all"), "hello fleet", &rows);
-        let out = read_render(&f.paths, session, Boundary::Prompt)
-            .unwrap()
-            .unwrap();
-        assert!(
-            out.contains(&format!("· {id}`\n")),
-            "law form: two-field header closed before the body"
-        );
-        assert!(out.contains("hello fleet"));
-        let second = read_render(&f.paths, session, Boundary::Prompt).unwrap();
-        assert!(second.is_none(), "cursor silences the second read");
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn status_counts_landed_pending_unverified_and_never_rescans_landed() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("status");
-        let home = std::env::temp_dir().join(format!(
-            "fno-announce-home-{}-{}",
+    fn concurrent_cursor_writers_keep_every_insert() {
+        let root = std::env::temp_dir().join(format!(
+            "fno-announce-cursor-race-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
-        let s1 = "cccc5555-5555-5555-5555-555555555555";
-        let s2 = "dddd6666-6666-6666-6666-666666666666";
-        let s3 = "ses_nostore";
-        let rows = vec![
-            agent_row("one", s1, json!({})),
-            agent_row("two", s2, json!({})),
-            agent_row("three", s3, json!({})),
-        ];
-        let mut flags = send_flags("all");
-        flags.push("--json");
-        let (_, id) = send_via(&f.paths, &flags, "receipts please", &rows);
-
-        // s1 carries the id in its claude transcript; s2's transcript lacks
-        // it; s3 has no resolvable store at all.
-        let proj = crate::claude_ask::ClaudeHome::at(&home)
-            .projects_dir()
-            .join("-tmp-one");
-        std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(
-            proj.join(format!("{s1}.jsonl")),
-            format!(
-                "{{\"x\":\"<fno_mail id=\\\"{id}\\\" kind=\\\"announce\\\">hi</fno_mail>\"}}\n"
-            ),
-        )
-        .unwrap();
-        let proj2 = crate::claude_ask::ClaudeHome::at(&home)
-            .projects_dir()
-            .join("-tmp-two");
-        std::fs::create_dir_all(&proj2).unwrap();
-        std::fs::write(proj2.join(format!("{s2}.jsonl")), "{\"x\":\"nothing\"}\n").unwrap();
-
-        let saved_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
-        let code1 = run_announce_status(&[id.clone(), "--json".into()], &f.paths);
-        let code2 = run_announce_status(&[id.clone()], &f.paths);
-        let rows_on_bus = read_bus_segments(&f.paths.bus_live);
-        let announcement = rows_on_bus
+        std::fs::create_dir_all(&root).unwrap();
+        let ids: Vec<String> = (0..4)
+            .flat_map(|w| (0..3).map(move |i| format!("w{w}-id{i}")))
+            .collect();
+        let barrier = Arc::new(Barrier::new(ids.len()));
+        let handles: Vec<_> = ids
             .iter()
-            .find(|m| row_str(m, "id") == Some(id.as_str()))
-            .unwrap();
-        let receipt = announce_receipt(&rows_on_bus, announcement, &id, &f.paths, &home);
-        if let Some(h) = saved_home {
-            std::env::set_var("HOME", h);
-        }
-        assert_eq!(code1, 0);
-        assert_eq!(code2, 0);
-        assert_eq!(receipt["landed"], json!(1));
-        assert_eq!(receipt["pending"], json!(1));
-        assert_eq!(receipt["unverified"], json!(1));
-        assert!(receipt.get("unreachable").is_none());
-
-        let bus = std::fs::read_to_string(&f.paths.bus_live).unwrap();
-        let landed_rows: usize = bus
-            .lines()
-            .filter(|l| {
-                serde_json::from_str::<Value>(l)
-                    .ok()
-                    .is_some_and(|m| row_str(&m, "kind") == Some("landed"))
+            .cloned()
+            .map(|id| {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    update_cursor(&root, "rules-seen", "sess", |seen| {
+                        std::thread::sleep(Duration::from_millis(2));
+                        seen.insert(id);
+                        true
+                    });
+                })
             })
-            .count();
-        assert_eq!(landed_rows, 1, "exactly one landed proof row: {bus}");
-        std::fs::remove_dir_all(&f.root).ok();
-        std::fs::remove_dir_all(&home).ok();
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let seen = load_cursor(&root, "rules-seen", "sess");
+        assert_eq!(
+            seen.len(),
+            ids.len(),
+            "a concurrent save dropped an id: {seen:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

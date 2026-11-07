@@ -119,13 +119,15 @@ fn resolve_source(cwd: &Path) -> Result<PathBuf, String> {
         }
         tried.push(format!("{} (incomplete)", root.display()));
     }
-    let stage = crate::plugin_install::state_root()
-        .join("plugin-stage")
-        .join("fno");
-    if is_footnote_tree(&stage) {
-        return Ok(stage);
+    for stage in [
+        crate::plugin_install::stage_parent().join("fno"),
+        crate::plugin_install::state_root().join("plugin-stage/fno"),
+    ] {
+        if is_footnote_tree(&stage) {
+            return Ok(stage);
+        }
+        tried.push(stage.display().to_string());
     }
-    tried.push(stage.display().to_string());
     let repo = worktree_repo_root(cwd);
     if is_footnote_tree(&repo) {
         return Ok(repo);

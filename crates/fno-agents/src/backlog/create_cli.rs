@@ -58,6 +58,9 @@ pub struct AddArgs {
     pub source_session_id: Option<String>,
     pub unscoped: bool,
     pub force_domain: bool,
+    /// Per-create id prefix (`--prefix go`): the minter uses it in place of
+    /// the configured prefix. The word passes the same shape gate.
+    pub prefix: Option<String>,
     /// Set programmatically by the `new` word's arm (never a CLI flag): the
     /// scoped-create spelling stamps `source: "fno-new"` where plain add
     /// records null.
@@ -97,6 +100,7 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--source-inbox-msg",
         "--source-inbox-thread",
         "--source-session-id",
+        "--prefix",
         "--related",
     ];
     if long.contains(&arg) {
@@ -192,6 +196,7 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--source-inbox-msg" => args.source_inbox_msg = Some(value),
                     "--source-inbox-thread" => args.source_inbox_thread = Some(value),
                     "--source-session-id" => args.source_session_id = Some(value),
+                    "--prefix" => args.prefix = Some(value.to_lowercase()),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -230,6 +235,10 @@ pub(crate) struct Refusal {
 pub(crate) struct Born {
     pub(crate) id: String,
     pub(crate) reused: Option<Value>,
+    /// The short number minted in step with the filing, when the store could
+    /// answer. `None` leaves the receipt hash-only; the daemon beat backfills
+    /// the number later.
+    pub(crate) number: Option<String>,
 }
 
 fn refused(message: impl Into<String>, exit: i32) -> Refusal {
@@ -569,6 +578,33 @@ pub(crate) fn mint_node_id(
         existing,
         &[&archive_ids, &tombstones, &plan_ids, &aliases, &numbers],
         &prefix,
+        width,
+    )?;
+    record_id_tombstone(&minted);
+    Ok(minted)
+}
+
+/// The mint with an explicit per-create prefix (`--prefix go` on add): the
+/// word replaces the configured prefix and passes the same shape gate.
+pub(crate) fn mint_node_id_prefixed(
+    existing: &std::collections::BTreeSet<String>,
+    prefix: &str,
+) -> Result<String, String> {
+    if !node_ref::valid_prefix_word(prefix) {
+        return Err(format!(
+            "invalid prefix {prefix:?}: a lowercase word of up to 8 letters or digits"
+        ));
+    }
+    let width = super::settings::node_id_hex_width();
+    let archive_ids = archived_id_pool();
+    let tombstones = load_id_tombstones();
+    let plan_ids = plan_frontmatter_ids();
+    let aliases = alias_pool();
+    let numbers = crate::numbers::node_number_texts();
+    let minted = mint_node_id_with_prefix(
+        existing,
+        &[&archive_ids, &tombstones, &plan_ids, &aliases, &numbers],
+        prefix,
         width,
     )?;
     record_id_tombstone(&minted);
@@ -935,9 +971,15 @@ pub fn run(tail: &[String]) -> i32 {
     };
     match create_node(&args, &|_| None) {
         Ok(born) => {
+            // stderr, not stdout: the JSON payload stays machine-readable,
+            // and the number line rides with the other advisory receipt
+            // lines.
+            if let Some(number) = &born.number {
+                super::receipt::emit_line_to(std::io::stderr(), &format!("number: {number}"));
+            }
             println!(
                 "{}",
-                super::render::py_json_pretty(&json!({"id": born.id, "title": args.title}))
+                super::render::py_json_pretty(&receipt_json(&born, &args.title))
             );
             0
         }
@@ -946,6 +988,16 @@ pub fn run(tail: &[String]) -> i32 {
             r.exit
         }
     }
+}
+
+/// The stdout receipt. `number` rides along only when the store minted in
+/// step; consumers read fields by name, so the key is additive.
+fn receipt_json(born: &Born, title: &str) -> Value {
+    let mut receipt = json!({"id": born.id, "title": title});
+    if let Some(number) = &born.number {
+        receipt["number"] = json!(number);
+    }
+    receipt
 }
 
 /// The create flow without the stdout receipt. `reuse` runs over every
@@ -958,6 +1010,16 @@ pub(crate) fn create_node(
 ) -> Result<Born, Refusal> {
     refuse_tracker_owned("add")?;
     validate_priority(&args.priority, args.blocks_everything)?;
+    if let Some(word) = &args.prefix {
+        if !node_ref::valid_prefix_word(word) {
+            return Err(refused(
+                format!(
+                    "Error: invalid --prefix '{word}': use a lowercase word of up to 8 letters or digits"
+                ),
+                2,
+            ));
+        }
+    }
     let difficulty = match &args.difficulty {
         None => {
             return Err(refused(
@@ -1120,6 +1182,7 @@ pub(crate) fn create_node(
             return Ok(Born {
                 id,
                 reused: Some(row),
+                number: None,
             });
         }
 
@@ -1133,7 +1196,10 @@ pub(crate) fn create_node(
             None => None,
         };
 
-        let minted = mint_node_id(&known_ids).map_err(|e| refused(e, 1))?;
+        let minted = match &args.prefix {
+            Some(word) => mint_node_id_prefixed(&known_ids, word).map_err(|e| refused(e, 1))?,
+            None => mint_node_id(&known_ids).map_err(|e| refused(e, 1))?,
+        };
 
         // Build the node (the builder's field set, byte-shaped like Python's).
         let now = crate::graph_store::now_isoformat();
@@ -1428,9 +1494,15 @@ pub(crate) fn create_node(
             }
         },
     }
+    // The receipt's short number, minted in step with the filing so the
+    // filer leaves with it. Advisory: any failure reads None, the receipt
+    // stays hash-only, and the daemon beat mints the same key as a no-op.
+    let number =
+        crate::numbers::mint_now(&graph, &format!("{}{minted}", crate::numbers::NODE_KIND));
     Ok(Born {
         id: minted,
         reused: None,
+        number,
     })
 }
 
@@ -1617,6 +1689,42 @@ fn parse_blocker_list_args(values: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_receipt_carries_the_number_only_when_minted() {
+        let hash_only = Born {
+            id: "x-aaaa".into(),
+            reused: None,
+            number: None,
+        };
+        assert!(receipt_json(&hash_only, "t").get("number").is_none());
+        let minted = Born {
+            id: "x-aaaa".into(),
+            reused: None,
+            number: Some("x-5555".into()),
+        };
+        assert_eq!(receipt_json(&minted, "t")["number"], "x-5555");
+    }
+
+    #[test]
+    fn a_per_create_prefix_parses_and_the_mint_gate_refuses_a_bad_word() {
+        let tail: Vec<String> = ["fix the gate", "--prefix", "Go"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let parsed = match parse(&tail) {
+            ParsedAdd::Args(args) => args,
+            ParsedAdd::Refusal { message, .. } => panic!("parse refused: {message}"),
+            ParsedAdd::Help => panic!("help"),
+        };
+        assert_eq!(parsed.prefix.as_deref(), Some("go"));
+        assert!(
+            !node_ref::valid_prefix_word("Bad-Prefix"),
+            "the word gate holds the id shape"
+        );
+        let mint = mint_node_id_prefixed(&Default::default(), "Bad-Prefix").unwrap_err();
+        assert!(mint.contains("invalid prefix"), "{mint}");
+    }
 
     #[test]
     fn tombstone_round_trip_and_mint_exclusion() {

@@ -31,6 +31,8 @@ const WORKTREE_REMOVE_SCRIPT: &str = "hooks/worktree-remove.sh";
 /// A file only the plugin ships: its presence proves a directory is the root.
 const PLUGIN_MARKER: &str = "hooks/helpers/init-target-state.sh";
 const GEMINI_HOOK_NAME: &str = "fno-session-start";
+const FOOTNOTE_STATE_WRITES_RULE: &str = "Footnote State Writes: Allow only fno commands whose complete effect stays within ~/.fno state, such as fno inbox law set, fno doctor event emit, and local backlog updates. Exclude backlog advance or dispatch, PR operations, Claude Code settings, credentials, OS or GitHub permissions, and sandbox controls. Permit fno agents spawn only to start a local Footnote worker; this does not approve commands later run by that worker or remote hosts.";
+const FOOTNOTE_ROLE_GRANTS_RULE: &str = "Footnote Role Grants: Allow fno agents org promote, fno agents org grant, and fno agents role only for Footnote role changes stored under ~/.fno. This does not grant OS, GitHub, or Claude Code permissions, edit credentials or settings, or disable sandbox controls.";
 
 const CLI_HOOKS_USAGE: &str = "usage: fno config setup cli-hooks [--codex/--no-codex] \
 [--gemini/--no-gemini] [--claude/--no-claude] [--codex-config PATH] \
@@ -610,6 +612,113 @@ pub fn install_claude_worktree_remove(
         };
     }
     groups.push(json!({"hooks": [{"type": "command", "command": new_command}]}));
+    match write_json(settings, &Value::Object(data)) {
+        Ok(backup) => InstallResult {
+            changed: true,
+            backup,
+            ..InstallResult::at(settings)
+        },
+        Err(e) => InstallResult::refused(settings, &format!("write failed ({e}); left unchanged")),
+    }
+}
+
+fn claude_settings_path(home: &Path, config_dir: Option<&Path>) -> PathBuf {
+    config_dir
+        .map(|path| path.join("settings.json"))
+        .unwrap_or_else(|| home.join(".claude/settings.json"))
+}
+
+pub(crate) fn user_claude_settings_path() -> PathBuf {
+    let home = home();
+    let config_dir = env_path("CLAUDE_CONFIG_DIR");
+    claude_settings_path(&home, config_dir.as_deref())
+}
+
+pub(crate) fn claude_auto_mode_allow_status(settings: &Path) -> Result<bool, String> {
+    let data = load_settings(settings)?;
+    let Some(auto_mode) = data.get("autoMode") else {
+        return Ok(false);
+    };
+    let Some(auto_mode) = auto_mode.as_object() else {
+        return Err("`autoMode` is not an object; left unchanged".into());
+    };
+    let Some(allow) = auto_mode.get("allow") else {
+        return Ok(false);
+    };
+    let Some(allow) = allow.as_array() else {
+        return Err("`autoMode.allow` is not an array; left unchanged".into());
+    };
+    Ok(allow.iter().any(|v| v.as_str() == Some("$defaults"))
+        && allow
+            .iter()
+            .any(|v| v.as_str() == Some(FOOTNOTE_STATE_WRITES_RULE))
+        && allow
+            .iter()
+            .any(|v| v.as_str() == Some(FOOTNOTE_ROLE_GRANTS_RULE)))
+}
+
+pub(crate) fn install_claude_auto_mode_allow(settings: &Path) -> InstallResult {
+    let mut data = match load_settings(settings) {
+        Ok(data) => data,
+        Err(note) => return InstallResult::refused(settings, &note),
+    };
+    if data.get("autoMode").is_some_and(|value| !value.is_object()) {
+        return InstallResult::refused(settings, "`autoMode` is not an object; left unchanged");
+    }
+    let auto_mode = data
+        .entry("autoMode")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("autoMode type checked above");
+    if auto_mode
+        .get("allow")
+        .is_some_and(|value| !value.is_array())
+    {
+        return InstallResult::refused(
+            settings,
+            "`autoMode.allow` is not an array; left unchanged",
+        );
+    }
+    let allow = auto_mode
+        .entry("allow")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .expect("autoMode.allow type checked above");
+    let mut merged = Vec::with_capacity(allow.len() + 2);
+    let mut state_added = false;
+    let mut roles_added = false;
+    for value in allow.iter() {
+        let owned = value.as_str().unwrap_or("");
+        if owned.starts_with("Footnote State Writes:") {
+            if !state_added {
+                merged.push(json!(FOOTNOTE_STATE_WRITES_RULE));
+                state_added = true;
+            }
+        } else if owned.starts_with("Footnote Role Grants:") {
+            if !roles_added {
+                merged.push(json!(FOOTNOTE_ROLE_GRANTS_RULE));
+                roles_added = true;
+            }
+        } else {
+            merged.push(value.clone());
+        }
+    }
+    if !merged.iter().any(|v| v.as_str() == Some("$defaults")) {
+        merged.insert(0, json!("$defaults"));
+    }
+    if !state_added {
+        merged.push(json!(FOOTNOTE_STATE_WRITES_RULE));
+    }
+    if !roles_added {
+        merged.push(json!(FOOTNOTE_ROLE_GRANTS_RULE));
+    }
+    if *allow == merged {
+        return InstallResult {
+            already_present: true,
+            ..InstallResult::at(settings)
+        };
+    }
+    *allow = merged;
     match write_json(settings, &Value::Object(data)) {
         Ok(backup) => InstallResult {
             changed: true,

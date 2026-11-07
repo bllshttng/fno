@@ -2242,6 +2242,7 @@ fn mutate_lifecycle(f: impl FnOnce(&mut Vec<ExternalLifecycle>)) -> io::Result<(
 /// `current_exe()`. A bare directory named `target` without a marker is NOT a
 /// build tree (the marker is what proves cargo owns it), so a coincidentally
 /// named dir never trips the guard.
+#[cfg(not(test))]
 fn build_tree_target_dir(exe: &std::path::Path) -> Option<PathBuf> {
     exe.ancestors()
         .find(|d| d.join(".rustc_info.json").exists() || d.join("CACHEDIR.TAG").exists())

@@ -90,7 +90,24 @@ pub(crate) fn plan_doc_path(
     at: Option<PinnedTimestamp>,
 ) -> Result<PathBuf, String> {
     let dir = plans_content_dir(anchor).ok_or_else(|| "plans dir unresolved".to_string())?;
+    require_plans_leaf(&dir)?;
     Ok(dir.join(plan_doc_filename(anchor, slug, node, at)?))
+}
+
+/// A plans dir must sit in a `plans` folder. Every reader greps `<vault>/<project>/plans/`,
+/// and a template without the `/plans` segment (the old `internal/{project}`
+/// global) scattered plan docs at a vault root, where they stranded stale
+/// first drafts beside the live copy in `plans/`.
+fn require_plans_leaf(dir: &Path) -> Result<(), String> {
+    if dir.file_name().and_then(|n| n.to_str()) == Some("plans") {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing plan doc outside a plans/ dir: {} does not end in /plans. \
+         Set plans_dir (config.toml) or plansDirectory (.claude/settings.json) \
+         to a path ending in /plans",
+        dir.display()
+    ))
 }
 
 /// A pinned render time: epoch seconds, the wire form `--now` carries so a
@@ -873,5 +890,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("zz-11aa"), "the refusal names the node: {err}");
+    }
+
+    #[test]
+    fn plan_doc_path_refuses_a_dir_without_a_plans_leaf() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let fx = Fixture::new("leafrefuse");
+        let _env = EnvGuard::new(&fx.pins());
+        fs::write(fx.config(), "plans_dir = \"internal/{project}\"\n").unwrap();
+        let err = plan_doc_path(
+            &fx.root(),
+            "feature",
+            "zz-11aa",
+            PinnedTimestamp::from_epoch(NOW),
+        )
+        .unwrap_err();
+        assert!(err.contains("/plans"), "the refusal names the fix: {err}");
+        assert!(
+            !fx.root().join("internal").exists(),
+            "the refusal fires before any path is created"
+        );
+    }
+
+    #[test]
+    fn plan_doc_path_accepts_a_plans_leaf() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let fx = Fixture::new("leafaccept");
+        let _env = EnvGuard::new(&fx.pins());
+        fs::write(fx.config(), "plans_dir = \"internal/{project}/plans\"\n").unwrap();
+        let path = plan_doc_path(
+            &fx.root(),
+            "feature",
+            "zz-11aa",
+            PinnedTimestamp::from_epoch(NOW),
+        )
+        .unwrap();
+        let expected = fs::canonicalize(&fx.base)
+            .unwrap()
+            .join("proj/internal/proj/plans/20260927-feature-zz-11aa.md");
+        assert_eq!(path, expected);
     }
 }

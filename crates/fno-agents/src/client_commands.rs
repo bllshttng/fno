@@ -1680,6 +1680,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         from_name,
         cwd: cwd_override,
         account,
+        route: route_flag,
         ..
     } = match crate::resume_args::parse_and_validate(rest) {
         Ok(v) => v,
@@ -1823,6 +1824,15 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         eprintln!("{line}");
         return 13;
     }
+    // The resume is proceeding: a revival by session id re-seats the role
+    // its vacate set aside, the same treatment the boot pass gives a revived
+    // holder; the seat must be live before the resumed lead's first check-in
+    // reads the registry. --print-command and refused routes never get here.
+    // Best effort: a refusal prints and the resume stands.
+    crate::boot_revival::reseat_resumed_row(
+        home,
+        entry.get("name").and_then(Value::as_str).unwrap_or(&name),
+    );
     // Codex route args belong after the executable token. Keep terminal argv
     // raw until route resolution; composing pre_exec first would put those
     // args into the outer `sh -c` invocation.
@@ -1852,6 +1862,22 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             }
         }
     }
+    // The re-route step: apply refuses before anything stops, restamps the
+    // row, and hands back what the registry now records, so reentry below
+    // reads the restamped row. The flag binds as route_flag because `route`
+    // already names the resume plan above.
+    let entry = if let Some(new_route) = route_flag.as_deref() {
+        match crate::resume_reroute::apply(home, entry, new_route) {
+            Ok(updated) => updated,
+            Err(line) => {
+                eprintln!("fno agents resume: {line}");
+                return 13;
+            }
+        }
+    } else {
+        entry.clone()
+    };
+    let entry = &entry;
     let recorded_cwd = entry.get("cwd").and_then(Value::as_str).unwrap_or("");
     // claude keys transcript dirs by the session cwd, so a session that ran
     // EnterWorktree after registration has its transcript under a different
@@ -2329,6 +2355,10 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
         );
         return 0;
     }
+
+    // The recovery is proceeding: the same re-seat a resume runs, so a
+    // recovered lead comes back holding its vacated seat. Best effort.
+    crate::boot_revival::reseat_resumed_row(home, &name);
 
     if !which_on_path(&plan.argv[0]) {
         eprintln!("fno agents recover: {} CLI not on PATH", plan.argv[0]);

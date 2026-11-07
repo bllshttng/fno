@@ -60,7 +60,6 @@ pr-watcher.err.log	logs/pr-watcher.err.log	append	daemon
 groom.out.log	logs/groom.out.log	append	daemon
 groom.err.log	logs/groom.err.log	append	daemon
 corrections.log	logs/corrections.log	append	daemon
-corrections.log.wm	logs/corrections.log.wm	overwrite	daemon
 merge-gate-overrides.log	logs/merge-gate-overrides.log	append	daemon
 health-alerts.log	logs/health-alerts.log	append	daemon
 # db/history/ - append-only jsonl journals, plus the durable ledger (one JSON
@@ -132,7 +131,7 @@ attest	state/attest	dir	daemon
 backups	backups	dir	daemon
 bin	install/bin	dir	daemon
 bus	db/mail/bus	dir	daemon
-cargo-build	cargo-build	dir	daemon
+cargo-build	cache/cargo-build	dir	daemon
 chats	db/mail/chats	dir	daemon
 claim-aux	state/claim-aux	dir	daemon
 context-cache	cache/context	dir	daemon
@@ -150,7 +149,7 @@ migrations	install/migrations	dir	daemon
 notice-route	state/notice-route	dir	daemon
 operator-capture	db/operator-capture	dir	daemon
 pages	cache/pages	dir	daemon
-plugin-stage	plugin-stage	dir	daemon
+plugin-stage	install/plugin-stage	dir	daemon
 postmortems	db/postmortems	dir	daemon
 push-stamps	state/push-stamps	dir	daemon
 reclaim	state/reclaim	dir	daemon

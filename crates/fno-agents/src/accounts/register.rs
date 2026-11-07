@@ -188,7 +188,9 @@ fn capture(
     // Only claude has a principal endpoint; any other proof failure still
     // registers, unbound, so registration works offline.
     let principal: Option<Principal> = if harness == "claude" {
-        match binding::principal_of_blobs(&blobs, probe) {
+        // Registration proves live or not at all: the stored-blob fallback
+        // names existing records, never the record being minted.
+        match binding::principal_of_blobs(&blobs, probe, root, now, &[]) {
             Ok(p) => Some(p),
             Err("ambiguous-slot") => {
                 return Ok(Capture::Refused(format!(

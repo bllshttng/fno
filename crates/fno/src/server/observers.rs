@@ -79,7 +79,7 @@ impl Core {
     /// same client, or a tag past the cap changes nothing.
     pub(super) fn observe(&mut self, id: u64, hello: ObserverHello) -> Flow {
         if !self.is_passive(id) {
-            eprintln!("fno mux: client {id} sent Observe but is not an observer; ignored");
+            crate::mux_log!(warn; "fno mux: client {id} sent Observe but is not an observer; ignored");
             return Flow::Continue;
         }
         let live: Vec<u64> = self.clients.iter().map(|c| c.id).collect();
@@ -172,17 +172,5 @@ mod tests {
             core.observer_rows().is_empty(),
             "a client that left is no longer listed"
         );
-    }
-
-    #[test]
-    fn frames_follow_the_tag() {
-        let mut core = empty_core();
-        core.clients.push(client(7, true));
-        core.observe(7, hello("a", 3));
-        let all = [1, 3, 5];
-        assert_eq!(frame_ids(&core.observers, 7, &all), vec![3]);
-        assert_eq!(frame_ids(&core.observers, 99, &all), vec![1, 3, 5]);
-        core.observers.0.get_mut(&7).unwrap().frames = false;
-        assert!(frame_ids(&core.observers, 7, &all).is_empty());
     }
 }

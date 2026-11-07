@@ -102,6 +102,7 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
         open_pr: None,
         peer_drives_pr: false,
         eval_finished: false,
+        exited_age_s: None,
     };
     assert_eq!(gc_decide(&live, 900).0, GcAction::Keep);
     assert_eq!(

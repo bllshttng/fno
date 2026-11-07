@@ -1488,12 +1488,11 @@ fn optional_reviews_blocker(value: Option<Option<i64>>) -> Option<Blocker> {
     }
 }
 
-/// Graph rows for the stub-manifest and plan-fidelity gates. An unreadable
-/// store degrades to None (the default hard merge path), as the Python did.
+/// Contract rows for the stub-manifest gate. An unreadable store degrades to
+/// None (the default hard merge path), as the Python did.
 fn walk_entries(cwd: &Path) -> Option<Vec<Value>> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let store = GraphStore::new(&graph_path);
-    backlog_api::rows(&store).ok()
+    crate::graph_store::read_contract_rows(&graph_path).ok()
 }
 
 /// The repo top-level for manifest lookups: manifests live at the project

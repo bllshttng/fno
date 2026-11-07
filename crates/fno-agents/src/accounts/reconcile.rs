@@ -119,7 +119,7 @@ fn reconcile_locked(
         ));
     }
     // Prove the capture itself, never a second read of the slot.
-    let principal = match binding::principal_of_blobs(&blobs, probe) {
+    let principal = match binding::principal_of_blobs(&blobs, probe, root, now, records) {
         Ok(principal) => principal,
         Err("ambiguous-slot") => {
             return Ok(Outcome::refused(
@@ -139,7 +139,12 @@ fn reconcile_locked(
             ))
         }
     };
-    let blob = &blobs[0];
+    // Snapshot a live item when one exists; an expired one may be refreshed
+    // and rotated by the next claude launch.
+    let blob = blobs
+        .iter()
+        .find(|b| !binding::access_expired(b, now))
+        .unwrap_or(&blobs[0]);
     let wanted = binding::identity_key(&principal);
 
     // A record with its own config_dir is attributable without the shared

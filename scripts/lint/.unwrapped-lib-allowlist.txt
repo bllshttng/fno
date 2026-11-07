@@ -16,7 +16,6 @@ state-parser.sh
 transcript-parser.sh
 worktree-manager.sh
 worktree-config.sh
-corrections-lock.sh
 phase-handoff.sh
 target-guard.sh
 spawn-subagent.sh
@@ -75,10 +74,9 @@ hook-input.sh
 # crates/fno-agents/src/loopcheck.rs.)
 cancel-signal.sh
 
-# Orphan target-family detector: blocks exit when /fno:target,
-# or /fno:megawalk was invoked but the
-# corresponding state file was never created (init was skipped). Sourced
-# by hooks/target-stop-hook.sh; not a user-facing entry point.
+# Orphan target-family detector: blocks exit when /fno:target was
+# invoked but the corresponding state file was never created (init was
+# skipped). Sourced by hooks/target-stop-hook.sh; not a user-facing entry point.
 orphan-target-detector.sh
 
 # Phase 5 of stop-hook refactor: stub detection + stale-owner detection
@@ -152,7 +150,7 @@ check-artifact-body.sh
 consolidate-artifacts.sh
 
 # Shared throttled-reconcile helper (retro-auto-triage). Sourced
-# by hooks/reconcile-session-start.sh and hooks/megawalk-stop-hook.sh to fire a
+# by hooks/reconcile-session-start.sh to fire a
 # backgrounded, throttled `fno backlog reconcile` (which IS the wrapped entry
 # point). Pure sourcing library: exposes reconcile_maybe_fire; no standalone CLI.
 reconcile-throttle.sh
@@ -187,12 +185,6 @@ operator-override.sh
 # user-facing `fno <command>` surface of their own.
 infer-has-ui.sh
 resolve-plan-executor.sh
-
-# Megawalk lineage-aware pre-advance verification (target self-handoff,
-#). resolve_terminal_session implements the terminal-session
-# resolution rule (docs/architecture/target-self-handoff.md). Sourced by
-# hooks/megawalk-stop-hook.sh; tests source the lib directly. Pure sourcing
-# library; no standalone CLI of its own.
 
 # The zero-verdict helper (runs a control and a probe through ONE argv so a
 # zero needs a live control in the same tool and scope). Invoked via

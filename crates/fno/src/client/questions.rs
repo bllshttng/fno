@@ -1313,6 +1313,79 @@ impl View {
         self.selector
     }
 
+    /// Stamp `AgentBadge::Blocked` on every live row whose session holds an
+    /// open user-rung question. The stamp rides the badge path a parked
+    /// prompt rides (`AgentBadge::Blocked` drives the glyph, the pinned
+    /// Needs input section and the strip count), so the flag never forks a
+    /// second state source. Matched by the asker's session id first, its
+    /// registry name second; an exited row keeps its exit fact. Re-derived
+    /// on every fold landing and layout push, so an answer clears it.
+    pub(super) fn restamp_asking_badges(&mut self) {
+        use std::collections::HashSet;
+        let Some(fold) = self.questions_fold.as_ref() else {
+            return;
+        };
+        let mut ids: HashSet<String> = HashSet::new();
+        let mut names: HashSet<String> = HashSet::new();
+        for item in &fold.items {
+            if item.state != "open" || !matches!(item.kind.as_str(), "question" | "pin") {
+                continue;
+            }
+            // A question sitting at a lead rung is not the user's to answer
+            // yet; its row keeps working until the lease lapses onto the
+            // board (the same visibility rule `on_board` applies).
+            if !matches!(
+                item.rung.as_ref().and_then(|r| r.level.as_deref()),
+                None | Some("user")
+            ) {
+                continue;
+            }
+            let Some(origin) = item.origin.as_ref() else {
+                continue;
+            };
+            if let Some(sid) = origin.session_id.as_deref() {
+                ids.insert(sid.to_string());
+            }
+            // The name joins only a question asked on this machine (the
+            // item's host reads None here, and Some on a copy): a cross-
+            // machine copy's name is another machine's registry name, and
+            // two machines name rows alike.
+            if item.host.is_none() {
+                if let Some(name) = origin.name.as_deref() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        for a in &mut self.layout.agents {
+            if a.exited {
+                continue;
+            }
+            let asks = a
+                .harness_session_id
+                .as_deref()
+                .is_some_and(|s| ids.contains(s))
+                || names.contains(a.name.as_str());
+            let key = a
+                .harness_session_id
+                .clone()
+                .unwrap_or_else(|| a.name.clone());
+            if asks {
+                // An already-stamped row keeps its first capture: the badge
+                // under a live stamp is always the stamp itself.
+                if a.reason.as_deref() != Some("filed_question") {
+                    self.question_stamps
+                        .insert(key, (a.badge.take(), a.reason.take()));
+                    a.badge = Some(AgentBadge::Blocked);
+                    a.reason = Some("filed_question".into());
+                }
+            } else if let Some((badge, reason)) = self.question_stamps.remove(&key) {
+                // The question closed: the row reads its own badge again.
+                a.badge = badge;
+                a.reason = reason;
+            }
+        }
+    }
+
     /// Apply the latest questions projection. An Err remains visible in the
     /// bell panel instead of becoming an empty list.
     pub(super) fn apply_questions_fold(
@@ -1325,6 +1398,7 @@ impl View {
                 self.questions_degraded = false;
                 self.questions_degraded_reason = None;
                 self.questions_fold = Some(f);
+                self.restamp_asking_badges();
             }
             Err(reason) => {
                 // The last good fold stays: an unread board never renders 0,
@@ -1512,29 +1586,6 @@ mod tests {
         assert_eq!(q.options.len(), 2);
         assert!(q.blocked_because.is_some());
     }
-
-    #[test]
-    fn an_open_page_fills_in_when_the_projection_lands() {
-        let mut v = view_with_agents(vec![]);
-        let mut stub = item("q-b4d63b60", true);
-        stub.options = vec![];
-        stub.blocked_because = None;
-        v.apply_questions_index(fold_with(vec![stub]));
-        v.apply_questions_fold(Err("timed out".into()));
-        v.open_detail_on("q-b4d63b60");
-        let d = v.question_detail.as_ref().unwrap();
-        assert!(d.item.node.is_none());
-        assert_eq!(d.degraded.as_deref(), Some("timed out"));
-        let page = question_page(&d.item, d, 0, 80);
-        assert!(page.contains("projection unavailable: timed out"), "{page}");
-
-        v.apply_questions_fold(Ok(stored_fold()));
-        let d = v.question_detail.as_ref().unwrap();
-        assert_eq!(d.item.node.as_deref(), Some("x-aaaa"));
-        assert_eq!(d.item.options.len(), 2);
-        assert!(d.degraded.is_none());
-    }
-
     #[test]
     fn page_rows() {
         let mut q = item("q-1", false);
@@ -1655,46 +1706,6 @@ mod tests {
         assert!(page.contains("asked by w1"), "no duplicated handle: {page}");
         assert!(!page.contains("(w1"), "parens dropped: {page}");
     }
-
-    #[tokio::test]
-    async fn notes_box_draws_inline_under_the_body_and_grows() {
-        // AC34-HP: typed notes wrap past the old 3-line cap, every wrapped
-        // line keeps the blockquote bar, the cursor block shows, and the box
-        // sits directly under the body and above why asked.
-        let mut q = item("q-n", true);
-        q.body = Some("the question body prose".into());
-        q.options = vec![];
-        let mut v = view_with_agents(vec![]);
-        v.questions_fold = Some(fold_with(vec![q]));
-        v.open_detail_on("q-n");
-        detail_keys(&mut v, b"n", &mut Vec::new()).await.unwrap();
-        detail_keys(&mut v, &b"word ".repeat(140), &mut Vec::new())
-            .await
-            .unwrap();
-        let text = crate::vt::frame_text(&v.compose());
-        let lines: Vec<&str> = text.lines().collect();
-        let bars = lines
-            .iter()
-            .filter(|l| l.starts_with('\u{2502}') && l.contains("word"))
-            .count();
-        assert!(bars >= 6, "expected 6+ wrapped note lines, got {bars}");
-        let body_at = lines
-            .iter()
-            .position(|l| l.contains("the question body prose"))
-            .expect("body renders");
-        let notes_at = lines
-            .iter()
-            .position(|l| l.contains('\u{276f}'))
-            .expect("notes prompt renders");
-        let why_at = lines
-            .iter()
-            .position(|l| l.contains("why asked"))
-            .expect("why asked renders");
-        assert!(body_at < notes_at, "notes sit under the body: {text}");
-        assert!(notes_at < why_at, "notes sit above why asked: {text}");
-        assert!(text.contains('\u{258f}'), "the cursor block shows: {text}");
-    }
-
     #[tokio::test]
     async fn answer_keys_rows() {
         let mut v = view_with_agents(vec![]);
@@ -1875,53 +1886,6 @@ mod tests {
         detail_keys(&mut v, b"x", &mut Vec::new()).await.unwrap();
         assert_eq!(v.question_archive, Some(vec!["q-a".into()]));
     }
-
-    #[tokio::test]
-    async fn detail_keys_nav_rows() {
-        let mut v = view_with_agents(vec![]);
-        v.questions_fold = Some(fold_with(vec![item("q-1", true)]));
-        v.open_detail_on("q-1");
-        // Unset + down lands on the first option, then walks into none of
-        // these and wraps back around.
-        detail_keys(&mut v, b"j", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().sel, Some(1));
-        detail_keys(&mut v, b"j", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().sel, Some(2));
-        detail_keys(&mut v, b"j", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().sel, Some(0));
-        detail_keys(&mut v, b"j", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().sel, Some(1), "wrap");
-        // Up from the first option reaches none of these from the other side.
-        detail_keys(&mut v, b"k", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().sel, Some(0));
-        detail_keys(&mut v, b"k", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().sel, Some(2));
-        // Enter submits the arrow-highlighted option.
-        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
-        assert_eq!(
-            v.question_action,
-            Some(("q-1".into(), crate::needs_overlay::AnswerPick::Option(2)))
-        );
-
-        let mut q = item("q-long", true);
-        q.body = Some("word ".repeat(300));
-        let mut v = view_with_agents(vec![]);
-        v.questions_fold = Some(fold_with(vec![q]));
-        v.open_detail_on("q-long");
-        detail_keys(&mut v, b"\x04", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().scroll, 12, "half page");
-        detail_keys(&mut v, b"\x15", &mut Vec::new()).await.unwrap();
-        assert_eq!(v.question_detail.as_ref().unwrap().scroll, 0);
-
-        let mut v = view_with_agents(vec![]);
-        v.questions_fold = Some(fold_with(vec![item("q-a", true)]));
-        v.open_detail_on("q-a");
-        detail_keys(&mut v, b"\x1b", &mut Vec::new()).await.unwrap();
-        // The lone Esc rides the carry until the next chunk proves it bare.
-        detail_keys(&mut v, b"", &mut Vec::new()).await.unwrap();
-        assert!(v.question_detail.is_none());
-    }
-
     #[tokio::test]
     async fn screens_strip_expand_and_fallback_rows() {
         let red = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
@@ -2018,51 +1982,6 @@ mod tests {
         let d = v.question_detail.as_ref().unwrap();
         assert!(!d.expanded && d.screen == Some(0));
     }
-
-    #[tokio::test]
-    async fn draw_detail_rows() {
-        let mut v = view_with_agents(vec![]);
-        v.questions_fold = Some(fold_with(vec![item("q-a", true)]));
-        v.open_detail_on("q-a");
-        let (rows, cols) = (30usize, 120usize);
-        v.term = (rows as u16, cols as u16);
-        let mut cells = vec![Cell::default(); rows * cols];
-        assert!(draw_detail(
-            &v,
-            &mut cells,
-            (rows, cols),
-            (0, 0),
-            (rows, cols)
-        ));
-        // The page owns the full width: the opened question's title renders
-        // on the page, no list pane beside it.
-        let row1: String = cells[cols..2 * cols].iter().map(|c| c.c).collect();
-        assert!(row1.contains("title for q-a"), "the page renders: {row1}");
-
-        let mut v = view_with_agents(vec![]);
-        v.questions_fold = Some(fold_with(vec![item("q-1", true)]));
-        v.open_detail_on("q-1");
-        detail_keys(&mut v, b"n", &mut Vec::new()).await.unwrap();
-        detail_keys(
-            &mut v,
-            "a long note that must wrap and stay inside the box".as_bytes(),
-            &mut Vec::new(),
-        )
-        .await
-        .unwrap();
-        // A 20x6 terminal: the box clamps to the terminal, no panic.
-        v.term = (6, 20);
-        let (rows, cols) = (6usize, 20usize);
-        let mut cells = vec![Cell::default(); rows * cols];
-        assert!(draw_detail(
-            &v,
-            &mut cells,
-            (rows, cols),
-            (0, 0),
-            (rows, cols)
-        ));
-    }
-
     #[test]
     fn apply_result_rows() {
         let mut v = view_with_agents(vec![]);

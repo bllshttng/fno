@@ -402,7 +402,12 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         .cloned()
         .collect();
     let rollup_verdicts = super::promise::rollup_hold_set(&warm_candidates, &mut |node| {
-        resolve_promise_evidence(node, super::promise::gate_cwd_for(node).as_deref(), &[])
+        resolve_promise_evidence(
+            node,
+            super::promise::gate_cwd_for(node).as_deref(),
+            &[],
+            None,
+        )
     });
     for (pid, verdict) in rollup_verdicts.iter().filter(|(_, v)| !v.satisfied()) {
         let outcome = match verdict.outcome {
@@ -586,11 +591,11 @@ fn heals_leg_persist(
                 continue;
             };
             let current = &rows[index];
-            if !node_is_open(current) {
+            if !node_is_open(current) && !h.followup {
                 continue;
             }
             let has_refs = !super::merge_evidence::node_pr_refs(current).is_empty();
-            if has_refs && !h.rebind {
+            if has_refs && !h.rebind && !h.followup {
                 continue;
             }
             let result = bind_pr_rows(
@@ -600,6 +605,7 @@ fn heals_leg_persist(
                 h.pr_url.as_deref(),
                 None,
                 h.rebind,
+                h.followup,
                 &super::pr_link::repo_alias_map(None),
             );
             if result.outcome == "bound" && !result.bound_ids().is_empty() {
@@ -763,7 +769,9 @@ fn bind_claims(
     let aliases = super::pr_link::aliases_with_probe(None, repo, ref_slugs);
     if dry_run {
         let mut rows = entries.clone();
-        let result = bind_pr_rows(&mut rows, claims, pr_number, pr_url, repo, false, &aliases);
+        let result = bind_pr_rows(
+            &mut rows, claims, pr_number, pr_url, repo, false, false, &aliases,
+        );
         let out = (result.refusal.clone(), result.bound_ids());
         *entries = rows;
         return out;
@@ -775,7 +783,9 @@ fn bind_claims(
         None,
         None,
         |working| {
-            let result = bind_pr_rows(working, claims, pr_number, pr_url, repo, false, &aliases);
+            let result = bind_pr_rows(
+                working, claims, pr_number, pr_url, repo, false, false, &aliases,
+            );
             outcome = (result.refusal.clone(), result.bound_ids());
             if result.refusal.is_some() {
                 return Ok(false);
@@ -1202,7 +1212,7 @@ fn promise_gate_leg(
             // Expired: the locked recheck covers only a NEWER reopen.
             reopen_expired.push(record.node_id.clone());
         }
-        let verdict = resolve_promise_evidence(&node, gate_cwd.as_deref(), &[]);
+        let verdict = resolve_promise_evidence(&node, gate_cwd.as_deref(), &[], None);
         if let Some(warning) = &verdict.warning {
             if !json_out {
                 stderr_log.push(format!("warning: {warning}"));
@@ -2929,5 +2939,33 @@ mod tests {
         // the parent's own record's leftover duty.
         assert_eq!(entries[0]["merge_status"], "merged");
         assert_eq!(entries[1]["merge_status"], "merged");
+    }
+    #[test]
+    fn a_followup_heal_persists_for_a_done_node_in_the_dry_run() {
+        let mut entries = vec![json!({
+            "id": "x-aaaa",
+            "status": "done",
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+            "merge_status": "merged",
+        })];
+        let heals = vec![OpenBindingHeal {
+            node_id: "x-aaaa".into(),
+            pr_number: 1813,
+            pr_url: Some("https://github.com/o/r/pull/1813".into()),
+            rebind: false,
+            followup: true,
+        }];
+        let kept = heals_leg_persist(&mut entries, Path::new("/nonexistent"), heals, None, true);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(kept[0]["node"], "x-aaaa");
+        assert_eq!(kept[0]["pr"], 1813);
+        assert_eq!(kept[0]["would"], true);
+        // The dry-run preview carries the append; the finished row's primary
+        // and closure facts stay untouched.
+        assert_eq!(entries[0]["additional_prs"][0]["number"], 1813);
+        assert_eq!(entries[0]["pr_number"], 1720);
+        assert_eq!(entries[0]["merge_status"], "merged");
     }
 }

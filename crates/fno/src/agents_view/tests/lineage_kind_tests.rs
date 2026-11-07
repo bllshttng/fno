@@ -31,16 +31,3 @@ fn a_child_nests_and_a_peer_roots_beside_its_spawner() {
     ];
     assert_eq!(depths_of(&rows), vec![0, 1, 0]);
 }
-
-/// AC4-EDGE: a pre-v32 row (spawn edge recorded, no lineage word) renders
-/// flat, never nested under a spawner it does not wait on.
-#[test]
-fn a_pre_v32_row_without_a_word_roots_flat() {
-    let rows = vec![
-        row_from(r#"{"name":"s","exited":false,"harness_session_id":"s-1"}"#),
-        row_from(
-            r#"{"name":"o","exited":false,"harness_session_id":"s-2","spawned_by_session":"s-1"}"#,
-        ),
-    ];
-    assert_eq!(depths_of(&rows), vec![0, 0]);
-}

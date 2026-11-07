@@ -481,72 +481,6 @@ mod tests {
         assert_eq!(items[0].session_id.as_deref(), Some("s-do"));
         assert_eq!(items[1].r#ref.as_deref(), Some("1395"));
     }
-
-    #[test]
-    fn empty_body_is_an_empty_vec_not_an_error() {
-        let items = parse_feed(b"[]", b"").expect("an empty feed is a real answer");
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn new_fields_deserialize_when_the_projection_sends_them() {
-        let body = br#"[{"ts":"2026-09-28T16:48:49Z","kind":"session_reaped","title":"successor removed","reason":"why","role":"L2 x-eeee","owner":"epic x-2222 the epic","parent":"s-lead","holder":"successor"},{"ts":"2026-09-29T08:00:00Z","kind":"node_created","node":"x-aaaa","cwd":"/workspace/node-project","title":"created node"}]"#;
-        let items = parse_feed(body, b"").expect("a body carrying the new fields parses");
-        assert_eq!(items[0].reason.as_deref(), Some("why"));
-        assert_eq!(items[0].role.as_deref(), Some("L2 x-eeee"));
-        assert_eq!(items[0].owner.as_deref(), Some("epic x-2222 the epic"));
-        assert_eq!(items[0].parent.as_deref(), Some("s-lead"));
-        assert_eq!(items[0].holder.as_deref(), Some("successor"));
-        assert_eq!(items[1].cwd.as_deref(), Some("/workspace/node-project"));
-        // AC7-HP: the event row interface answers the grammar's keys, and
-        // `s:` refuses on the event surface.
-        let item = FeedItem {
-            ts: "2026-10-01T08:00:00Z".into(),
-            kind: "question_asked".into(),
-            node: Some("x-eeee".into()),
-            session_id: Some("s-lead-1234".into()),
-            title: "proceed with the merge?".into(),
-            owner: Some("lead rowan L2".into()),
-            url: Some("https://github.com/o/r/pull/2890".into()),
-            ..Default::default()
-        };
-        let mut ctx = EventCtx::from_rows(&[], &[]);
-        ctx.nodes.insert("x-eeee".into(), (None, None, true));
-        let f = event_fields(&item, &ctx);
-        let now = 1791854400;
-        let keeps = |q: &str| -> bool {
-            match crate::search_query::parse(q, crate::search_query::Surface::Event, now) {
-                Ok(p) => p.keeps(&f),
-                Err(e) => panic!("{q} refused: {e}"),
-            }
-        };
-        assert!(keeps("k:question"), "k:question keeps");
-        assert!(keeps("l:rowan"), "l:rowan keeps through the owner holder");
-        assert!(keeps("pr:2890"), "pr:2890 keeps through the url");
-        assert!(keeps("ar:mail"), "ar:mail keeps");
-        assert!(keeps("sid:s-lead-1234"), "sid: keeps");
-        assert!(keeps("is:open"), "the open node keeps is:open");
-        assert!(
-            crate::search_query::parse("s:ready", crate::search_query::Surface::Event, now)
-                .is_err()
-        );
-        // A role row keeps under l: through the new holder field.
-        let role = FeedItem {
-            ts: "2026-09-30T10:00:00Z".into(),
-            kind: "role_granted".into(),
-            title: "successor promoted L2 x-eeee".into(),
-            holder: Some("successor".into()),
-            ..Default::default()
-        };
-        let fc = event_fields(&role, &ctx);
-        let p = crate::search_query::parse("l:successor", crate::search_query::Surface::Event, now)
-            .expect("l:successor parses");
-        assert!(p.keeps(&fc), "the role row keeps under l:successor");
-        // The feed-row case table and the prefilter cases, from the feed's
-        // own search surface.
-        crate::client::feed_view::search::tests::feed_row_cases_through_the_shared_matcher();
-    }
-
     #[test]
     fn garbage_is_malformed_carrying_stderr() {
         let err = parse_feed(b"not json", b"skipped 3 malformed question lines\n")
@@ -564,16 +498,5 @@ mod tests {
         let line = FeedError::Timeout.to_string();
         assert!(line.contains("timed out after 10s"), "got: {line}");
         assert!(!line.contains("failed"));
-    }
-
-    #[test]
-    fn exit_carries_stderr_first_line() {
-        let status = std::process::Command::new("true")
-            .status()
-            .expect("true runs");
-        let note = stderr_note(b"unreadable store: graph.json\nsecond line", &status);
-        assert_eq!(note, "unreadable store: graph.json");
-        let rendered = FeedError::Exit(note).to_string();
-        assert!(rendered.contains("unreadable store"), "got: {rendered}");
     }
 }

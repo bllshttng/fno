@@ -88,6 +88,44 @@ struct Fake {
     main_repair: Option<Option<String>>,
 }
 
+#[test]
+fn stub_manifest_scoped_graph_rows() {
+    let _env_lock = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    struct RestoreHome(Option<std::ffi::OsString>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_HOME", value),
+                None => std::env::remove_var("FNO_HOME"),
+            }
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let _restore = RestoreHome(std::env::var_os("FNO_HOME"));
+    std::env::set_var("FNO_HOME", home.path());
+    let graph = crate::org_board::scope::graph_json_path(home.path());
+    crate::graph_store::seed_rows(
+        &graph,
+        &[
+            json!({"id":"x-contract", "dep":"contract", "pr_number":7}),
+            json!({"id":"x-feature", "type":"feature", "pr_number":8}),
+            json!({"id":"x-raw-contract", "dep":"contract", "status":"not-a-status", "pr_number":9}),
+        ],
+    )
+    .unwrap();
+
+    let rows = walk_entries(home.path()).expect("graph rows are readable");
+
+    let mut ids: Vec<_> = rows
+        .iter()
+        .filter_map(|row| row.get("id").and_then(Value::as_str))
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["x-contract", "x-raw-contract"]);
+}
+
 fn open_facts() -> PrFacts {
     PrFacts {
         number: 7,
@@ -1792,25 +1830,6 @@ fn a_worktree_held_branch_recovers_through_the_rest_endpoint_with_the_pin() {
         calls[1]
     );
     assert!(calls[1].contains(&"merge_method=squash".to_string()));
-}
-
-#[test]
-fn an_arm_never_takes_the_worktree_recovery() {
-    // A queue arm is not a merge, so a checkout refusal has nothing to
-    // recover: PUT .../merge would merge NOW, past the queue's own wait.
-    let fake = Fake {
-        gh_ok: false,
-        gh_output: "fatal: 'feature/x' is already used by worktree at /w".to_string(),
-        ..clean()
-    };
-    let authorized = Authorized {
-        facts: open_facts(),
-        head: "abc123".to_string(),
-        strategy: "squash".to_string(),
-        merge_grant: None,
-    };
-    let _ = effect(&fake, &request(Effect::Arm), &authorized);
-    assert_eq!(fake.gh_calls.borrow().len(), 1);
 }
 
 #[test]

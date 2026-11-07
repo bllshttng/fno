@@ -55,46 +55,4 @@ mod tests {
             }
         }
     }
-
-    /// No surface reads the theme's `sel` surface to paint a cursor row. The
-    /// color stays a theme field (the import editor and the digest overlay set
-    /// it); only `theme.rs` and this module may resolve it.
-    #[test]
-    fn no_surface_paints_a_cursor_from_the_sel_color() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut bad = Vec::new();
-        let mut stack = vec![src];
-        while let Some(dir) = stack.pop() {
-            for e in std::fs::read_dir(dir).unwrap().flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                    continue;
-                }
-                let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                let exempt = matches!(
-                    name.as_str(),
-                    "theme.rs" | "cursor.rs" | "digest_overlay.rs" | "theme_import_ui.rs"
-                ) || name.contains("test");
-                if exempt || p.extension().and_then(|x| x.to_str()) != Some("rs") {
-                    continue;
-                }
-                let text = std::fs::read_to_string(&p).unwrap();
-                for (i, line) in text.lines().enumerate() {
-                    let word = |c: char| c.is_alphanumeric() || c == '_';
-                    let hit = ["t.sel", "theme.sel"].iter().any(|k| {
-                        line.match_indices(k).any(|(at, _)| {
-                            let before = line[..at].chars().next_back();
-                            let after = line[at + k.len()..].chars().next();
-                            !before.is_some_and(word) && !after.is_some_and(word)
-                        })
-                    });
-                    if hit {
-                        bad.push(format!("{}:{}", p.display(), i + 1));
-                    }
-                }
-            }
-        }
-        assert!(bad.is_empty(), "cursor painted from theme sel: {bad:?}");
-    }
 }

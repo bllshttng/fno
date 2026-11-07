@@ -239,7 +239,7 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                     ClientMsg::Control { .. } => "Control",
                     _ => "KillServer",
                 };
-                eprintln!("fno mux: client {id} sent {name} on a live connection; dropping it");
+                crate::mux_log!(error; "fno mux: client {id} sent {name} on a live connection; dropping it");
                 let _ = core_tx.send(CoreMsg::Gone(id)).await;
                 break;
             }
@@ -251,7 +251,7 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
             // over-cap prefix whose body was never read, a closed peer)
             // desyncs or has nothing left to read: the client is gone.
             Err(crate::proto::ProtoError::Malformed(e)) => {
-                eprintln!("fno mux: client {id} sent an unusable frame: {e}");
+                crate::mux_log!(error; "fno mux: client {id} sent an unusable frame: {e}");
                 let _ = core_tx
                     .send(CoreMsg::FrameRefused {
                         id,
@@ -266,7 +266,7 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                 // Includes the abrupt-close case (killed client): routine, but
                 // one log line makes a misbehaving client diagnosable.
                 if !matches!(e, crate::proto::ProtoError::Closed) {
-                    eprintln!("fno mux: client {id} read failed: {e}");
+                    crate::mux_log!(error; "fno mux: client {id} read failed: {e}");
                 }
                 let _ = core_tx.send(CoreMsg::Gone(id)).await;
                 break;

@@ -30,7 +30,7 @@ impl Core {
             return;
         };
         if c.reliable_tx.try_send(ServerMsg::OpenLink { url }).is_err() {
-            eprintln!(
+            crate::mux_log!(error;
                 "fno mux: client {client_id} reliable channel wedged on OpenLink; dropping it"
             );
             self.clients.retain(|c| c.id != client_id);

@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::spawn_admission::{flag_value, has_flag, seed_of, HARNESS_FLAGS};
 
@@ -19,20 +20,92 @@ pub const EVALS_SEALED_ENV: &str = "FNO_EVALS_SEALED";
 /// The spawn gate's exit for a sandbox that blocks a tool the worker needs.
 pub const EXIT_SANDBOX_UNREACHABLE: i32 = 85;
 
+#[derive(Debug)]
+pub struct SpawnTiming {
+    entered: Instant,
+    seam_ms: u64,
+    gate_ms: u64,
+    guard_ms: u64,
+    queued_ms: u64,
+}
+
+impl SpawnTiming {
+    pub fn for_spawn(args: &[String]) -> Option<Self> {
+        (args.first().map(String::as_str) == Some("spawn")).then(|| Self {
+            entered: Instant::now(),
+            seam_ms: 0,
+            gate_ms: 0,
+            guard_ms: 0,
+            queued_ms: 0,
+        })
+    }
+
+    pub fn record_seam(&mut self) {
+        self.seam_ms = duration_ms(self.entered.elapsed());
+    }
+
+    pub fn record_gate(&mut self, gate: Duration, queued: Duration) {
+        self.gate_ms = self.gate_ms.saturating_add(duration_ms(gate));
+        self.queued_ms = self.queued_ms.saturating_add(duration_ms(queued));
+    }
+
+    pub fn record_guard(&mut self, guard: Duration) {
+        self.guard_ms = self.guard_ms.saturating_add(duration_ms(guard));
+    }
+
+    pub fn client_stage_ms(&self) -> serde_json::Value {
+        serde_json::json!({
+            "seam": self.seam_ms,
+            "gate": self.gate_ms,
+            "guard": self.guard_ms,
+            "queued": self.queued_ms,
+        })
+    }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 /// Admit one argv. `Ok` is the argv to parse; `Err` is the exit code of a
 /// refusal whose lines are already printed.
 pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     if args.first().map(String::as_str) != Some("spawn") {
         return Ok(args);
     }
+    let args = crate::spawn_admission::resolve_prompt_file(args).map_err(|(reason, code)| {
+        eprintln!("{reason}");
+        code
+    })?;
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     refuse_codex_without_git_grant(&args, &here)?;
 
     let home = crate::paths::AgentsHome::from_env();
-    let names: HashSet<String> = crate::state::load_registry(&home.registry_json())
+    let mut names: HashSet<String> = crate::state::load_registry(&home.registry_json())
         .map(|r| r.entries.into_iter().map(|e| e.name).collect())
         .unwrap_or_default();
-    let admitted = crate::spawn_admission::admit(&args, &here, &names);
+    let typed = flag_value(&args[1..], &["--name"]).is_some();
+    // `--print` launches nothing, so it reserves nothing.
+    let print = has_flag(&args[1..], "", &["--print"]);
+    let admitted = loop {
+        let admitted = crate::spawn_admission::admit(&args, &here, &names);
+        let Some(name) = reservable_name(&admitted, print) else {
+            break admitted;
+        };
+        match reserve_name(&name, None) {
+            Ok(()) => break admitted,
+            // A minted name another spawn holds: mint the next suffix. The
+            // mint gives up past `-5`, and that refusal ends the loop.
+            Err(_) if !typed && names.insert(name.clone()) => continue,
+            Err(holder) => {
+                eprintln!(
+                    "fno agents spawn: the name {name} is reserved by {holder}, a spawn still \
+                     inside its launch window; pass another --name or wait for that spawn"
+                );
+                return Err(2);
+            }
+        }
+    };
     for line in &admitted.stderr {
         eprintln!("{line}");
     }
@@ -72,6 +145,44 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     }
     crate::claims::take_caller_identity(&crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV);
     Ok(argv)
+}
+
+/// The name an admitted spawn must reserve. A refusal carries an empty argv,
+/// so it reserves nothing and its reason prints.
+fn reservable_name(admitted: &crate::spawn_admission::Admission, print: bool) -> Option<String> {
+    if admitted.exit.is_some() || print {
+        return None;
+    }
+    flag_value(admitted.argv.get(1..).unwrap_or(&[]), &["--name"]).filter(|n| !n.is_empty())
+}
+
+/// Reserve a worker name while this spawn client runs. The registry holds no
+/// row until the child boots (p50 8 s), so two concurrent spawns of one seed
+/// both read a name free; a claim decides the race. The claim names this
+/// process's pid and takes no TTL, so it reads stale the moment the client
+/// exits and needs no release. The key is not `name:`, which marks a lead's
+/// drawn person name used forever. A broken claims store fails open to the
+/// registry read. `Err` names the holder.
+pub(crate) fn reserve_name(name: &str, root: Option<&Path>) -> Result<(), String> {
+    let key = format!("spawn-name:{}", name.to_ascii_lowercase());
+    let holder = format!(
+        "{}{}",
+        crate::spawn_guard::SPAWN_CLI_HOLDER_PREFIX,
+        std::process::id()
+    );
+    let opts = crate::claims::AcquireOpts {
+        reason: Some(format!("spawn launch window for worker {name}")),
+        root: root.map(Path::to_path_buf),
+        ..Default::default()
+    };
+    match crate::claims::acquire(&key, &holder, opts) {
+        crate::claims::AcquireOutcome::HeldByOther { holder, .. } => Err(holder),
+        crate::claims::AcquireOutcome::Error(e) => {
+            eprintln!("spawn note: {key} could not be reserved ({e}); the registry read decides");
+            Ok(())
+        }
+        crate::claims::AcquireOutcome::Acquired(_) => Ok(()),
+    }
 }
 
 /// The spawn's effective working directory: `--cwd`/`-c`, else the caller's.
@@ -303,6 +414,53 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn a_name_another_spawn_reserved_refuses_and_names_its_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rival = |pid: u32| crate::claims::AcquireOpts {
+            pid: Some(pid),
+            root: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        };
+        // A live rival client holds the name: the race refuses and names it.
+        let _ = crate::claims::acquire(
+            "spawn-name:t-second-pass",
+            "spawn-cli:1",
+            rival(std::process::id()),
+        );
+        assert_eq!(
+            reserve_name("t-Second-Pass", Some(tmp.path())),
+            Err("spawn-cli:1".to_string())
+        );
+        // A rival client that exited frees the name with no release.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let _ = crate::claims::acquire("spawn-name:t-gone", "spawn-cli:2", rival(dead));
+        assert_eq!(reserve_name("t-gone", Some(tmp.path())), Ok(()));
+    }
+
+    #[test]
+    fn a_refused_admission_reserves_no_name_and_keeps_its_reason() {
+        let refused = crate::spawn_admission::Admission {
+            argv: Vec::new(),
+            stderr: vec!["fno agents spawn: refused".to_string()],
+            exit: Some(2),
+            stdout: None,
+            take_over: None,
+            events: Vec::new(),
+        };
+        assert_eq!(reservable_name(&refused, false), None);
+        assert_eq!(refused.stderr, ["fno agents spawn: refused"]);
+        let ok = crate::spawn_admission::Admission {
+            argv: argv(&["spawn", "--name", "w1"]),
+            exit: None,
+            ..refused
+        };
+        assert_eq!(reservable_name(&ok, false), Some("w1".to_string()));
+        assert_eq!(reservable_name(&ok, true), None);
     }
 
     #[test]

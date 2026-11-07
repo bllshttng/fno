@@ -48,21 +48,6 @@ pub fn ambient_leak_canary() -> &'static str {
     &vocab().ambient_leak_canary
 }
 
-/// The capture specimen's source lists, in capture order (identity
-/// markers + ambient names + environment + runner passthrough): the
-/// golden test rebuilds the specimen from the same lists the Python
-/// capture walked.
-#[cfg(test)]
-pub(crate) fn vocab_lists() -> Vec<Vec<String>> {
-    let v = vocab();
-    vec![
-        v.identity_markers.clone(),
-        v.ambient_names.clone(),
-        v.environment.clone(),
-        v.runner_passthrough.clone(),
-    ]
-}
-
 /// `"ambient"`, `"environment"`, or `"unclassified"`. The Python
 /// `fno.hermetic.classify` mirrors this from the copied vocabulary; the
 /// ambient-surface test walks every env read in source and fails on an
@@ -215,7 +200,7 @@ pub fn neutralise(
     out.insert(
         "CARGO_BUILD_BUILD_DIR".into(),
         format!(
-            "{}/.fno/cargo-build/{{workspace-path-hash}}",
+            "{}/.fno/cache/cargo-build/{{workspace-path-hash}}",
             home.to_string_lossy()
         ),
     );
@@ -444,7 +429,7 @@ mod tests {
         assert_eq!(
             out.get("CARGO_BUILD_BUILD_DIR").unwrap(),
             format!(
-                "{}/.fno/cargo-build/{{workspace-path-hash}}",
+                "{}/.fno/cache/cargo-build/{{workspace-path-hash}}",
                 home.to_string_lossy()
             )
             .as_str()

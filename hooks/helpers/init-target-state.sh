@@ -1844,15 +1844,68 @@ EOF
               echo "UNBLOCKS_AFTER: parent generation releases node:${_NODE_ID} or stale-claim recovery reclaims it" >&1
             fi
           else
-            printf 'author: init\nreason: claim_held_by_other\n' > "$STATE_DIR/.target-cancelled"
-            _EVENT_DATA="$(jq -cn --arg path "$STATE_DIR/.target-cancelled" '{lane: "target", path: $path, reason: "claim_held_by_other"}' 2>/dev/null || true)"
-            if [[ -n "$_EVENT_DATA" ]]; then
-              fno doctor event emit -t cancel_signal_set -s hook -d "$_EVENT_DATA" >/dev/null 2>&1 || \
-                echo "target: WARNING: cancel signal set but its event was not emitted ($STATE_DIR/.target-cancelled)" >&2
-            else
-              echo "target: WARNING: cancel signal set but its event payload could not be built ($STATE_DIR/.target-cancelled)" >&2
+            # A claim_held_by_other whose holder names THIS session is the
+            # session's own pre-placed spawn-handover row, not a foreign hold:
+            # the spawner claims the node for this worker before the worker
+            # exists, so the worker's plain acquire hits its own row. The
+            # adoption ladder above can miss it (registry name not resolvable
+            # yet, launch window still live), but the session proceeds and
+            # claims fine through that row (measured live 2026-09-09, again
+            # 2026-10-15). Touching the cancel sentinel here left a live,
+            # progressing session reading as Interrupted to loop-check and any
+            # resumed session, and the stale-sentinel wipe at init start cannot
+            # clean it: it ran earlier in this same run. Same identity rungs
+            # the adoption ladder trusts: the holder string (bare registry
+            # agent name, spawn-handover: prefixed, or this session's own
+            # holder) and the recorded session id. Exact match is the only
+            # proof; any other holder keeps the sentinel.
+            _SELF_CLAIM_JSON="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "$_CLAIM_KEY" --json --no-roster 2>/dev/null || true)"
+            _OTHER_HOLDER="$(printf '%s' "${_SELF_CLAIM_JSON:-}" \
+              | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+            _SELF_NAME="${FNO_WORKER_NAME:-}"
+            if [[ -z "$_SELF_NAME" ]]; then
+              _SELF_NAME="$(fno agents whoami 2>/dev/null \
+                | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
             fi
-            echo "target_claim_blocked_reason: claim_held_by_other" >> "$STATE_FILE"
+            _OTHER_SESSION="$(printf '%s' "${_SELF_CLAIM_JSON:-}" \
+              | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+            if [[ -z "$_OTHER_SESSION" ]]; then
+              _OTHER_SESSION="$(printf '%s' "${_SELF_CLAIM_JSON:-}" \
+                | sed -n 's/.*"dispatched_by_session"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+            fi
+            _IS_OWN_PREPLACED=0
+            if [[ -n "${_OTHER_HOLDER:-}" ]]; then
+              if [[ "$_OTHER_HOLDER" == "$_CLAIM_HOLDER" ]] \
+                 || { [[ -n "${_SELF_NAME:-}" ]] \
+                      && { [[ "$_OTHER_HOLDER" == "$_SELF_NAME" ]] \
+                           || [[ "$_OTHER_HOLDER" == "spawn-handover:$_SELF_NAME" ]]; }; }; then
+                _IS_OWN_PREPLACED=1
+              fi
+            fi
+            if [[ "$_IS_OWN_PREPLACED" -eq 0 && -n "${_OTHER_SESSION:-}" && -n "${_HARNESS_SESSION:-}" ]]; then
+              # Case folds like the engine's same_session_id; an exact match
+              # is the only proof, never a prefix.
+              if [[ "$_OTHER_SESSION" == "$_HARNESS_SESSION" ]] \
+                 || { [[ "$_OTHER_SESSION" != ses_* && "$_HARNESS_SESSION" != ses_* ]] \
+                      && [[ "$(printf '%s' "$_OTHER_SESSION" | tr '[:upper:]' '[:lower:]')" \
+                            == "$(printf '%s' "$_HARNESS_SESSION" | tr '[:upper:]' '[:lower:]')" ]]; }; then
+                _IS_OWN_PREPLACED=1
+              fi
+            fi
+            if [[ "$_IS_OWN_PREPLACED" -eq 1 ]]; then
+              echo "target: init: node claim names this session ($_OTHER_HOLDER${_OTHER_SESSION:+ / $_OTHER_SESSION}); cancel sentinel not set" >&2
+              echo "target_claim_blocked_reason: claim_held_by_self_preplaced" >> "$STATE_FILE"
+            else
+              printf 'author: init\nreason: claim_held_by_other\n' > "$STATE_DIR/.target-cancelled"
+              _EVENT_DATA="$(jq -cn --arg path "$STATE_DIR/.target-cancelled" '{lane: "target", path: $path, reason: "claim_held_by_other"}' 2>/dev/null || true)"
+              if [[ -n "$_EVENT_DATA" ]]; then
+                fno doctor event emit -t cancel_signal_set -s hook -d "$_EVENT_DATA" >/dev/null 2>&1 || \
+                  echo "target: WARNING: cancel signal set but its event was not emitted ($STATE_DIR/.target-cancelled)" >&2
+              else
+                echo "target: WARNING: cancel signal set but its event payload could not be built ($STATE_DIR/.target-cancelled)" >&2
+              fi
+              echo "target_claim_blocked_reason: claim_held_by_other" >> "$STATE_FILE"
+            fi
           fi
         elif grep -qE 'store\.remote_url\) (is unreachable|did not answer)' "$STATE_DIR/.claim-err" 2>/dev/null; then
           # A shared primary that cannot be reached, or took the request and

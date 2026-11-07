@@ -34,7 +34,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Rename map `old = \"new\"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = \"fnodotdev/fno\"`."
+      "doc": "Rename map `old = \"new\"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-ins already carry this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = \"fnodotdev/fno\"`."
     },
     {
       "path": "branch.prefix",
@@ -1549,6 +1549,33 @@
       "doc": "Arm the CI healer: each tick spawns one detached pr-heal --all --apply drive loop over every project root, off the tick's own budget. Default false. Measured 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. Arm with: fno config set auto_heal.enabled true."
     },
     {
+      "path": "pr.cancel_red_run",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Cancel a red head's in-flight CI runs instead of refusing or waiting them out; default true. False disables every cancel site: `fno do pr push` restores the old exit-2 refusal while a run is in flight, `fno do pr wait` reads a red verdict as final and cancels nothing, and the daemon cadence wakes the pusher without cancelling. A head whose latest rows are not red always refuses."
+    },
+    {
+      "path": "pr.open_ready",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft law; default true, and a broken config never disables a guard."
+    },
+    {
+      "path": "pr.wait_wake_minutes",
+      "type": "int",
+      "default": 15,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Minutes `fno do pr wait` waits before it wakes when --timeout is omitted."
+    },
+    {
       "path": "pr_watch.enabled",
       "type": "bool",
       "default": false,
@@ -1754,6 +1781,15 @@
       "question": "",
       "default_source": "default",
       "doc": "Which projects the mux backlog board shows: repo (default, this checkout's project.id) | all | workspace:<name>, e.g. workspace:main for a workspace holding web, backend and marketing. A scope that cannot resolve falls back to every project, and `fno mux doctor` reports that as a warn naming the remedy. Latched at mux server birth; `fno mux kill-server` re-reads."
+    },
+    {
+      "path": "mux.report_parent",
+      "type": "str (optional)",
+      "default": null,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "Parent epic for reports filed with prefix+!. Unset files reports without a parent."
     },
     {
       "path": "mux.prefix",

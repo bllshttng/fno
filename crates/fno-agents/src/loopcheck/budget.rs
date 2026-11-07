@@ -17,6 +17,10 @@ pub(super) enum BudgetTrip {
         cap_usd: Option<f64>,
         spent_usd: f64,
     },
+    TeamCost {
+        cap_usd: Option<f64>,
+        spent_usd: f64,
+    },
 }
 
 /// Resolve an `Option<Result<T, String>>` budget cap for use in check_budget.
@@ -112,8 +116,15 @@ pub(super) fn check_budget(
             })
         }
         ResolvedCap::Valid(cap) => {
-            if let Some(session_id) = &manifest.session_id {
-                let cost = session_cost_from_ledger(ledger_path, session_id);
+            let meter = crate::team_spend::session_meter(
+                &crate::paths::AgentsHome::from_env()
+                    .otel_dir()
+                    .join("otel.db"),
+                ledger_path,
+                manifest.session_id.as_deref(),
+                manifest.harness_session_id.as_deref(),
+            );
+            if let Some(cost) = meter.usd() {
                 if cost >= cap {
                     return Some(BudgetTrip::Cost {
                         cap_usd: Some(cap),
@@ -125,4 +136,21 @@ pub(super) fn check_budget(
         }
         ResolvedCap::Absent => None,
     }
+
+    .or_else(|| {
+        let cap = match resolve_cap(&settings.team_cost_cap_usd) {
+            ResolvedCap::Absent => return None,
+            ResolvedCap::Malformed(raw) => {
+                eprintln!("loop-check: malformed team budget cap '{raw}' - failing closed; fix the config");
+                return Some(BudgetTrip::TeamCost { cap_usd: None, spent_usd: 0.0 });
+            }
+            ResolvedCap::Valid(cap) => cap,
+        };
+        let session = manifest.harness_session_id.as_deref()?;
+        let spend = crate::team_spend::team_spend(session).ok()?;
+        (spend.metered_usd >= cap).then_some(BudgetTrip::TeamCost {
+            cap_usd: Some(cap),
+            spent_usd: spend.metered_usd,
+        })
+    })
 }

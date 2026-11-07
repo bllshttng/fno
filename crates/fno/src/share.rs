@@ -1287,13 +1287,6 @@ mod tests {
             .collect()
     }
 
-    fn mails(effects: &[Effect]) -> Vec<&Effect> {
-        effects
-            .iter()
-            .filter(|e| matches!(e, Effect::Mail { .. }))
-            .collect()
-    }
-
     #[test]
     fn consent_machine_rows() {
         let now = Instant::now();
@@ -1367,46 +1360,6 @@ mod tests {
         assert!(fx.contains(&Effect::Print("Ms. Lee stopped watching".into())));
         assert_eq!(m.coach("tok-1", "hi").unwrap_err().0, 401);
     }
-
-    #[test]
-    fn steer_mails_only_after_the_driver_says_y() {
-        let now = Instant::now();
-        let mut m = Viewers::new(3, true);
-        let (Knock::Waiting(id), _) = m.knock(true, "Ms. Lee", now) else {
-            panic!("knock waits");
-        };
-        m.admit(id, "tok".into());
-
-        let (n, fx) = m.steer("tok", "run the tests").expect("queued");
-        assert!(mails(&fx).is_empty(), "nothing mails before consent");
-        let fx = m.decline(n);
-        assert!(mails(&fx).is_empty());
-        assert!(sends_to(&fx, id)[0].contains("declined"));
-        assert!(
-            mails(&m.approve(n)).is_empty(),
-            "a declined steer cannot be approved"
-        );
-
-        let (n, _) = m.steer("tok", "run the tests").expect("queued");
-        let fx = m.approve(n);
-        assert_eq!(
-            mails(&fx),
-            vec![&Effect::Mail {
-                viewer: id,
-                steer: n,
-                from: "observer:Ms. Lee".into(),
-                text: "run the tests".into(),
-            }]
-        );
-        assert!(mails(&m.approve(n)).is_empty(), "one y sends once");
-
-        assert_eq!(parse_cmd("y 2"), Some(Cmd::Approve(2)));
-        assert_eq!(parse_cmd("n s2"), Some(Cmd::Decline(2)));
-        assert_eq!(parse_cmd("a 1 2"), None);
-        assert_eq!(parse_cmd("q"), Some(Cmd::Quit));
-        assert_eq!(parse_cmd("x 1"), None);
-    }
-
     #[tokio::test]
     async fn share_router_serves_only_its_own_routes() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -367,7 +367,7 @@ headless = "argv-add-dir"
 # paneless start.
 [harness.codex.thread]
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir"]
-passthrough = ["-c", "--config", "--add-dir", "-m", "--model"]
+passthrough = ["-c", "--config", "--add-dir", "-m", "--model", "--effort", "--permission-mode"]
 
 [harness.codex.permission_response.allow_once]
 supported = true
@@ -684,6 +684,15 @@ tokens = ["agy"]
 kind = "session_flag"
 tokens = ["agy", "--conversation", "{session_id}"]
 
+# Attach is UNSUPPORTED, measured 2026-11-06 on agy 1.3.3: a second
+# `agy --conversation <id>` restores the transcript at open, prints agy's own
+# "Conversation already open ... Sending messages from both may cause
+# conflicts. Use /fork to continue here separately." warning, and NEVER shows
+# a turn the first process takes afterwards (48s, two captures) - a snapshot
+# rival, not a join. agy names no join protocol (remote-control's --help names
+# only a registration daemon), so fno must hold the pty. The typed-input log
+# (`history.jsonl`) still gives keeper mail a real receipt; see the agy arm in
+# mail_inject's resolve_confirm.
 [harness.agy.resume_strategy.forms.interactive_attach]
 kind = "unsupported"
 tokens = []
@@ -2121,9 +2130,11 @@ reason = "no fno hook registration for muse (no plugin hook file and no capabili
 state = "supported"
 via = ["hooks/session-state.sh", "hooks/hooks.json", "crates/fno-agents/src/hook/session_state.rs"]
 
+# A parked prompt stays observable when its notification is missed.
 [harness.claude.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done", PostModelSwitch = "model" }
 blocked = "Notification"
+screen_backstop = true
 
 [harness.codex.hooks.session_state]
 state = "supported"
@@ -2169,10 +2180,11 @@ blocked = "none"
 state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/hook/adapter/opencode.rs", "crates/fno-agents/src/hook/session_state.rs"]
 
-# A permission prompt rides as a Notification, so the row reads blocked.
+# Permission notifications are primary; the screen backs up a missed event.
 [harness.opencode.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "Notification"
+screen_backstop = true
 
 [harness.pi.hooks.session_state]
 state = "supported"

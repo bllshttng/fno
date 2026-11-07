@@ -1,13 +1,16 @@
 //! Bring the fleet back after a reboot.
 //!
 //! On the first daemon start of a boot, every registry worker that was live
-//! at the boot comes back without a tap: `claude agents --json --all` lists
-//! its job as stopped or failed, so `claude respawn <job id>` restarts it.
-//! A worker whose node is done or superseded stays stopped. Leads go
-//! first. A revival re-seats a row that already held a seat, so it never
-//! asks the spawn gate. One receipt row per worker lands in
-//! `<agents home>/boot-revival.json`, and that file's boot stamp is what
-//! makes the pass run once per boot.
+//! at the boot comes back without a retire-arm tap: `claude agents --json
+//! --all` lists its job as stopped or failed, so `claude respawn <job id>`
+//! restarts it. A worker whose node is done or superseded stays stopped.
+//! Leads go first. A revival re-seats a row that already held a seat, so it
+//! never asks the spawn gate. One receipt row per worker lands in
+//! `<agents home>/boot-revival.json`; that file's boot stamp makes the pass
+//! run once per boot, and its `done` marker tells the daemon's retire arm
+//! whether the pass has finished - the arm holds its vacates and row reaps
+//! until it has, so a power loss cannot end a lead before the revival that
+//! would have re-seated it.
 //!
 //! The receipt is not the whole delivery: after the pass, a failed row
 //! reaches its spawned_by lead as durable mail (reason, re-spawn line,
@@ -16,6 +19,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,6 +29,61 @@ use crate::paths::AgentsHome;
 use crate::state::RegistryEntry;
 
 const RECEIPT_FILE: &str = "boot-revival.json";
+
+/// The batch's in-process in-flight guard: a second `start` while the batch
+/// thread is alive returns instead of re-planning under it (the listing
+/// would still read the pre-respawn world and double-respawn).
+static BATCH_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// The hold's bound in seconds past boot: revival protection is not a veto.
+/// A listing that never reads (a broken harness CLI) must not hold the
+/// retire arm forever, so 30 minutes past boot the sweeps resume and the
+/// failure stays in the events.
+const REVIVAL_HOLD_CEILING_SECS: u64 = 30 * 60;
+
+/// Why the retire arm holds its vacates and row reaps: `Some` while this
+/// boot's revival pass has not finished and the boot is recent enough for
+/// the hold to bind, `None` when the pass is done, or when the host cannot
+/// even name its boot (a gate nobody can evaluate is no gate).
+pub(crate) fn hold_reason(home: &AgentsHome) -> Option<String> {
+    let Some(boot) = boot_time() else {
+        return None;
+    };
+    if boot_age_past_ceiling(boot) {
+        return None;
+    }
+    let receipt = home.root().join(RECEIPT_FILE);
+    let parsed = std::fs::read_to_string(&receipt)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    match parsed {
+        None => Some("no receipt for this boot yet".to_string()),
+        Some(v) => {
+            let matches_boot = ran_this_boot(v.get("boot").and_then(Value::as_u64), boot);
+            let done = v.get("done").and_then(Value::as_bool).unwrap_or(false);
+            match (matches_boot, done) {
+                (true, true) => None,
+                (true, false) => Some("this boot's revival pass has not finished".to_string()),
+                (false, _) => Some("the receipt is from an earlier boot".to_string()),
+            }
+        }
+    }
+}
+
+/// Seconds since the boot exceeded the hold ceiling: wall-clock bound.
+fn boot_age_past_ceiling(boot_epoch_s: u64) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(u64::MAX);
+    boot_age_past_ceiling_at(boot_epoch_s, now)
+}
+
+/// The pure ceiling read, now injected so the test pins a young and an old
+/// boot without depending on the runner's own uptime.
+fn boot_age_past_ceiling_at(boot_epoch_s: u64, now_s: u64) -> bool {
+    now_s.saturating_sub(boot_epoch_s) > REVIVAL_HOLD_CEILING_SECS
+}
 
 /// The sender stamp the pass's mail carries, so a drain attributes the rows
 /// to the boot pass the way `lead_mail::SETTLE_SENDER` does for the settle
@@ -58,16 +117,19 @@ impl ReceiptRow {
 /// batch runs this many at a time behind one upfront birth.
 pub(crate) const REVIVE_CONCURRENCY: usize = 3;
 
-/// Plan the pass once, then revive off the caller's thread. Planning reads
-/// the registry before the startup sweep rewrites a single status, so a row
-/// still reads the way it did when the machine went down. A second daemon
-/// start in the same boot finds the receipt and does nothing.
+/// Plan the pass, stamp the receipt, and revive off the caller's thread.
+/// Planning reads the registry before the startup sweep rewrites a single
+/// status, so a row still reads the way it did when the machine went down.
+/// A receipt from this boot that reads unfinished (a daemon that died
+/// mid-batch) re-runs the batch: the listing re-reads live truth, so a row
+/// the earlier pass already revived lists working and is skipped, making a
+/// re-run complete the pass instead of double-respawning it.
 pub(crate) fn start(home: &AgentsHome) {
     let Some(boot) = boot_time() else {
         return;
     };
     let receipt = home.root().join(RECEIPT_FILE);
-    if ran_this_boot(recorded_boot(&receipt), boot) {
+    if receipt_done_for_boot(&receipt, boot) {
         return;
     }
     let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
@@ -75,20 +137,24 @@ pub(crate) fn start(home: &AgentsHome) {
     };
     let listing = crate::claude_roster::read_all_agents_union();
     // An unread listing reads every job as unlisted. Stamping the boot then
-    // would skip the whole fleet for good, so the next daemon start retries.
+    // would skip the whole fleet for good, so the retire arm's interval kick
+    // retries, and the hold binds until its ceiling.
     if !listing.is_known() || !listing.warning_text().is_empty() {
         eprintln!(
-            "boot revival: claude agents --json --all unread ({}); retrying on the next daemon start",
+            "boot revival: claude agents --json --all unread ({}); the retire arm's interval kick retries",
             listing.warning_text()
         );
         return;
     }
+    if BATCH_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let (closed, merged) = closed_and_merged_nodes();
     let (leads, workers, mut rows) = plan(&registry.entries, &listing, &closed, &merged, boot);
-    // Stamp the boot first: a daemon that dies mid-pass must not respawn the
-    // fleet again on its next start. The tap is the fallback for a row the
-    // pass never reached.
-    write_receipt(&receipt, boot, &rows);
+    // Stamp before the batch. The in-process guard holds the same-daemon
+    // case; a re-run after death is safe because the listing re-reads live
+    // truth, and the tap is the fallback for a row the pass never reached.
+    write_receipt(&receipt, boot, &rows, false);
     let pass_home = home.clone();
     std::thread::spawn(move || {
         rows.extend(revive_batch(
@@ -107,9 +173,230 @@ pub(crate) fn start(home: &AgentsHome) {
                 )
             },
         ));
-        write_receipt(&receipt, boot, &rows);
-        notify(&pass_home, &rows);
+        let passed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Re-seat before the gate opens: the first post-revival sweep
+            // must read the world after the role re-seat, not before it.
+            reseat_vacated_roles(&pass_home, &revived_names(&rows));
+            write_receipt(&receipt, boot, &rows, true);
+            notify(&pass_home, &rows);
+        }));
+        // The guard releases on every path: a panicked batch leaves the
+        // receipt unfinished on purpose, so a later kick re-runs it.
+        BATCH_RUNNING.store(false, Ordering::SeqCst);
+        if passed.is_err() {
+            eprintln!("boot revival: the batch panicked; the receipt stays unfinished");
+        }
     });
+}
+
+/// The revived rows' names, the re-seat's join-key input.
+fn revived_names(rows: &[ReceiptRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|r| r.outcome == "revived")
+        .map(|r| r.name.clone())
+        .collect()
+}
+
+/// Whether the receipt names this boot AND reads finished: the one shape
+/// that lets `start` return without work and the retire arm run its sweeps.
+/// An older receipt predates the `done` field and reads unfinished.
+fn receipt_done_for_boot(receipt: &Path, boot: u64) -> bool {
+    std::fs::read_to_string(receipt)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .map(|v| {
+            ran_this_boot(v.get("boot").and_then(Value::as_u64), boot)
+                && v.get("done").and_then(Value::as_bool).unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+/// Re-seat the roles of revived holders: for each revived row whose session
+/// a `.md.vacated` lead manifest names, restore the manifest and re-stamp
+/// the row, refusing over a live rival or a manifest a successor armed
+/// meanwhile. A reboot vacate keeps the manifest aside precisely so this can
+/// run; without it a revived lead would come back roleless. Best effort: a
+/// refusal prints and the revive outcome stands.
+fn reseat_vacated_roles(home: &AgentsHome, revived: &[String]) {
+    if revived.is_empty() {
+        return;
+    }
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return;
+    };
+    for name in revived {
+        if let Err(reason) = reseat_one_name(home, &registry.entries, name, "daemon") {
+            eprintln!("boot revival: {reason}");
+        }
+    }
+}
+
+/// The manual resume's share of the re-seat: a revival by session id must
+/// come back holding the seat its vacate set aside, not wait for the next
+/// boot or a fresh grant. Best effort like the boot pass: a refusal prints
+/// on the resume's stderr and the resume stands.
+pub(crate) fn reseat_resumed_row(home: &AgentsHome, row_name: &str) {
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return;
+    };
+    if let Err(reason) = reseat_one_name(home, &registry.entries, row_name, "agents") {
+        eprintln!("fno agents resume: {reason}");
+    }
+}
+
+/// One row's re-seat scan: every `.md.vacated` lead manifest in the row's
+/// space whose `harness_session_id` names the row's session gets restored
+/// onto the row, with one `agent_team_reseated` event per restore stamped
+/// `source` (the boot pass and the resume door stay distinguishable in the
+/// journal). A row with no session, no leads dir, or no matching manifest
+/// answers `Ok` - the common no-op for a worker resume.
+fn reseat_one_name(
+    home: &AgentsHome,
+    entries: &[RegistryEntry],
+    name: &str,
+    source: &str,
+) -> Result<(), String> {
+    let Some(row) = entries.iter().find(|e| e.name == name) else {
+        return Ok(());
+    };
+    let Some(sid) = row.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let leads = crate::paths::space_dir(std::path::Path::new(&row.cwd)).join("leads");
+    let Ok(read) = std::fs::read_dir(&leads) else {
+        return Ok(());
+    };
+    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), source);
+    let mut first: Option<String> = None;
+    let mut vacated: Vec<std::path::PathBuf> = read.flatten().map(|e| e.path()).collect();
+    vacated.sort();
+    for path in vacated {
+        let is_vacated = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".md.vacated"));
+        if !is_vacated {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if crate::claude_adopt::manifest_field(&content, "harness_session_id").as_deref()
+            != Some(sid)
+        {
+            continue;
+        }
+        let Some(scope) = crate::claude_adopt::manifest_field(&content, "role_scope")
+            .filter(|s| !s.trim().is_empty())
+        else {
+            continue;
+        };
+        let Some(level) = crate::claude_adopt::manifest_field(&content, "role_level")
+            .and_then(|l| l.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let grantor = crate::claude_adopt::manifest_field(&content, "role_grantor")
+            .filter(|g| !g.trim().is_empty())
+            .unwrap_or_else(|| "spawn".to_string());
+        match reseat_one(
+            &home.registry_json(),
+            &row.name,
+            &scope,
+            level,
+            &grantor,
+            &path,
+        ) {
+            Ok(()) => {
+                let _ = emitter.emit(
+                    "agent_team_reseated",
+                    &serde_json::json!({
+                        "scope": scope, "level": level, "holder_session": sid,
+                        "grantor": grantor, "row": row.name,
+                    }),
+                );
+            }
+            Err(reason) => {
+                // One refused manifest never stops the scan: the boot loop
+                // printed and kept going, so the first refusal is held and
+                // the remaining manifests still get their pass.
+                if first.is_none() {
+                    first = Some(format!(
+                        "re-seat for {} over {scope} refused ({reason})",
+                        row.name
+                    ));
+                }
+            }
+        }
+    }
+    match first {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
+/// One re-seat: re-stamp the row under the live-rival check (registry
+/// first, the vacate's own order), then restore the manifest under the
+/// destination's flock. A destination that already exists refuses - a
+/// successor armed while this holder was down keeps the seat - and the
+/// vacated file stays standing for a later pass.
+fn reseat_one(
+    registry_path: &Path,
+    row_name: &str,
+    scope: &str,
+    level: u32,
+    grantor: &str,
+    vacated_path: &Path,
+) -> Result<(), String> {
+    let key = crate::lead_state::territory_key(scope);
+    let refused = crate::state::update_registry(registry_path, |doc| {
+        let rival = doc.entries.iter().any(|r| {
+            r.name != row_name
+                && !crate::lead_state::is_terminal(r)
+                && r.role_scope
+                    .as_deref()
+                    .is_some_and(|s| crate::lead_state::territory_key(s) == key)
+        });
+        if rival {
+            return None;
+        }
+        let row = doc.entries.iter_mut().find(|r| r.name == row_name)?;
+        row.role_scope = Some(scope.to_string());
+        row.role_level = Some(level);
+        row.role_grantor = Some(grantor.to_string());
+        Some(())
+    })
+    .map_err(|e| format!("registry write refused: {e}"))?;
+    if refused.is_none() {
+        return Err(format!(
+            "a live rival holds {scope:?}; the territory stays theirs"
+        ));
+    }
+    let Some(file_name) = vacated_path.file_name().and_then(|n| n.to_str()) else {
+        return Err(format!(
+            "cannot restore {}: no file name",
+            vacated_path.display()
+        ));
+    };
+    let live_path = vacated_path.with_file_name(file_name.trim_end_matches(".vacated"));
+    let lock_path = live_path.with_extension("md.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {parent:?}: {e}"))?;
+    }
+    let lock = crate::chokepoint::take(&crate::chokepoint::TEAM_REAP, &lock_path)
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        if live_path.exists() {
+            return Err(format!(
+                "{} exists; a successor armed while this holder was down",
+                live_path.display()
+            ));
+        }
+        std::fs::rename(vacated_path, &live_path)
+            .map_err(|e| format!("cannot restore {}: {e}", live_path.display()))
+    })();
+    drop(lock);
+    result
 }
 
 /// The config-dir overlay a plan's guard addresses, the dedupe key for the
@@ -603,16 +890,8 @@ fn ran_this_boot(recorded: Option<u64>, boot: u64) -> bool {
     recorded.is_some_and(|at| at.abs_diff(boot) <= BOOT_DRIFT_S)
 }
 
-fn recorded_boot(receipt: &Path) -> Option<u64> {
-    let raw = std::fs::read_to_string(receipt).ok()?;
-    serde_json::from_str::<Value>(&raw)
-        .ok()?
-        .get("boot")
-        .and_then(Value::as_u64)
-}
-
-fn write_receipt(receipt: &Path, boot: u64, rows: &[ReceiptRow]) {
-    let body = serde_json::json!({ "boot": boot, "rows": rows });
+pub(crate) fn write_receipt(receipt: &Path, boot: u64, rows: &[ReceiptRow], done: bool) {
+    let body = serde_json::json!({ "boot": boot, "rows": rows, "done": done });
     let tmp = receipt.with_extension("json.tmp");
     if std::fs::write(&tmp, body.to_string()).is_ok() {
         let _ = std::fs::rename(&tmp, receipt);
@@ -760,7 +1039,7 @@ pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
     );
     let (merged_rows, any_failed) =
         merge_rerun_rows(old_rows, &rerun, run_rows.clone(), fresh_skips);
-    write_receipt(&receipt, boot, &merged_rows);
+    write_receipt(&receipt, boot, &merged_rows, true);
     for row in merged_rows.iter().filter(|r| rerun.contains(&r.name)) {
         println!("{}: {} ({})", row.name, row.outcome, row.reason);
     }
@@ -773,7 +1052,7 @@ pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
 }
 
 /// This boot's start, in epoch seconds.
-fn boot_time() -> Option<u64> {
+pub(crate) fn boot_time() -> Option<u64> {
     if cfg!(target_os = "linux") {
         let stat = std::fs::read_to_string("/proc/stat").ok()?;
         return stat
@@ -802,8 +1081,6 @@ mod tests {
     use super::*;
     use crate::claude_roster::ClaudeAgentRow;
     use crate::AgentStatus;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
 
     const BOOT: u64 = 1_790_338_000;
 
@@ -987,144 +1264,206 @@ mod tests {
     }
 
     #[test]
-    fn the_receipt_stamp_makes_the_pass_run_once_per_boot() {
+    fn the_receipts_done_marker_decides_the_pass_and_the_gate() {
         let dir = tempfile::tempdir().unwrap();
         let receipt = dir.path().join(RECEIPT_FILE);
-        assert!(!ran_this_boot(recorded_boot(&receipt), BOOT));
-        write_receipt(&receipt, BOOT, &[]);
-        assert!(ran_this_boot(recorded_boot(&receipt), BOOT));
+        assert!(!receipt_done_for_boot(&receipt, BOOT));
+        write_receipt(&receipt, BOOT, &[], false);
+        assert!(
+            !receipt_done_for_boot(&receipt, BOOT),
+            "stamped but unfinished holds"
+        );
+        write_receipt(&receipt, BOOT, &[], true);
+        assert!(receipt_done_for_boot(&receipt, BOOT));
         // A clock step nudges kern.boottime; it is still the same boot.
-        assert!(ran_this_boot(recorded_boot(&receipt), BOOT + 3));
-        assert!(!ran_this_boot(recorded_boot(&receipt), BOOT + 86_400));
+        write_receipt(&receipt, BOOT + 3, &[], true);
+        assert!(receipt_done_for_boot(&receipt, BOOT + 3));
+        assert!(!receipt_done_for_boot(&receipt, BOOT + 86_400));
     }
-
-    fn plan_fixture(name: &str, config_dir: Option<&str>) -> crate::reentry::ReentryPlan {
-        crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "respawn".into(),
-            name: name.into(),
-            fno_id: None,
-            node: None,
-            session_id: "123e4567-0000-0000-0000-000000000000".into(),
-            short_id: "123e4567".into(),
-            launch_account: "default".into(),
-            claude_config_dir: config_dir.map(str::to_string),
-            route_settings_path: None,
-            cwd: "/tmp/wt".into(),
-            substrate: "thread".into(),
-            mux: None,
-            argv: vec!["claude".into(), "--resume".into(), "123e4567".into()],
-            env: Default::default(),
+    /// The retire arm's hold table: no receipt holds, an earlier boot's
+    /// receipt holds, this boot unfinished holds, this boot finished runs,
+    /// and a receipt beyond the hold ceiling does not bind.
+    #[test]
+    fn the_retire_arm_holds_until_this_boots_pass_finishes_then_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        std::fs::create_dir_all(home.root()).unwrap();
+        let receipt = dir.path().join(RECEIPT_FILE);
+        assert!(hold_reason(&home).is_some(), "no receipt must hold");
+        let boot = boot_time().unwrap();
+        write_receipt(&receipt, boot - 86_400, &[], true);
+        assert!(
+            hold_reason(&home).is_some(),
+            "an earlier boot's receipt must hold"
+        );
+        write_receipt(&receipt, boot, &[], false);
+        assert!(hold_reason(&home).is_some(), "unfinished must hold");
+        write_receipt(&receipt, boot, &[], true);
+        assert!(hold_reason(&home).is_none(), "finished must run");
+        // The ceiling is a pure bound on the boot's age, tested with now
+        // injected: a receipt older than the window reads as an earlier
+        // boot, so the wall-clock ceiling is what ends the hold.
+        let young = boot_age_past_ceiling_at(boot, boot + 60);
+        assert!(!young, "a fresh boot is inside the ceiling");
+        let old = boot_age_past_ceiling_at(boot - 1, boot + REVIVAL_HOLD_CEILING_SECS);
+        assert!(old, "past the ceiling the hold does not bind");
+    }
+    /// The re-seat: a revived holder gets its vacated manifest restored and
+    /// its row re-stamped; a live rival on the territory refuses the stamp
+    /// and the manifest stays set aside.
+    #[test]
+    fn a_reseat_restores_the_vacated_manifest_and_restamps_the_row() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_SPACES_DIR");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        let leads = crate::paths::space_dir(&cwd).join("leads");
+        std::fs::create_dir_all(&leads).unwrap();
+        let sid = "11111111-2222-4333-8444-555555555555";
+        let manifest = "---\nscope: zed\nharness: claude\n".to_string()
+            + "harness_session_id: "
+            + sid
+            + "\ncreated_at: 2026-11-05T00:00:00Z\nrole_scope: zed\nrole_level: 2\n"
+            + "role_grantor: operator\n---\n";
+        std::fs::write(leads.join("zed.md.vacated"), manifest.clone()).unwrap();
+        let agents = dir.path().join("agents");
+        let home = AgentsHome::at(&agents);
+        std::fs::create_dir_all(home.root()).unwrap();
+        let registry = home.registry_json();
+        crate::registry_store::seed_raw(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [{
+                    "name": "l2",
+                    "cwd": cwd,
+                    "status": "exited",
+                    "harness": "claude",
+                    "harness_session_id": sid,
+                }],
+            })
+            .to_string(),
+        );
+        reseat_vacated_roles(&home, &["l2".to_string()]);
+        let live = leads.join("zed.md");
+        assert!(live.exists(), "the manifest is restored");
+        assert!(!leads.join("zed.md.vacated").exists());
+        let row = crate::state::load_registry(&registry).unwrap().entries[0].clone();
+        assert_eq!(row.role_scope.as_deref(), Some("zed"));
+        assert_eq!(row.role_level, Some(2));
+        assert_eq!(row.role_grantor.as_deref(), Some("operator"));
+        // A live rival on the territory refuses the stamp: the manifest
+        // stays set aside and the row keeps no role.
+        // The re-vacate renames the restored manifest aside; the fixture
+        // replays that before the rival leg.
+        std::fs::remove_file(&live).unwrap();
+        std::fs::write(leads.join("zed.md.vacated"), manifest).unwrap();
+        crate::registry_store::seed_raw(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [
+                    {"name": "l2", "cwd": cwd, "status": "exited",
+                     "harness": "claude", "harness_session_id": sid},
+                    {"name": "rival", "cwd": cwd, "status": "live",
+                     "harness": "claude",
+                     "harness_session_id": "22222222-3333-4444-8555-666666666666",
+                     "role_scope": "zed", "role_level": 2},
+                ],
+            })
+            .to_string(),
+        );
+        reseat_vacated_roles(&home, &["l2".to_string()]);
+        assert!(!live.exists(), "a rival keeps the manifest set aside");
+        let rows = crate::state::load_registry(&registry).unwrap().entries;
+        let l2 = rows.iter().find(|r| r.name == "l2").unwrap();
+        assert!(l2.role_scope.is_none(), "{:?}", l2.role_scope);
+        std::fs::remove_dir_all(dir.path()).ok();
+        match saved {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
         }
     }
 
+    /// A revival by session id re-seats the role its vacate set aside, the
+    /// same treatment the boot pass gives a revived holder: the resumed
+    /// lead's own check-in must find its team live, not wait for a reboot
+    /// or a fresh grant.
     #[test]
-    fn the_worker_batch_runs_three_at_a_time_behind_one_birth_per_env() {
+    fn a_resume_revived_lead_reseats_its_role_and_the_checkin_passes() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_SPACES_DIR");
         let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let workers: Vec<String> = (0..7).map(|i| format!("w{i}")).collect();
-        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let inflight = Arc::new(AtomicUsize::new(0));
-        let max_inflight = Arc::new(AtomicUsize::new(0));
-        let g_log = log.clone();
-        let r_log = log.clone();
-        let i_inflight = inflight.clone();
-        let m_inflight = max_inflight.clone();
-        let rows = revive_batch(
-            &home,
-            &[],
-            &workers,
-            move |_plan| {
-                g_log.lock().unwrap().push("guard".into());
-            },
-            move |_home, name| {
-                let n = i_inflight.fetch_add(1, Ordering::SeqCst) + 1;
-                m_inflight.fetch_max(n, Ordering::SeqCst);
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                r_log.lock().unwrap().push(format!("revive:{name}"));
-                i_inflight.fetch_sub(1, Ordering::SeqCst);
-                ReceiptRow::new(name, "revived", "")
-            },
-            |_home, name| Ok(plan_fixture(name, Some("/cfg"))),
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        let space = crate::paths::space_dir(&cwd);
+        let leads = space.join("leads");
+        std::fs::create_dir_all(&leads).unwrap();
+        let sid = "33333333-4444-4555-8666-777777777777";
+        let manifest = "---\nscope: fno-web\nharness: claude\n".to_string()
+            + "harness_session_id: "
+            + sid
+            + "\ncreated_at: 2026-11-06T00:00:00Z\nrole_scope: fno-web\nrole_level: 1\n"
+            + "role_grantor: operator\n---\n";
+        // The vacate's own product: the manifest set aside, the row's team
+        // fields cleared. The resume leaves the row liveish but roleless.
+        std::fs::write(leads.join("rosa.md.vacated"), manifest).unwrap();
+        let agents = dir.path().join("agents");
+        let home = AgentsHome::at(&agents);
+        std::fs::create_dir_all(home.root()).unwrap();
+        let registry = home.registry_json();
+        crate::registry_store::seed_raw(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [{
+                    "name": "rosa",
+                    "cwd": cwd,
+                    "status": "busy",
+                    "harness": "claude",
+                    "harness_session_id": sid,
+                }],
+            })
+            .to_string(),
         );
-        assert_eq!(rows.len(), 7);
-        assert!(rows.iter().all(|r| r.outcome == "revived"), "{rows:?}");
-        let peak = max_inflight.load(Ordering::SeqCst);
-        assert!(peak <= 3, "the bound is three: {peak}");
-        assert!(peak >= 2, "the batch runs concurrently: {peak}");
-        let lg = log.lock().unwrap();
-        assert_eq!(lg.iter().filter(|e| *e == "guard").count(), 1, "{lg:?}");
-        assert_eq!(lg[0], "guard", "the birth precedes every revive: {lg:?}");
-    }
-
-    #[test]
-    fn a_failed_row_is_retried_once_and_the_retry_replaces_the_row() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let workers = vec!["flaky".to_string(), "down".to_string()];
-        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let c1 = calls.clone();
-        let c2 = calls.clone();
-        let rows = revive_batch(
-            &home,
-            &[],
-            &workers,
-            |_plan| {},
-            move |_home, name| {
-                c1.lock().unwrap().push(name.to_string());
-                if name == "flaky" {
-                    let count = {
-                        let log = c2.lock().unwrap();
-                        log.iter().filter(|n| n.as_str() == "flaky").count()
-                    };
-                    if count == 1 {
-                        return ReceiptRow::new(name, "failed", "exited 16");
-                    }
-                }
-                ReceiptRow::new(name, "revived", "")
-            },
-            |_home, name| Ok(plan_fixture(name, None)),
-        );
-        let flaky: Vec<&ReceiptRow> = rows.iter().filter(|r| r.name == "flaky").collect();
+        let state = || {
+            crate::lead_state::lead_state(space.as_path(), Some("fno-web"), None, None, &registry)
+        };
         assert_eq!(
-            flaky.len(),
-            1,
-            "one row per worker, not one per attempt: {rows:?}"
+            state().teamed,
+            Some(false),
+            "the vacated lead reads unteamed before the re-seat"
         );
-        assert_eq!(flaky[0].outcome, "revived", "{rows:?}");
-        let log = calls.lock().unwrap();
-        assert_eq!(log.iter().filter(|n| n.as_str() == "flaky").count(), 2);
-        assert_eq!(log.iter().filter(|n| n.as_str() == "down").count(), 1);
-    }
 
-    #[test]
-    fn rerun_merge_keeps_rows_outside_the_set_and_reports_surviving_failures() {
-        let old = vec![
-            ReceiptRow::new("a", "revived", "kept"),
-            ReceiptRow::new("b", "failed", "exited 16"),
-            ReceiptRow::new("c", "failed", "exited 16"),
-            ReceiptRow::new("d", "skipped", "listed as working"),
-        ];
-        let rerun: HashSet<String> = ["b", "c", "d"].iter().map(|s| s.to_string()).collect();
-        let (merged, any_failed) = merge_rerun_rows(
-            old,
-            &rerun,
-            vec![ReceiptRow::new("b", "revived", "claude respawn 1111")],
-            vec![ReceiptRow::new("d", "skipped", "node x done")],
-        );
-        let find = |name: &str| merged.iter().find(|r| r.name == name).unwrap();
-        assert_eq!(find("a").outcome, "revived", "{merged:?}");
-        assert_eq!(find("a").reason, "kept");
-        assert_eq!(find("b").outcome, "revived", "{merged:?}");
-        assert_eq!(
-            find("c").outcome,
-            "failed",
-            "no fresh reading keeps the failure"
-        );
-        assert_eq!(find("d").outcome, "skipped");
-        assert_eq!(find("d").reason, "node x done");
-        assert!(any_failed, "c keeps its failure");
+        crate::boot_revival::reseat_resumed_row(&home, "rosa");
+
+        let live = leads.join("rosa.md");
+        assert!(live.exists(), "the manifest is restored");
+        assert!(!leads.join("rosa.md.vacated").exists());
+        let row = crate::state::load_registry(&registry).unwrap().entries[0].clone();
+        assert_eq!(row.role_scope.as_deref(), Some("fno-web"));
+        assert_eq!(row.role_level, Some(1));
+        assert_eq!(row.role_grantor.as_deref(), Some("operator"));
+        // The check-in passes: the team reads live, held by this session.
+        let state = state();
+        assert_eq!(state.teamed, Some(true), "{:?}", state.unknown_reason);
+        assert_eq!(state.live, Some(true));
+        let team = crate::team_names::live_index(&registry)
+            .unwrap()
+            .remove("fno-web");
+        assert_eq!(team.map(|t| t.holder_session), Some(Some(sid.to_string())));
+        std::fs::remove_dir_all(dir.path()).ok();
+        match saved {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
     }
 
     #[test]
@@ -1136,45 +1475,6 @@ mod tests {
             &home,
         );
         assert_eq!(code, 2);
-    }
-
-    #[test]
-    fn a_resolution_failure_is_attempted_once_not_twice() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let workers = vec!["bad".to_string(), "good".to_string()];
-        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let c1 = calls.clone();
-        let rows = revive_batch(
-            &home,
-            &[],
-            &workers,
-            |_plan| {},
-            move |_home, name| {
-                c1.lock().unwrap().push(name.to_string());
-                ReceiptRow::new(name, "revived", "")
-            },
-            |_home, name| {
-                if name == "bad" {
-                    Err("no route on the row".to_string())
-                } else {
-                    Ok(plan_fixture(name, None))
-                }
-            },
-        );
-        let bad: Vec<&ReceiptRow> = rows.iter().filter(|r| r.name == "bad").collect();
-        assert_eq!(
-            bad.len(),
-            1,
-            "one row for a resolve-failed worker: {rows:?}"
-        );
-        assert_eq!(bad[0].outcome, "revived", "{rows:?}");
-        let log = calls.lock().unwrap();
-        assert_eq!(
-            log.iter().filter(|n| n.as_str() == "bad").count(),
-            1,
-            "the resolve-failed worker rides the retry loop only, never the batch: {log:?}"
-        );
     }
 
     #[test]
@@ -1192,6 +1492,7 @@ mod tests {
                 "failed",
                 "claude respawn 33334444 exited 16",
             )],
+            true,
         );
         let code = rerun_failed(&home);
         assert_eq!(code, 1, "a previous boot's receipt is not this boot's news");

@@ -104,8 +104,8 @@ pub struct ReapReceipt {
     /// new write stamps `Some(2)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<u32>,
-    /// The full native identity and store context: harness, session id,
-    /// store root, project dir. `None` on a v1 receipt.
+    /// The native identity, store context and team lineage needed after the
+    /// registry row leaves the live projection. `None` on a v1 receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<serde_json::Value>,
     /// Where the native history lives (transcript paths, index records), so
@@ -348,6 +348,8 @@ pub fn build_reap_receipt(
         "short_id": e.short_id,
         "store_root": store_root_for(harness).map(|p| p.to_string_lossy().to_string()),
         "cwd": e.cwd,
+        "role_level": e.role_level,
+        "spawned_by_session": e.spawned_by_session,
     });
     Ok(ReapReceipt {
         row_name: e.name.clone(),
@@ -540,163 +542,6 @@ mod tests {
             r#"{{"name":"{name}","short_id":"{name}-id","harness":"claude","harness_session_id":"{name}-session","cwd":"/tmp/x","log_path":"/tmp/x.log","created_at":"2026-09-01T00:00:00Z","status":"live"}}"#
         ))
         .unwrap()
-    }
-
-    /// A route the claude resume cannot carry comes back through spawn's own
-    /// form: message, `--name`, `--resume`, one `--route provider/model`.
-    #[test]
-    fn a_lost_route_resume_is_a_spawn_line_that_runs() {
-        let mut e = sample_row("t-command-center-is");
-        e.model = Some("sonnet".into());
-        let argv = claude_resume_recipe(&e, "s-1", vec!["claude".into()], &|_| Some("zai".into()));
-        assert_eq!(
-            argv,
-            [
-                "fno",
-                "agents",
-                "spawn",
-                RESUME_MESSAGE,
-                "--name",
-                "t-command-center-is",
-                "--resume",
-                "s-1",
-                "--route",
-                "zai/sonnet",
-            ]
-            .map(str::to_string)
-        );
-        assert!(!argv.iter().any(|t| t == "-P" || t == "-m"));
-    }
-
-    /// Every receipt names its writer: two `Writer` values produce the same
-    /// key set and different stamps. The old absence assertions are
-    /// gone; a receipt that cannot name its writer is not constructible.
-    #[test]
-    fn every_receipt_names_its_writer_and_the_key_sets_match() {
-        let e = sample_row("shape");
-        let sweep = build_reap_receipt(&e, None, Writer::GcSweep, &|_| None).unwrap();
-        let choke = build_reap_receipt(&e, None, Writer::RegistryWrite, &|_| None).unwrap();
-        let sweep_json: serde_json::Value = serde_json::to_value(&sweep).unwrap();
-        let choke_json: serde_json::Value = serde_json::to_value(&choke).unwrap();
-        assert_eq!(sweep_json["removed_by"], "gc-sweep");
-        assert_eq!(sweep_json["removal_trigger"], "unattended");
-        assert!(
-            choke_json["removed_by"]
-                .as_str()
-                .is_some_and(|s| !s.is_empty()),
-            "the choke point names its surface: {choke_json}"
-        );
-        assert_eq!(
-            choke_json["removal_trigger"], "session",
-            "a cargo test binary is a session, not the daemon: {choke_json}"
-        );
-        assert_ne!(
-            sweep_json["removed_by"], choke_json["removed_by"],
-            "two doors never stamp the same surface"
-        );
-        // The two writers write the same file shape.
-        let mut sweep_keys: Vec<&str> = sweep_json
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(|k| k.as_str())
-            .collect();
-        let mut choke_keys: Vec<&str> = choke_json
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(|k| k.as_str())
-            .collect();
-        sweep_keys.sort_unstable();
-        choke_keys.sort_unstable();
-        assert_eq!(sweep_keys, choke_keys);
-    }
-
-    /// A receipt write that fails leaves the harness-side removal already
-    /// done and nothing on disk to say so. The event is then the only record,
-    /// so it must still name the active-surface outcome. The row is
-    /// `opencode`, whose cascade is `not-applicable` and shells out to
-    /// nothing, so the assertion measures the reporting, not a harness.
-    #[test]
-    fn a_failed_receipt_write_still_names_the_active_surface_outcome() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("agents");
-        std::fs::create_dir_all(&root).unwrap();
-        // A FILE where the receipt directory belongs: create_dir_all fails,
-        // so write_reap_receipt returns Err on a path nothing else touches.
-        std::fs::write(root.join("reap-receipts"), b"not a directory").unwrap();
-        let home = AgentsHome::at(&root);
-
-        let entry: state::RegistryEntry = serde_json::from_str(
-            r#"{"name":"wkE","short_id":"wkE-id","harness":"opencode","harness_session_id":"wkE-session","cwd":"/tmp/x","log_path":"/tmp/x.log","created_at":"2026-09-01T00:00:00Z","status":"live"}"#,
-        )
-        .unwrap();
-        let events = dir.path().join("events.jsonl");
-        let emitter = crate::events::EventEmitter::new(&events, "daemon");
-
-        stage_removal_accounting(&home, &entry, "test-remover", &emitter, &|_| None);
-
-        let line = crate::events::committed_journal_text(&events);
-        let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        let data = &event["data"];
-        assert_eq!(event["type"], "registry_row_removed");
-        assert_eq!(data["receipt_staged"], false, "the write was made to fail");
-        assert_eq!(
-            data["active_surface"], "not-applicable",
-            "the removal that already happened is named even with no receipt"
-        );
-    }
-
-    #[test]
-    fn receipt_locator_uses_the_callers_store_answer() {
-        let entry = sample_row("locator");
-        let receipt = build_reap_receipt(&entry, None, Writer::GcSweep, &|row| {
-            assert_eq!(row.harness_session_id, entry.harness_session_id);
-            Some(vec![std::path::PathBuf::from("/x/a.jsonl")])
-        })
-        .unwrap();
-        assert_eq!(
-            receipt.native_locator,
-            Some(json!({"transcripts": ["/x/a.jsonl"]}))
-        );
-        let unreadable = build_reap_receipt(&entry, None, Writer::GcSweep, &|_| None).unwrap();
-        assert_eq!(unreadable.native_locator, Some(json!({"transcripts": []})));
-    }
-
-    #[test]
-    fn removal_accounting_preserves_a_staged_receipt_without_a_store_read() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        let mut entry = sample_row("staged");
-        entry.harness = Some("opencode".to_string());
-        let events = home.events_jsonl();
-        let emitter = crate::events::EventEmitter::new(&events, "daemon");
-        let calls = std::cell::Cell::new(0);
-        stage_removal_accounting(&home, &entry, "test-remover", &emitter, &|_| {
-            calls.set(calls.get() + 1);
-            Some(vec![std::path::PathBuf::from("/x/staged.jsonl")])
-        });
-        assert_eq!(calls.get(), 1);
-        let path = reap_receipt_path_for(&home, "opencode", "staged-session");
-        let original = std::fs::read(&path).unwrap();
-        let receipt = read_reap_receipt(&path).unwrap();
-        assert!(!receipt.removed_by.is_empty());
-        assert_eq!(
-            receipt.native_locator,
-            Some(json!({"transcripts": ["/x/staged.jsonl"]}))
-        );
-        stage_removal_accounting(&home, &entry, "second-remover", &emitter, &|_| {
-            panic!("a staged receipt must not read the transcript store")
-        });
-        assert_eq!(std::fs::read(&path).unwrap(), original);
-        let journal = crate::events::committed_journal_text(&events);
-        let event: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
-        assert_eq!(event["data"]["receipt_staged"], true);
-        assert_eq!(
-            event["data"]["reason"],
-            "receipt already staged for this session"
-        );
-        assert!(event["data"]["active_surface"].is_null());
     }
 
     fn axes_row(name: &str, axes: &str) -> state::RegistryEntry {

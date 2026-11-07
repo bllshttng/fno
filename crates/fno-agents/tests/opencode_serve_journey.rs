@@ -66,7 +66,11 @@ fn last_assistant_text(messages: &serde_json::Value) -> Option<String> {
 struct ServeReaper(u32);
 impl Drop for ServeReaper {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.0 as i32, libc::SIGTERM) };
+        // Group TERM then group KILL, the fn-47ea driver pattern: `opencode
+        // serve` spawns children, and a pid TERM leaves them running.
+        unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGTERM) };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGKILL) };
     }
 }
 

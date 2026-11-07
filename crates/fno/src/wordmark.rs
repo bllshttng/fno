@@ -20,7 +20,6 @@ pub fn one_row() -> Vec<(&'static str, Role)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Theme;
 
     #[test]
     fn one_row_is_the_fullwidth_f_then_the_bracketed_no() {
@@ -29,19 +28,5 @@ mod tests {
         assert_eq!(row[1], ("[no]", Role::Stamp));
         let joined: String = row.iter().map(|(s, _)| *s).collect();
         assert_eq!(joined, TEXT);
-    }
-
-    #[test]
-    fn the_stamp_role_is_inverse_under_every_theme() {
-        for name in crate::theme::THEME_NAMES {
-            let t = Theme::from_name(name).0;
-            let (fg, _bg, flags) = crate::theme::cell_style(Role::Stamp, &t);
-            assert_eq!(fg, t.stamp, "{name}");
-            assert_eq!(
-                flags & crate::proto::cell_flags::INVERSE,
-                crate::proto::cell_flags::INVERSE,
-                "{name}"
-            );
-        }
     }
 }

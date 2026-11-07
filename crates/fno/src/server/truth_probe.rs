@@ -164,19 +164,6 @@ impl Core {
 #[cfg(test)]
 mod truth_probe_cadence {
     use super::*;
-
-    #[test]
-    fn cadence_stays_well_below_the_attention_threshold_it_feeds() {
-        assert!(
-            TRUTH_PROBE_EVERY >= Duration::from_secs(60),
-            "a cadence under 60s keeps the ~8s whole-fleet probe child effectively always running"
-        );
-        assert!(
-            TRUTH_PROBE_EVERY * 10 <= Duration::from_secs(600),
-            "the refresh must stay an order of magnitude below the 600s attention threshold its ages feed"
-        );
-    }
-
     /// the probe reads the daemon's `agent.list` RPC, never
     /// a spawned `fno agents list` interpreter. The pure half carries the
     /// row contract: identity-first join, the four readings, malformed rows

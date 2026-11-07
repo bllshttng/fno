@@ -41,7 +41,7 @@ run_lane() {
 import json, os, subprocess, sys, tempfile
 from pathlib import Path
 
-from fno.test_env_door import apply_env
+from fno.env_door import apply_env
 from fno.hermetic import AMBIENT_LEAK_CANARY
 
 mode, test_path = sys.argv[1], sys.argv[2]

@@ -37,6 +37,32 @@ Set `SQLD_CHECKPOINT_INTERVAL_S`. This turns off the frame-count auto-checkpoint
 
 The setting needs a container recreate. It is not live until the container's environment shows it.
 
+## The abort: compaction cannot swap the wallog
+
+A second sqld defect aborts the primary at log compaction. When the wallog passes its size cap, sqld writes an empty replacement log in `to_compact/` and swaps the two names with `renameat2(RENAME_EXCHANGE)`. A filesystem that does not implement that flag answers EINVAL. sqld unwraps the error, so the process aborts. The container manager restarts it within seconds. Each restart fails every claim write in flight and resets the unchanged-container-start window. The upstream site is `libsql-server/src/replication/primary/logger.rs` line 398 at tag `libsql-server-v0.24.33`, with the flag call at lines 472 to 490. Upstream main still carries both. The upstream report is [libsql issue 1902](https://github.com/tursodatabase/libsql/issues/1902), open.
+
+The signature on r2d2:
+
+- The log shows `performing log compaction`, then a panic: `failed to perform snapshot file swap ... -> iku.db/dbs/default/wallog`.
+- Aborts were observed 2026-10-28 13:49Z, 2026-10-29 03:20Z and 2026-10-30 20:07Z, each a restart of about 1.5 seconds.
+- A soak that needs one unchanged container start cannot outlast a compaction.
+
+Btrfs gained `RENAME_EXCHANGE` in kernel 4.7, and r2d2 runs 4.4.302+ with the data directory on btrfs. Measured on the primary's data directory on 2026-11-06 with a two-file `renameat2` probe inside the container runtime. On btrfs the probe answered `-1 EINVAL`. On tmpfs the same probe answered `0`.
+
+### Check before you start sqld
+
+Run the probe against the directory you plan to bind to `/var/lib/sqld`. It prints `renameat2 -> 0` on a filesystem that can swap. Anything else rules that directory out for sqld:
+
+```bash
+docker run --rm -v /path/to/sqld-data:/d python:3.12-alpine python -c "import ctypes,os;open('/d/.x1','w');open('/d/.x2','w');l=ctypes.CDLL(None,use_errno=True);r=l.renameat2(-100,b'/d/.x1',-100,b'/d/.x2',2);print('renameat2 ->',r,os.strerror(ctypes.get_errno()));os.remove('/d/.x1');os.remove('/d/.x2')"
+```
+
+ext4 and tmpfs pass. btrfs on kernels older than 4.7 fails, and so does any other filesystem without the flag. The probe is Linux-shaped: macOS libc exposes no `renameat2`, and APFS supports atomic swap through a different call, so the probe does not run there.
+
+### Remediation on the shared primary (2026-11-06)
+
+The sqld data directory moved onto a 16 GB ext4 image, `/volume2/docker/fno-sqld.ext4.img`, loop-mounted at `/volume2/docker/fno-sqld-ext4`. The container was recreated on that mount with its previous environment, port and restart policy. Its entrypoint now waits for a `.on-ext4` marker in the data directory, so an auto-start that lands before the mount cannot reinitialize an empty store. The boot hook `/usr/local/etc/rc.d/fno-sqld-ext4-mount.sh` mounts the image and restarts the container. If the marker is missing, it stops the container instead, because a store that is clearly down beats one that silently starts empty. The old btrfs directory stays in place until the clean window below closes. Downtime was about 3 minutes.
+
 ## Diagnose before recovery
 
 Run `fno agents claim backlog probe` to measure one read and one empty write transaction. Capture its read and write times, change-log bounds, and recent average batch bytes. This is a point-in-time write-lock probe, not a measurement of every claim write.
@@ -59,3 +85,5 @@ The stamp commits with the batch. A visible stamp identifies a committed writer.
 A code regression and a short healthy probe establish different facts from sustained operation. Record the deployed fixed build and the observation start and end. Include actual claim-write timing coverage, fleet activity, container start time, and observation gaps. Record timeouts and failed measurements explicitly. Empty write-lock probes alone do not prove that every claim write met its latency bound.
 
 If the stall recurs, preserve the new evidence and continue diagnosis. Do not treat removal of the measured scan amplification as proof that another lock holder or server fault is absent.
+
+The same discipline applies to the compaction fix. The observation window for the ext4 remediation started 2026-11-06 08:13Z with the remediated container. When a 72-hour log scan shows at least one `performing log compaction` line and zero `snapshot file swap` failures, the window closes. A window with no compaction line does not close, because it proves the logs were quiet, not that the swap works.

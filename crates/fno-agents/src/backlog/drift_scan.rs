@@ -318,15 +318,18 @@ pub(crate) fn branch_matches_node(head_ref: &str, node_id: &str) -> bool {
     re.is_match(head_ref)
 }
 
-/// Group open ref-less candidates by repo: (groups, cwd_by_nid, skipped).
-/// Shared eligibility of both listing scans; the first member's cwd runs
-/// the gh call so gh still resolves the repo from that dir's origin
-/// remote. Groups carry entry indices so the callers can re-read rows.
+/// Group candidates by repo: (groups, cwd_by_nid, skipped). Shared
+/// eligibility of both listing scans; the first member's cwd runs the gh
+/// call so gh still resolves the repo from that dir's origin remote.
+/// Groups carry entry indices so the callers can re-read rows. `with_refs`
+/// admits ref-carrying nodes; `include_done` admits finished rows, which
+/// only the open-binding heal wants (a follow-up PR records there).
 fn group_refless_by_repo(
     entries: &[Value],
     scope: Option<&BTreeSet<String>>,
     memo: &mut HashMap<String, String>,
     with_refs: bool,
+    include_done: bool,
 ) -> (
     Vec<(String, Vec<usize>)>,
     HashMap<String, String>,
@@ -344,7 +347,9 @@ fn group_refless_by_repo(
                 continue;
             }
         }
-        if !node_is_open(node) || (!with_refs && !node_pr_refs_of(node).is_empty()) {
+        if (!node_is_open(node) && !include_done)
+            || (!with_refs && !node_pr_refs_of(node).is_empty())
+        {
             continue;
         }
         let raw = node.get("cwd").and_then(Value::as_str).unwrap_or("");
@@ -411,7 +416,7 @@ pub(crate) fn reverse_map_unstamped(
             }
             None => &mut fallback,
         };
-        group_refless_by_repo(entries, scope, memo, false)
+        group_refless_by_repo(entries, scope, memo, false, false)
     };
 
     if !skipped_dead_cwd.is_empty() {
@@ -996,10 +1001,133 @@ mod tests {
         assert_eq!(records[0].error_kind.as_deref(), Some("repository_context"));
         assert!(!records[0].closeable());
     }
+
+    #[test]
+    fn the_missing_verdict_heal_decision_table() {
+        let no_query = |_: i64, _: Option<&str>, _: Option<&str>, _: bool| {
+            panic!("query owed nothing: no primary-closed read was owed")
+        };
+        // A finished node records the branch-named open PR as a follow-up.
+        let done = json!({
+            "id": "x-aaaa",
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+            "merge_status": "merged",
+        });
+        let heal = heal_for_missing_verdict(&done, 1813, None, ".", &no_query, &mut Vec::new())
+            .expect("done node earns a heal");
+        assert!(heal.followup);
+        assert!(!heal.rebind);
+        assert_eq!(heal.pr_number, 1813);
+        // An open node with no refs fills its primary.
+        let refless = open_node(json!({}));
+        let heal = heal_for_missing_verdict(&refless, 5, None, ".", &no_query, &mut Vec::new())
+            .expect("refless open node earns a fill");
+        assert!(!heal.followup && !heal.rebind);
+        // An open node whose primary closed rebinds.
+        let closed_primary = open_node(json!({
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7",
+        }));
+        let closed_query = |pr: i64,
+                            _: Option<&str>,
+                            _: Option<&str>,
+                            _: bool|
+         -> Result<PrMergeState, PrReadError> {
+            Ok(PrMergeState {
+                number: pr,
+                state: "CLOSED".into(),
+                url: None,
+                merged_at: None,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                body: None,
+            })
+        };
+        let heal = heal_for_missing_verdict(
+            &closed_primary,
+            9,
+            None,
+            ".",
+            &closed_query,
+            &mut Vec::new(),
+        )
+        .expect("closed primary earns a rebind");
+        assert!(heal.rebind && !heal.followup);
+        // An open node whose primary is still open earns nothing.
+        let open_query = |pr: i64,
+                          _: Option<&str>,
+                          _: Option<&str>,
+                          _: bool|
+         -> Result<PrMergeState, PrReadError> {
+            Ok(PrMergeState {
+                number: pr,
+                state: "OPEN".into(),
+                url: None,
+                merged_at: None,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                body: None,
+            })
+        };
+        assert!(heal_for_missing_verdict(
+            &closed_primary,
+            9,
+            None,
+            ".",
+            &open_query,
+            &mut Vec::new()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_done_node_heals_its_branch_named_open_pr_as_a_followup() {
+        let done = open_node(json!({
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+            "cwd": ".",
+        }));
+        let entries = vec![
+            done,
+            open_node(json!({
+                "id": "x-bbbb",
+                "completed_at": "2026-09-12T00:00:00Z",
+                "cwd": "/nonexistent-dead-cwd",
+            })),
+        ];
+        let mut row = pr_row(1813, "shrink/x-aaaa-cli-net", "");
+        row["body"] = json!("");
+        let cache = ListingCache::new();
+        cache
+            .rows_for_with("open", ".", |_| Ok(vec![row.clone()]))
+            .expect("seed open");
+        let (heals, advisories) =
+            collect_open_binding_heals(&entries, None, Some(&cache), |_, _, _, _| {
+                panic!("query owed nothing: no primary-closed read was owed")
+            });
+        // The dead-cwd candidate is skipped, and the skip is loud.
+        assert!(
+            advisories
+                .iter()
+                .any(|a| a.contains("x-bbbb") && a.contains("cwd")),
+            "{advisories:?}"
+        );
+        assert_eq!(heals.len(), 1, "{heals:?}");
+        assert_eq!(heals[0].node_id, "x-aaaa");
+        assert_eq!(heals[0].pr_number, 1813);
+        assert!(heals[0].followup);
+        assert!(!heals[0].rebind);
+    }
 }
 
-/// One open-PR binding heal: a missing verdict whose node is open with no
-/// PR refs - the exact repair a human did by hand with `update pr_number=<n>`.
+/// One open-PR binding heal: a missing verdict on a node the PR resolves to.
+/// The exact repair a human did by hand with `update pr_number=<n>`, plus
+/// the follow-up record for a finished node whose branch names one open PR.
 #[derive(Debug, Clone)]
 pub(crate) struct OpenBindingHeal {
     pub node_id: String,
@@ -1008,6 +1136,9 @@ pub(crate) struct OpenBindingHeal {
     /// true when the node already carries refs and the primary PR closed:
     /// the heal REBINDS instead of filling.
     pub rebind: bool,
+    /// true when the node is finished: the heal records the open PR in
+    /// `additional_prs` and touches nothing else on the row.
+    pub followup: bool,
 }
 
 /// Discover open PRs that uniquely name an open, ref-less node. One gh
@@ -1024,7 +1155,8 @@ pub(crate) fn collect_open_binding_heals(
     // The repo_keys RefMut must drop before the loop: rows_for re-borrows
     // it, and a borrow held across the loop panicked (exit 101) on every
     // daemon sweep once the graph held a ref-less open-bound node.
-    let (groups, cwd_by_nid, _skipped) = {
+    let mut advisories: Vec<String> = Vec::new();
+    let (groups, cwd_by_nid, skipped_dead_cwd) = {
         let mut fallback = HashMap::new();
         let mut cache_memo;
         let memo: &mut HashMap<String, String> = match listings {
@@ -1034,11 +1166,18 @@ pub(crate) fn collect_open_binding_heals(
             }
             None => &mut fallback,
         };
-        group_refless_by_repo(entries, scope, memo, true)
+        group_refless_by_repo(entries, scope, memo, true, true)
     };
+    // A candidate the scan dropped for a dead cwd still names its warning
+    // forever; say why it was skipped, with the remedy, instead of silence.
+    for nid in &skipped_dead_cwd {
+        advisories.push(format!(
+            "open-binding scan skipped {nid}: its recorded cwd is missing or \
+             not a checkout (heal with: fno backlog update {nid} cwd=<path>)"
+        ));
+    }
 
     let mut heals: Vec<OpenBindingHeal> = Vec::new();
-    let mut advisories: Vec<String> = Vec::new();
     let deadline = Instant::now() + REVERSE_MAP_BUDGET;
     for (_key, nodes) in &groups {
         if Instant::now() >= deadline {
@@ -1099,20 +1238,16 @@ pub(crate) fn collect_open_binding_heals(
                     }) else {
                         continue;
                     };
-                    let node = &entries[*node];
-                    let refs = node_pr_refs_of(node);
-                    if !refs.is_empty() {
-                        let closed = primary_closed(node, gh_cwd, &query, &mut advisories);
-                        if !closed {
-                            continue;
-                        }
+                    if let Some(heal) = heal_for_missing_verdict(
+                        &entries[*node],
+                        verdict.number,
+                        verdict.pr_url(),
+                        gh_cwd,
+                        &query,
+                        &mut advisories,
+                    ) {
+                        heals.push(heal);
                     }
-                    heals.push(OpenBindingHeal {
-                        node_id: heal_nid.clone(),
-                        pr_number: verdict.number,
-                        pr_url: verdict.pr_url().map(str::to_string),
-                        rebind: !refs.is_empty(),
-                    });
                 }
                 // A closed PR reopened after the closed-PR leg moved it aside.
                 "bound" => {
@@ -1132,6 +1267,7 @@ pub(crate) fn collect_open_binding_heals(
                             pr_number: verdict.number,
                             pr_url: verdict.pr_url().map(str::to_string),
                             rebind: true,
+                            followup: false,
                         });
                     }
                 }
@@ -1140,6 +1276,45 @@ pub(crate) fn collect_open_binding_heals(
         }
     }
     (heals, advisories)
+}
+
+/// The heal a `missing` verdict earns, decided purely from the node row:
+/// a finished node records the open PR as a follow-up (`additional_prs`,
+/// no other field moves); an open node with no refs fills its primary; an
+/// open node whose primary closed rebinds; an open node whose primary is
+/// still open earns nothing (its second open PR reads ambiguous upstream).
+/// `None` skips. `query` is the primary-closed read, already injected.
+fn heal_for_missing_verdict(
+    node: &Value,
+    number: i64,
+    url: Option<&str>,
+    gh_cwd: &str,
+    query: &impl Fn(i64, Option<&str>, Option<&str>, bool) -> Result<PrMergeState, PrReadError>,
+    advisories: &mut Vec<String>,
+) -> Option<OpenBindingHeal> {
+    let refs = node_pr_refs_of(node);
+    if !node_is_open(node) {
+        return Some(OpenBindingHeal {
+            node_id: node.get("id").and_then(Value::as_str)?.to_string(),
+            pr_number: number,
+            pr_url: url.map(str::to_string),
+            rebind: false,
+            followup: true,
+        });
+    }
+    if !refs.is_empty() {
+        let closed = primary_closed(node, gh_cwd, query, advisories);
+        if !closed {
+            return None;
+        }
+    }
+    Some(OpenBindingHeal {
+        node_id: node.get("id").and_then(Value::as_str)?.to_string(),
+        pr_number: number,
+        pr_url: url.map(str::to_string),
+        rebind: !refs.is_empty(),
+        followup: false,
+    })
 }
 
 /// The rebind gate: the node's primary PR must have CLOSED on GitHub

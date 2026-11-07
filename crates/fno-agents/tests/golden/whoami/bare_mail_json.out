@@ -28,7 +28,6 @@
     "status": "IN_PROGRESS"
   },
   "visitor": null,
-  "walker": null,
   "warnings": [
     "not a git repo, using cwd"
   ],

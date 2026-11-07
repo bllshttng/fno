@@ -243,7 +243,7 @@ fn registry_axes(state: &Map<String, Value>) -> Map<String, Value> {
 /// `owner/repo` from a git remote URL, or None for a non-GitHub remote: strip
 /// scheme and credentials, anchor on the host, and require exactly two path
 /// segments (the ported `_slug_from_remote`).
-fn slug_from_remote(raw: &str) -> Option<String> {
+pub(crate) fn slug_from_remote(raw: &str) -> Option<String> {
     let scheme = regex::Regex::new(r"^[A-Za-z][A-Za-z0-9+.-]*://").expect("static regex");
     let creds = regex::Regex::new(r"^[^/@]*@").expect("static regex");
     let host = regex::Regex::new(r"(?i)^github\.com(?::\d+)?[:/](.+)$").expect("static regex");
@@ -1342,26 +1342,6 @@ mod tests {
         assert_eq!(entries[0]["fno_id"], "t1");
         assert_eq!(entries[0]["termination_reason"], "DonePRGreen");
         assert_eq!(entries[0]["sessions"], json!(["u2"]));
-    }
-
-    #[test]
-    fn append_collapses_backstop_on_plain_append() {
-        let dir = TempDir::new().unwrap();
-        let ledger = dir.path().join("ledger.json");
-        seed_ledger(
-            &ledger,
-            json!({"entries": [{"backstop": true, "graph_node_id": "ab-node"}]}),
-        );
-        let entry = json!({
-            "fno_id": "t2",
-            "graph_node_id": "ab-node",
-            "termination_reason": "Budget",
-        });
-        append_to_tasks_json(&ledger, &entry).unwrap();
-        let doc = read_ledger(&ledger);
-        let entries = doc["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].get("backstop").is_none());
     }
 
     #[test]

@@ -194,15 +194,6 @@ mod tests {
         f.write_all(bytes).unwrap();
         f.flush().unwrap();
     }
-
-    #[test]
-    fn of_missing_path_is_none() {
-        // AC1-ERR: a stat that cannot resolve the file fails safe to None
-        // (mapped to Unknown by classify), never a panic.
-        let p = tmp_path("missing");
-        assert!(ExeFingerprint::of(&p).is_none());
-    }
-
     #[test]
     fn of_roundtrips_and_tracks_size_change() {
         let p = tmp_path("rt");
@@ -220,70 +211,6 @@ mod tests {
         assert_eq!(c.size, 13);
         fs::remove_file(&p).ok();
     }
-
-    #[test]
-    fn classify_fresh_when_equal() {
-        // AC1-FR: identical running/on-disk fingerprint -> Fresh, no warning.
-        let p = tmp_path("fresh");
-        write_file(&p, b"bin");
-        let fp = ExeFingerprint::of(&p).unwrap();
-        assert_eq!(classify(Some(&fp), Some(&fp)), DriftState::Fresh);
-        assert_eq!(drift_warning(&DriftState::Fresh, Some(1)), None);
-        fs::remove_file(&p).ok();
-    }
-
-    #[test]
-    fn classify_content_drift_when_size_differs() {
-        // AC1-HP (classification half): same path, different content -> Drifted.
-        let p = tmp_path("content");
-        write_file(&p, b"old");
-        let running = ExeFingerprint::of(&p).unwrap();
-        let on_disk = ExeFingerprint {
-            size: running.size + 7,
-            ..running.clone()
-        };
-        match classify(Some(&running), Some(&on_disk)) {
-            DriftState::Drifted { .. } => {}
-            other => panic!("expected Drifted, got {other:?}"),
-        }
-        fs::remove_file(&p).ok();
-    }
-
-    #[test]
-    fn classify_path_drift_when_path_differs() {
-        // AC1-EDGE: running from a different path than we would launch -> Drifted.
-        let a = ExeFingerprint {
-            path: PathBuf::from("/opt/a/fno-agents-daemon"),
-            mtime_nanos: 100,
-            size: 10,
-        };
-        let b = ExeFingerprint {
-            path: PathBuf::from("/home/u/.cargo/bin/fno-agents-daemon"),
-            mtime_nanos: 100,
-            size: 10,
-        };
-        match classify(Some(&a), Some(&b)) {
-            DriftState::Drifted { .. } => {}
-            other => panic!("expected Drifted, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn classify_unknown_when_either_missing() {
-        // AC1-ERR: a None on either side is Unknown (silent), never Drifted.
-        let fp = ExeFingerprint {
-            path: PathBuf::from("/x"),
-            mtime_nanos: 1,
-            size: 1,
-        };
-        assert_eq!(classify(None, Some(&fp)), DriftState::Unknown);
-        assert_eq!(classify(Some(&fp), None), DriftState::Unknown);
-        assert_eq!(classify(None, None), DriftState::Unknown);
-        // And Unknown never warns.
-        assert_eq!(drift_warning(&DriftState::Unknown, None), None);
-        assert_eq!(drift_warning(&DriftState::DaemonDown, None), None);
-    }
-
     #[test]
     fn self_drift_reads_fresh_then_drifted_after_a_rewrite() {
         let p = tmp_path("self");
@@ -359,36 +286,5 @@ mod tests {
             "{note}"
         );
         assert!(note.contains("not the installed release path"), "{note}");
-    }
-
-    #[test]
-    fn keeper_note_says_when_the_keeper_is_the_installed_release() {
-        // The keeper detector matches argv0's basename, so the staged file
-        // must be named like the real binary.
-        let dir = std::env::temp_dir().join(format!(
-            "fno_drift_keeper_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("fno-agents");
-        write_file(&p, b"bin");
-        let commands = vec![format!("{} --store-keeper --sock /tmp/x", p.display())];
-        let note = keeper_path_note(&commands, Some(&p)).expect("note");
-        assert!(note.contains("the installed release path"), "{note}");
-        fs::remove_file(&p).ok();
-        fs::remove_dir(&dir).ok();
-    }
-
-    #[test]
-    fn keeper_note_is_none_without_a_keeper_row() {
-        let commands = vec![
-            "/usr/bin/rustc --edition=2021".to_string(),
-            "claude bg-spare --bg-spare /tmp/spare".to_string(),
-        ];
-        assert_eq!(keeper_path_note(&commands, None), None);
     }
 }

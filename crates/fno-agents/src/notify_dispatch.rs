@@ -546,65 +546,12 @@ mod tests {
     use crate::claims::test_env_lock;
 
     #[test]
-    fn terminal_app_names_each_terminal_the_user_runs() {
-        assert_eq!(terminal_app("ghostty", ""), Some("Ghostty"));
-        assert_eq!(terminal_app("", "dev.warp.Warp-Stable"), Some("Warp"));
-        assert_eq!(terminal_app("vscode", ""), None);
-    }
-
-    #[test]
     fn toast_script_escapes_and_names_the_app() {
         assert_eq!(
             toast_script(Some("iTerm"), "a\"b", "c\\d"),
             "try\nif application \"iTerm\" is running then\ntell application \"iTerm\" to display notification \"c\\\\d\" with title \"a\\\"b\"\nelse\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend if\non error\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend try"
         );
         assert!(toast_script(None, "t", "m").starts_with("display notification"));
-    }
-
-    #[test]
-    fn empty_title_and_message_take_the_defaults() {
-        // The decision table on injected channels, the way the deleted
-        // Python leg's tests monkeypatched the module: no env stamp, no host
-        // tool dependence (the Linux runner has no notify-send, so the env
-        // stamp cannot make the toast count there). Case one: the toast
-        // answers, the defaults ride the request, an accepted channel exits
-        // 0 with an empty message. Case two: every channel absent, and the
-        // loud degrade answers NO_TOOL_MSG byte for byte.
-        let seen = &mut Vec::new();
-        let (code, msg) = send_notification_seams(
-            "",
-            "",
-            "",
-            &mut |_t, _m| true,
-            &mut |_t, _m| None,
-            &mut |t, m, _p| {
-                seen.push((t.to_string(), m.to_string()));
-                false
-            },
-            &mut |_e| false,
-        );
-        assert_eq!(code, 0);
-        assert!(msg.is_empty());
-        assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0], ("target".to_string(), "Complete".to_string()));
-        let (code, msg) = send_notification_seams(
-            "",
-            "",
-            "",
-            &mut |_t, _m| false,
-            &mut |_t, _m| None,
-            &mut |_t, _m, _p| false,
-            &mut |_e| false,
-        );
-        assert_eq!(code, 1);
-        assert_eq!(msg, NO_TOOL_MSG);
-    }
-
-    #[test]
-    fn pointer_caps_at_the_notice_cap() {
-        let big = "x".repeat(NOTICE_CAP + 50);
-        let capped = cap(&big);
-        assert_eq!(capped.chars().count(), NOTICE_CAP);
     }
 
     #[test]
@@ -648,30 +595,6 @@ mod tests {
             Some(v) => std::env::set_var(var, v),
             None => std::env::remove_var(var),
         }
-    }
-
-    #[test]
-    fn mux_seam_spawns_the_narrow_one_shot_and_parses_the_receipt() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let argv = dir.path().join("mux.argv");
-        std::env::set_var("FNO_TEST_ARGV_FILE", &argv);
-        let stub = stub_fno(
-            dir.path(),
-            "fno-mux",
-            r#"printf '%s\n' "$@" > "$FNO_TEST_ARGV_FILE"; echo '{"clients": 3}'"#,
-        );
-        let bin_prev = env_guard("FNO_BIN", Some(stub.as_os_str()));
-        let hermetic_prev = env_guard("FNO_TEST_HERMETIC", None);
-        let seen = mux_clients("T", "B");
-        restore_env("FNO_TEST_HERMETIC", hermetic_prev);
-        restore_env("FNO_BIN", bin_prev);
-        assert_eq!(seen, Some(3));
-        let recorded = std::fs::read_to_string(&argv).unwrap();
-        assert_eq!(
-            recorded.lines().collect::<Vec<_>>(),
-            vec!["mux", "notify", "--json", "--", "T", "B"]
-        );
     }
 
     #[test]

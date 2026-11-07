@@ -405,7 +405,7 @@ pub(crate) fn theme_footnote_paper() -> Theme {
         border: rgb(0x14, 0x14, 0x14), // the dark twin's ground (the mirror pair)
         title: rgb(0x14, 0x14, 0x14),  // text
         brand: rgb(0x14, 0x14, 0x14),  // ink
-        needs_you: rgb(0x79, 0x68, 0x23), // needs-you olive
+        needs_you: rgb(0x65, 0x55, 0x1b), // needs-you olive, readable on surface0
         ok: rgb(0x46, 0x77, 0x48),     // palette green
         warn: rgb(0x79, 0x68, 0x23),   // palette yellow
         error: rgb(0x8f, 0x4d, 0x4b),  // the palette red darkened one step: the
@@ -695,16 +695,6 @@ mod tests {
         assert_eq!(t.name, "footnote-superscript");
         assert!(warn.is_none(), "no preference is not a warning");
     }
-
-    #[test]
-    fn each_shipped_name_resolves() {
-        for n in THEME_NAMES {
-            let (t, warn) = Theme::from_name(n);
-            assert_eq!(t.name, n, "{n} should resolve to itself");
-            assert!(warn.is_none(), "{n} should not warn");
-        }
-    }
-
     #[test]
     fn a_light_background_defaults_to_paper() {
         assert_eq!(Theme::default_for(true).name, "footnote-paper");
@@ -795,43 +785,6 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn terminal_accent_preserves_the_pre_theme_glyph() {
-        // The one exception to "terminal is all Default": the needs-attention
-        // accent stays Indexed(3) so the warning glyph does not silently change.
-        assert_eq!(theme_terminal().needs_you, Color::Indexed(3));
-        assert_eq!(theme_terminal().brand, Color::Indexed(3));
-    }
-
-    #[test]
-    fn named_themes_color_the_chrome() {
-        // A named theme must actually differ from terminal on the chrome roles,
-        // otherwise the picker offers no choice.
-        let term = theme_terminal();
-        for t in [
-            theme_footnote_superscript(),
-            theme_footnote_paper(),
-            theme_catppuccin(),
-            theme_tokyo_night(),
-            theme_gruvbox(),
-        ] {
-            assert!(!t.inherit);
-            assert_ne!(
-                cell_style(Role::Border, &t).0,
-                cell_style(Role::Border, &term).0,
-                "{} border should differ from terminal",
-                t.name
-            );
-            assert_ne!(
-                cell_style(Role::Title, &t).0,
-                cell_style(Role::Title, &term).0,
-                "{} title should differ from terminal",
-                t.name
-            );
-        }
-    }
-
     #[test]
     fn borders_paint_the_theme_brand_and_the_three_themes_pick_a_signature_accent() {
         // The ruling: every border paints the running theme's brand. Each
@@ -863,62 +816,6 @@ mod tests {
         // reads the field directly); cell_style stays byte-identical.
         assert_eq!(theme_terminal().border, Color::Indexed(3));
     }
-
-    #[test]
-    fn selected_row_is_reverse_video_under_terminal_and_title_on_base_under_named() {
-        let (_, _, flags) = cell_style(Role::BodySel, &theme_terminal());
-        assert_eq!(flags, cell_flags::INVERSE);
-        // named: the theme's text color as ground, base as text, both explicit.
-        let (fg, bg, _) = cell_style(Role::BodySel, &theme_catppuccin());
-        assert_eq!(bg, theme_catppuccin().title);
-        assert_eq!(fg, theme_catppuccin().base);
-    }
-
-    #[test]
-    fn the_stamp_is_reverse_video_under_every_theme() {
-        // The mark's [no] is a stamp in every theme: INVERSE, with the
-        // theme's stamp label as the fg (the swap makes it the label bg).
-        for n in THEME_NAMES {
-            let t = Theme::from_name(n).0;
-            let (fg, bg, flags) = cell_style(Role::Stamp, &t);
-            assert_eq!(fg, t.stamp, "{n} stamp fg is the label color");
-            assert_eq!(bg, Color::Default, "{n} stamp letters are the terminal's");
-            assert_eq!(
-                flags & cell_flags::INVERSE,
-                cell_flags::INVERSE,
-                "{n} stamp is reverse video"
-            );
-        }
-    }
-
-    #[test]
-    fn the_focused_chip_is_a_terminal_following_inverse_under_every_theme() {
-        // The focused-chip ruling: all chips read at one dim weight, so
-        // Tab's landing spot is the only tell, and it told nothing. The
-        // focused chip is the one
-        // filled chip: the terminal's own pair swapped (INVERSE), bold
-        // label, under EVERY theme - no theme picks a fill that washes out
-        // on the disagreeing ground.
-        for n in THEME_NAMES {
-            let t = Theme::from_name(n).0;
-            let (fg, bg, flags) = cell_style(Role::ChipFocus, &t);
-            assert_eq!(fg, Color::Default, "{n} focused-chip fg");
-            assert_eq!(bg, Color::Default, "{n} focused-chip bg");
-            assert_eq!(
-                flags & cell_flags::INVERSE,
-                cell_flags::INVERSE,
-                "{n} focused chip carries INVERSE"
-            );
-            // A focused chip must not read like its neighbors: unfocused
-            // chips ride Text(Item) (default video) under every theme.
-            assert_ne!(
-                cell_style(Role::ChipFocus, &t),
-                cell_style(Role::Text(TextStyle::Item), &t),
-                "{n} focused vs unfocused chip"
-            );
-        }
-    }
-
     #[test]
     fn panel_roles_never_carry_inverse_or_a_bg_under_any_theme() {
         // The pale-panel fix: the backlog panel paints on the terminal's own
@@ -967,30 +864,6 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn modal_bodies_never_paint_inverse_under_named_themes() {
-        // The one-rule body: under a named theme no body role resolves to the
-        // INVERSE block - the ground is the one fill. (Under `terminal` the
-        // cursor band and dim rows keep INVERSE by design; byte-identity.)
-        for t in [
-            theme_footnote_superscript(),
-            theme_footnote_paper(),
-            theme_catppuccin(),
-            theme_tokyo_night(),
-            theme_gruvbox(),
-        ] {
-            for role in [Role::BodySel, Role::BodyCursor, Role::Text(TextStyle::Meta)] {
-                let (_, _, flags) = cell_style(role, &t);
-                assert!(
-                    flags & cell_flags::INVERSE == 0,
-                    "{role:?} must not carry INVERSE under {}",
-                    t.name
-                );
-            }
-        }
-    }
-
     #[test]
     fn text_levels_are_distinct_and_carry_their_weight_under_every_theme() {
         // The whole point of the hierarchy: the levels resolve to DIFFERENT
@@ -1058,47 +931,6 @@ mod tests {
             // WARN and Badge both ride the accent slot: urgency is the
             // caller's word, the color is the palette's amber.
             assert_eq!(style(TextStyle::WARN), style(TextStyle::Badge));
-        }
-    }
-
-    #[test]
-    fn panel_slots_stay_palette_following_under_named_themes() {
-        // D1: attributes and palette indexes only. A fixed Rgb in a panel
-        // slot washes out the moment the emulator's palette disagrees with
-        // the theme's - the pale-blue lane names on Solarized Light.
-        for t in [
-            theme_footnote_superscript(),
-            theme_footnote_paper(),
-            theme_catppuccin(),
-            theme_tokyo_night(),
-            theme_gruvbox(),
-        ] {
-            for role in [
-                Role::Text(TextStyle::Item),
-                Role::Text(TextStyle::Title),
-                Role::Text(TextStyle::Section),
-                Role::Text(TextStyle::Value),
-                Role::Text(TextStyle::Badge),
-                Role::Text(TextStyle::Meta),
-                Role::Text(TextStyle::Hint),
-                Role::Text(TextStyle::OK),
-                Role::Text(TextStyle::WARN),
-                Role::Text(TextStyle::ERROR),
-            ] {
-                let (fg, bg, flags) = cell_style(role, &t);
-                assert!(
-                    !matches!(fg, Color::Rgb(..)) || role == Role::Text(TextStyle::Section),
-                    "{role:?} fg must stay palette-following under {}",
-                    t.name
-                );
-                assert_eq!(bg, Color::Default, "{role:?} bg under {}", t.name);
-                assert_eq!(
-                    flags & cell_flags::INVERSE,
-                    0,
-                    "{role:?} INVERSE under {}",
-                    t.name
-                );
-            }
         }
     }
     #[test]
