@@ -1738,6 +1738,14 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         }
     };
     let entry = &entry;
+    // A revival by session id re-seats the role its vacate set aside, the
+    // same treatment the boot pass gives a revived holder; the seat must be
+    // live before the resumed lead's first check-in reads the registry.
+    // Best effort: a refusal prints and the resume stands.
+    crate::boot_revival::reseat_resumed_row(
+        home,
+        entry.get("name").and_then(Value::as_str).unwrap_or(&name),
+    );
 
     // Identity is one axis: resume keys on harness (provider fallback
     // for a not-yet-backfilled row), and the exit-13 errors name the harness,
