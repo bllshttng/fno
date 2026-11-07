@@ -1426,7 +1426,7 @@ mod tests {
                 "agents": [{
                     "name": "rosa",
                     "cwd": cwd,
-                    "status": "working",
+                    "status": "busy",
                     "harness": "claude",
                     "harness_session_id": sid,
                 }],
