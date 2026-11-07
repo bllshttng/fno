@@ -342,7 +342,7 @@ pub fn agy_paths() -> [String; 3] {
     [
         one("hooks/footnote-agy-target-stop-hook.sh"),
         one("hooks/agy-team-inject.sh"),
-        one("hooks/agy-lead-guard.sh"),
+        one("hooks/agy-pretool.sh"),
     ]
 }
 

@@ -74,9 +74,10 @@ const LOOP_PARTICIPATION: [&str; 3] = ["native", "extension", "none"];
 /// The loop job is NOT one of them: `loop_participation` and
 /// `loop_extension` already declare it, and the wire-gate below derives the
 /// loop's state from that pair instead of a second field.
-pub const HOOK_JOBS: [&str; 4] = [
+pub const HOOK_JOBS: [&str; 5] = [
     "lead_guard",
     "lead_reinject",
+    "pretool_guards",
     "session_state",
     "event_rules",
 ];
@@ -1748,7 +1749,7 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
                 harness,
                 "hooks",
                 &format!(
-                    "unknown hook job {job:?}; declared jobs are lead_guard, lead_reinject, session_state and event_rules"
+                    "unknown hook job {job:?}; declared jobs are lead_guard, lead_reinject, pretool_guards, session_state and event_rules"
                 ),
             ));
         }

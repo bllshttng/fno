@@ -59,6 +59,7 @@ claude	SessionStart	context-run.sh	wait	-
 claude	SessionStart	daemon-liveness-session-start.sh	wait	-
 codex	PreToolUse	write-gate.sh	block	closed
 codex	PreToolUse	worktree-write-protect.sh	block	open
+codex	PreToolUse	join-partition-write-guard.sh	block	open
 codex	PreToolUse	plan-location-guard.sh	block	open
 codex	PreToolUse	pretooluse-bash-dispatch.sh	block	open
 codex	PreToolUse	rules-dispatch.sh	block	open

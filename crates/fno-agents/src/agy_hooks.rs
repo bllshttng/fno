@@ -398,6 +398,18 @@ pub fn install(
     let report = report_script(adapter);
     let session_state = session_state_scripts(adapter);
     let mut pruned = remove_handlers(fn_map, is_dead);
+    // The guard shim's old name. An install that predates the pretool host
+    // left its registration under a script this install replaces; the
+    // tombstone stub still met the chain for sessions that cached the old
+    // registration, but the fresh group must be the ONLY one (a stale pair
+    // would run the chain twice per fire).
+    pruned += remove_handlers(fn_map, |h| {
+        h.get("command").and_then(Value::as_str).is_some_and(|c| {
+            Path::new(c.trim())
+                .file_name()
+                .is_some_and(|n| n == "agy-lead-guard.sh")
+        })
+    });
     for script in [team, guard, report.as_deref()]
         .into_iter()
         .flatten()
@@ -620,9 +632,14 @@ mod tests {
         std::fs::create_dir_all(&hooks).unwrap();
         let adapter = hooks.join("footnote-agy-target-stop-hook.sh");
         let team = hooks.join("agy-team-inject.sh");
+        let pretool = hooks.join("agy-pretool.sh");
+        let old_guard = hooks.join("agy-lead-guard.sh");
         let older = dir.path().join("older-tree/hooks/agy-team-inject.sh");
         std::fs::create_dir_all(older.parent().unwrap()).unwrap();
         for p in [&adapter, &team, &older] {
+            std::fs::write(p, "#!/usr/bin/env bash\n").unwrap();
+        }
+        for p in [&pretool, &old_guard] {
             std::fs::write(p, "#!/usr/bin/env bash\n").unwrap();
         }
         let gone = dir.path().join("archived-worktree/hooks/agy-old-inject.sh");
@@ -635,7 +652,7 @@ mod tests {
                     {"type": "command", "command": older.display().to_string()},
                     {"type": "command", "command": team.display().to_string()}
                 ],
-                "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": gone.display().to_string()}]}]
+                "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": gone.display().to_string()}, {"type": "command", "command": old_guard.display().to_string()}]}]
             }
         });
         std::fs::write(&path, data.to_string()).unwrap();
@@ -646,19 +663,33 @@ mod tests {
             "the older live copy runs beside the new one"
         );
         assert!(!before.installed, "a dead handler is not installed");
-        let receipt = install(&path, &adapter, Some(&team), None).expect("install");
-        assert!(receipt.note.contains("pruned 3"), "{}", receipt.note);
-        let after = status(&path, Some(&adapter), Some(&team), None);
+        let receipt = install(&path, &adapter, Some(&team), Some(&pretool)).expect("install");
+        assert!(receipt.note.contains("pruned 4"), "{}", receipt.note);
+        let after = status(&path, Some(&adapter), Some(&team), Some(&pretool));
         assert_eq!((after.dead, after.superseded), (0, 0));
         assert!(after.installed);
+        assert_eq!(after.guard, "matches", "the pretool shim registers");
         let data: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let pre = data["footnote"]["PreInvocation"].as_array().unwrap();
         assert_eq!(pre.len(), 1);
         assert_eq!(pre[0]["command"], team.display().to_string());
-        assert!(data["footnote"]["PreToolUse"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        let groups = data["footnote"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(
+            groups.len(),
+            1,
+            "exactly one PreToolUse group after the install"
+        );
+        assert_eq!(
+            groups[0]["hooks"][0]["command"],
+            pretool.display().to_string(),
+            "the one group points at the pretool shim"
+        );
+        assert!(
+            !serde_json::to_string(&data["footnote"])
+                .unwrap()
+                .contains("agy-lead-guard.sh"),
+            "the old guard registration is gone"
+        );
         assert_eq!(
             data["other"]["Stop"][0]["command"],
             gone.display().to_string(),

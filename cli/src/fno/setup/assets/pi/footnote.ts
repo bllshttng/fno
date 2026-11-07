@@ -62,6 +62,15 @@ function statePathTimeoutMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 5000
 }
 
+// The pretool host bound: the whole claude block-guard chain (up to six
+// guards, one subprocess each) measured at p95 826ms with a 4.2s cold-CLI
+// max, so the bound sits above the cold max instead of pi's old 5s lead
+// guard bound.
+function pretoolTimeoutMs(): number {
+  const raw = Number(process.env.FNO_PI_PRETOOL_TIMEOUT_MS || "")
+  return Number.isFinite(raw) && raw > 0 ? raw : 10000
+}
+
 // One bounded child run. Resolves "" when the child failed for any reason
 // (spawn error, nonzero exit, timeout) - the caller records why it could not
 // read an answer rather than guessing one. An optional stdin payload rides
@@ -361,51 +370,45 @@ export default function (pi: {
     }
   })
 
-  // LEAD GUARD: a promoted pi session does not write repo source. The tool
-  // call becomes a claude-shaped PreToolUse payload and the Rust guard
-  // answers; its deny vetoed with `block: true` and the guard's reason.
-  // Fail-open: no binary, an unreadable answer, or a failed run returns
-  // nothing and the tool proceeds - the never-block contract
-  // hooks/lead-delegation-guard.sh ships under.
+  // PRETOOL HOST: the tool call rides to `fno-agents hook pretool --wire pi`
+  // and the host runs the full claude PreToolUse block guard chain
+  // (hooks/hooks.json filtered by hook-classes.tsv) with the payload cwd and
+  // the harness env, relaying the first deny as `{block: true, reason}`.
+  // Fail-open: no root, no binary, an unreadable answer, or a failed run
+  // returns nothing and the tool proceeds - the never-block contract every
+  // shim ships under (docs/hooks-fail-open.md).
   pi.on("tool_call", async (event: unknown, ctx: unknown) => {
     pushState("PreToolUse", ctx, {
       tool_name: (event as { toolName?: string })?.toolName || "",
     })
     try {
       const ev = event as { toolName?: string; input?: Record<string, unknown> }
-      const input = ev?.input || {}
-      // pi names paths `path` and shells `command`; the guard reads the
-      // claude spellings. Everything else is not judged.
-      let toolName = ""
-      const shaped: Record<string, unknown> = { ...input }
-      if (ev?.toolName === "bash") {
-        toolName = "Bash"
-      } else if (ev?.toolName === "edit" || ev?.toolName === "write") {
-        toolName = ev.toolName === "edit" ? "Edit" : "Write"
-        shaped.file_path = typeof input.path === "string" ? input.path : ""
-      } else {
-        return
-      }
-      const payload = {
-        hook_event_name: "PreToolUse",
-        tool_name: toolName,
-        tool_input: shaped,
+      const root = pluginRoot()
+      if (!root) return
+      const payload = JSON.stringify({
+        toolName: ev?.toolName || "",
+        input: ev?.input || {},
         cwd: process.cwd(),
         session_id: (ctx as Ctx)?.sessionManager?.getSessionId?.() || "",
-      }
+      })
       const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
-      const out = await runBounded(bin, ["hook", "lead-guard"], 5000, JSON.stringify(payload))
+      const out = await runBounded(
+        bin,
+        ["hook", "pretool", "--wire", "pi", "--plugin-root", root],
+        pretoolTimeoutMs(),
+        payload,
+      )
       if (!out.trim()) return
-      let decision: { permissionDecision?: string; reason?: string } | null = null
+      let decision: { block?: boolean; reason?: string } | null = null
       try {
         decision = JSON.parse(out)
       } catch {
         return
       }
-      if (decision?.permissionDecision === "deny") {
+      if (decision?.block === true) {
         return {
           block: true,
-          reason: decision.reason || "promoted sessions do not write repo source",
+          reason: decision.reason || "blocked by footnote hook",
         }
       }
     } catch {
