@@ -438,7 +438,7 @@ fn team_budget_terminal_after(journal: &str, fno_id: &str, latest_turn_ms: i64) 
             && row["ts"]
                 .as_str()
                 .and_then(epoch)
-                .is_some_and(|ts| ts > latest_turn_ms)
+                .is_some_and(|ts| ts >= latest_turn_ms)
     })
 }
 
@@ -942,5 +942,14 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn team_budget_terminal_parks_until_a_later_transcript_timestamp() {
+        let journal = r#"{"ts":"2026-10-06T10:10:00Z","data":{"session_id":"manifest-a","reason":"Budget","axis":"team_cost"}}"#;
+        let terminal = epoch("2026-10-06T10:10:00Z").unwrap();
+        assert!(team_budget_terminal_after(journal, "manifest-a", terminal - 1));
+        assert!(team_budget_terminal_after(journal, "manifest-a", terminal));
+        assert!(!team_budget_terminal_after(journal, "manifest-a", terminal + 1));
     }
 }
