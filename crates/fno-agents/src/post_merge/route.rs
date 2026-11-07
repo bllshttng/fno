@@ -970,18 +970,12 @@ fn recent_user_turn(sid: &str, window_s: i64) -> bool {
         let age = record
             .timestamp
             .as_deref()
-            .and_then(stamp_epoch)
-            .map(|ts| now.saturating_sub(ts))
+            .and_then(crate::session_truth::parse_stamp)
+            .map(|ts| now.saturating_sub(ts as i64))
             .unwrap_or(0);
         return age <= window_s;
     }
     false
-}
-
-fn stamp_epoch(ts: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(&ts.replace('Z', "+00:00"))
-        .ok()
-        .map(|dt| dt.timestamp())
 }
 
 /// The production seams: roster-backed claude probe+inject, the codex

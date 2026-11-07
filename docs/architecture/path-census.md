@@ -8,7 +8,7 @@ Rows marked `OPEN` below are intentionally not deleted when the repository still
 
 ## Census 1: post-merge ritual
 
-The dispatch lives in one leaf module: `crates/fno-agents/src/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` command directly (no bg thread, no `/fno:ship pr merged` LLM wrapper), and the warm route injects that SAME command. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
+The dispatch lives in one leaf module: `crates/fno-agents/src/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` command directly, with no bg thread and no LLM wrapper. The warm route injects that SAME command into a session holding no lead role and no fresh user turn. Every other live session takes the cold path. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
