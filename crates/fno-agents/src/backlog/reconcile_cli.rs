@@ -402,7 +402,12 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         .cloned()
         .collect();
     let rollup_verdicts = super::promise::rollup_hold_set(&warm_candidates, &mut |node| {
-        resolve_promise_evidence(node, super::promise::gate_cwd_for(node).as_deref(), &[])
+        resolve_promise_evidence(
+            node,
+            super::promise::gate_cwd_for(node).as_deref(),
+            &[],
+            None,
+        )
     });
     for (pid, verdict) in rollup_verdicts.iter().filter(|(_, v)| !v.satisfied()) {
         let outcome = match verdict.outcome {
@@ -1207,7 +1212,7 @@ fn promise_gate_leg(
             // Expired: the locked recheck covers only a NEWER reopen.
             reopen_expired.push(record.node_id.clone());
         }
-        let verdict = resolve_promise_evidence(&node, gate_cwd.as_deref(), &[]);
+        let verdict = resolve_promise_evidence(&node, gate_cwd.as_deref(), &[], None);
         if let Some(warning) = &verdict.warning {
             if !json_out {
                 stderr_log.push(format!("warning: {warning}"));
