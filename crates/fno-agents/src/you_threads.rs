@@ -386,6 +386,25 @@ pub(crate) fn walk(
                             close(&mut open, &mut reply, &mut item_start, &mut items);
                             continue;
                         }
+                        // Codex harness context: the rollout opens with the
+                        // machine's own instructions payload, which reads as
+                        // a user message. No person asked it; it opens no
+                        // item. The prefixes are the measured envelope
+                        // shapes (sampled off a live 2-day rollout).
+                        let trimmed = text.trim_start();
+                        if [
+                            "# AGENTS.md instructions",
+                            "<INSTRUCTIONS>",
+                            "<ENVIRONMENT_CONTEXT>",
+                            "<user_instructions>",
+                            "<turn_context>",
+                        ]
+                        .iter()
+                        .any(|p| trimmed.starts_with(p))
+                        {
+                            close(&mut open, &mut reply, &mut item_start, &mut items);
+                            continue;
+                        }
                         let Some(text) = typed_part(&text).or_else(|| {
                             let t = text.trim();
                             (!t.is_empty()).then(|| t.to_string())
@@ -808,16 +827,6 @@ fn capture_sessions(capture_dir: &Path, now: u64) -> Vec<(String, PathBuf)> {
         if sid.is_empty() {
             continue;
         }
-        let fresh = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .is_some_and(|mtime| now.saturating_sub(mtime) <= WINDOW_SECS);
-        if !fresh {
-            continue;
-        }
         let transcript = std::fs::read_to_string(entry.path())
             .ok()
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -826,8 +835,20 @@ fn capture_sessions(capture_dir: &Path, now: u64) -> Vec<(String, PathBuf)> {
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
             });
+        // The window reads the TRANSCRIPT's mtime, never the scan file's:
+        // a session typed into today whose last queue read is three days
+        // old would otherwise fall out of the view until its next hook
+        // beat rewrites the scan.
         if let Some(transcript) = transcript {
-            out.push((sid.to_string(), transcript));
+            let fresh = std::fs::metadata(&transcript)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .is_some_and(|mtime| now.saturating_sub(mtime) <= WINDOW_SECS);
+            if fresh {
+                out.push((sid.to_string(), transcript));
+            }
         }
     }
     out
@@ -1259,6 +1280,38 @@ mod tests {
             out.items[0].reply_text,
             "Checking the rollout shape.\n\nThe id sat at payload.id."
         );
+    }
+
+    /// A codex rollout's harness context payload opens no item: the
+    /// machine's instructions block is nobody's ask, and a real ask after
+    /// it still opens.
+    #[test]
+    fn codex_context_payload_opens_no_item() {
+        let payload_row = |role: &str, text: &str| {
+            json!({"timestamp": "2026-11-05T01:55:00Z", "type": "response_item",
+                   "payload": {"type": "message", "role": role,
+                               "content": [{"type": "text", "text": text}]}})
+            .to_string()
+        };
+        let raw = [
+            payload_row(
+                "user",
+                "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nwork here\n</INSTRUCTIONS>",
+            ),
+            payload_row("assistant", "Understood the instructions."),
+            payload_row("user", "status on the gate?"),
+            payload_row("assistant", "Green."),
+        ]
+        .join("\n");
+        let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
+        assert_eq!(
+            out.items.len(),
+            1,
+            "only the real ask opens: {:?}",
+            out.items
+        );
+        assert_eq!(out.items[0].typed_text, "status on the gate?");
+        assert_eq!(out.items[0].end_reply, "Green.");
     }
 
     /// A derived turn id survives a resume: the cached suffix walk folds the
