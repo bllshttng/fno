@@ -1159,8 +1159,7 @@ mod tests {
         let sibling = dir.path().join("fno");
         std::fs::write(&sibling, b"").unwrap();
         assert_eq!(binary_beside(&exe, "fno"), None);
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sibling = crate::write_exec_stub(dir.path(), "fno", "#!/bin/sh\n");
         assert_eq!(binary_beside(&exe, "fno"), Some(sibling));
     }
 }
