@@ -5,7 +5,7 @@ name = "fno"
 # typo, not a real version line. Protocol compat is PROTO_VERSION, not this.
 version = "0.4.5"
 edition = "2021"
-# The mux pulls in tokio + alacritty_terminal + portable-pty, so this crate no
+# The mux pulls in tokio + rio-vt + portable-pty, so this crate no
 # longer targets the old pure-std 1.74 floor. 1.89 matched fno-agents (the
 # in-tree floor these same dependencies already build on); the PDF viewer's
 # hayro declares MSRV 1.92, so the floor follows it rather than failing an
@@ -44,7 +44,7 @@ required-features = ["full"]
 default = ["full"]
 full = [
     "dep:axum",
-    "dep:alacritty_terminal",
+    "dep:rio-vt",
     "dep:crossterm",
     "dep:ratatui-core",
     "dep:ratatui-widgets",
@@ -75,8 +75,12 @@ full = [
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
 axum = { version = "0.8", features = ["ws"], optional = true }
-# Same major versions as crates/fno-agents, which already builds this stack.
-alacritty_terminal = { version = "0.26", optional = true }
+# rio-vt replaces alacritty_terminal as the mux VT engine. `default-features
+# = false` drops the PTY stack (the mux owns PTYs) and every renderer and
+# windowing dep. The 0.5.29 registry tarball was verified byte-identical to
+# the audited upstream source (raphamorim/rio at 0d9ede193ace8a); the exact
+# pin keeps that audit true.
+rio-vt = { version = "=0.5.29", default-features = false, optional = true }
 crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 # The sideline's widget layer: `draw_sideline` renders a `Table` into a
 # standalone `Buffer` and `ratatui_blit` copies it into the compositor's
@@ -149,7 +153,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 # Popup chrome measures and paints in terminal columns: a fullwidth
 # glyph is one char and two cells. Already resolved transitively via
-# alacritty_terminal, so this adds no new build artifact.
+# rio-vt, so this adds no new build artifact.
 unicode-width = { version = "0.2", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup", "fallible_uint", "functions"], optional = true }
 # The generated rules module compares rule review dates through it.
