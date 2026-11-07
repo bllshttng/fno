@@ -984,8 +984,11 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            empty_cycle["flow"]["cycle"]["reason"],
-            "no merged PR dates in window"
+            empty_cycle
+                .get("flow")
+                .and_then(|flow| flow.get("cycle"))
+                .and_then(|cycle| cycle.get("reason")),
+            Some(&json!("no merged PR dates in window")),
         );
     }
 }
