@@ -30,12 +30,15 @@ pub struct SpawnPlan {
 
 /// Build the plan from the relay tail (everything after `spawn-remote`).
 /// `local_host` arrives pre-resolved, so tests pin the shapes without env
-/// reads. The `--name` value is the only slot that may carry the `@host`
-/// address; every other word rides in order. `--name @<host>` drops the flag
-/// from the exec'd words, so the remote slug mint answers and no recursion
-/// survives the strip.
+/// reads. The address rides in one of two slots: a `--name` value with an
+/// `@host` part, or a bare `--machine <host>` pin (x-8460), which keeps the
+/// default name. `--machine` beside a plain `--name` is legal: the name
+/// rides and the pin carries the host. Every other word rides in order.
+/// `--name @<host>` drops the flag from the exec'd words, so the remote slug
+/// mint answers and no recursion survives the strip.
 pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String> {
     let mut name_at: Option<(usize, String, usize)> = None;
+    let mut machine_at: Option<(usize, String, usize)> = None;
     let mut i = 0;
     while i < args.len() {
         let word = args[i].as_str();
@@ -50,6 +53,13 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
             }
             Ok(())
         };
+        let mut pin = |v: &str, taken: usize| -> Result<(), String> {
+            if machine_at.is_some() {
+                return Err("spawn takes one --machine".to_string());
+            }
+            machine_at = Some((i, v.to_string(), taken));
+            Ok(())
+        };
         if word == "--name" {
             let value = args
                 .get(i + 1)
@@ -59,14 +69,38 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
         } else if let Some(v) = word.strip_prefix("--name=") {
             hit(v, 1)?;
             i += 1;
+        } else if word == "--machine" {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| "--machine needs a host".to_string())?;
+            pin(&value, 2)?;
+            i += 2;
+        } else if let Some(v) = word.strip_prefix("--machine=") {
+            pin(v, 1)?;
+            i += 1;
         } else {
             i += 1;
         }
     }
-    let Some((idx, value, taken)) = name_at else {
-        return Err("usage: fno agents spawn --name <name>@<host> [args...] <prompt>".to_string());
+    if name_at.is_some() && machine_at.is_some() {
+        return Err("spawn takes one cross-host address: --machine <host> or \
+             --name <name>@<host>, not both"
+            .to_string());
+    }
+    let machine_pin = machine_at.is_some();
+    let Some((idx, value, taken)) = name_at.or(machine_at) else {
+        return Err(
+            "usage: fno agents spawn --machine <host> | --name <name>@<host> \
+             [args...] <prompt>"
+                .to_string(),
+        );
     };
-    let (name, host) = if let Some(rest) = value.strip_prefix('@') {
+    let (name, host) = if machine_pin {
+        if value.is_empty() || value.contains('@') {
+            return Err(format!("--machine takes a bare host, got {value:?}"));
+        }
+        (String::new(), value)
+    } else if let Some(rest) = value.strip_prefix('@') {
         if rest.is_empty() {
             return Err(target_error(&value));
         }
@@ -224,6 +258,60 @@ mod tests {
         assert!(spawn_plan(&["--name".to_string(), "q@".to_string()], "x").is_err());
         assert!(spawn_plan(&["--name".to_string(), "@".to_string()], "x").is_err());
         assert!(spawn_plan(&["--name".to_string()], "x").is_err());
+        // --machine pins the host and keeps the default name: the flag and
+        // its value are stripped and the relayed words carry no name, so the
+        // remote slug mint answers.
+        let plan = spawn_plan(
+            &[
+                "--machine".to_string(),
+                "mbp3".to_string(),
+                "fix".to_string(),
+                "it".to_string(),
+            ],
+            "imac2d2",
+        )
+        .expect("plans");
+        assert!(!plan.same_host);
+        assert_eq!(plan.host, "mbp3");
+        assert!(plan.words.contains(&"fix".to_string()));
+        assert!(!plan.words.contains(&"--machine".to_string()));
+        assert!(!plan.words.iter().any(|w| w.contains('@')));
+        // --machine beside a plain --name is legal: the name rides, the pin
+        // carries the host.
+        let plan = spawn_plan(
+            &[
+                "--machine".to_string(),
+                "mbp3".to_string(),
+                "--name".to_string(),
+                "quinlan".to_string(),
+                "hi".to_string(),
+            ],
+            "imac2d2",
+        )
+        .expect("plans");
+        assert!(!plan.same_host);
+        assert_eq!(plan.host, "mbp3");
+        assert!(plan.words.contains(&"quinlan".to_string()));
+        assert!(plan.words.contains(&"--name".to_string()));
+        assert!(!plan.words.contains(&"--machine".to_string()));
+        // The typer equals spelling pins the same way.
+        let plan = spawn_plan(&["--machine=mbp3".to_string(), "hi".to_string()], "imac2d2")
+            .expect("plans");
+        assert_eq!(plan.host, "mbp3");
+        // Each --machine refusal shape: duplicate pin, @-bearing or empty
+        // value, missing value, and --machine beside an @-name.
+        assert!(spawn_plan(&["--machine".to_string()], "x").is_err());
+        assert!(spawn_plan(&["--machine".to_string(), "a@b".to_string()], "x").is_err());
+        assert!(spawn_plan(
+            &[
+                "--machine".to_string(),
+                "mbp3".to_string(),
+                "--name".to_string(),
+                "q@mbp3".to_string()
+            ],
+            "x"
+        )
+        .is_err());
     }
 
     // One table-style declaration: the CI delta caps new test declarations.

@@ -373,7 +373,10 @@ enum Role {
     /// relay. The carried tail runs `fno-agents spawn-remote`; an argv with
     /// no `@` in any fno-owned `--name` value forwards byte-verbatim to the
     /// local command, and words after a `--` fence are never scanned.
+    /// `fno agents spawn --machine <host>` reaches the same relay through
+    /// the client's placement intercept (x-8460), keeping the default name.
     RemoteSpawn(Vec<OsString>),
+
     /// `fno agents mail reply ...`: the native reply leaf. The carried tail
     /// passes through byte-verbatim, re-spelled by the exec action; the
     /// cross-host lane runs inside the leaf, before local routing.
