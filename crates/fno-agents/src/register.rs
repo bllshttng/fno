@@ -124,8 +124,13 @@ session '{session_id}'; use the full session id directly"
     }
 
     // The census walk reads the whole process table, so it must not run under
-    // the registry lock: the refresh below binds a pid resolved here.
-    let ambient_pid = crate::spawn_context::session_identity_ambient(std::process::id()).0;
+    // the registry lock: the refresh below binds a pid resolved here. The mint
+    // arm never binds, so a first registration skips the walk entirely.
+    let ambient_pid = if own_row_exists {
+        crate::spawn_context::session_identity_ambient(std::process::id()).0
+    } else {
+        None
+    };
     let outcome = update_registry(
         &crate::paths::AgentsHome::shared_registry_json(),
         |registry| {
