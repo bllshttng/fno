@@ -2738,11 +2738,12 @@ pub fn base_version(path: &Path) -> Result<String, StoreError> {
 /// because unchanged prose fields are skipped.
 pub fn enforce_node_state_policy(pre: &[Value], entries: &[Value]) -> Result<(), StoreError> {
     use crate::backlog::node_state;
+    let pre_by_id = index_by_id(pre);
     for cand in entries {
         let Some(id) = entry_id(cand) else {
             continue;
         };
-        let pre_row = pre.iter().find(|r| entry_id(r) == Some(id));
+        let pre_row = pre_by_id.get(id).copied();
         let cand_details = cand.get("details");
         let pre_details = pre_row.and_then(|r| r.get("details"));
         let cand_state = cand.get(node_state::STATE_KEY);
