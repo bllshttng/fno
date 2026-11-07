@@ -18,7 +18,7 @@ mod copy_recovery;
 mod gc;
 
 #[path = "event_hermetic.rs"]
-mod hermetic;
+pub(crate) mod hermetic;
 
 #[path = "event_gate.rs"]
 mod gate;
@@ -970,7 +970,10 @@ fn now_ms() -> i64 {
 
 /// The first matching envelope field: top level, then `data`, then `payload`
 /// (the same order Python find searches).
-fn field_lookup<'a>(row: &'a serde_json::Value, field: &str) -> Option<&'a serde_json::Value> {
+pub(crate) fn field_lookup<'a>(
+    row: &'a serde_json::Value,
+    field: &str,
+) -> Option<&'a serde_json::Value> {
     if let Some(v) = row.get(field) {
         return Some(v);
     }
@@ -1043,9 +1046,12 @@ fn run_find(args: &[OsString]) -> i32 {
     let mut journals: Vec<PathBuf> = Vec::new();
     let mut kind: Option<String> = None;
     let mut fields: Vec<(String, String)> = Vec::new();
+    let mut excluded: Vec<(String, String)> = Vec::new();
     let mut since_raw: Option<String> = None;
     let mut session: Option<String> = None;
     let mut limit: usize = 50;
+    let mut limit_set = false;
+    let mut last: Option<usize> = None;
     let mut kinds_mode = false;
     let mut json_mode = false;
     let normalized = split_options(
@@ -1057,6 +1063,7 @@ fn run_find(args: &[OsString]) -> i32 {
             "--session-id",
             "--session",
             "--limit",
+            "--last",
         ],
     );
     let mut it = normalized.iter();
@@ -1070,17 +1077,29 @@ fn run_find(args: &[OsString]) -> i32 {
             }
             "--field" => {
                 let Some(v) = it.next() else {
-                    eprintln!("error: --field requires FIELD=VALUE");
+                    eprintln!("error: --field requires FIELD=VALUE or FIELD!=VALUE");
                     return 2;
                 };
                 let raw = v.to_string_lossy();
-                match raw.split_once('=') {
-                    Some((k, val)) if !k.is_empty() => {
-                        fields.push((k.to_string(), val.to_string()))
-                    }
-                    _ => {
-                        eprintln!("error: --field must use FIELD=VALUE: '{raw}'");
+                // The exclude form must win the split: '=' inside '!=' would
+                // otherwise read as the field name ending in '!'.
+                if let Some((k, val)) = raw.split_once("!=") {
+                    if k.is_empty() {
+                        eprintln!("error: --field must use FIELD!=VALUE: '{raw}'");
                         return 2;
+                    }
+                    excluded.push((k.to_string(), val.to_string()));
+                } else {
+                    match raw.split_once('=') {
+                        Some((k, val)) if !k.is_empty() => {
+                            fields.push((k.to_string(), val.to_string()))
+                        }
+                        _ => {
+                            eprintln!(
+                                "error: --field must use FIELD=VALUE or FIELD!=VALUE: '{raw}'"
+                            );
+                            return 2;
+                        }
                     }
                 }
             }
@@ -1097,9 +1116,23 @@ fn run_find(args: &[OsString]) -> i32 {
             "--limit" => {
                 if let Some(v) = it.next() {
                     match v.to_string_lossy().parse::<usize>() {
-                        Ok(n) if n >= 1 => limit = n,
+                        Ok(n) if n >= 1 => {
+                            limit = n;
+                            limit_set = true;
+                        }
                         _ => {
                             eprintln!("error: --limit must be a positive integer");
+                            return 2;
+                        }
+                    }
+                }
+            }
+            "--last" => {
+                if let Some(v) = it.next() {
+                    match v.to_string_lossy().parse::<usize>() {
+                        Ok(n) if n >= 1 => last = Some(n),
+                        _ => {
+                            eprintln!("error: --last must be a positive integer");
                             return 2;
                         }
                     }
@@ -1124,6 +1157,14 @@ fn run_find(args: &[OsString]) -> i32 {
         eprintln!("error: pass KIND or --kinds, not both");
         return 2;
     }
+    if last.is_some() && limit_set {
+        eprintln!("error: pass --limit or --last, not both");
+        return 2;
+    }
+    // `--last N` prints the NEWEST N matches; the print cap and the fold cap
+    // become the same rolling tail.
+    let last_mode = last.is_some();
+    let cap = last.unwrap_or(limit);
     let since_ms = match parse_since_ms(since_raw.as_deref()) {
         Ok(v) => v,
         Err(e) => {
@@ -1169,9 +1210,11 @@ fn run_find(args: &[OsString]) -> i32 {
             journal,
             kind.as_deref(),
             &fields,
+            &excluded,
             since_ms,
             session.as_deref(),
-            limit,
+            cap,
+            last_mode,
         );
         let unreadable = entry["status"] == "unreadable";
         file_entries.push(entry.clone());
@@ -1186,11 +1229,10 @@ fn run_find(args: &[OsString]) -> i32 {
             .cloned()
             .unwrap_or_default()
         {
-            if (matches.len() as usize) < limit {
-                matches.push(row);
-            }
+            matches.push(row);
         }
     }
+    let matches = last_tail(matches, cap, last_mode);
     // kind_counts fold across files, at output time, from per-file entries.
     let mut kind_counts = serde_json::Map::new();
     for entry in &file_entries {
@@ -1395,16 +1437,43 @@ fn find_exit_code(
     0
 }
 
-/// Query and fold one journal's store into its file entry: counts, per-key
-/// hits, span, kind counts, matching rows, and the store's coverage receipt.
+/// The print cap over the combined per-journal candidates. A first-cap keeps
+/// fold order; `--last` orders by ts newest first, because the fold order is
+/// journal sort order where a live journal sorts before its own rotations
+/// and a fold-order tail would let an older rotation evict newer live rows.
+fn last_tail(
+    mut matches: Vec<serde_json::Value>,
+    cap: usize,
+    last_mode: bool,
+) -> Vec<serde_json::Value> {
+    if last_mode {
+        matches.sort_by(|a, b| row_ts_ms(b).cmp(&row_ts_ms(a)));
+    }
+    matches.truncate(cap);
+    matches
+}
+
+/// A row's ts as millis for cross-journal ordering; an unparsable ts sorts
+/// last (i64::MIN).
+fn row_ts_ms(row: &serde_json::Value) -> i64 {
+    row.get("ts")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(i64::MIN)
+}
+
+/// Query and fold one journal's store into its file entry/// hits, span, kind counts, matching rows, and the store's coverage receipt.
 #[allow(clippy::too_many_arguments)]
-fn fold_journal(
+pub(crate) fn fold_journal(
     journal: &PathBuf,
     kind: Option<&str>,
     fields: &[(String, String)],
+    excluded: &[(String, String)],
     since_ms: Option<i64>,
     session: Option<&str>,
-    limit: usize,
+    cap: usize,
+    last_mode: bool,
 ) -> serde_json::Value {
     let display = journal.display().to_string();
     let store = crate::event_store::store_path(journal);
@@ -1509,6 +1578,16 @@ fn fold_journal(
         }) {
             continue;
         }
+        // FIELD!=VALUE keeps a row only when the field is present and
+        // differs; a missing field never matches either filter form, which
+        // is what the prior-head read leans on.
+        if excluded.iter().any(|(f, want)| {
+            field_lookup(&parsed, f)
+                .map(|v| field_matches(v, want))
+                .unwrap_or(true)
+        }) {
+            continue;
+        }
         matched += 1;
         // kind_counts folds by winning field, per file, for the aggregate.
         let slot = per_kind.iter_mut().find(|(name, _, _)| name == k);
@@ -1531,7 +1610,12 @@ fn fold_journal(
         // the total, everything else represents one.
         let occ = row_occurrence(&row.line);
         occurrence_total += occ;
-        if (all_matches.len() as u64) < limit as u64 {
+        if last_mode {
+            all_matches.push(parsed);
+            if all_matches.len() > cap {
+                all_matches.remove(0);
+            }
+        } else if (all_matches.len() as u64) < cap as u64 {
             all_matches.push(parsed);
         }
     }
@@ -1621,5 +1705,106 @@ mod tests {
         );
         assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_some());
         assert!(classify_doctor_event(&mk(&["doctor"])).is_none());
+    }
+
+    /// One valid attestation envelope; the schema requires reviewer,
+    /// head_sha, verdict, session_id under data, and the envelope needs
+    /// ts/type/source/data.
+    fn attestation_row(head_sha: &str, branch: &str, ts: &str) -> String {
+        format!(
+            r#"{{"ts":"{ts}","type":"review_attestation","source":"target","data":{{"reviewer":"code-review","head_sha":"{head_sha}","verdict":"pass","session_id":"s1","branch":"{branch}"}}}}"#
+        )
+    }
+
+    fn write_journal(dir: &std::path::Path, rows: &[String]) -> std::path::PathBuf {
+        let journal = dir.join("events.jsonl");
+        std::fs::write(&journal, rows.join("\n") + "\n").unwrap();
+        journal
+    }
+
+    #[test]
+    fn fold_exclude_keeps_present_and_different_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            attestation_row("aaaa", "feature/t", "2026-11-06T10:00:01.000Z"),
+            attestation_row("bbbb", "feature/t", "2026-11-06T10:00:02.000Z"),
+            attestation_row("", "feature/bad", "2026-10-06T10:00:03.000Z"),
+        ];
+        let journal = write_journal(dir.path(), &rows);
+        let fields = vec![
+            ("verdict".to_string(), "pass".to_string()),
+            ("branch".to_string(), "feature/t".to_string()),
+        ];
+        let excluded = vec![("head_sha".to_string(), "aaaa".to_string())];
+        let entry = fold_journal(
+            &journal,
+            Some("review_attestation"),
+            &fields,
+            &excluded,
+            None,
+            None,
+            50,
+            false,
+        );
+        assert_eq!(entry["matches"], 1);
+    }
+
+    #[test]
+    fn fold_last_returns_newest_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            attestation_row("aaaa", "feature/t", "2026-11-06T10:00:01.000Z"),
+            attestation_row("bbbb", "feature/t", "2026-11-06T10:00:02.000Z"),
+            attestation_row("cccc", "feature/t", "2026-11-06T10:00:03.000Z"),
+        ];
+        let journal = write_journal(dir.path(), &rows);
+        let empty: Vec<(String, String)> = Vec::new();
+        let entry = fold_journal(
+            &journal,
+            Some("review_attestation"),
+            &empty,
+            &empty,
+            None,
+            None,
+            1,
+            true,
+        );
+        let got = &entry["matching_rows"][0]["data"]["head_sha"];
+        assert_eq!(got.as_str(), Some("cccc"));
+    }
+
+    #[test]
+    fn find_refuses_bad_flag_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ev = tmp.path().join("j.jsonl");
+        let base = ["--events", ev.to_str().unwrap()];
+        let mut a2 = base.to_vec();
+        a2.extend(["--limit", "5", "--last", "2"]);
+        assert_eq!(
+            run_find(&a2.iter().map(OsString::from).collect::<Vec<_>>()),
+            2
+        );
+        let mut a3 = base.to_vec();
+        a3.extend(["--last", "0"]);
+        assert_eq!(
+            run_find(&a3.iter().map(OsString::from).collect::<Vec<_>>()),
+            2
+        );
+    }
+
+    #[test]
+    fn last_tail_prefers_newest_ts_over_fold_order() {
+        let live = serde_json::json!({"ts": "2026-11-06T11:00:00.000Z"});
+        let old_rotation = serde_json::json!({"ts": "2026-11-05T09:00:00.000Z"});
+        // Fold order puts the live journal first, so the old rotation row
+        // arrives last: a fold-order tail would keep exactly the wrong row.
+        let got = last_tail(vec![live, old_rotation.clone()], 1, true);
+        assert_eq!(got.len(), 1);
+        // The live journal's row is newer: ts ordering must keep it over the
+        // rotation row that arrives last in fold order.
+        assert_eq!(got[0]["ts"].as_str(), Some("2026-11-06T11:00:00.000Z"));
+        let newer = serde_json::json!({"ts": "2026-11-06T12:00:00.000Z"});
+        let got = last_tail(vec![old_rotation, newer.clone()], 1, true);
+        assert_eq!(got[0]["ts"].as_str(), Some("2026-11-06T12:00:00.000Z"));
     }
 }

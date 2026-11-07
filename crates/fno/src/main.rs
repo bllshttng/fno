@@ -292,8 +292,12 @@ enum Role {
     /// join, reserve, emit, settle), exec'd through the sibling fno-agents
     /// door. The tail passes through byte-verbatim, help included.
     ReviewInvocations(Vec<OsString>),
+    /// `fno do review prior-head <tail>`: the prior reviewed head read,
+    /// native in-process against the events journals. The tail passes
+    /// through byte-verbatim, help included.
+    ReviewPriorHead(Vec<OsString>),
     /// `fno do review --help` (and the alias's): the native usage, printed
-    /// here because no Python leg remains to list the four leaves.
+    /// here because no Python leg remains to list the five leaves.
     ReviewHelp,
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
     /// through the sibling fno-agents `review-policy assess` door. The
@@ -1217,6 +1221,20 @@ fn classify_review_invocations(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do review prior-head <tail>`: the prior reviewed head read, claimed
+/// by the same literal three-token prefix as its siblings. Runs in-process
+/// against the events journals; no Python leg.
+fn classify_review_prior_head(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "prior-head"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
 /// assurance root claims native when the tail names no leaf. Only the FIRST
 /// tail token names a leaf (a leaf spelled later is a flag value, exactly as
@@ -1234,7 +1252,7 @@ fn classify_review_root(args: &[OsString]) -> Option<(bool, bool, Vec<OsString>)
         };
     if matches!(
         tail.first().and_then(|a| a.to_str()),
-        Some("classify" | "post-dispositions" | "invocations" | "resolve-level")
+        Some("classify" | "post-dispositions" | "invocations" | "resolve-level" | "prior-head")
     ) {
         return None;
     }
@@ -1477,6 +1495,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_invocations(args) {
         return Role::ReviewInvocations(rest);
+    }
+    if let Some(rest) = classify_review_prior_head(args) {
+        return Role::ReviewPriorHead(rest);
     }
     if let Some((alias, help, rest)) = classify_review_root(args) {
         if help {
@@ -2296,6 +2317,7 @@ fn main() {
             &["review-level", "invocations"],
             &rest,
         )),
+        Role::ReviewPriorHead(rest) => std::process::exit(fno::review_prior_head::run(&rest)),
         Role::ReviewHelp => {
             println!(
                 "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
@@ -2306,6 +2328,7 @@ fn main() {
             println!("  post-dispositions <args>          the per-round disposition comment");
             println!("  classify <args>                   the findings classifier");
             println!("  invocations <action>              parse, join, reserve, emit, settle");
+            println!("  prior-head [--branch B] [--head H]  the prior reviewed head read");
             std::process::exit(0)
         }
         Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
@@ -2679,6 +2702,10 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "review", "invocations", "--help"]), false),
             Role::ReviewInvocations(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "prior-head", "--branch", "b"]), false),
+            Role::ReviewPriorHead(os(&["--branch", "b"]))
         );
         assert_eq!(
             decide_role(&os(&["review", "--help"]), false),
