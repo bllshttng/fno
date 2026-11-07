@@ -3379,6 +3379,37 @@ mod reap_tests {
     }
 }
 
+#[cfg(test)]
+mod spawn_parse_tests {
+    use super::*;
+
+    /// The bare hand-off (`spawn --promote <scope> --hand-off`, no `--name`)
+    /// parses without a name: the seam skips the mint for a hand-off on
+    /// purpose, and the settle draw fills the name at plan. Every other
+    /// nameless spawn still demands a name at the parse.
+    #[test]
+    fn a_bare_hand_off_parses_without_a_name() {
+        let rest: Vec<String> = ["--promote", "alpha", "--hand-off", "--print"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (method, params) = build_request("spawn", &rest).unwrap();
+        assert_eq!(method, "agent.spawn");
+        assert!(params.get("name").is_none(), "the draw owns the name");
+        assert_eq!(params["promote"], serde_json::json!(["alpha"]));
+        assert_eq!(params["hand_off"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_nameless_spawn_without_a_hand_off_still_refuses() {
+        let err = build_request("spawn", &[]).unwrap_err();
+        assert_eq!(err, "spawn needs a <name> or --name");
+        let bare_hand_off: Vec<String> = ["--hand-off"].iter().map(|s| s.to_string()).collect();
+        let err = build_request("spawn", &bare_hand_off).unwrap_err();
+        assert_eq!(err, "spawn needs a <name> or --name");
+    }
+}
+
 /// `fno-agents roster-reap`: the roster-side sweep (gap one). Dry-run
 /// by default; `--apply` executes. Takes only --json/--apply.
 fn run_roster_reap(rest: &[String]) -> i32 {
@@ -4171,8 +4202,19 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             }
             // With --name the whole positional tail is the message; without it the
             // first positional is still the name (a direct `fno-agents spawn`
-            // bypasses the seam normalizer that would have minted one).
+            // bypasses the seam normalizer that would have minted one). A bare
+            // hand-off names nobody: the seam skips the mint on purpose (a minted
+            // slug would arrive as an explicit proposal and decline the documented
+            // no-name draw), and the settle draw fills the name at plan, so the
+            // parse must not demand one here.
             let msg_from = if params.contains_key("name") {
+                0
+            } else if params.get("hand_off").and_then(Value::as_bool) == Some(true)
+                && params
+                    .get("promote")
+                    .and_then(Value::as_array)
+                    .is_some_and(|scopes| !scopes.is_empty())
+            {
                 0
             } else {
                 let name = positional.first().ok_or("spawn needs a <name> or --name")?;
