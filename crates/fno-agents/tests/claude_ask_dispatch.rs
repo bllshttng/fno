@@ -97,12 +97,22 @@ fn validation_rejects_bad_inputs() {
     let cwd = tmpdir("val-cwd");
     let d = Duration::from_secs(1);
 
-    let empty_name = dispatch_claude_ask(&home, &ch, "", "hi", "fno", &cwd, false, Some(d), &[],
-        None);
+    let empty_name =
+        dispatch_claude_ask(&home, &ch, "", "hi", "fno", &cwd, false, Some(d), &[], None);
     assert_eq!(empty_name.exit_code, 2);
 
-    let sep_name = dispatch_claude_ask(&home, &ch, "a/b", "hi", "fno", &cwd, false, Some(d), &[],
-        None);
+    let sep_name = dispatch_claude_ask(
+        &home,
+        &ch,
+        "a/b",
+        "hi",
+        "fno",
+        &cwd,
+        false,
+        Some(d),
+        &[],
+        None,
+    );
     assert_eq!(sep_name.exit_code, 2);
 
     let shortid_shape = dispatch_claude_ask(
@@ -119,13 +129,32 @@ fn validation_rejects_bad_inputs() {
     );
     assert_eq!(shortid_shape.exit_code, 2);
 
-    let empty_msg =
-        dispatch_claude_ask(&home, &ch, "alice", "   ", "fno", &cwd, false, Some(d), &[],
-        None);
+    let empty_msg = dispatch_claude_ask(
+        &home,
+        &ch,
+        "alice",
+        "   ",
+        "fno",
+        &cwd,
+        false,
+        Some(d),
+        &[],
+        None,
+    );
     assert_eq!(empty_msg.exit_code, 2);
 
-    let bad_from = dispatch_claude_ask(&home, &ch, "alice", "hi", "a<b", &cwd, false, Some(d), &[],
-        None);
+    let bad_from = dispatch_claude_ask(
+        &home,
+        &ch,
+        "alice",
+        "hi",
+        "a<b",
+        &cwd,
+        false,
+        Some(d),
+        &[],
+        None,
+    );
     assert_eq!(bad_from.exit_code, 2);
     assert!(bad_from.stderr.contains("XML-unsafe"));
 }

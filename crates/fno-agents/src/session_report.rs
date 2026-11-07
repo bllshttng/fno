@@ -1545,12 +1545,15 @@ mod tests {
     #[test]
     fn a_row_born_without_a_transport_key_backfills_it_at_first_report() {
         let (_d, home) = temp_home("backfill");
-        seed_registry(&home, json!({
-            "name": "w1", "cwd": "/repo", "status": "spawning",
-            "created_at": "2026-09-26T00:00:00Z",
-            "harness": "claude",
-            "harness_session_id": "312d5c0f-0000-0000-0000-000000000000"
-        }));
+        seed_registry(
+            &home,
+            json!({
+                "name": "w1", "cwd": "/repo", "status": "spawning",
+                "created_at": "2026-09-26T00:00:00Z",
+                "harness": "claude",
+                "harness_session_id": "312d5c0f-0000-0000-0000-000000000000"
+            }),
+        );
         let sid = "312d5c0f-0000-0000-0000-000000000000";
         let resp = handle_session_report(
             &home,
