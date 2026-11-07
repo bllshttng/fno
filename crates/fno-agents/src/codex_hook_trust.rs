@@ -237,7 +237,7 @@ fn fno_rows(hooks: &[Value]) -> Vec<FnoHook> {
         .collect()
 }
 
-/// The TUI-shaped trust write: one `config/batchWrite` Upsert of
+/// The TUI-shaped trust write: one `config/batchWrite` upsert of
 /// `hooks.state.{key}.trusted_hash = current_hash`, with
 /// `reload_user_config: true` so the daemon re-reads its own config. codex
 /// splits the combined "<declaration>/<content>" server-side.
@@ -264,7 +264,7 @@ async fn write_hook_trust(
                 "edits": [{
                     "keyPath": "hooks.state",
                     "value": Value::Object(state),
-                    "mergeStrategy": "Upsert",
+                    "mergeStrategy": "upsert",
                 }],
                 "filePath": null,
                 "expectedVersion": null,
