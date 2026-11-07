@@ -1,4 +1,4 @@
-//! The onboarding conversation as a pure module: fifteen screens in a
+//! The onboarding conversation as a pure module: seventeen screens in a
 //! fixed order, three presets as per-screen stop flags, and a proposal
 //! list the terminal host applies. No terminal, no subprocess and no
 //! clock live here - a scripted prompter drives the same flow in tests,
@@ -119,7 +119,7 @@ pub struct Screen {
 
 /// The fixed screen order. The wizard never reorders; a false `when`
 /// records a skip and moves on.
-pub const SCREENS: [Screen; 16] = [
+pub const SCREENS: [Screen; 17] = [
     Screen {
         id: "preflight",
         when: When::Always,
@@ -169,6 +169,11 @@ pub const SCREENS: [Screen; 16] = [
         id: "services",
         when: When::Always,
         stops: [false, true, true],
+    },
+    Screen {
+        id: "claude-auto-mode",
+        when: When::Always,
+        stops: [true, true, true],
     },
     Screen {
         id: "messaging",
@@ -457,6 +462,7 @@ pub fn step(state: &mut State, pr: &mut dyn Prompter, pb: &mut dyn Probes) -> Ne
         "budget" => screen_budget(state, pr, stops),
         "review-merge" => screen_review_merge(state, pr, stops),
         "services" => screen_services(state, pr, stops),
+        "claude-auto-mode" => screen_claude_auto_mode(state, pr),
         "messaging" => screen_messaging(state, pr, stops),
         "projects" => screen_projects(state, pr, stops),
         "join" => screen_join(state, pr, stops),
@@ -997,6 +1003,27 @@ fn screen_services(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
     Outcome::Forward
 }
 
+fn screen_claude_auto_mode(state: &mut State, pr: &mut dyn Prompter) -> Outcome {
+    match confirm_flow(
+        state,
+        pr,
+        "claude-auto-mode",
+        "Add Footnote's Auto Mode rules to Claude Code user settings?",
+        false,
+    ) {
+        Flow::Answered(true) => {
+            state.answers.insert("claude-auto-mode", Answer::Yes);
+            Outcome::Forward
+        }
+        Flow::Answered(false) => {
+            state.answers.insert("claude-auto-mode", Answer::No);
+            Outcome::Forward
+        }
+        Flow::Back => Outcome::Back,
+        Flow::Cancel => Outcome::Cancel,
+    }
+}
+
 /// Chat channels for open questions. Every preset ticks none: a channel
 /// needs a token only the person can make, so the aggressive pass skips it
 /// and the setup at apply asks for each pick's details.
@@ -1216,6 +1243,16 @@ pub fn pending(state: &State) -> Vec<Proposal> {
     let mut rows = Vec::new();
     if state.skip_all {
         return rows;
+    }
+    if let Some(Answer::Yes) = state.answers.get("claude-auto-mode") {
+        rows.push(Proposal {
+            id: "claude-auto-mode",
+            key: "autoMode.allow".into(),
+            value: "Footnote State Writes + Footnote Role Grants".into(),
+            scope: "global",
+            reason: "the person's explicit approval to add Footnote's Auto Mode rules".into(),
+            source: "wizard",
+        });
     }
     if let Some(Answer::Text(n)) = state.answers.get("budget") {
         rows.push(Proposal {

@@ -9,6 +9,7 @@
 
 use std::io::Read;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -66,7 +67,9 @@ impl OwnerProcess {
 struct KillGuard(u32);
 impl Drop for KillGuard {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGKILL) };
+        // SAFETY: group SIGKILL to the keeper this test started, so its pty
+        // child dies with it (the fn-47ea driver pattern).
+        unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGKILL) };
     }
 }
 
@@ -89,6 +92,7 @@ fn pane_keeper_dies_within_5s_of_its_test_owner() {
             "/tmp",
             "--",
         ])
+        .process_group(0)
         .arg("sleep")
         .arg("300")
         .env("FNO_TEST_OWNER_PID", owner_pid.to_string())

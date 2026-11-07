@@ -210,7 +210,17 @@ for ((trial = 1; trial <= trials; trial++)); do
     daemon_verdict=pass
     persistence_verdict=pass
     workspace_verdict=pass
-    [[ "$daemon_rc" == 0 ]] && grep -Eq '^daemon_restart_served_during_sweep ' "$trial_dir/daemon_e2e.log" || daemon_verdict=fail
+    if [[ "$daemon_rc" != 0 ]]; then
+        echo "stress_daemon_fail trial=$trial reason=nonzero_rc rc=$daemon_rc" >&2
+        daemon_verdict=fail
+    elif ! grep -Eq '^daemon_restart_served_during_sweep ' "$trial_dir/daemon_e2e.log"; then
+        # rc is green but the proof line is absent: the test that prints it
+        # did not run on this tree. Name it, or a merge ref frozen on the
+        # wrong side of a marker rewrite reads as a load flake and burns
+        # reruns on a cause it cannot have.
+        echo "stress_daemon_fail trial=$trial reason=marker_vacuous rc=0" >&2
+        daemon_verdict=fail
+    fi
     [[ "$persistence_rc" == 0 ]] || persistence_verdict=fail
     [[ "$workspace_rc" == 0 ]] && grep -Eq 'old_server_reaped_before_rebind old_pid=' "$trial_dir/workspace_persistence_e2e.log" || workspace_verdict=fail
 

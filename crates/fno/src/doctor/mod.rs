@@ -28,6 +28,10 @@ pub enum Claim {
     /// The native report / bundle / plugin-file / flag arms; the payload is
     /// the argv after `doctor`.
     Home(Vec<OsString>),
+    /// `-h`/`--help`: the door answers the family usage itself. Help used to
+    /// fall through to the Python forward, whose signpost handed it straight
+    /// back; the pair ping-ponged until the process chain ate the machine.
+    Help,
     /// A pure transport leaf: exec the fno-agents binary with this argv
     /// (label names the leaf for the exec refusal).
     AgentsExec(&'static str, Vec<OsString>),
@@ -37,6 +41,17 @@ pub enum Claim {
 /// `decide_role` answer them.
 const FOREIGN_LEAVES: &[&str] = &["test", "route", "observer", "fanout"];
 
+/// The usage `fno doctor -h` prints. Shape, not a leaf catalog: the catalog
+/// drifts, and `fno --help` is the real menu.
+pub const HELP_TEXT: &str = "\
+fno doctor [leaf] [flags]
+
+Install health and maintenance. Bare `fno doctor` prints the health
+report. Leaves answer here (`fno doctor update`, `fno doctor lint`,
+`fno doctor event`, ...) or hand to their owning family; `fno --help`
+lists every family.
+";
+
 pub fn classify(args: &[OsString]) -> Option<Claim> {
     if args.first()?.to_str()? != "doctor" {
         return None;
@@ -44,6 +59,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
     let second = args.get(1).and_then(|a| a.to_str());
     match second {
         None => Some(Claim::Home(vec![])),
+        Some("-h") | Some("--help") => Some(Claim::Help),
         Some("bundle") | Some("plugin-file") => Some(Claim::Home(args[1..].to_vec())),
         Some(word) if FOREIGN_LEAVES.contains(&word) => None,
         Some("evals") => {
@@ -661,7 +677,14 @@ fn run_home(args: &[String]) -> i32 {
         return cost_check_report();
     }
 
-    let rep = Report::build(source.as_deref());
+    let auto_mode_settings = crate::cli_hooks::user_claude_settings_path();
+    let mut rep = Report::build(source.as_deref());
+    if let Value::Object(report) = &mut rep.value {
+        report.insert(
+            "auto_mode_rules".into(),
+            report::auto_mode_rules(&auto_mode_settings),
+        );
+    }
     let blockers = Blockers::of(&rep.value);
     let source_blocked = rep
         .value
@@ -690,6 +713,22 @@ fn run_home(args: &[String]) -> i32 {
             echo_stdout("fno doctor: advisory findings follow.");
         }
         human::emit_human(&rep.value, src.as_deref(), false, cargo_present);
+        match rep
+            .value
+            .get("auto_mode_rules")
+            .and_then(|v| v.get("status"))
+            .and_then(Value::as_str)
+        {
+            Some("missing") => echo_stdout(&format!(
+                "fno doctor: Claude Code Auto Mode rules are missing from {}. Fix: `fno doctor --fix` or `fno config setup run --only claude-auto-mode`.",
+                auto_mode_settings.display()
+            )),
+            Some("unknown") => echo_stdout(&format!(
+                "fno doctor: Claude Code Auto Mode settings could not be read at {}.",
+                auto_mode_settings.display()
+            )),
+            _ => {}
+        }
         if !fix {
             if let Some(line) = report::preamble_budget_line(src.as_ref().and_then(|p| p.to_str()))
             {
@@ -724,6 +763,36 @@ fn run_home(args: &[String]) -> i32 {
             "fno doctor: --fix refused: resolved source checkout is behind origin/main; sync the checkout before repairing.",
         );
         return 1;
+    }
+    let mut auto_mode_fixed = false;
+    let mut auto_mode_fix_failed = false;
+    let auto_mode_status = rep
+        .value
+        .get("auto_mode_rules")
+        .and_then(|v| v.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if let Some(repaired) =
+        report::repair_auto_mode_rules(&auto_mode_settings, auto_mode_status, fix, json)
+    {
+        if let Some(error) = repaired.error {
+            echo_stderr(&format!("fno doctor: --fix Auto Mode rules: {error}"));
+            auto_mode_fix_failed = true;
+        } else if repaired.changed {
+            echo_stderr(&format!(
+                "fno doctor: --fix Auto Mode rules: repaired {}",
+                auto_mode_settings.display()
+            ));
+            auto_mode_fixed = true;
+        } else {
+            echo_stderr("fno doctor: --fix Auto Mode rules: already present");
+            auto_mode_fixed = true;
+        }
+    } else if fix && !json && auto_mode_status == "unknown" {
+        echo_stderr(
+            "fno doctor: --fix Auto Mode rules: settings could not be read; left unchanged",
+        );
+        auto_mode_fix_failed = true;
     }
     if fix {
         // Heal a dead/wedged pr-watch first; the stale --fix path below
@@ -834,8 +903,10 @@ fn run_home(args: &[String]) -> i32 {
                         }
                     }
                 }
-            } else {
-                echo_stderr("fno doctor: nothing to fix.");
+            } else if let Some(message) =
+                nothing_to_fix_message(auto_mode_fixed, auto_mode_fix_failed)
+            {
+                echo_stderr(message);
             }
         }
     }
@@ -844,10 +915,22 @@ fn run_home(args: &[String]) -> i32 {
         || source_blocked
         || dead_agents
         || stage_stale
+        || auto_mode_fix_failed
     {
         1
     } else {
         0
+    }
+}
+
+fn nothing_to_fix_message(
+    auto_mode_fixed: bool,
+    auto_mode_fix_failed: bool,
+) -> Option<&'static str> {
+    if auto_mode_fixed || auto_mode_fix_failed {
+        None
+    } else {
+        Some("fno doctor: nothing to fix.")
     }
 }
 
@@ -903,7 +986,7 @@ fn cost_check_report() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::bounded_command_for;
+    use super::{bounded_command_for, nothing_to_fix_message, report};
 
     fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
         args.iter().map(std::ffi::OsString::from).collect()
@@ -952,6 +1035,26 @@ mod tests {
         }
     }
 
+    /// Help claims here instead of falling through to the Python forward:
+    /// the signpost hands the same argv back, and the pair chains until
+    /// killed. Both spellings claim; the bare report keeps its claim.
+    #[test]
+    fn help_claims_here_and_the_bare_report_still_does() {
+        for spelling in ["-h", "--help"] {
+            assert!(
+                matches!(
+                    super::classify(&os(&["doctor", spelling])),
+                    Some(super::Claim::Help)
+                ),
+                "{spelling} must claim"
+            );
+        }
+        assert!(matches!(
+            super::classify(&os(&["doctor"])),
+            Some(super::Claim::Home(_))
+        ));
+    }
+
     /// The deleted Python transport's contract (its
     /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out
     /// gate's descendant dies with the process group, not orphaned past the
@@ -989,5 +1092,41 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn auto_mode_doctor_finding_and_repair_preserve_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.json");
+        std::fs::write(
+            &settings,
+            r#"{"model":"opus","autoMode":{"allow":["$defaults","My custom Auto Mode rule"]}}"#,
+        )
+        .unwrap();
+        let before = std::fs::read(&settings).unwrap();
+
+        let finding = report::auto_mode_rules(&settings);
+        assert_eq!(finding["status"], "missing");
+        assert_eq!(std::fs::read(&settings).unwrap(), before);
+
+        assert!(report::repair_auto_mode_rules(&settings, "missing", false, false).is_none());
+        assert!(report::repair_auto_mode_rules(&settings, "missing", true, true).is_none());
+        assert_eq!(std::fs::read(&settings).unwrap(), before);
+
+        let repaired = report::repair_auto_mode_rules(&settings, "missing", true, false)
+            .expect("non-JSON --fix attempts the repair");
+        assert!(repaired.changed && repaired.error.is_none(), "{repaired:?}");
+        let finding = report::auto_mode_rules(&settings);
+        assert_eq!(finding["status"], "present");
+        assert!(report::repair_auto_mode_rules(&settings, "present", true, false).is_none());
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(settings).unwrap()).unwrap();
+        assert_eq!(written["model"], "opus");
+        assert_eq!(written["autoMode"]["allow"][1], "My custom Auto Mode rule");
+        assert_eq!(nothing_to_fix_message(false, true), None);
+        assert_eq!(
+            nothing_to_fix_message(false, false),
+            Some("fno doctor: nothing to fix.")
+        );
     }
 }
