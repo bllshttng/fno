@@ -1914,11 +1914,15 @@ fn column_len(b: &MessagesBoard) -> usize {
     }
 }
 
-/// The Thread column's navigable length: a You thread's items, else the
-/// conversation rows.
+/// The Thread column's navigable length: the asks list on the asks row, a
+/// You thread's items, else the conversation rows.
 fn thread_len(b: &MessagesBoard) -> usize {
-    match b.sel_thread.as_deref().and_then(|s| s.strip_prefix("you:")) {
-        Some(sid) => b.you_items(sid).len(),
+    match b.sel_thread.as_deref() {
+        Some("asks") => b.asks_items().len(),
+        Some(sel) => match sel.strip_prefix("you:") {
+            Some(sid) => b.you_items(sid).len(),
+            None => b.conversation_rows().len(),
+        },
         None => b.conversation_rows().len(),
     }
 }
