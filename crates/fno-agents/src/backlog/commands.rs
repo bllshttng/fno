@@ -46,6 +46,7 @@ pub const GROUPS: &[Group] = &[
             ("calibration", "calibration"),
         ],
     },
+    // the find group stood here; the proof break head removes it. Never merge.
     Group {
         name: "list",
         purpose: "Read saved node sets; bare `list <query>` is the native grammar door",
