@@ -218,7 +218,18 @@ fn ask_unknown_name_stderr_byte_parity() {
     let ch = ClaudeHome::at(tmpdir("ask-parity-claude"));
     let cwd = tmpdir("ask-parity-cwd");
 
-    let out = dispatch_claude_ask(&home, &ch, "myagent", "msg", "fno", &cwd, false, None, &[]);
+    let out = dispatch_claude_ask(
+        &home,
+        &ch,
+        "myagent",
+        "msg",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[],
+        None,
+    );
 
     // Python: f"unknown agent {name!r}; spawn it first: fno agents spawn {name} --harness <harness>"
     // Rust must match this exactly (py_repr wraps in single quotes).

@@ -51,11 +51,12 @@ impl Waiting {
     /// The check-in line: the finding and the remedy in one sentence.
     pub(crate) fn line(&self, now: i64) -> String {
         format!(
-            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: claude attach {}",
+            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: fno agents ask {} --answer allow_once (TTY form: claude attach {})",
             self.name,
             self.short_id,
             self.waiting_for,
             self.minutes(now),
+            self.short_id,
             self.short_id
         )
     }
