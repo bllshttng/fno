@@ -2420,12 +2420,20 @@ pub fn graph_lock_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.lock", base.display()))
 }
 
+/// A hold that runs past this threshold journals one `graph_lock_held` row
+/// on release, naming the holder and where the time went.
+const HOLD_EVENT_MIN: Duration = Duration::from_secs(2);
+
 /// A held bounded lock. Release on drop.
 #[derive(Debug)]
 pub struct BoundedLock {
     file: File,
     path: PathBuf,
     ticket: Option<PathBuf>,
+    acquired_at: Instant,
+    /// Sub-phase timings of the work this holder did under the lock, filled
+    /// by `locked_mutate_flavored` and carried onto the hold event.
+    phases: std::cell::RefCell<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl BoundedLock {
@@ -2470,6 +2478,8 @@ impl BoundedLock {
                             file,
                             path: lock_path,
                             ticket,
+                            acquired_at: Instant::now(),
+                            phases: Default::default(),
                         });
                     }
                     Err(_) if Instant::now() >= deadline => break,
@@ -2492,6 +2502,26 @@ impl BoundedLock {
 
     pub fn lock_path(&self) -> &Path {
         &self.path
+    }
+
+    /// How long this holder has held the lock.
+    pub fn held_for(&self) -> Duration {
+        self.acquired_at.elapsed()
+    }
+
+    /// Record one under-lock sub-phase's duration for the hold event.
+    pub fn note_phase(&self, name: &str, started: Instant) {
+        self.phases.borrow_mut().insert(
+            format!("{name}_ms"),
+            serde_json::Value::from(started.elapsed().as_millis() as u64),
+        );
+    }
+
+    /// Record a named counter (a busy-retry count) for the hold event.
+    pub fn note_count(&self, name: &str, value: u64) {
+        self.phases
+            .borrow_mut()
+            .insert(name.to_string(), serde_json::Value::from(value));
     }
 }
 
@@ -2527,7 +2557,16 @@ fn holder_summary(lock_path: &Path) -> String {
     if super::agent_lock::pid_is_alive(pid) {
         format!("recorded holder pid {pid}, {age}")
     } else {
-        format!("holder record pid {pid} is dead (a crashed writer), {age}")
+        // The stamp can outlive its holder: a crashed writer's line stays
+        // until the next successful stamp, so a LIVE flock holder can sit
+        // behind a dead pid. The holder's own queue ticket is still
+        // registered, so the oldest ticket names the real holder.
+        match crate::lock_queue::head_pid(lock_path) {
+            Some(live) if live != pid && super::agent_lock::pid_is_alive(live) => format!(
+                "holder record pid {pid} is dead (a crashed writer), {age}; the live lock holder is queue-head pid {live}"
+            ),
+            _ => format!("holder record pid {pid} is dead (a crashed writer), {age}"),
+        }
     }
 }
 
@@ -2548,9 +2587,26 @@ fn unstamped_summary(lock_path: &Path) -> String {
 
 impl Drop for BoundedLock {
     fn drop(&mut self) {
+        let held = self.acquired_at.elapsed();
         crate::lock_queue::withdraw(self.ticket.as_deref());
         let _ = self.file.set_len(0);
         let _ = self.file.unlock();
+        // The holder's own measurement of a long hold: a waiter
+        // sees only its timeout; this row names who held and where the time
+        // went. Best effort, past a 2 s threshold so a quiet store journals
+        // nothing.
+        if held >= HOLD_EVENT_MIN {
+            crate::chokepoint_events::append_row(
+                "graph_lock_held",
+                serde_json::json!({
+                    "pid": std::process::id(),
+                    "command": crate::chokepoint::process_command(std::process::id()),
+                    "lock": self.path.display().to_string(),
+                    "hold_ms": held.as_millis() as u64,
+                    "phases_ms": serde_json::Value::Object(self.phases.borrow().clone()),
+                }),
+            );
+        }
     }
 }
 
@@ -2688,6 +2744,9 @@ pub struct MutateOutcome {
     pub is_canonical: bool,
     /// The store content digest stamped with the published rows.
     pub version: String,
+    /// How long this publish held the graph lock, the holder-side slice the
+    /// hold-ratio contract judges (`lock_held < wall/4` on a one-row change).
+    pub lock_held: Duration,
 }
 
 /// Inputs to the store-side mutate cycle that the CLIENT computes
@@ -2844,10 +2903,12 @@ fn locked_mutate_flavored(
         crate::backlog::read_entries(path).map_err(StoreError::Sqlite)?
     };
     let _lock = BoundedLock::acquire(path, timeout)?;
+    let recheck_started = Instant::now();
     let current = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
     if current != begin_version || current != input.base_version {
         return Err(StoreError::Conflict);
     }
+    _lock.note_phase("version_recheck", recheck_started);
 
     // Pre-image defaults for the curation snapshot, re-derived through the
     // same pipeline (store.py's _status_normalized + _pre_curation). The
@@ -3011,7 +3072,9 @@ fn locked_mutate_flavored(
     // why, or the whole publish refuses and nothing lands.
     crate::backlog::done_evidence::enforce(&raw, &entries).map_err(StoreError::Invalid)?;
     if let Some(hook) = before_publish {
+        let hook_started = Instant::now();
         hook(&raw)?;
+        _lock.note_phase("before_publish", hook_started);
     }
 
     // The store diff runs against the baseline in the same canonical shape
@@ -3021,11 +3084,17 @@ fn locked_mutate_flavored(
     // row-level conflict detection for untouched rows.
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
-    let (version, _retries) = crate::backlog::retry_on_busy(|| {
+    let publish_started = Instant::now();
+    let (version, publish_retries) = crate::backlog::retry_on_busy(|| {
         crate::backlog::authoritative_sync(path, &baseline, &entries)
     })
     .map_err(StoreError::Sqlite)?;
+    _lock.note_phase("authoritative_sync", publish_started);
+    _lock.note_count("publish_retries", publish_retries as u64);
+    let snapshot_started = Instant::now();
     crate::backlog::snapshot_db(path, crate::backlog::now_ms()).map_err(StoreError::Sqlite)?;
+    _lock.note_phase("snapshot_db", snapshot_started);
+    let lock_held = _lock.held_for();
     let backup: Option<PathBuf> = None;
     let shadow_warning = None;
 
@@ -3037,6 +3106,7 @@ fn locked_mutate_flavored(
         closure_releases,
         is_canonical,
         version,
+        lock_held,
     })
 }
 

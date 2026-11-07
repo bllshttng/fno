@@ -1076,6 +1076,18 @@ pub(crate) fn retry_on_busy<T>(
                     continue;
                 }
                 if busy {
+                    // The busy layer had no journal row: the
+                    // dozen 2026-11-06 refusals were these, and no events
+                    // file held a trace of them. One row per exhausted wait.
+                    crate::chokepoint_events::append_row(
+                        "graph_write_busy",
+                        serde_json::json!({
+                            "pid": std::process::id(),
+                            "attempts": ATTEMPTS,
+                            "elapsed_ms": started.elapsed().as_millis() as u64,
+                            "error": error.chars().take(300).collect::<String>(),
+                        }),
+                    );
                     return Err(format!(
                         "graph write refused: the store was busy after {ATTEMPTS} attempts over \
                          {:.1}s (sqlite: {error}). Nothing was written; no node was created. \
