@@ -77,6 +77,22 @@ pub(super) fn drain_with_phase_receipt(
     crate::loop_lead::scope_undelivered_with_reserve_watch(fno_bin, cwd, scope, session_id, emit)
 }
 
+/// The newest assistant text in the transcript tail, if any.
+fn last_assistant_text(transcript_path: &Path) -> Option<String> {
+    read_tail_lines(transcript_path, 1 << 20)
+        .iter()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+        .filter(|val| {
+            val.pointer("/message/role")
+                .or_else(|| val.get("role"))
+                .and_then(|v| v.as_str())
+                == Some("assistant")
+        })
+        .map(|val| extract_assistant_text(&val))
+        .find(|text| !text.is_empty())
+}
+
 pub(super) fn lead_decide(
     parsed: &LoopCheckArgs,
     // The registry the session-binding gate already loaded on the Team
@@ -338,10 +354,16 @@ pub(super) fn lead_decide(
                 dry,
             );
         }
+        // A lead that ends its turn naming a user question another session
+        // asked is waiting on the user too: its beat stays quiet until the
+        // question closes, whoever owns it now.
         let open_question = board
             .operator_question_sessions
             .iter()
-            .any(|owner| owner == &session_id);
+            .any(|owner| owner == &session_id)
+            || last_assistant_text(&parsed.transcript_path).is_some_and(|text| {
+                !crate::event_rules::stop_open_questions(&parsed.cwd, &text).is_empty()
+            });
         if open_question {
             return terminate(
                 TerminationReason::NoWork,

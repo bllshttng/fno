@@ -575,20 +575,30 @@ fn named_qids(text: &str) -> Vec<&str> {
 }
 
 fn names_open_question(ctx: &Ctx) -> bool {
-    let qids = named_qids(&ctx.last_message);
+    !open_questions_named(&ctx.last_message, ctx.home, ctx.journal, ctx.cwd).is_empty()
+}
+
+/// The `q-xxxxxxxx` ids `text` names that are still open on the board,
+/// whoever asked them. The Stop hook flags the session on a non-empty answer,
+/// and the lead's beat goes quiet on it.
+pub(crate) fn open_questions_named(
+    text: &str,
+    home: &crate::paths::AgentsHome,
+    journal: &Path,
+    cwd: &Path,
+) -> Vec<String> {
+    let qids = named_qids(text);
     if qids.is_empty() {
-        return false;
+        return Vec::new();
     }
-    let fno_dir = ctx
-        .home
+    let fno_dir = home
         .root()
         .parent()
         .map_or_else(|| std::path::PathBuf::from(".fno"), Path::to_path_buf);
-    let mut journals = vec![ctx.journal.to_path_buf()];
+    let mut journals = vec![journal.to_path_buf()];
     // Resolving the space dir can panic with no hermetic state root; the
     // Stop path fails open to the journals it can read.
-    if let Ok(family) =
-        std::panic::catch_unwind(|| crate::needs::question_journals(&fno_dir, ctx.cwd))
+    if let Ok(family) = std::panic::catch_unwind(|| crate::needs::question_journals(&fno_dir, cwd))
     {
         journals.extend(family);
     }
@@ -600,7 +610,17 @@ fn names_open_question(ctx: &Ctx) -> bool {
         closed.extend(c);
     }
     qids.iter()
-        .any(|q| asked.contains(*q) && !closed.contains(*q))
+        .filter(|q| asked.contains(**q) && !closed.contains(**q))
+        .map(|q| (*q).to_string())
+        .collect()
+}
+
+/// [`open_questions_named`] for a Stop payload's last assistant message,
+/// read from the process environment the way [`eval_stop`] reads it.
+pub(crate) fn stop_open_questions(cwd: &Path, last_message: &str) -> Vec<String> {
+    let journal = crate::law_match::project_events_journal();
+    let home = crate::paths::AgentsHome::from_env();
+    open_questions_named(last_message, &home, &journal, cwd)
 }
 
 fn session_filed_this_turn(ctx: &Ctx) -> bool {
@@ -1111,6 +1131,11 @@ mod tests {
             !fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
             "an inherited open qid counts as filed"
         );
+        assert_eq!(
+            open_questions_named(relay, &rig.home, &rig.journal, &rig.cwd),
+            ["q-1f456994"],
+            "a relay of another session's open question is named"
+        );
         rig.seed(json!({
             "ts": crate::events::now_rfc3339(),
             "type": crate::needs::QUESTION_TYPES[1],
@@ -1121,6 +1146,10 @@ mod tests {
         assert!(
             fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
             "a closed qid files nothing"
+        );
+        assert!(
+            open_questions_named(relay, &rig.home, &rig.journal, &rig.cwd).is_empty(),
+            "an answered question names nothing, so the flag clears"
         );
         assert_eq!(
             named_qids("see q-1f456994, not q-1f4569941 or xq-1f456994"),
