@@ -3420,7 +3420,10 @@ mod tests {
         // three agree at offset 0, so only a scrolled pane catches them.
         let mut pane = Pane::new(3, 20);
         pane.feed(b"\x1b[31mrow0\x1b[0m\r\nrow1\r\nhttps://example.com\r\nfour\r\nfive\r\n");
-        assert_eq!(pane.scroll(2), 2);
+        // Five fed lines scroll three into history (the trailing \r\n
+        // scrolls once past "five"), so offset 3 puts "row0" at viewport
+        // row 0 and the URL row at viewport row 2.
+        assert_eq!(pane.scroll(3), 3);
 
         // viewport_point: a selection over viewport row 0 must yank "row0"
         // (the oldest visible line), not a row 2*offset away.
