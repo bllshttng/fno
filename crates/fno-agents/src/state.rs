@@ -1667,6 +1667,33 @@ impl RegistryEntry {
         true
     }
 
+    /// WHO answers for this row NOW. Succession re-homes each live worker by
+    /// rewriting the `spawn_provenance` owner (team_settle), and the birth
+    /// edge `spawned_by_session` stays history by design, so a reader asking
+    /// "whose worker is this today" reads the owner session and falls back to
+    /// the birth edge only where no provenance narrows it (adopted rows,
+    /// pre-v33 births, team, mission or operator owners).
+    pub fn current_owner_session(&self) -> Option<&str> {
+        if let Some(crate::spawn_contract::SpawnOwner::Session(owner)) =
+            self.spawn_provenance.as_ref().map(|p| &p.owner)
+        {
+            let sid = owner.session_id.trim();
+            if !sid.is_empty() {
+                return Some(sid);
+            }
+        }
+        self.spawned_by_session.as_deref().filter(|s| !s.is_empty())
+    }
+
+    /// The harness of the owner session, only when the owner IS a session.
+    /// `None` sends the caller back to the row's birth-edge harness.
+    pub fn current_owner_harness(&self) -> Option<&str> {
+        match self.spawn_provenance.as_ref().map(|p| &p.owner) {
+            Some(crate::spawn_contract::SpawnOwner::Session(owner)) => Some(&owner.harness),
+            _ => None,
+        }
+    }
+
     /// Clone this row as an independently addressable live branch. The branch
     /// leaves with no `fno_id`: the registry write mints it one of its own.
     pub fn fork_for_session(
