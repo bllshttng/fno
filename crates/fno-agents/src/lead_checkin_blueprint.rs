@@ -706,9 +706,13 @@ mod tests {
             "high",
         )
         .unwrap();
-        assert_eq!(reading["plan_ready"], json!(["x-pl"]), "{reading}");
+        assert_eq!(
+            reading.get("plan_ready"),
+            Some(&json!(["x-pl"])),
+            "{reading}"
+        );
         assert_eq!(reading["starts"], json!([]), "{reading}");
-        assert_eq!(reading["target_ready"], json!([]), "{reading}");
+        assert_eq!(reading.get("target_ready"), Some(&json!([])), "{reading}");
         let lines = render_lines(&reading);
         let want = "  plan-ready: fno agents spawn \"/fno:target x-pl\"";
         assert_eq!(lines.iter().filter(|l| *l == want).count(), 1, "{lines:?}");
@@ -736,12 +740,17 @@ mod tests {
             Ok(0),
         )
         .unwrap();
-        assert_eq!(reading["plan_ready"], json!(["x-mine"]), "{reading}");
+        assert_eq!(
+            reading.get("plan_ready"),
+            Some(&json!(["x-mine"])),
+            "{reading}"
+        );
         // The empty unplanned queue also adds its null-id idle skip, so the
         // owned row must read among the skips, not as the only one.
         assert!(
-            reading["skips"]
-                .as_array()
+            reading
+                .get("skips")
+                .and_then(Value::as_array)
                 .unwrap()
                 .iter()
                 .any(|s| { s == &json!({"id": "x-theirs", "reason": "owned by team x-cccc"}) }),
@@ -757,7 +766,7 @@ mod tests {
             "high",
         )
         .unwrap();
-        assert_eq!(reading["plan_ready"], json!([]), "{reading}");
+        assert_eq!(reading.get("plan_ready"), Some(&json!([])), "{reading}");
         assert!(
             render_lines(&reading)
                 .iter()

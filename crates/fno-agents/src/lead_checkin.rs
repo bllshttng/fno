@@ -1483,7 +1483,7 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         );
         data.insert(
             "blueprint_plan_ready".into(),
-            bp.value["plan_ready"].clone(),
+            bp.value.get("plan_ready").cloned().unwrap_or(Value::Null),
         );
         data.insert("blueprint_skips".into(), bp.value["skips"].clone());
         // The idle-scope attention reads these; deliberately NOT diff keys
