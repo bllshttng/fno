@@ -93,7 +93,7 @@ pub(crate) fn identity_key(session_id: &str) -> String {
 /// settings stack instead of `FNO_HOME`, so the two agree wherever the
 /// global config (or the default) carries the root, and a test env must pin
 /// both variables to aim both legs at one directory.
-fn state_root() -> PathBuf {
+pub(crate) fn state_root() -> PathBuf {
     if let Some(home) = std::env::var_os("FNO_HOME") {
         return PathBuf::from(home);
     }

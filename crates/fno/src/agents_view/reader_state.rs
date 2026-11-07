@@ -170,6 +170,9 @@ impl ReaderState {
             // Stamp machine-armed holds after the badges; a hold
             // mark is orthogonal to the badge, like `dnd` itself.
             overlay_hold_marks(&mut reg_rows, now_secs);
+            // The cargo build mark: same read-time stamping as the holds,
+            // from the db/build-marks sidecars the daemon arm rewrites.
+            overlay_build_marks(&mut reg_rows, now_secs);
             overlay_keep_marks(&mut reg_rows);
         }
         self.last_good_reg = Some(reg_rows.clone());

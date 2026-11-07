@@ -403,7 +403,10 @@ fn default_true() -> bool {
 /// `Command::ReachRemote`, a remote row opened in a portal; floor stays 58.
 /// v122: `AgentLaunchRequest.host` (serde default), the composer's target
 /// machine; older servers must never ignore a remote destination.
-pub const PROTO_VERSION: u32 = 122;
+/// v123: `AgentRow.build` (serde default), the daemon-pushed cargo build
+/// mark behind the sideline's compiling throbber and waiting hourglass;
+/// floor stays 58.
+pub const PROTO_VERSION: u32 = 123;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1144,6 +1147,11 @@ pub struct AgentRow {
     /// lineage, so no reaper removes it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
+    /// (v123) The cargo build mark the daemon pushes for the session's
+    /// checkout: compiling, or waiting with its queue position. Additive
+    /// like `dnd`: an older wire defaults None, which paints no mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildMark>,
     /// (v47) True only when `exited` is a terminal registry status
     /// with NO positive corroboration (no confirmed-dead pid, no confirmed-
     /// gone pane) -- `agents_view::Liveness::Unmeasured`. `exited` keeps its
@@ -1575,6 +1583,42 @@ pub enum AgentBadge {
     Working,
     Blocked,
     Done,
+}
+
+/// The cargo build mark the daemon pushes per session: a compiling job or a
+/// waiter with its queue position. The server's read loop stamps it onto
+/// rows from the db/build-marks sidecars; the sideline paints it beside the
+/// lattice state, never fighting it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildStage {
+    Compiling,
+    Waiting,
+}
+
+/// The mark's wire form. `position` rides only on `Waiting` and is omitted
+/// when the lane read cannot name it (the hourglass alone is honest).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuildMark {
+    pub stage: BuildStage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u64>,
+}
+
+impl BuildMark {
+    pub(crate) fn waiting(position: Option<u64>) -> Self {
+        Self {
+            stage: BuildStage::Waiting,
+            position,
+        }
+    }
+
+    pub(crate) fn compiling() -> Self {
+        Self {
+            stage: BuildStage::Compiling,
+            position: None,
+        }
+    }
 }
 
 /// Layout mutations the client can request. Interpreted (prefix-key table)
@@ -3867,6 +3911,7 @@ mod tests {
                         dnd: false,
                         held_conversation: false,
                         pinned: false,
+                        build: None,
                         unmeasured: false,
                         answerable: Some(AnswerablePrompt {
                             prompt: "Do you want to proceed?".into(),
@@ -3927,6 +3972,7 @@ mod tests {
                         dnd: false,
                         held_conversation: false,
                         pinned: false,
+                        build: None,
                         unmeasured: false,
                         answerable: None,
                         attach_id: None,
@@ -4162,7 +4208,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 122);
+        assert_eq!(PROTO_VERSION, 123);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

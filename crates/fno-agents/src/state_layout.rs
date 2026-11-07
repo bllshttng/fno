@@ -154,6 +154,7 @@ pub const FOLD_CANDIDATES: &[&str] = &[
     "backups",
     "bin",
     "bus",
+    "build-marks",
     "cargo-build",
     "chats",
     "claim-aux",
