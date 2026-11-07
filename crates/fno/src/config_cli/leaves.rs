@@ -108,7 +108,7 @@ pub fn run_build_dir(args: &[OsString]) -> i32 {
 }
 
 /// The build-dir value over the native merge: the
-/// `paths.cargo_targets_base` override, else `<state_dir>/cargo-build`.
+/// `paths.cargo_targets_base` override, else the layout table's cargo cache.
 pub fn cargo_build_dir_value() -> String {
     let raw = super::merged_config(&repo_root());
     let override_base = super::raw_get(&raw, "paths.cargo_targets_base")
@@ -117,7 +117,8 @@ pub fn cargo_build_dir_value() -> String {
     let home = home_dir().to_string_lossy().into_owned();
     let base = match override_base {
         Some(configured) => resolve_path(&PathBuf::from(expanduser(&configured, &home))),
-        None => state_dir_value().join("cargo-build"),
+        None => crate::state_layout::place_dir(&state_dir_value(), "cargo-build")
+            .expect("cargo-build must have a state-root layout row"),
     };
     format!("{}/{{workspace-path-hash}}", base.to_string_lossy())
 }
@@ -243,7 +244,7 @@ pub fn run_budget(args: &[OsString]) -> i32 {
         }
         Some(budget) => {
             println!(
-                "{stamp} declares a subagent budget of {budget}; declared width {parsed} exceeds it - run inline or split the work"
+                "refused: {stamp} declares a subagent budget of {budget}; declared width {parsed} exceeds it - run inline or split the work"
             );
             1
         }

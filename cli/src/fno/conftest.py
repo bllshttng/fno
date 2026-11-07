@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.test_env_door import native_env
+from fno.env_door import native_env
 
 _SANDBOX = tempfile.mkdtemp(prefix="fno-src-test-sandbox-")
 _hermetic_env = native_env("neutralise", sandbox=Path(_SANDBOX))

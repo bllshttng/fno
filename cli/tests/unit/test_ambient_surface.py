@@ -90,9 +90,9 @@ def test_an_unreceived_env_still_refuses_without_the_binary(monkeypatch):
     """
     import pytest as _pytest
 
-    from fno import test_env_door
+    from fno import env_door
 
-    monkeypatch.setattr(test_env_door.shutil, "which", lambda name: None)
+    monkeypatch.setattr(env_door.shutil, "which", lambda name: None)
     with _pytest.raises(SystemExit) as excinfo:
-        test_env_door.apply_env("neutralise", {"HOME": "/anyone"}, sandbox=Path("/sb"))
+        env_door.apply_env("neutralise", {"HOME": "/anyone"}, sandbox=Path("/sb"))
     assert excinfo.value.code == 3

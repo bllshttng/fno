@@ -51,7 +51,7 @@ agent_freeze = false
 # postmortems_dir = <unset>   # optional; no default
 # Override base dir for worktrees.
 # worktrees_base = <unset>   # optional; no default
-# Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.
+# Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.
 # cargo_targets_base = <unset>   # optional; no default
 # Override path to the memory dir.
 # memory_dir = <unset>   # optional; no default
