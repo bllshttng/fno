@@ -32,10 +32,10 @@ use std::path::{Path, PathBuf};
 pub enum Door {
     Get(Vec<OsString>),
     History(Vec<OsString>),
-    BuildDir,
+    BuildDir(Vec<OsString>),
     Budget(Vec<OsString>),
     StatusSinks(Vec<OsString>),
-    ActiveBacklog,
+    ActiveBacklog(Vec<OsString>),
     PluginInstall(Vec<OsString>),
     PluginGroup(Vec<OsString>),
     Doctor(Vec<OsString>),
@@ -49,10 +49,10 @@ pub fn run(door: Door) -> i32 {
     match door {
         Door::Get(rest) => get::run(&rest),
         Door::History(rest) => history::run(&rest),
-        Door::BuildDir => leaves::run_build_dir(&[]),
+        Door::BuildDir(rest) => leaves::run_build_dir(&rest),
         Door::Budget(rest) => leaves::run_budget(&rest),
         Door::StatusSinks(rest) => leaves::run_status_sinks(&rest),
-        Door::ActiveBacklog => leaves::run_active_backlog(&[]),
+        Door::ActiveBacklog(rest) => leaves::run_active_backlog(&rest),
         Door::PluginInstall(rest) => plugin_install::run(&rest),
         Door::PluginGroup(rest) => plugin_install::run_group(&rest),
         Door::Doctor(rest) => crate::config_doctor::run(&rest),
@@ -80,14 +80,14 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
         ["config", "history", rest @ ..] => Some(Door::History(
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
-        ["config", "build-dir"] => Some(Door::BuildDir),
+        ["config", "build-dir", ..] => Some(Door::BuildDir(args[2..].to_vec())),
         ["config", "assert-subagent-budget", rest @ ..] => Some(Door::Budget(
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
         ["config", "status-sinks", rest @ ..] => Some(Door::StatusSinks(
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
-        ["config", "active-backlog"] => Some(Door::ActiveBacklog),
+        ["config", "active-backlog", ..] => Some(Door::ActiveBacklog(args[2..].to_vec())),
         ["config", "plugin", "install", ..] => Some(Door::PluginInstall(args[3..].to_vec())),
         ["config", "plugin", rest @ ..] => Some(Door::PluginGroup(
             rest.iter().map(|w| OsString::from(*w)).collect(),
@@ -762,16 +762,16 @@ mod tests {
             Some(Door::History(_))
         ));
         assert!(matches!(
-            classify(&os(&["config", "build-dir"])),
-            Some(Door::BuildDir)
+            classify(&os(&["config", "build-dir", "--help"])),
+            Some(Door::BuildDir(_))
         ));
         assert!(matches!(
             classify(&os(&["config", "status-sinks", "--json"])),
             Some(Door::StatusSinks(_))
         ));
         assert!(matches!(
-            classify(&os(&["config", "active-backlog"])),
-            Some(Door::ActiveBacklog)
+            classify(&os(&["config", "active-backlog", "-h"])),
+            Some(Door::ActiveBacklog(_))
         ));
         assert!(matches!(
             classify(&os(&["config", "plugin", "install", "claude", "--dev"])),

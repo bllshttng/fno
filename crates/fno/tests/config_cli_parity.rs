@@ -14,16 +14,13 @@
 //! the committed oracle. The cold-settings.yaml path is covered end-to-end
 //! by the worktree-manager smoke tests, whose `wt_config` reader goes
 //! through `fno config get` against a fresh HOME.
-//! The two forwarded help routes are covered by `forwarded_help_keeps_argv`;
-//! they use a local `fno-py` probe instead of provisioning a wheel.
+//! The two leaf help routes are covered by `leaf_help_answers_natively`.
 //!
 //! With `FNO_CAPTURE_GOLDEN=1` the test re-freezes every golden from the
 //! oracle (`--case` mode, which loads the base-commit leg from git) instead
 //! of comparing, so the capture stays reproducible while the base commit
 //! exists.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -442,13 +439,11 @@ fn config_cli_family_matches_the_captured_leg() {
         }
         let _ = std::fs::remove_dir_all(&root);
     }
-    #[cfg(unix)]
-    forwarded_help_keeps_argv();
+    leaf_help_answers_natively();
 }
 
-#[cfg(unix)]
-fn forwarded_help_keeps_argv() {
-    let root = unique_root("forwarded-help");
+fn leaf_help_answers_natively() {
+    let root = unique_root("leaf-help");
     let project = root.join("project");
     let home = root.join("home");
     let state = root.join("state");
@@ -456,18 +451,20 @@ fn forwarded_help_keeps_argv() {
     std::fs::create_dir_all(home.join(".fno")).unwrap();
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(state.join(".path-migration-done"), b"").unwrap();
-    let launcher = root.join("fno-py");
-    std::fs::write(&launcher, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n").unwrap();
-    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    for args in [
-        &["config", "build-dir", "--help"][..],
-        &["config", "active-backlog", "--help"][..],
+    for (args, usage) in [
+        (
+            &["config", "build-dir", "--help"][..],
+            "Usage: fno config build-dir [OPTIONS]",
+        ),
+        (
+            &["config", "active-backlog", "--help"][..],
+            "Usage: fno config active-backlog [OPTIONS]",
+        ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_fno"))
             .args(args)
             .current_dir(&project)
-            .env("FNO_PY", &launcher)
             .env("FNO_AGENT_SELF", "1")
             .env("FNO_REPO_ROOT", &project)
             .env("FNO_GLOBAL_SETTINGS_PATH", home.join(".fno/settings.yaml"))
@@ -476,14 +473,15 @@ fn forwarded_help_keeps_argv() {
             .env("HOME", &home)
             .output()
             .expect("fno must run");
-        assert_eq!(output.status.code(), Some(0));
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            args.join(" ")
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).starts_with(usage),
+            "{args:?} stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
         );
         assert!(
             output.stderr.is_empty(),
-            "forwarded CLI stderr: {}",
+            "{args:?} stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
