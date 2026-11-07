@@ -47,11 +47,6 @@ pub const GROUPS: &[Group] = &[
         ],
     },
     Group {
-        name: "find",
-        purpose: "Search node text",
-        actions: &[("text", "find")],
-    },
-    Group {
         name: "list",
         purpose: "Read saved node sets; bare `list <query>` is the native grammar door",
         actions: &[
