@@ -117,6 +117,9 @@ impl View {
             if at(&buttons.session) {
                 return Some(ChromeHit::ToggleComposer);
             }
+            if at(&buttons.host) {
+                return Some(ChromeHit::AddRemoteHost);
+            }
             if at(&buttons.menu) {
                 return Some(ChromeHit::OpenSidelineMenu { row, col });
             }

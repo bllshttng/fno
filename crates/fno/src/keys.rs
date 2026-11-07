@@ -587,6 +587,9 @@ pub enum Event {
     /// Open the sideline MENU popup (prefix+P): the footer `menu` button's
     /// action, reached from the keyboard. `M` belongs to open-messages.
     OpenSidelineMenu,
+    /// Open settings on the Remote hosts tab with the add field armed (prefix++):
+    /// the footer `+ host` button's action.
+    OpenAddHost,
     /// Open the new-workspace name overlay (prefix+N): the `+ new workspace`
     /// footer's action, reached from the keyboard. Case pair with `n`
     /// (next tab).
@@ -1353,6 +1356,13 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             OpenSidelineMenu,
             Global,
             "sideline menu (palette)",
+        ),
+        b(
+            b'+',
+            "add-remote-host",
+            OpenAddHost,
+            Global,
+            "add a remote host",
         ),
         b(
             b'C',
