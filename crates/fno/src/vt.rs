@@ -300,10 +300,10 @@ impl Pane {
                         // including the BSU, park the tail (a BSU split
                         // across PTY reads degrades to a torn frame until
                         // ESU or expiry - wrong timing, never wrong text).
-                        let split = pos + BSU.len();
-                        self.processor.advance(&mut self.term, &b[..split]);
+                        let (head_plus_bsu, tail) = b.split_at(pos + BSU.len());
+                        self.processor.advance(&mut self.term, head_plus_bsu);
                         if self.term.mode().contains(Mode::SYNC_UPDATE) {
-                            self.hold_bytes(&b[split..]);
+                            self.hold_bytes(tail);
                         }
                     } else {
                         self.processor.advance(&mut self.term, &b);
@@ -1652,10 +1652,13 @@ fn map_square(square: &Square, styles: &[Style]) -> Cell {
             if style_flags.contains(StyleFlags::DIM) {
                 f |= cell_flags::DIM;
             }
-            let c = if style_flags.contains(StyleFlags::HIDDEN) {
+            let ch = square.c();
+            // A blank rio-vt cell decodes as codepoint 0; the wire's blank
+            // is a space, as the old engine's default cell carried.
+            let c = if style_flags.contains(StyleFlags::HIDDEN) || ch == '\0' {
                 ' '
             } else {
-                square.c()
+                ch
             };
             (c, style.fg, style.bg)
         }
@@ -1686,7 +1689,8 @@ fn map_square(square: &Square, styles: &[Style]) -> Cell {
 /// The cell's visible char for text walks: bg-only cells and hidden text
 /// render as spaces, matching the wire [`Cell`] mapping.
 fn square_text_char(square: &Square, styles: &[Style]) -> char {
-    if !matches!(square.content_tag(), ContentTag::Codepoint) {
+    let ch = square.c();
+    if !matches!(square.content_tag(), ContentTag::Codepoint) || ch == '\0' {
         return ' ';
     }
     let hidden = styles
@@ -1695,7 +1699,7 @@ fn square_text_char(square: &Square, styles: &[Style]) -> char {
     if hidden {
         ' '
     } else {
-        square.c()
+        ch
     }
 }
 
@@ -1981,10 +1985,10 @@ const BSU: &[u8] = b"\x1b[?2026h";
 /// First index of `needle` in `hay`, or `None` (bounded scan; the held
 /// paths only ever search 8-byte constants against one PTY read).
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.len() > hay.len() {
+    if needle.is_empty() {
         return None;
     }
-    (0..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Which recognized OSC a payload accumulator belongs to; the per-kind cap
