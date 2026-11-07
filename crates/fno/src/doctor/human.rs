@@ -973,7 +973,7 @@ fn emit_launch_agents(rep: &Value, err: bool) {
         .unwrap_or_default()
     {
         let label = entry.get("label").and_then(Value::as_str).unwrap_or("?");
-        let remedy = if label == "sh.fno.pr-watcher" {
+        let remedy = if label == crate::setup_services::pr_watcher_label() {
             "run `fno do pr watch refresh`"
         } else {
             "re-run `fno doctor update` if the entry point moved"

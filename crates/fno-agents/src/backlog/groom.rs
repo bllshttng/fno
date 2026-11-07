@@ -660,7 +660,11 @@ fn install_agent(
     // refresh passes the installed value so it is not re-resolved against
     // whatever directory the update ran from.
     let workdir = workdir.or_else(repo_root);
-    let plist_path = agents_dir.join(format!("{}.plist", label()));
+    // The plist FILENAME stays fixed (sh.fno.groom.plist): the per-HOME
+    // LaunchAgents directory separates files, and doctor's groom collector
+    // plus the legacy-installed file both key on this exact name. Only the
+    // Label key inside carries the derived label.
+    let plist_path = agents_dir.join(crate::launchd_labels::GROOM_PLIST_FILENAME);
     let rendered = render_plist(&fno_binary, &install_path, hour, workdir.as_deref());
     match refresh::write_if_changed(&plist_path, &rendered) {
         Ok(false) => {
@@ -734,7 +738,7 @@ fn installed_agent_settings(plist_path: &Path) -> (Option<i64>, Option<String>) 
 /// it: the tail of `fno doctor update`. A no-op when no groom agent is
 /// installed. Never fails: the update chain calls it best-effort.
 fn refresh_agent(agents_dir: &Path) -> Value {
-    let plist_path = agents_dir.join(format!("{}.plist", label()));
+    let plist_path = agents_dir.join(crate::launchd_labels::GROOM_PLIST_FILENAME);
     if !cfg!(target_os = "macos") || !plist_path.exists() {
         return json!({"status": "skipped", "detail": "no groom agent installed"});
     }

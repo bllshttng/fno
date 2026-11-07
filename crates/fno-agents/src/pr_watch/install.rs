@@ -655,12 +655,9 @@ pub(crate) fn ensure_activated(
     let interval = cfg_interval(cwd, interval);
     let plist_path = launch_agents_dir.join(PLIST_FILENAME);
     let _ = retire_legacy_postmerge_agents(launch_agents_dir);
-    // A legacy fixed-label job whose plist points at this HOME would keep
-    // double-ticking beside the derived-label job, so the migration runs
-    // here, before the loaded check; run() prints the receipts on the CLI
-    // path, and this silent call is what protects the ensure flow itself.
-    let _ =
-        crate::launchd_labels::retire_legacy_fixed_label(LEGACY_LABEL, &plist_path, "pr-watcher");
+    // The legacy fixed-label migration already ran in run() before this call
+    // (its receipts printed there), so the loaded check below cannot read the
+    // legacy job as ours.
 
     if launchctl_is_loaded() {
         return "already-running".to_string();

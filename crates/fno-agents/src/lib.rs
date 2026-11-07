@@ -314,7 +314,6 @@ pub mod lane_heal;
 pub mod lanes;
 pub mod launch_exec;
 pub mod launch_flags;
-pub mod launch_labels;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod launchd_labels;

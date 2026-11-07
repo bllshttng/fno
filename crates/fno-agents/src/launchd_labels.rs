@@ -18,7 +18,7 @@
 //! `setup_services.rs` (fno cannot depend on this crate); the parity unit
 //! tests in both crates pin the same vectors and fail if either drifts.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -85,9 +85,6 @@ pub fn retire_legacy_fixed_label(legacy: &str, expected_plist: &Path, what: &str
     if !cfg!(target_os = "macos") {
         return receipts;
     }
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return receipts;
-    };
     let Some(uid_num) = uid() else {
         return receipts;
     };
@@ -102,22 +99,19 @@ pub fn retire_legacy_fixed_label(legacy: &str, expected_plist: &Path, what: &str
         // Not registered: nothing to migrate.
         return receipts;
     };
-    let foreign = crate::tick_ledger::foreign_plist_path(&text, &home);
-    let registered_here = if foreign.is_some() {
-        false
-    } else {
-        paths_match(&path, expected_plist)
-    };
-    if foreign.is_some() {
+    // The registration is this HOME's own only when its plist path IS the
+    // expected plist; anything else (another HOME's plist, an unreadable or
+    // unknown path) stays and the receipt names where it points. The
+    // foreign-vs-unknown split does not change the action, so one compare
+    // covers both. This must NOT route through tick_ledger's foreign probe:
+    // that one pins the watcher's plist filename, which would misread a
+    // groom registration as foreign.
+    if !paths_match(&path, expected_plist) {
         receipts.push(format!(
-            "left the foreign {legacy} registration in place (registered from {path}); \
-             this HOME's {what} now runs under a HOME-derived label"
+            "left the {legacy} registration in place (registered from {path}, \
+             not this HOME's {what} plist); this HOME's {what} now runs under \
+             a HOME-derived label"
         ));
-        return receipts;
-    }
-    if !registered_here {
-        // Registered with an unreadable/unknown path: leave it; the doctor
-        // fold surfaces it as a `sh.fno.*` row this HOME cannot claim.
         return receipts;
     }
     let boot = std::process::Command::new("launchctl")
