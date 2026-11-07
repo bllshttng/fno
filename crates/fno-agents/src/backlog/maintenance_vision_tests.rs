@@ -18,7 +18,21 @@ fn vrow(id: &str, extra: Value) -> Value {
 }
 
 fn vfx(rows: &[Value]) -> (tempfile::TempDir, std::path::PathBuf) {
+    vfx_vision(rows, true)
+}
+
+/// A fixture store plus, when `vision`, a local config that carries
+/// project.vision, so the sweep's vision check is deterministic per
+/// fixture instead of reading the ambient machine config.
+fn vfx_vision(rows: &[Value], vision: bool) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
+    if vision {
+        let cfg = dir.path().join(".fno");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let body =
+            "[project]\nvision = \"keep the backlog honest, ship the idea-to-PR toolchain\"\n";
+        std::fs::write(cfg.join("config.toml"), body).unwrap();
+    }
     let graph = dir.path().join("graph.json");
     crate::graph_store::seed_rows(&graph, rows).unwrap();
     (dir, graph)
@@ -72,7 +86,7 @@ fn sweep_run(
     let tail: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let flags = parse_flags(&tail).unwrap();
     let mut out = Out::captured();
-    let code = run_vision_sweep(flags, &seams, &mut out, entries);
+    let code = run_vision_sweep(flags, &seams, &mut out, entries, dir.path());
     (code, out)
 }
 
@@ -172,14 +186,8 @@ fn vision_sweep_apply_defers_exactly_the_judged_list() {
 fn vision_sweep_skip_and_unjudged_never_defer() {
     // No vision source: the skip line, no grading, no artifact. Apply with
     // no artifact on disk defers nothing.
-    let (dir, graph) = vfx(&[vrow("ab-swp05", json!({}))]);
+    let (dir, graph) = vfx_vision(&[vrow("ab-swp05", json!({}))], false);
     let grade_none = |_: &str, _: &Path| -> Option<(String, String)> { None };
-    let cwd_probe = std::env::current_dir().unwrap();
-    if crate::blueprint_judge::vision_source_text(&[], &cwd_probe).is_some() {
-        // The dev machine carries no project vision; skip this leg when
-        // that changes so the fixture stays hermetic.
-        return;
-    }
     let (code, out) = sweep_run(
         graph.clone(),
         &dir,

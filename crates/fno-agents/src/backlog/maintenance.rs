@@ -1633,7 +1633,8 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
     }
 
     if flags.vision_sweep {
-        return maintenance_vision::run_vision_sweep(flags, seams, out, &entries);
+        let cwd = std::env::current_dir().unwrap_or_default();
+        return maintenance_vision::run_vision_sweep(flags, seams, out, &entries, &cwd);
     }
 
     // Apply legs never touch a node a live target session is driving.

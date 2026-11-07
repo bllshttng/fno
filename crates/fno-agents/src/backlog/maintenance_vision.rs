@@ -25,6 +25,7 @@ pub(crate) fn run_vision_sweep(
     seams: &Seams,
     out: &mut Out,
     entries: &[Value],
+    cwd: &Path,
 ) -> i32 {
     // Apply never re-grades: the artifact the report landed is the approval
     // surface, so apply reads the newest one and defers exactly its fail
@@ -33,8 +34,7 @@ pub(crate) fn run_vision_sweep(
     if flags.apply {
         return apply_from_artifact(seams, out);
     }
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let Some(vision) = crate::blueprint_judge::vision_source_text(&[], &cwd) else {
+    let Some(vision) = crate::blueprint_judge::vision_source_text(&[], cwd) else {
         out.line("vision-sweep: skipped (no vision source configured)");
         return 0;
     };
