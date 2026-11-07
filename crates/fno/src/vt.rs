@@ -154,6 +154,13 @@ pub struct Pane {
     /// wrong row). Shared per-pane (Locked 2) - every co-viewer sees the jump +
     /// highlight; only the initiator gets the `[i/n]` counter.
     search: Option<SearchState>,
+    /// Bytes parked during an open synchronized update (DEC 2026). The old
+    /// engine's processor deferred application inside a sync window; rio-vt
+    /// applies bytes to the grid immediately and only asks its renderer to
+    /// hold the frame, so the mux's hold contract lives here: `feed` parks
+    /// bytes while `Mode::SYNC_UPDATE` is set, and they flush when the
+    /// stream carries ESU or `expire_sync` fires at the deadline.
+    held: Vec<u8>,
 }
 
 /// The B..C command-echo capture in flight (see [`Pane::pending_cmd`]).
@@ -244,6 +251,7 @@ impl Pane {
             selected_block: None,
             search: None,
             notices: Vec::new(),
+            held: Vec::new(),
         }
     }
 
@@ -285,7 +293,21 @@ impl Pane {
                             p.raw.drain(..cut);
                         }
                     }
-                    self.processor.advance(&mut self.term, &b);
+                    if self.term.mode().contains(Mode::SYNC_UPDATE) {
+                        // Park the bytes (see `held`); flush as soon as the
+                        // stream itself ends the update, ahead of the deadline.
+                        self.held.extend_from_slice(&b);
+                        if self.held.len() > SYNC_HELD_BYTES {
+                            let cut = self.held.len() - SYNC_HELD_BYTES;
+                            self.held.drain(..cut);
+                        }
+                        if b.windows(ESU.len()).any(|w| w == ESU) {
+                            let held = std::mem::take(&mut self.held);
+                            self.processor.advance(&mut self.term, &held);
+                        }
+                    } else {
+                        self.processor.advance(&mut self.term, &b);
+                    }
                 }
                 Seg::Marker(m) => self.on_marker(m),
                 Seg::Notice(n) => {
@@ -307,11 +329,15 @@ impl Pane {
     }
 
     /// Apply a synchronized update whose deadline has passed, and report whether
-    /// one was applied. The parser sets the deadline but leaves the expiry to its
-    /// owner, because a program that dies inside an update sends no more bytes.
+    /// one was applied. The deadline's owner expires it because a program that
+    /// dies inside an update sends no more bytes; the held window flushes here.
     pub fn expire_sync(&mut self, now: std::time::Instant) -> bool {
         if self.sync_deadline().is_none_or(|deadline| deadline > now) {
             return false;
+        }
+        let held = std::mem::take(&mut self.held);
+        if !held.is_empty() {
+            self.processor.advance(&mut self.term, &held);
         }
         self.term.end_sync_update();
         true
@@ -1924,6 +1950,15 @@ const OSC_NUM_CAP: usize = 8;
 /// Queue cap for undrained notifications on one pane: the server's pump
 /// drains after every feed, so the cap only bites on an undrained replay.
 const NOTICE_QUEUE_CAP: usize = 8;
+
+/// Cap for bytes parked inside one synchronized update (`held`): a hostile
+/// program can open a sync window and stream forever; past this the oldest
+/// held bytes drop (the grid would have shown them mid-window anyway under
+/// rio-vt's immediate application, so a torn head is the honest fallback).
+const SYNC_HELD_BYTES: usize = 256 * 1024;
+
+/// End of a synchronized update: `CSI ? 2026 l`.
+const ESU: &[u8] = b"\x1b[?2026l";
 
 /// Which recognized OSC a payload accumulator belongs to; the per-kind cap
 /// and the terminator handler read it.
