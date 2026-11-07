@@ -1,6 +1,6 @@
 # clippy ratchet baseline: one <crate>/<path><TAB><lint><TAB>line text> per line.
-# Written by scripts/ci/clippy-check.sh --write-baseline; regen after fixing
 # flagged lines or bumping CLIPPY_TOOLCHAIN in .github/workflows/rust-ci.yml.
+# Written by scripts/ci/clippy-check.sh --write-baseline; regen after fixing
 crates/fno-agents/build.rs	clippy::disallowed_methods	let output = Command::new(cmd).args(args).output().ok()?;
 crates/fno-agents/build.rs	clippy::indexing_slicing	"allowed_sources": seq_to_json(&parsed["envelope"]["properties"]["source"]["enum"]),
 crates/fno-agents/build.rs	clippy::indexing_slicing	"envelope_allowed": seq_to_json(&family["envelope"]["allowed"]),
@@ -1372,6 +1372,8 @@ crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	} else if fno_agent
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&& result["filters_applied"]["provider"].as_str() == Some("codex")
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&args[1..],
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&rest[1..],
+crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	assert_eq!(params["hand_off"], serde_json::json!(true));
+crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	assert_eq!(params["promote"], serde_json::json!(["alpha"]));
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if !status_leaf && is_help_request(&args[1..]) {
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if command == "rename" && args.len() > 1 && args[1] == "retask" {
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if command == "rename" && args[1..].iter().any(|a| a == "--from-journal") {
@@ -7714,6 +7716,8 @@ crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	let caller_name 
 crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	let stray = if caller["kind"] == "unreadable" && caller_session.is_none() {
 crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	out[key] = row_json[key].clone();
 crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	params["message"] = seeded["message"].clone();
+crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	params["name"],
+crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	promotion.ask["plan"]["outcome"].as_str(),
 crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	resolved["level"].clone(),
 crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	resolved["scope"].as_str().unwrap_or("").to_string(),
 crates/fno-agents/src/spawn_promote.rs	clippy::indexing_slicing	settle["take_over"] = json!({"reason": reason});
@@ -9009,6 +9013,7 @@ crates/fno-agents/tests/heal_fleet_task.rs	clippy::indexing_slicing	&& tasks[1].
 crates/fno-agents/tests/heal_fleet_task.rs	clippy::indexing_slicing	tasks[0].contains(r#""key":"PR 1 fold conflict""#)
 crates/fno-agents/tests/hook_latency.rs	clippy::disallowed_methods	.output()
 crates/fno-agents/tests/hook_latency.rs	clippy::indexing_slicing	.filter_map(|row| row["data"]["guard"].as_str().map(str::to_owned))
+crates/fno-agents/tests/hook_latency.rs	clippy::indexing_slicing	(fields.iter().take(8).sum(), fields[3] + fields[4])
 crates/fno-agents/tests/hook_latency.rs	clippy::indexing_slicing	assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
 crates/fno-agents/tests/hook_latency.rs	clippy::indexing_slicing	assert_eq!(v["decision"], "block", "{stdout}");
 crates/fno-agents/tests/hook_latency.rs	clippy::indexing_slicing	assert!(response["hookSpecificOutput"]["permissionDecisionReason"]
