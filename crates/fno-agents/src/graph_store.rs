@@ -765,11 +765,6 @@ pub fn is_dict(v: &Value) -> bool {
 /// through the same readiness overlay every live read applies. Mirrors
 /// store._compute_children.
 pub fn compute_children(entries: &mut [Value]) {
-    let ids: Vec<String> = entries
-        .iter()
-        .filter(|e| is_dict(e))
-        .filter_map(|e| entry_id(e).map(str::to_string))
-        .collect();
     let id_to_entry = index_by_id(entries);
     let mut kids: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
     for e in entries.iter() {
@@ -784,7 +779,7 @@ pub fn compute_children(entries: &mut [Value]) {
         };
         // A self-parented node must not become its own child: that would
         // accumulate on every write with no self-healing path.
-        if !ids.iter().any(|i| i == parent) || cid == parent {
+        if !id_to_entry.contains_key(parent) || cid == parent {
             continue;
         }
         let mut summary = Map::new();
@@ -2420,12 +2415,20 @@ pub fn graph_lock_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.lock", base.display()))
 }
 
+/// A hold that runs past this threshold journals one `graph_lock_held` row
+/// on release, naming the holder and where the time went.
+const HOLD_EVENT_MIN: Duration = Duration::from_secs(2);
+
 /// A held bounded lock. Release on drop.
 #[derive(Debug)]
 pub struct BoundedLock {
     file: File,
     path: PathBuf,
     ticket: Option<PathBuf>,
+    acquired_at: Instant,
+    /// Sub-phase timings of the work this holder did under the lock, filled
+    /// by `locked_mutate_flavored` and carried onto the hold event.
+    phases: std::cell::RefCell<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl BoundedLock {
@@ -2470,6 +2473,8 @@ impl BoundedLock {
                             file,
                             path: lock_path,
                             ticket,
+                            acquired_at: Instant::now(),
+                            phases: Default::default(),
                         });
                     }
                     Err(_) if Instant::now() >= deadline => break,
@@ -2492,6 +2497,26 @@ impl BoundedLock {
 
     pub fn lock_path(&self) -> &Path {
         &self.path
+    }
+
+    /// How long this holder has held the lock.
+    pub fn held_for(&self) -> Duration {
+        self.acquired_at.elapsed()
+    }
+
+    /// Record one under-lock sub-phase's duration for the hold event.
+    pub fn note_phase(&self, name: &str, started: Instant) {
+        self.phases.borrow_mut().insert(
+            format!("{name}_ms"),
+            serde_json::Value::from(started.elapsed().as_millis() as u64),
+        );
+    }
+
+    /// Record a named counter (a busy-retry count) for the hold event.
+    pub fn note_count(&self, name: &str, value: u64) {
+        self.phases
+            .borrow_mut()
+            .insert(name.to_string(), serde_json::Value::from(value));
     }
 }
 
@@ -2527,7 +2552,16 @@ fn holder_summary(lock_path: &Path) -> String {
     if super::agent_lock::pid_is_alive(pid) {
         format!("recorded holder pid {pid}, {age}")
     } else {
-        format!("holder record pid {pid} is dead (a crashed writer), {age}")
+        // The stamp can outlive its holder: a crashed writer's line stays
+        // until the next successful stamp, so a LIVE flock holder can sit
+        // behind a dead pid. The holder's own queue ticket is still
+        // registered, so the oldest ticket names the real holder.
+        match crate::lock_queue::head_pid(lock_path) {
+            Some(live) if live != pid && super::agent_lock::pid_is_alive(live) => format!(
+                "holder record pid {pid} is dead (a crashed writer), {age}; the live lock holder is queue-head pid {live}"
+            ),
+            _ => format!("holder record pid {pid} is dead (a crashed writer), {age}"),
+        }
     }
 }
 
@@ -2548,9 +2582,28 @@ fn unstamped_summary(lock_path: &Path) -> String {
 
 impl Drop for BoundedLock {
     fn drop(&mut self) {
+        let held = self.acquired_at.elapsed();
         crate::lock_queue::withdraw(self.ticket.as_deref());
         let _ = self.file.set_len(0);
         let _ = self.file.unlock();
+        // The holder's own measurement of a long hold: a waiter
+        // sees only its timeout; this row names who held and where the time
+        // went. Best effort, past a 2 s threshold so a quiet store journals
+        // nothing.
+        if held >= HOLD_EVENT_MIN {
+            crate::chokepoint_events::append_row(
+                "graph_lock_held",
+                serde_json::json!({
+                    "pid": std::process::id(),
+                    "command": crate::chokepoint::process_command(u64::from(
+                        std::process::id(),
+                    )),
+                    "lock": self.path.display().to_string(),
+                    "hold_ms": held.as_millis() as u64,
+                    "phases_ms": serde_json::Value::Object(self.phases.borrow().clone()),
+                }),
+            );
+        }
     }
 }
 
@@ -2688,6 +2741,9 @@ pub struct MutateOutcome {
     pub is_canonical: bool,
     /// The store content digest stamped with the published rows.
     pub version: String,
+    /// How long this publish held the graph lock, the holder-side slice the
+    /// hold-ratio contract judges (`lock_held < wall/4` on a one-row change).
+    pub lock_held: Duration,
 }
 
 /// Inputs to the store-side mutate cycle that the CLIENT computes
@@ -2738,11 +2794,12 @@ pub fn base_version(path: &Path) -> Result<String, StoreError> {
 /// because unchanged prose fields are skipped.
 pub fn enforce_node_state_policy(pre: &[Value], entries: &[Value]) -> Result<(), StoreError> {
     use crate::backlog::node_state;
+    let pre_by_id = index_by_id(pre);
     for cand in entries {
         let Some(id) = entry_id(cand) else {
             continue;
         };
-        let pre_row = pre.iter().find(|r| entry_id(r) == Some(id));
+        let pre_row = pre_by_id.get(id).copied();
         let cand_details = cand.get("details");
         let pre_details = pre_row.and_then(|r| r.get("details"));
         let cand_state = cand.get(node_state::STATE_KEY);
@@ -2828,26 +2885,58 @@ fn locked_mutate_flavored(
     before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
     stored_statuses: bool,
 ) -> Result<MutateOutcome, StoreError> {
+    let prepared = prepare_mutate(path, input, stored_statuses)?;
+    commit_prepared(path, prepared, timeout, before_publish)
+}
+
+/// The pure half of the mutate cycle, computed from `raw` and the caller's
+/// input BEFORE the lock is taken: defaults, recompute, touched_at, closure
+/// collection, canonicalize, the row-snapshot gates, the baseline
+/// canonicalize, the changed-id diff and the content version. Under the
+/// lock, `commit_prepared` keeps only the version re-check, the two
+/// config-cap gates (their cap reads config.toml, which an edit can move
+/// without moving the graph version), the hook and the write of the changed
+/// rows - so a whole-graph publish holds the store for its write, not for
+/// its thinking.
+struct PreparedMutate {
+    raw: Vec<Value>,
+    entries: Vec<Value>,
+    baseline: Vec<Value>,
+    begin_version: String,
+    base_version: String,
+    dropped: usize,
+    closure_releases: Vec<(String, String)>,
+    is_canonical: bool,
+    changed_ids: Vec<String>,
+    version: String,
+}
+
+fn prepare_mutate(
+    path: &Path,
+    input: MutateInput,
+    stored_statuses: bool,
+) -> Result<PreparedMutate, StoreError> {
+    let MutateInput {
+        entries: working_entries,
+        canonical_path,
+        base_version,
+        plan_rungs,
+    } = input;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     // The expensive pre-image read runs OUTSIDE the lock. Every content
     // writer stamps a fresh content version (authoritative_sync,
-    // mutate_single_row_once), so the under-lock version re-check below
-    // proves `raw` current; a write landing between the two reads surfaces
-    // as Conflict and the caller retries, the same surface a stale
-    // base_version already produced.
+    // mutate_single_row_once), so the under-lock version re-check in
+    // `commit_prepared` proves `raw` current; a write landing between the
+    // two reads surfaces as Conflict and the caller retries, the same
+    // surface a stale base_version already produced.
     let begin_version = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
     let raw = if stored_statuses {
         crate::backlog::read_entries_stored(path).map_err(StoreError::Sqlite)?
     } else {
         crate::backlog::read_entries(path).map_err(StoreError::Sqlite)?
     };
-    let _lock = BoundedLock::acquire(path, timeout)?;
-    let current = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
-    if current != begin_version || current != input.base_version {
-        return Err(StoreError::Conflict);
-    }
 
     // Pre-image defaults for the curation snapshot, re-derived through the
     // same pipeline (store.py's _status_normalized + _pre_curation). The
@@ -2857,7 +2946,7 @@ fn locked_mutate_flavored(
     let mut pre = raw.clone();
     apply_defaults_without_readiness_overlay(&mut pre, false);
     let mut pre_normalized = pre.clone();
-    recompute_statuses_with_plan_rungs(&mut pre_normalized, input.plan_rungs.as_ref());
+    recompute_statuses_with_plan_rungs(&mut pre_normalized, plan_rungs.as_ref());
     // The baseline is the rows as read: the db holds the last publish, so
     // `raw` is that publish. A change normalization alone makes
     // (defaults, settles, ownership stamps, children) must compare unequal
@@ -2900,7 +2989,7 @@ fn locked_mutate_flavored(
     let dropped = raw
         .len()
         .saturating_sub(raw.iter().filter(|e| is_dict(e)).count());
-    let mut entries = input.entries;
+    let mut entries = working_entries;
 
     // The presence invariant holds at the STORE boundary, not only at the
     // typed update path: the Python mutator runs client-side against plain
@@ -2916,7 +3005,7 @@ fn locked_mutate_flavored(
     // late join, not the child's older created_at.
     let now_iso = now_isoformat();
     stamp_parent_edges(&raw, &mut entries, &now_iso);
-    recompute_statuses_with_plan_rungs(&mut entries, input.plan_rungs.as_ref());
+    recompute_statuses_with_plan_rungs(&mut entries, plan_rungs.as_ref());
 
     // touched_at stamp: a curation-field change vs the pre-image. The
     // pre-image is defaulted, so the compare reads the defaulted view too:
@@ -2950,7 +3039,7 @@ fn locked_mutate_flavored(
     // terminal rung during THIS mutation is the one moment every closure path
     // shares. Ids are COLLECTED here; the release runs in the caller after
     // the lock drops. Only the CONFIGURED graph owns the global node-id space.
-    let is_canonical = match &input.canonical_path {
+    let is_canonical = match &canonical_path {
         Some(cfg) => same_file(path, cfg),
         None => false,
     };
@@ -2990,29 +3079,10 @@ fn locked_mutate_flavored(
     // render gate would refuse never publishes; a stored leaky title passes
     // an unrelated update.
     crate::backlog::title_gate::enforce_title_gate(&raw, &entries)?;
-    // The epic child cap holds at this seam too: every whole-graph writer
-    // (update parent=, idea --parent, contain, decompose, the rollup
-    // auto-link) meets the same refusal. The single-row seam answers for
-    // api node_create under sqlite.
-    crate::backlog::epic_cap::enforce(
-        &raw,
-        &entries,
-        crate::backlog::epic_cap::configured_cap(path),
-    )
-    .map_err(StoreError::Invalid)?;
-    crate::backlog::idea_cap::enforce(
-        &raw,
-        &entries,
-        crate::backlog::idea_cap::configured_cap(path).0,
-    )
-    .map_err(StoreError::Invalid)?;
     // The close-evidence rule holds at this seam too: a write that sets
     // completed_at on an existing open row must leave the row a record of
     // why, or the whole publish refuses and nothing lands.
     crate::backlog::done_evidence::enforce(&raw, &entries).map_err(StoreError::Invalid)?;
-    if let Some(hook) = before_publish {
-        hook(&raw)?;
-    }
 
     // The store diff runs against the baseline in the same canonical shape
     // the publish itself carries: canonicalize injects default keys
@@ -3021,22 +3091,93 @@ fn locked_mutate_flavored(
     // row-level conflict detection for untouched rows.
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
-    let (version, _retries) = crate::backlog::retry_on_busy(|| {
-        crate::backlog::authoritative_sync(path, &baseline, &entries)
+    let changed_ids = crate::backlog::diff_rows(&baseline, &entries);
+    let version = crate::backlog::content_version(&entries);
+    Ok(PreparedMutate {
+        raw,
+        entries,
+        baseline,
+        begin_version,
+        base_version,
+        dropped,
+        closure_releases,
+        is_canonical,
+        changed_ids,
+        version,
+    })
+}
+
+/// The locked half of the mutate cycle: re-check the version, re-run the two
+/// config-cap gates (the only gate inputs an edit can move without moving
+/// the graph version), run the hook, publish the changed rows, then release
+/// and snapshot. Every pure step already ran in `prepare_mutate`.
+fn commit_prepared(
+    path: &Path,
+    prepared: PreparedMutate,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+) -> Result<MutateOutcome, StoreError> {
+    let _lock = BoundedLock::acquire(path, timeout)?;
+    let recheck_started = Instant::now();
+    let current = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
+    if current != prepared.begin_version || current != prepared.base_version {
+        return Err(StoreError::Conflict);
+    }
+    _lock.note_phase("version_recheck", recheck_started);
+    // The epic child cap holds at this seam too: every whole-graph writer
+    // (update parent=, idea --parent, contain, decompose, the rollup
+    // auto-link) meets the same refusal. The single-row seam answers for
+    // api node_create under sqlite.
+    let caps_started = Instant::now();
+    crate::backlog::epic_cap::enforce(
+        &prepared.raw,
+        &prepared.entries,
+        crate::backlog::epic_cap::configured_cap(path),
+    )
+    .map_err(StoreError::Invalid)?;
+    crate::backlog::idea_cap::enforce(
+        &prepared.raw,
+        &prepared.entries,
+        crate::backlog::idea_cap::configured_cap(path).0,
+    )
+    .map_err(StoreError::Invalid)?;
+    _lock.note_phase("cap_gates", caps_started);
+    if let Some(hook) = before_publish {
+        let hook_started = Instant::now();
+        hook(&prepared.raw)?;
+        _lock.note_phase("before_publish", hook_started);
+    }
+
+    let publish_started = Instant::now();
+    let (version, publish_retries) = crate::backlog::retry_on_busy(|| {
+        crate::backlog::authoritative_sync_prepared(
+            path,
+            &prepared.baseline,
+            &prepared.entries,
+            &prepared.changed_ids,
+            &prepared.version,
+        )
     })
     .map_err(StoreError::Sqlite)?;
+    _lock.note_phase("authoritative_sync", publish_started);
+    _lock.note_count("publish_retries", publish_retries as u64);
+    let lock_held = _lock.held_for();
+    drop(_lock);
+    // The hourly snapshot copy runs with the lock gone, so a slow VACUUM
+    // INTO never widens the hold.
     crate::backlog::snapshot_db(path, crate::backlog::now_ms()).map_err(StoreError::Sqlite)?;
     let backup: Option<PathBuf> = None;
     let shadow_warning = None;
 
     Ok(MutateOutcome {
-        entries,
-        dropped,
+        entries: prepared.entries,
+        dropped: prepared.dropped,
         backup: backup.map(|p| p.display().to_string()),
         shadow_warning,
-        closure_releases,
-        is_canonical,
+        closure_releases: prepared.closure_releases,
+        is_canonical: prepared.is_canonical,
         version,
+        lock_held,
     })
 }
 

@@ -137,3 +137,73 @@ pub(crate) fn status_word(s: LatticeState) -> &'static str {
         LatticeState::Empty => "\u{2205}",
     }
 }
+
+/// The build throbber's frame set: the same crate's BRAILLE_SIX, the user's
+/// 2026-10-09 pick for a compiling row (one cell wide, throbber-widgets
+/// vocabulary, distinct from the BLACK_CIRCLE working spin at a glance).
+pub(crate) fn build_spin_symbols() -> &'static [&'static str] {
+    throbber_widgets_tui::symbols::throbber::BRAILLE_SIX.symbols
+}
+
+/// The compiling row's still glyph (a snapshot, a test, reduced motion, or
+/// the card line's rest shape): the set's own `full`.
+pub(crate) fn build_rest_glyph() -> char {
+    throbber_widgets_tui::symbols::throbber::BRAILLE_SIX
+        .full
+        .chars()
+        .next()
+        .unwrap_or('\u{283f}')
+}
+
+/// One frame of the build throbber at `elapsed_ms` into the spin epoch (the
+/// SAME clock the working spin turns on, so no new timer exists).
+pub(crate) fn build_frame(elapsed_ms: u64) -> char {
+    let syms = build_spin_symbols();
+    syms[(elapsed_ms / SPIN_FRAME_MS) as usize % syms.len()]
+        .chars()
+        .next()
+        .unwrap_or('\u{283f}')
+}
+
+/// The build mark's status-cell override. Only a Working row carries it: a
+/// blocked row needs a human (the accent outranks build info), an idle row
+/// runs no cargo, and the mark never fights the lattice. Compiling renders
+/// the BRAILLE_SIX frame IN PLACE OF the working cell - never both. The
+/// waiting arm renders the static hourglass with the queue position when
+/// the lane read can name it. Both stay within the `cells`-column status
+/// cell the caller names: the list column is 5, the card glyph column 1
+/// (its second cell is the edge bar's, which paints over cell 0 after the
+/// blit - a two-cell mark there loses its left glyph to the bar, the
+/// 2026-11-06 shot finding), the slim rail 2.
+pub(crate) fn build_status_cell(
+    mark: Option<crate::proto::BuildMark>,
+    s: LatticeState,
+    cells: usize,
+) -> Option<String> {
+    if !matches!(s, LatticeState::Working) {
+        return None;
+    }
+    let mark = mark?;
+    match mark.stage {
+        // The frame REPLACES the working cell: the status column is
+        // Constraint::Length(5) and its words are shortened to fit it, so
+        // the glyph alone carries the state (the card line's own
+        // still-glyph convention).
+        crate::proto::BuildStage::Compiling => Some(match spin_epoch() {
+            Some(t0) => build_frame(t0.elapsed().as_millis() as u64).to_string(),
+            None => build_rest_glyph().to_string(),
+        }),
+        crate::proto::BuildStage::Waiting => Some(match (cells >= 2, mark.position) {
+            (true, Some(n)) => format!("{HOURGLASS}{n}"),
+            _ => HOURGLASS.to_string(),
+        }),
+    }
+}
+
+/// The waiting mark's glyph (user pick, 2026-10-09: an hourglass and the
+/// position). The BLACK HOURGLASS codepoint, not the emoji one: the
+/// snapshot grid draws each cell at an exact textLength, which squeezes
+/// the emoji-presentation hourglass to nothing (the 2026-11-06 probe shot
+/// provably dropped it), while this text-presentation spelling renders in
+/// the grid, in the terminal, and distinct from every lattice glyph.
+pub(crate) const HOURGLASS: char = '\u{29d7}';

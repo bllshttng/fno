@@ -36,7 +36,7 @@ use std::io::{self, BufRead, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::claude_attach::{perform_attach, AttachRequest, UnixControlTransport};
+use crate::claude_attach::{perform_attach, AttachRequest, ControlTransport, UnixControlTransport};
 use crate::claude_drive::{
     contains_detach_sentinel, find_transcript_in, transcript_len, DriveError,
 };
@@ -1158,6 +1158,38 @@ pub fn deliver_via_control_sock_in(
         interval_ms,
         enter_delay_ms,
     ))
+}
+
+/// Type one permission-response key over the attach transport: the wire form
+/// of `claude attach` + pressing the picker key. Post-attach the
+/// `control.sock` is a raw keystroke pipe, so the key plus a separate CR
+/// answers a showing prompt without a TTY. No transcript confirm: the picker
+/// closes on the key and prints nothing a message confirm could grep for.
+pub fn answer_permission_via_control_sock_in(
+    daemon_dir: &Path,
+    session: &str,
+    key: &str,
+    enter_delay_ms: u64,
+) -> Result<(), &'static str> {
+    if key.is_empty() || key.chars().any(|c| c.is_control()) {
+        return Err("unsafe-text");
+    }
+    let roster = ClaudeRoster::load(&daemon_dir.join("roster.json")).map_err(|_| NOT_INJECTABLE)?;
+    let worker = roster.find(session).ok_or(NOT_INJECTABLE)?;
+    let sock = worker.resolve_control_sock().ok_or(NOT_INJECTABLE)?;
+    let auth = read_control_key_in(daemon_dir);
+    let mut transport = UnixControlTransport::connect(&sock).map_err(|_| "io-error")?;
+    if perform_attach(
+        &mut transport,
+        &AttachRequest::for_frame_stream(worker.short_id().to_string(), auth.clone()),
+    )
+    .is_err()
+    {
+        return Err("attach-failed");
+    }
+    transport.send_line(key).map_err(|_| "io-error")?;
+    std::thread::sleep(Duration::from_millis(enter_delay_ms));
+    transport.send_line("\r").map_err(|_| "io-error")
 }
 
 /// The control.sock lane with the state it reached. `Err` is a refusal

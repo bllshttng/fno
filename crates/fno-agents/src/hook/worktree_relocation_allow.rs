@@ -1,5 +1,5 @@
 //! PermissionRequest hook: allow EnterWorktree into a worktree under the
-//! resolved `paths.worktrees_base`.
+//! resolved `paths.worktrees_base` or either state-root default base.
 //!
 //! Claude Code asks before EnterWorktree moves the session to a path outside
 //! its own managed worktree dir in the repo ("permission-root relocation").
@@ -24,10 +24,7 @@ use std::path::{Path, PathBuf};
 pub fn run(_args: &[String]) -> i32 {
     let payload: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
     let cwd = payload_cwd(&payload);
-    let legacy = crate::paths_cli::legacy_worktrees_base_for(&cwd);
-    if allows(&payload, &crate::paths_cli::worktrees_base(&cwd))
-        || legacy.as_deref().is_some_and(|base| allows(&payload, base))
-    {
+    if bases(&cwd).iter().any(|base| allows(&payload, base)) {
         let out = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
@@ -39,6 +36,23 @@ pub fn run(_args: &[String]) -> i32 {
     } else {
         super::emit_allow()
     }
+}
+
+/// Every base fno has written checkouts to: the configured (or default) base,
+/// plus both state-root defaults. An override moves new checkouts, yet
+/// worktrees made before it, or by a peer repo with another config, still sit
+/// under a default base and must not stop at the prompt.
+fn bases(cwd: &Path) -> Vec<PathBuf> {
+    let state = crate::paths_cli::state_root_for_worktrees(cwd);
+    bases_for(crate::paths_cli::worktrees_base(cwd), &state)
+}
+
+fn bases_for(configured: PathBuf, state: &Path) -> Vec<PathBuf> {
+    vec![
+        configured,
+        crate::paths_cli::default_worktrees_base(state),
+        crate::paths_cli::legacy_worktrees_base(state),
+    ]
 }
 
 fn payload_cwd(payload: &Value) -> PathBuf {
@@ -116,6 +130,23 @@ mod tests {
         assert!(!allows(&other, &base));
         let create = json!({"tool_name": "EnterWorktree", "tool_input": {"name": "x"}});
         assert!(!allows(&create, &base));
+    }
+
+    #[test]
+    fn every_base_fno_writes_to_is_allowed_even_under_an_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let spaces = crate::paths_cli::default_worktrees_base(&state).join("repo/node");
+        let legacy = crate::paths_cli::legacy_worktrees_base(&state).join("repo/node");
+        std::fs::create_dir_all(&spaces).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        let configured = tmp.path().join("custom");
+        std::fs::create_dir_all(&configured).unwrap();
+        let all = bases_for(configured, &state);
+        for wt in [&spaces, &legacy] {
+            let p = call(tmp.path(), &wt.to_string_lossy());
+            assert!(all.iter().any(|b| allows(&p, b)));
+        }
     }
 
     #[cfg(unix)]

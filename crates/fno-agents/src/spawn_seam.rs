@@ -381,7 +381,7 @@ pub(crate) fn export_worker_dirs(cwd: &Path) {
     }
 }
 
-fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
+pub(crate) fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
     if sealed {
         Vec::new()
     } else {

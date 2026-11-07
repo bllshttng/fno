@@ -95,6 +95,7 @@ pub mod board_render_arm;
 mod boot_revival;
 mod bounded_cmd;
 mod bounded_spawn;
+pub(crate) mod build_marks;
 pub mod burn_watch;
 mod cancel_sentinel;
 pub mod canonical_check;
@@ -165,6 +166,7 @@ pub mod compaction;
 mod completion_output;
 pub mod component_update;
 pub mod config_route;
+pub mod consult;
 pub mod context_audit;
 pub mod context_run;
 pub mod context_window;
@@ -2229,6 +2231,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The register command's join row (register.rs): one event per minted
     // or refreshed roster row.
     "session_registered",
+    // One bounded stronger-model question from a worker session
+    // (consult.rs); figures are "unknown" when the envelope omits them.
+    "consult_call",
+    // The first-check sweep's notice beside the parent mail
+    // (first_check.rs); the notice index orders the repeats.
+    "first_check_notice",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the
@@ -2267,7 +2275,7 @@ pub fn emit_schema_json() -> serde_json::Value {
                 "source": {
                     "type": "string",
                     "anyOf": [
-                        { "enum": ["active-backlog", "agents", "approvals", "backlog", "bash", "cli", "config", "daemon", "fno-loop", "hook", "legacy", "loop", "megatron", "megawalk", "migration", "observer", "pr-heal", "pr-park", "python", "rust", "skill_diff", "subagent", "target", "test"] },
+                        { "enum": ["active-backlog", "agents", "approvals", "backlog", "bash", "cli", "config", "consult", "daemon", "fno-first-check", "fno-loop", "hook", "legacy", "loop", "megatron", "megawalk", "migration", "observer", "pr-heal", "pr-park", "python", "rust", "skill_diff", "subagent", "target", "test"] },
                         { "pattern": "^(worker|stream-worker|footnote):.+$" }
                     ],
                     "description": "Producer identity: a fixed-string source or a per-agent worker (worker:<id> / stream-worker:<id>)"

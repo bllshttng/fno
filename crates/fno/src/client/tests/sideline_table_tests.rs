@@ -673,6 +673,155 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
 }
 
 #[test]
+fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
+    // The mark's paint contract (user ruling 2026-10-09): compiling swaps
+    // the working glyph for the BRAILLE_SIX rest frame, waiting swaps the
+    // glyph for the hourglass and its queue position; a row the mark does
+    // not apply to keeps the plain working cell. Deterministic: the test
+    // env has no spin epoch, so compiling paints the set's rest glyph.
+    let mut builder = agent_row("builder", 4, Some(AgentBadge::Working), false);
+    builder.build = Some(crate::proto::BuildMark::compiling());
+    let mut waiter = agent_row("waiter", 5, Some(AgentBadge::Working), false);
+    waiter.build = Some(crate::proto::BuildMark::waiting(Some(2)));
+    let plain = agent_row("plain", 6, Some(AgentBadge::Working), false);
+    let mut v = wide_view(vec![builder.clone(), waiter.clone(), plain.clone()]);
+    // The list cell is the contract under test: pin the layout so the test
+    // reads the code, never the ambient config's own choice. The panel is
+    // pinned wide because the list's five columns need ~46; wide_view's
+    // 28-column panel collapses the status column to one cell, where the
+    // mark degrades (asserted separately below).
+    v.sideline_layout = sideline_color::SidelineLayout::List;
+    v.sideline_width = 60;
+    v.term = (24, 120);
+    let text = frame_text(&v.compose());
+    let builder_row = text.lines().find(|line| line.contains("builder")).unwrap();
+    assert!(
+        builder_row.contains('\u{283f}') && !builder_row.contains('\u{25cf}'),
+        "compiling paints the braille frame in place of the working cell: {builder_row:?}"
+    );
+    assert!(
+        !builder_row.contains("Work"),
+        "the status word drops so the cell stays within its 5 columns: {builder_row:?}"
+    );
+    assert!(
+        !builder_row.contains('\u{25cf}'),
+        "never both glyphs on one row: {builder_row:?}"
+    );
+    let waiter_row = text.lines().find(|line| line.contains("waiter")).unwrap();
+    assert!(
+        waiter_row.contains("\u{29d7}2"),
+        "waiting paints the hourglass and queue position: row {waiter_row:?} in frame (layout {:?} density {:?} panel {}): {text:?}",
+        v.sideline_layout,
+        v.density,
+        v.panel_w()
+    );
+    let plain_row = text.lines().find(|line| line.contains("plain")).unwrap();
+    assert!(
+        plain_row.contains('\u{25cf}'),
+        "an unmarked working row keeps the plain glyph: {plain_row:?}"
+    );
+    // The narrow panel (wide_view's default 28 columns) collapses the list
+    // status column to one cell; there the mark degrades to the hourglass
+    // alone, never a bare position digit (the 2026-11-07 CI frame finding).
+    let mut narrow = wide_view(vec![builder.clone(), waiter.clone(), plain.clone()]);
+    narrow.sideline_layout = sideline_color::SidelineLayout::List;
+    let narrow_text = frame_text(&narrow.compose());
+    let narrow_waiter = narrow_text
+        .lines()
+        .find(|line| line.contains("waiter"))
+        .unwrap();
+    assert!(
+        narrow_waiter.contains('\u{29d7}') && !narrow_waiter.contains("\u{29d7}2"),
+        "the collapsed list cell paints the hourglass alone: {narrow_waiter:?}"
+    );
+}
+
+#[test]
+fn a_marked_card_renders_the_waiting_mark_in_its_one_live_glyph_cell() {
+    // The card's status column is two cells wide and right-aligned, and the
+    // resting edge bar paints cell 0 after the blit - so the card's mark
+    // gets ONE live cell and the waiting mark drops the position digit
+    // there (the list cell keeps it). Without the budget the bar ate the
+    // hourglass and the row read a bare digit (the 2026-11-06 shot finding).
+    let mut waiter = agent_row("waiter", 5, Some(AgentBadge::Working), false);
+    waiter.build = Some(crate::proto::BuildMark::waiting(Some(2)));
+    let mut v = wide_view(vec![waiter]);
+    set_density(&mut v, Density::Extended);
+    v.sideline_layout = sideline_color::SidelineLayout::Card;
+    let text = frame_text(&v.compose());
+    let waiter_line = text.lines().find(|line| line.contains("waiter")).unwrap();
+    assert!(
+        waiter_line.contains('\u{29d7}'),
+        "the card paints the hourglass in its live glyph cell: {waiter_line:?}"
+    );
+    assert!(
+        !waiter_line.contains("\u{29d7}2"),
+        "the one-cell slot drops the position digit, never a bar-eaten glyph: {waiter_line:?}"
+    );
+}
+
+#[test]
+fn overlay_build_marks_stamps_live_sidecars_and_ages_out_stale_ones() {
+    // The mark's push leg: a fresh db/build-marks sidecar stamps its row,
+    // a stale one (dead daemon) does not, and an unrelated row carries no
+    // mark - the same fail-quiet contract the hold mark keeps.
+    let now = chrono::Utc::now().timestamp() as u64;
+    let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let dir = std::env::temp_dir().join(format!("build-marks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fresh = stamp(chrono::Utc::now());
+    let stale = stamp(chrono::Utc::now() - chrono::Duration::seconds(120));
+    std::fs::write(
+        dir.join("cccc3333-3333-3333-4444-555566667777.json"),
+        format!("{{\"state\": \"compiling\", \"at\": \"{fresh}\", \"ttl_ms\": 30000}}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("dddd4444-4444-4444-4444-555566667777.json"),
+        format!(
+            "{{\"state\": \"waiting\", \"position\": 3, \"at\": \"{stale}\", \"ttl_ms\": 30000}}\n"
+        ),
+    )
+    .unwrap();
+    let mut rows = vec![
+        crate::agents_view::RegistryAgent {
+            name: "builder".into(),
+            harness_session_id: Some("CCCC3333-3333-3333-4444-555566667777".into()),
+            ..Default::default()
+        },
+        crate::agents_view::RegistryAgent {
+            name: "waiter".into(),
+            harness_session_id: Some("dddd4444-4444-4444-4444-555566667777".into()),
+            ..Default::default()
+        },
+        crate::agents_view::RegistryAgent {
+            name: "idle".into(),
+            harness_session_id: Some("eeee5555-5555-5555-5555-555566667777".into()),
+            ..Default::default()
+        },
+    ];
+    crate::agents_view::overlay_build_marks_at(&mut rows, &dir, now);
+    assert_eq!(rows.len(), 3, "one row per registry agent");
+    assert_eq!(
+        rows.get(0).and_then(|r| r.build.map(|b| b.stage)),
+        Some(crate::proto::BuildStage::Compiling),
+        "a fresh sidecar stamps the row"
+    );
+    assert_eq!(
+        rows.get(1).and_then(|r| r.build),
+        None,
+        "a stale sidecar ages out: no mark, never a frozen hourglass"
+    );
+    assert_eq!(
+        rows.get(2).and_then(|r| r.build),
+        None,
+        "a session with no sidecar carries no mark"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn group_by_axes_build_labelled_bands_with_rollups() {
     // the non-workspace group axes emit labelled bands with rollup
     // counts, members in layout order (the run sort orders inside each band),

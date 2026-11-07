@@ -767,19 +767,37 @@ pub(crate) fn codex_sandbox_config_args_resume(cwd: &std::path::Path) -> Vec<Str
 }
 
 /// The root list the interactive resume and turn/start lanes grant: the repo's
-/// git write roots, the plan content dir, and the seam-published state dirs.
-/// Empty when none resolve.
+/// git write roots, the state and plan dirs resolved from `cwd`, and the uv
+/// cache. Empty when none resolve.
 pub(crate) fn codex_writable_roots(cwd: &std::path::Path) -> Vec<String> {
+    let sealed = std::env::var_os(crate::spawn_seam::EVALS_SEALED_ENV).is_some_and(|v| v == "1");
+    codex_writable_roots_for(cwd, sealed)
+}
+
+/// [`codex_writable_roots`] with the sealed verdict supplied. A caller that
+/// holds the thread's registry row reads it there, because the sender's own env
+/// says nothing about the thread being steered.
+pub(crate) fn codex_writable_roots_for(cwd: &std::path::Path, sealed: bool) -> Vec<String> {
     let mut roots: Vec<String> = git_write_roots(cwd);
-    roots.extend(plan_content_dir(cwd));
     // The state root rides here too, and it MUST: `writable_roots` is a
     // whole-value override, so a list that omits ~/.fno leaves a resumed bounded
     // worker unable to create its claim lockfile. It then holds no claim and the
-    // graph reads that node free while it runs. The create lane grants the same
-    // set through `--add-dir`.
-    for extra in crate::claude_ask::state_dirs_from_env() {
-        if !extra.is_empty() && !roots.contains(&extra) {
+    // graph reads that node free while it runs. The dirs resolve from `cwd`,
+    // never from the sender's `FNO_WORKER_ADD_DIRS`: a lead has none, and a
+    // worker's belong to its own project.
+    let granted = crate::spawn_seam::granted_dirs(cwd, sealed);
+    for extra in granted {
+        if !roots.contains(&extra) {
             roots.push(extra);
+        }
+    }
+    // The plan dir rides unconditionally, deduped: `worker_writable_dirs`
+    // keeps only EXISTING canonical roots, so a plans dir that does not
+    // exist yet drops out of the grant, and the create lane's `--add-dir`
+    // and the turn carrier both granted it before this change.
+    if let Some(plan_dir) = plan_content_dir(cwd) {
+        if !roots.contains(&plan_dir) {
+            roots.push(plan_dir);
         }
     }
     // The uv cache rides with the state dirs: a bounded worker installing
@@ -2480,24 +2498,22 @@ mod tests {
             from_name: None,
             yolo: false,
         };
-        assert_eq!(
-            CodexProvider.resume_argv(&ctx),
-            vec![
-                "codex",
-                "exec",
-                "resume",
-                "uuid-1",
-                "--json",
-                "--skip-git-repo-check",
-                "-c",
-                "sandbox_mode=workspace-write",
-                "-c",
-                crate::codex_posture::BOUNDED_NETWORK_OVERRIDE,
-                "-c",
-                "sandbox_workspace_write.writable_roots=[\"/x/.fno/plans\"]",
-                "--",
-                "m"
-            ]
+        // The grant is the cwd-pure set now (state root, claims root, plan
+        // dir, cache), never exactly one dir, so the pin is: the argv still
+        // re-pins writable_roots for a non-repo bounded resume and the plan
+        // dir rides it.
+        let argv = CodexProvider.resume_argv(&ctx);
+        assert!(
+            argv.contains(&"--skip-git-repo-check".to_string()),
+            "non-repo cwd still skips the git check: {argv:?}"
+        );
+        let roots_arg = argv
+            .iter()
+            .find(|t| t.starts_with("sandbox_workspace_write.writable_roots="))
+            .expect("bounded non-yolo resume re-pins writable_roots");
+        assert!(
+            roots_arg.contains("\"/x/.fno/plans\""),
+            "the plan dir rides for a non-repo cwd: {roots_arg}"
         );
     }
 

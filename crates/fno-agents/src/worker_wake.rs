@@ -254,8 +254,7 @@ fn run_pass_with(
         // ended filer session of the node. A row with no edge still recovers -
         // the delivery below runs - and only the notice is skipped.
         let lead = row
-            .spawned_by_session
-            .as_deref()
+            .current_owner_session()
             .or_else(|| node_row["spawned_by_session"].as_str());
         match claim_for(node, sid) {
             Claim::Own => {}

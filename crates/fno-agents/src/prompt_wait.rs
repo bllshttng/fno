@@ -51,11 +51,12 @@ impl Waiting {
     /// The check-in line: the finding and the remedy in one sentence.
     pub(crate) fn line(&self, now: i64) -> String {
         format!(
-            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: claude attach {}",
+            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: fno agents ask {} --answer allow_once (TTY form: claude attach {})",
             self.name,
             self.short_id,
             self.waiting_for,
             self.minutes(now),
+            self.short_id,
             self.short_id
         )
     }
@@ -143,13 +144,13 @@ fn parent_of(home: &AgentsHome, registry: &Registry, sid: &str) -> Option<String
         .entries
         .iter()
         .find(|r| is_session(r, sid))
-        .and_then(|r| r.spawned_by_session.clone())
+        .and_then(|r| r.current_owner_session().map(str::to_string))
         .or_else(|| crate::spawn_watch::caller_of(home, sid))
         .filter(|s| !s.is_empty() && s != sid)
 }
 
-/// Who hears about this wait: the spawner, then the nearest ancestor that
-/// holds a lead role. One session that is both hears it once.
+/// Who hears about this wait: the owner session, then the nearest ancestor
+/// that holds a lead role. One session that is both hears it once.
 fn recipients(home: &AgentsHome, registry: &Registry, sid: &str) -> Vec<String> {
     let lead = |s: &str| {
         let mut rows = registry.entries.iter();

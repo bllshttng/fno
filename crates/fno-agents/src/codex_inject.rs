@@ -1879,26 +1879,98 @@ async fn round_trip(
     read_until_id(stream, &serde_json::json!(id)).await
 }
 
-/// Whether `thread_id`'s registry row records a full-access posture. A `None`
-/// home (tests, stray callers), an unreadable registry, and a row miss all
-/// read `false`, so every miss keeps today's probe frame. The read is
-/// offloaded: `load_registry` takes the registry flock, and a blocking wait
-/// does not belong on the async delivery path.
-async fn recorded_posture_is_full_access(thread_id: &str) -> bool {
+/// What the registry row of a thread records: the full-access posture and the
+/// roots its spawn was granted. An empty grant on a registered row is the
+/// sealed record (`spawn_seam::export_worker_dirs` publishes nothing under
+/// `FNO_EVALS_SEALED=1`), so the row, not the sender's env, decides `sealed`.
+struct ThreadRecord {
+    full_access: bool,
+    granted_roots: Vec<String>,
+}
+
+/// The row for `thread_id`. A `None` home (tests, stray callers), an
+/// unreadable registry, and a row miss all read `None`, so every miss keeps
+/// today's probe frame. The read is offloaded: `load_registry` takes the
+/// registry flock, and a blocking wait does not belong on the async delivery
+/// path.
+async fn recorded_thread(thread_id: &str) -> Option<ThreadRecord> {
     let thread_id = thread_id.to_string();
     tokio::task::spawn_blocking(move || {
-        let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
-            return false;
-        };
-        let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
-            return false;
-        };
-        registry
-            .find_name_or_full_session_id(&thread_id)
-            .is_some_and(crate::codex_posture::entry_posture_is_full_access)
+        let home = crate::paths::AgentsHome::from_env_opt()?;
+        let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+        let entry = registry.find_name_or_full_session_id(&thread_id)?;
+        Some(ThreadRecord {
+            full_access: crate::codex_posture::entry_posture_is_full_access(entry),
+            granted_roots: entry.granted_writable_roots.clone(),
+        })
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(None)
+}
+
+/// A rollout `turn_context.sandbox_policy` (kebab tags, snake keys) in the v2
+/// wire shape `turn/start` takes (camel tags, camel keys). The rename is
+/// one-to-one; an unrecognized tag reads `None`, never a guessed posture.
+fn rollout_policy_to_wire(policy: &serde_json::Value) -> Option<serde_json::Value> {
+    let flag = |key: &str| policy.get(key).cloned().unwrap_or(json!(false));
+    match policy.get("type")?.as_str()? {
+        "danger-full-access" => Some(json!({"type": "dangerFullAccess"})),
+        "read-only" => Some(json!({"type": "readOnly", "networkAccess": flag("network_access")})),
+        "external-sandbox" => Some(json!({
+            "type": "externalSandbox",
+            "networkAccess": policy.get("network_access").cloned().unwrap_or(json!("restricted")),
+        })),
+        "workspace-write" => Some(json!({
+            "type": "workspaceWrite",
+            "writableRoots": policy.get("writable_roots").cloned().unwrap_or(json!([])),
+            "networkAccess": flag("network_access"),
+            "excludeTmpdirEnvVar": flag("exclude_tmpdir_env_var"),
+            "excludeSlashTmp": flag("exclude_slash_tmp"),
+        })),
+        _ => None,
+    }
+}
+
+/// The policy the thread's newest turn ran under, read from its rollout. A
+/// codex turn/start policy is per-turn on the deployed server, so a turn that
+/// carries none runs under the thread-START posture; echoing the last policy
+/// is what keeps a steered thread where it was. `None` when no rollout
+/// resolves, the newest `turn_context` lies past the scan bound, or its
+/// policy is unreadable: an unreadable newest record stops the scan and the
+/// caller falls back to the probe, never echoes an older turn's policy.
+async fn last_rollout_policy(thread_id: &str) -> Option<serde_json::Value> {
+    let thread_id = thread_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let path = crate::codex_store::codex_rollout_path(None, &thread_id)?;
+        let len = std::fs::metadata(&path).ok()?.len();
+        crate::session_truth::cursor::scan_back(
+            &path,
+            len,
+            b"turn_context",
+            crate::session_truth::CODEX_MODEL_SCAN_LIMIT,
+            &|line| {
+                let rec: serde_json::Value = serde_json::from_str(line).ok()?;
+                if rec.get("type")?.as_str()? != "turn_context" {
+                    return None;
+                }
+                // The newest turn_context stops the scan whatever its policy
+                // reads: a missing or unrecognized policy is Some(None), and
+                // an older turn's policy never echoes through it.
+                Some(
+                    rec.get("payload")
+                        .and_then(|payload| payload.get("sandbox_policy"))
+                        .and_then(rollout_policy_to_wire),
+                )
+            },
+        )
+    })
+    .await
+    .unwrap_or(None)
+    .flatten()
+}
+
+fn policy_type(policy: &serde_json::Value) -> Option<&str> {
+    policy.get("type").and_then(serde_json::Value::as_str)
 }
 
 /// The connect + initialize handshake + the posture read + `turn/start`.
@@ -1910,23 +1982,40 @@ async fn recorded_posture_is_full_access(thread_id: &str) -> bool {
 /// this lane never narrows a thread. A failed read is NOT a delivery failure:
 /// the turn still goes out, policy-less. Measured 2026-09-14 on codex 0.154.0:
 /// resume on a loaded thread answers Ok carrying `sandbox`, and the rollout
-/// does not grow. A registry row recording full access re-asserts it instead:
-/// the turn carries `{"type":"dangerFullAccess"}` and the probe is skipped,
-/// so an out-of-band narrowing is healed by the next delivered turn.
+/// does not grow. A registry row recording full access, or a rollout whose
+/// last turn ran full access, re-asserts it instead: the turn carries
+/// `{"type":"dangerFullAccess"}` and the probe is skipped, so an out-of-band
+/// narrowing is healed by the next delivered turn. The grant is the row's
+/// recorded roots plus the roots resolved from the thread's cwd, never the
+/// sender's `FNO_WORKER_ADD_DIRS`.
 async fn inject(
     sock: &Path,
     thread_id: &str,
     text: &str,
     cwd_hint: Option<&Path>,
 ) -> Result<(), ReviewStartError> {
-    let reassert = recorded_posture_is_full_access(thread_id).await;
+    let record = recorded_thread(thread_id).await;
+    // A full-access row decides the posture alone: the rollout read buys
+    // nothing and is skipped outright.
+    let last = if record.as_ref().is_some_and(|r| r.full_access) {
+        None
+    } else {
+        last_rollout_policy(thread_id).await
+    };
     let (mut sink, mut stream) = connect_app_server(sock)
         .await
         .map_err(ReviewStartError::Reason)?;
 
     let mut policy = None;
-    if reassert {
+    if record.as_ref().is_some_and(|r| r.full_access)
+        || last.as_ref().and_then(policy_type) == Some("dangerFullAccess")
+    {
         policy = Some(json!({"type": "dangerFullAccess"}));
+    } else if let Some(echo) = last
+        .as_ref()
+        .filter(|p| policy_type(p) != Some("workspaceWrite"))
+    {
+        policy = Some(echo.clone());
     } else {
         // A seed turn brings the spawner's own cwd: a fresh no-turn thread is
         // where thread/read is least certain, and the spawner knows the cwd
@@ -1946,29 +2035,46 @@ async fn inject(
             },
         };
         if !cwd.is_empty() {
-            let roots = crate::provider::codex_writable_roots(Path::new(&cwd));
+            let sealed = match &record {
+                Some(r) => r.granted_roots.is_empty(),
+                None => {
+                    std::env::var_os(crate::spawn_seam::EVALS_SEALED_ENV).is_some_and(|v| v == "1")
+                }
+            };
+            let mut roots: Vec<String> = record
+                .as_ref()
+                .map(|r| r.granted_roots.clone())
+                .unwrap_or_default();
+            for root in crate::provider::codex_writable_roots_for(Path::new(&cwd), sealed) {
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
             if !roots.is_empty() {
-                if let Ok(raw) = round_trip(
-                    &mut sink,
-                    &mut stream,
-                    THREAD_RESUME_ID,
-                    thread_resume_probe_json(THREAD_RESUME_ID, thread_id),
-                )
-                .await
+                // The rollout answers the posture; the probe is the fallback
+                // when no rollout resolves. It reports the thread-START
+                // posture, never the last turn's.
+                let sandbox = match last {
+                    Some(sandbox) => Some(sandbox),
+                    None => round_trip(
+                        &mut sink,
+                        &mut stream,
+                        THREAD_RESUME_ID,
+                        thread_resume_probe_json(THREAD_RESUME_ID, thread_id),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|raw| crate::codex_thread::parse_resolved_sandbox(&raw)),
+                };
+                // This lane never narrows: only a workspaceWrite posture is
+                // widened. A dangerFullAccess or readOnly probe answer goes
+                // policy-less, which leaves the thread on whatever the server
+                // already had.
+                if let Some(sandbox) = sandbox.filter(|s| policy_type(s) == Some("workspaceWrite"))
                 {
-                    if let Some(sandbox) = crate::codex_thread::parse_resolved_sandbox(&raw) {
-                        // This lane never narrows: only a resolved workspaceWrite
-                        // posture is widened. A dangerFullAccess or readOnly
-                        // posture goes policy-less, which leaves the thread on
-                        // whatever the server already had.
-                        if sandbox.get("type").and_then(serde_json::Value::as_str)
-                            == Some("workspaceWrite")
-                        {
-                            policy = Some(crate::codex_thread::sandbox_policy_with_roots(
-                                &sandbox, &roots,
-                            ));
-                        }
-                    }
+                    policy = Some(crate::codex_thread::sandbox_policy_with_roots(
+                        &sandbox, &roots,
+                    ));
                 }
             }
         }
@@ -2576,9 +2682,11 @@ mod tests {
         );
     }
 
-    /// The full turn path: a workspaceWrite posture yields a `turn/start`
-    /// whose `sandboxPolicy.writableRoots` carries the granted roots on top of
-    /// the posture's own.
+    /// The full turn path on a thread fno never registered: a workspaceWrite
+    /// probe yields a `turn/start` whose `sandboxPolicy.writableRoots` widens
+    /// the posture's own roots. The sender's `FNO_WORKER_ADD_DIRS` is dead on
+    /// this lane - a lead has none and a worker's belong to its own project -
+    /// so its dirs never ride, whatever the sender env carries.
     #[tokio::test]
     async fn deliver_carries_the_writable_roots_grant_on_the_turn() {
         let _env = crate::claims::test_env_lock()
@@ -2597,9 +2705,11 @@ mod tests {
         let turn = daemon
             .first_params("turn/start")
             .expect("turn/start must have run");
-        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
-            .as_array()
-            .unwrap()
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
@@ -2608,8 +2718,9 @@ mod tests {
             "the posture's own roots ride: {roots:?}"
         );
         assert!(
-            roots.contains(&"/tmp/fno-t13-a".to_string()),
-            "the state dirs ride: {roots:?}"
+            !roots.contains(&"/tmp/fno-t13-a".to_string())
+                && !roots.contains(&"/tmp/fno-t13-b".to_string()),
+            "the sender env grants nothing: {roots:?}"
         );
     }
 
@@ -2673,12 +2784,236 @@ mod tests {
             None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
         let turn = daemon.first_params("turn/start").expect("turn ran");
-        assert_eq!(turn["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+        assert_eq!(
+            turn.get("sandboxPolicy"),
+            Some(&json!({"type": "dangerFullAccess"}))
+        );
         assert!(
             daemon.received().iter().all(|frame| {
                 frame.get("method").and_then(serde_json::Value::as_str) != Some("thread/resume")
             }),
             "no resume probe may run when the row records full access"
+        );
+    }
+
+    /// A bounded row's recorded grant rides the mail turn with a bare sender
+    /// env: the roots come off the row, not off the process steering it.
+    #[tokio::test]
+    async fn mail_turn_keeps_recorded_state_root() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let home = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let grant = state_root.path().to_string_lossy().into_owned();
+        crate::state::update_registry(
+            &crate::paths::AgentsHome::at(home.path()).registry_json(),
+            {
+                let grant = grant.clone();
+                move |registry| {
+                    let mut entry = crate::state::RegistryEntry::default();
+                    entry.name = "t-mail-root".to_string();
+                    entry.cwd = "/repo".to_string();
+                    entry.harness = Some("codex".to_string());
+                    entry.harness_session_id = Some("thread-mail-root".to_string());
+                    entry.sandbox_posture = Some("workspace-write".to_string());
+                    entry.granted_writable_roots = vec![grant];
+                    registry.entries.push(entry);
+                }
+            },
+        )
+        .unwrap();
+        let _agents_home =
+            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-mail-root", "hello ROOT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&grant),
+            "the row's recorded grant rides: {roots:?}"
+        );
+    }
+
+    /// The superseded twin case: the row says nothing about full access, but
+    /// the thread's newest turn ran it. The rollout read answers the posture
+    /// and re-asserts it, probe answer aside; the probe is skipped outright.
+    #[tokio::test]
+    async fn mail_turn_keeps_last_full_access() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        // The fake daemon repoints CODEX_HOME at its own home for the socket,
+        // so the rollout must live under THAT home for the lane's read to
+        // find it; resolve it the way deliver() resolves the socket.
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let daemon_home = codex_app_server_socket_path()
+            .parent()
+            .and_then(|socket_dir| socket_dir.parent())
+            .expect("daemon home resolves from the control socket")
+            .to_path_buf();
+        let sessions = daemon_home.join("sessions/2026/11/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-full.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                r#"{"timestamp":"2026-11-06T11:19:30Z","type":"turn_context","payload":{"sandbox_policy":{"type":"workspace-write","writable_roots":["/repo/.git"]}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-11-06T13:20:44Z","type":"turn_context","payload":{"sandbox_policy":{"type":"danger-full-access"}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let result = deliver_via_codex_daemon("thread-full", "hello FULL").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        assert_eq!(
+            turn.get("sandboxPolicy"),
+            Some(&json!({"type": "dangerFullAccess"})),
+            "the last policy wins over the workspaceWrite probe"
+        );
+        assert!(
+            daemon.received().iter().all(|frame| {
+                frame.get("method").and_then(serde_json::Value::as_str) != Some("thread/resume")
+            }),
+            "the rollout answered the posture, so the probe is skipped"
+        );
+    }
+
+    /// A sender process whose `FNO_WORKER_ADD_DIRS` names another project's
+    /// dirs passes none of them to the thread: the row's recorded grant is
+    /// the whole story on a registered thread.
+    #[tokio::test]
+    async fn mail_turn_ignores_sender_grant() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let home = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let grant = state_root.path().to_string_lossy().into_owned();
+        crate::state::update_registry(
+            &crate::paths::AgentsHome::at(home.path()).registry_json(),
+            {
+                let grant = grant.clone();
+                move |registry| {
+                    let mut entry = crate::state::RegistryEntry::default();
+                    entry.name = "t-mail-foreign".to_string();
+                    entry.cwd = "/repo".to_string();
+                    entry.harness = Some("codex".to_string());
+                    entry.harness_session_id = Some("thread-mail-foreign".to_string());
+                    entry.sandbox_posture = Some("workspace-write".to_string());
+                    entry.granted_writable_roots = vec![grant];
+                    registry.entries.push(entry);
+                }
+            },
+        )
+        .unwrap();
+        let _agents_home =
+            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
+        let _add_dirs = crate::claims::EnvVarGuard::set(
+            "FNO_WORKER_ADD_DIRS",
+            "/tmp/fno-foreign-a:/tmp/fno-foreign-b",
+        );
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-mail-foreign", "hello FOREIGN").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&grant),
+            "the row's recorded grant rides: {roots:?}"
+        );
+        assert!(
+            !roots.contains(&"/tmp/fno-foreign-a".to_string())
+                && !roots.contains(&"/tmp/fno-foreign-b".to_string()),
+            "the sender env grants nothing on a registered thread: {roots:?}"
+        );
+    }
+
+    /// A newest `turn_context` whose policy is unreadable stops the rollout
+    /// read: the lane falls back to the probe instead of echoing an older
+    /// turn's policy, so the older policy's own roots never ride.
+    #[tokio::test]
+    async fn mail_turn_falls_back_to_probe_when_newest_policy_unreadable() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        // The fake daemon repoints CODEX_HOME at its own home for the socket,
+        // so the rollout must live under THAT home for the lane's read to
+        // find it; resolve it the way deliver() resolves the socket.
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let daemon_home = codex_app_server_socket_path()
+            .parent()
+            .and_then(|socket_dir| socket_dir.parent())
+            .expect("daemon home resolves from the control socket")
+            .to_path_buf();
+        let sessions = daemon_home.join("sessions/2026/11/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-unreadable.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                r#"{"timestamp":"2026-11-06T11:19:30Z","type":"turn_context","payload":{"sandbox_policy":{"type":"workspace-write","writable_roots":["/repo/.git"]}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-11-06T13:20:44Z","type":"turn_context","payload":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let result = deliver_via_codex_daemon("thread-unreadable", "hello FALLBACK").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&"/tmp/fno-t13-own".to_string()),
+            "the probe answered and its own roots ride: {roots:?}"
+        );
+        assert!(
+            !roots.contains(&"/repo/.git".to_string()),
+            "the older policy's roots must not ride past an unreadable newest: {roots:?}"
         );
     }
 }

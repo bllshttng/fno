@@ -558,6 +558,12 @@ dual_owner_kinds = {
     # above does.
     "backlog_refused_trimmed",
     "page_relief_done",
+    # consult_call + first_check_notice: the worker consult command and the
+    # first-check sweep are the one emitters; schema.yaml carries them for
+    # the validator and `doctor event find`, the way session_registered
+    # above does.
+    "consult_call",
+    "first_check_notice",
 }
 collisions -= dual_owner_kinds
 if collisions:

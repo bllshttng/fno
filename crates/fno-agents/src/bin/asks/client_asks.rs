@@ -67,6 +67,7 @@ pub(super) fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str
     let timeout = opt_timeout(params);
 
     let claude_home = ClaudeHome::from_env();
+    let answer = params.get("answer").and_then(|v| v.as_str());
     let outcome = dispatch_claude_ask(
         home,
         &claude_home,
@@ -77,6 +78,7 @@ pub(super) fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str
         false,
         timeout,
         &[],
+        answer,
     );
     // stderr/stdout carry exact bytes (newlines baked in); write verbatim.
     if !outcome.stderr.is_empty() {

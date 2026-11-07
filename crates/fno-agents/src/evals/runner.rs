@@ -874,7 +874,7 @@ fn lane_account_check(lane: &LaneRow, claude_ids: &[&str]) -> Result<(), String>
     ))
 }
 
-fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, String> {
+pub(crate) fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, String> {
     let rows = inv
         .get("rows")
         .and_then(serde_json::Value::as_array)
