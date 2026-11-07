@@ -432,6 +432,34 @@ fn history_all(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
     Ok(rows)
 }
 
+/// The fleet name for a remote sender, as `name:host` (`briar:imac2d2`).
+/// `from` must hold the `user:host/handle` shape a remote send stamps. A
+/// local sender (a live row, or any address without that shape) returns
+/// `None` before any ledger read. The name is the newest bound history row
+/// whose session shares the handle; a sender no row names returns `None`,
+/// so the caller keeps the short id.
+pub fn remote_fleet_label(
+    store_path: &Path,
+    from: &str,
+    from_session: Option<&str>,
+) -> Option<String> {
+    let (host, handle) = crate::mail_header::remote_parts(from)?;
+    let identity = from_session.filter(|s| !s.is_empty()).unwrap_or(handle);
+    let wanted = crate::identity::canonical_handle(identity);
+    let name = history_all(store_path)
+        .ok()?
+        .into_iter()
+        .filter(|e| e.kind == "bound")
+        .filter(|e| {
+            e.session
+                .as_deref()
+                .is_some_and(|s| crate::identity::canonical_handle(s) == wanted)
+        })
+        .max_by(|a, b| a.ts.cmp(&b.ts))?
+        .name;
+    Some(format!("{name}:{host}"))
+}
+
 /// The history file plus the names the registry snapshots still hold. A
 /// registry row can name a lead that never reached the history (a Wren from
 /// before the history existed), and the live registry forgets it once the

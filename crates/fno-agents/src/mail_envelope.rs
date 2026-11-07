@@ -75,15 +75,18 @@ fn form_of(input: &Value) -> crate::mail_header::HeaderForm {
 }
 
 /// The sender name a delivered header shows: the registry row's fleet name
-/// (what the fleet types), else the payload's `from_name`, else the `from`
-/// address itself.
+/// (what the fleet types), else the remote sender's `name:host` (resolved
+/// from the session at render time), else the payload's `from_name`, else
+/// the `from` address itself.
 fn header_sender<'a>(
     from_row: Option<&'a crate::state::RegistryEntry>,
+    remote: Option<&'a str>,
     from_name: Option<&'a str>,
     from: &'a str,
 ) -> &'a str {
     from_row
         .map(|row| row.name.as_str())
+        .or(remote)
         .or(from_name)
         .filter(|name| !name.is_empty())
         .unwrap_or(from)
@@ -265,7 +268,19 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
     // The sender is the fleet name, the id is required (the shape's join
     // key), and both are guarded so neither can forge a second field.
     let msg_id = attr(input, "id").ok_or("mail envelope: an id is required to render a header")?;
-    let sender = header_sender(from_row, from_name, from);
+    // A remote sender has no live row here, so its header name comes from the
+    // fleet name ledger by session. Only the remote shape reads the ledger.
+    let remote = from_row
+        .is_none()
+        .then(|| {
+            crate::team_names::remote_fleet_label(
+                &crate::team_names::store_beside(registry_path),
+                from_input,
+                from_session,
+            )
+        })
+        .flatten();
+    let sender = header_sender(from_row, remote.as_deref(), from_name, from);
     crate::system_sender::guard_sender(sender)?;
     validate_sender(sender)?;
     validate_attr("msg id", msg_id)?;
@@ -433,6 +448,31 @@ mod tests {
             .to_string(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_remote_sender_renders_its_fleet_name_at_its_host() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+        registry(&path);
+        std::fs::write(
+            tmp.path().join("name_history.json"),
+            json!({"version": 1, "names": [{
+                "name": "briar", "scope": "fno", "session": "1683f144-aaaa-4bbb-8ccc-000000000001",
+                "kind": "bound", "ts": "2026-11-06T00:00:00Z", "host": "imac2d2"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let input = json!({
+            "mode":"wrap", "body":"Ship it.", "from":"bb16:imac2d2/1683f144", "id":"msg-1"
+        });
+        let rendered = render_at(&input, &path).unwrap();
+        assert_eq!(rendered, "`@briar:imac2d2 · msg-1`\nShip it.");
+        // No ledger row names the session: the header keeps the short id.
+        std::fs::remove_file(tmp.path().join("name_history.json")).unwrap();
+        let unnamed = render_at(&input, &path).unwrap();
+        assert_eq!(unnamed, "`@bb16:imac2d2/1683f144 · msg-1`\nShip it.");
     }
 
     #[test]

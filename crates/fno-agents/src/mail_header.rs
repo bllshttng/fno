@@ -302,6 +302,15 @@ fn cut_words(text: &str, max: usize) -> String {
     words[..max].join(" ")
 }
 
+/// A remote sender's address split into its host and session handle:
+/// `bb16:imac2d2/1683f144` gives `("imac2d2", "1683f144")`. `None` for any
+/// address without the `user:host/handle` shape.
+pub fn remote_parts(from: &str) -> Option<(&str, &str)> {
+    let (_, rest) = from.split_once(':')?;
+    let (host, handle) = rest.split_once('/')?;
+    (!host.is_empty() && !handle.is_empty()).then_some((host, handle))
+}
+
 /// The rendered header line, backticks included, no trailing newline. The
 /// third field rides only when the caller passes one
 /// ([`header_third_field`] decides): a bodied mail's header is the law's
