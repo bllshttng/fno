@@ -170,7 +170,7 @@ pub(crate) fn start(home: &AgentsHome) {
             &workers,
             &keepers,
             |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
-            |home, name| revive_unattended(home, name),
+            revive_unattended,
             |home, name| {
                 crate::reentry::resolve_reentry(
                     &home.registry_json(),
@@ -1214,7 +1214,7 @@ pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
         &workers,
         &keepers,
         |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
-        |home, name| rerun_revive(home, name),
+        rerun_revive,
         |home, name| {
             crate::reentry::resolve_reentry(
                 &home.registry_json(),
@@ -1734,6 +1734,7 @@ mod tests {
     /// A live pi, grok or gemini row is a skipped receipt row whose reason
     /// names the harness's keeper stanza and the missing revival word.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the receipt rows
     fn plan_names_the_missing_keeper_revival() {
         let pi = keeper_row("pi-a", "pi11111-session", "pi", AgentStatus::Live);
         let grok = keeper_row("grok-a", "grok1111-session", "grok", AgentStatus::Live);
@@ -1771,6 +1772,7 @@ mod tests {
     /// The unread listing is claude's answer: the claude row waits as a
     /// named skip row while the keeper row still plans.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the receipt rows
     fn an_unread_listing_skips_only_claude_rows() {
         let claude = row("kestrel", "11112222-bbbb", AgentStatus::Orphaned);
         let agy = keeper_row("agy-a", "agy11111-session", "agy", AgentStatus::Live);
@@ -1863,6 +1865,7 @@ mod tests {
     /// purpose on a merged node stays down; a stop a resume already passed
     /// (live row) and a bare reboot death still come back.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the receipt rows
     fn a_deliberately_stopped_keeper_row_on_a_merged_node_stays_down() {
         let mut standing = keeper_row("agy-s", "agy11111-session", "agy", AgentStatus::Exited);
         standing.node = Some("x-merged".into());
