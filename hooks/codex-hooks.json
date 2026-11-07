@@ -27,6 +27,16 @@
         "hooks": [
           {
             "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/join-partition-write-guard.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook join-partition-write-guard.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
+            "statusMessage": "checking join partitions"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/plan-location-guard.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook plan-location-guard.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking plan save location"
           }
