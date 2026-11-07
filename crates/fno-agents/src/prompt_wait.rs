@@ -143,13 +143,13 @@ fn parent_of(home: &AgentsHome, registry: &Registry, sid: &str) -> Option<String
         .entries
         .iter()
         .find(|r| is_session(r, sid))
-        .and_then(|r| r.spawned_by_session.clone())
+        .and_then(|r| r.current_owner_session().map(str::to_string))
         .or_else(|| crate::spawn_watch::caller_of(home, sid))
         .filter(|s| !s.is_empty() && s != sid)
 }
 
-/// Who hears about this wait: the spawner, then the nearest ancestor that
-/// holds a lead role. One session that is both hears it once.
+/// Who hears about this wait: the owner session, then the nearest ancestor
+/// that holds a lead role. One session that is both hears it once.
 fn recipients(home: &AgentsHome, registry: &Registry, sid: &str) -> Vec<String> {
     let lead = |s: &str| {
         let mut rows = registry.entries.iter();

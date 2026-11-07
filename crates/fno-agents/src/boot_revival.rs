@@ -552,11 +552,12 @@ fn mail_failure(
     }
 }
 
-/// The registry row the worker's `spawned_by_session` names. The full
-/// session id is the join key (the registry's keying law); a finished row
-/// loses to a live one, and the first row wins among equals.
+/// The registry row the worker's current owner session names (the birth
+/// edge where no succession reown narrows it). The full session id is the
+/// join key (the registry's keying law); a finished row loses to a live
+/// one, and the first row wins among equals.
 fn spawned_lead_name(entries: &[RegistryEntry], worker: &RegistryEntry) -> Option<String> {
-    let sid = worker.spawned_by_session.as_deref()?;
+    let sid = worker.current_owner_session()?;
     let mut matches: Vec<&RegistryEntry> = entries
         .iter()
         .filter(|e| e.harness_session_id.as_deref() == Some(sid))
