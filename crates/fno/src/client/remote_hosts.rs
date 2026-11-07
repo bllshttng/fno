@@ -97,19 +97,38 @@ pub(super) fn parse_host(input: &str) -> Result<String, String> {
     })
 }
 
-/// Whether a configured name and a fleet-map host name one machine: the
-/// `user@` and the domain suffix do not count.
-fn same_host(configured: &str, band: &str) -> bool {
+/// The identity of a host name: the `user@` prefix and the case do not
+/// count. The domain stays: two machines that share a short name across
+/// tailnet domains are two machines.
+fn host_identity(s: &str) -> String {
+    s.rsplit('@')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+/// Whether a configured name names the same machine as one fleet-map host:
+/// full names equal, or a dot-less configured name answering to exactly one
+/// distinct full host in the set. The ambiguity guard keeps two machines
+/// that share a short name from folding into one row.
+fn fold_host<'a>(configured: &str, bands: &[&'a str]) -> Option<&'a str> {
+    let cfg = host_identity(configured);
+    if bands.iter().any(|b| host_identity(b) == cfg) {
+        return bands.iter().copied().find(|b| host_identity(b) == cfg);
+    }
+    if cfg.contains('.') || bands.is_empty() {
+        return None;
+    }
     let head = |s: &str| {
-        s.rsplit('@')
-            .next()
-            .unwrap_or_default()
+        host_identity(s)
             .split('.')
             .next()
             .unwrap_or_default()
-            .to_ascii_lowercase()
+            .to_string()
     };
-    !band.is_empty() && head(configured) == head(band)
+    let mut hits = bands.iter().filter(|b| head(b) == cfg);
+    let first = hits.next().copied()?;
+    hits.next().map_or(Some(first), |_| None)
 }
 
 impl RemoteHosts {
@@ -148,7 +167,10 @@ impl RemoteHosts {
     /// answered, each machine once.
     pub(super) fn destinations(&self, mut map: Vec<String>) -> Vec<String> {
         for host in &self.hosts {
-            let known = map.iter().any(|m| same_host(&host.name, m));
+            let known = {
+                let names: Vec<&str> = map.iter().map(String::as_str).collect();
+                fold_host(&host.name, &names).is_some()
+            };
             if !known && matches!(host.state, HostState::Reachable(_)) {
                 map.push(host.name.clone());
             }
@@ -158,13 +180,18 @@ impl RemoteHosts {
 
     fn lines(&self, tree: &MachineTree) -> Vec<Line> {
         let far: Vec<_> = tree.far_bands().collect();
+        let far_names: Vec<&str> = far.iter().map(|(h, ..)| *h).collect();
         let mut lines: Vec<Line> = self
             .hosts
             .iter()
             .map(|host| {
-                let band = far.iter().find(|(h, ..)| same_host(&host.name, h));
+                let band = fold_host(&host.name, &far_names).and_then(|name| {
+                    far.iter()
+                        .find(|(h, ..)| *h == name)
+                        .map(|&(_, fresh, age_s)| (fresh, age_s))
+                });
                 let (word, detail) = match (band, &host.state) {
-                    (Some(&(_, fresh, age_s)), _) => beat(fresh, age_s),
+                    (Some((fresh, age_s)), _) => beat(fresh, age_s),
                     (None, HostState::Checking) => ("checking".into(), "ssh has not answered yet".into()),
                     (None, HostState::Reachable(v)) => (
                         "not on the shared store".into(),
@@ -186,7 +213,11 @@ impl RemoteHosts {
             })
             .collect();
         for (host, fresh, age_s) in far {
-            if !self.hosts.iter().any(|h| same_host(&h.name, host)) {
+            if !self
+                .hosts
+                .iter()
+                .any(|h| fold_host(&h.name, &[host]).is_some())
+            {
                 let (word, _) = beat(fresh, age_s);
                 lines.push(Line {
                     name: host.to_string(),
@@ -460,10 +491,19 @@ mod tests {
     }
 
     #[test]
-    fn same_host_ignores_user_and_domain() {
-        assert!(same_host("bb16@R2D2.tail1.ts.net", "r2d2"));
-        assert!(!same_host("r2d2", "imac2d2"));
-        assert!(!same_host("r2d2", ""));
+    fn folding_matches_one_machine_and_refuses_ambiguity() {
+        // Full names equal, user@ and case aside.
+        assert!(fold_host("bb16@R2D2.tail1.ts.net", &["r2d2.tail1.ts.net"]).is_some());
+        assert!(!fold_host("r2d2", &["imac2d2"]).is_some());
+        // A dot-less name answers to one distinct full host.
+        assert_eq!(
+            fold_host("r2d2", &["r2d2.tail1.ts.net"]),
+            Some("r2d2.tail1.ts.net")
+        );
+        // Two machines sharing the short name fold to neither.
+        assert!(fold_host("r2d2", &["r2d2.a.ts.net", "r2d2.b.ts.net"]).is_none());
+        // A dotted name never rides the short-name fallback.
+        assert!(fold_host("r2d2.a.ts.net", &["r2d2.b.ts.net"]).is_none());
     }
 
     #[test]
