@@ -2230,6 +2230,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The register command's join row (register.rs): one event per minted
     // or refreshed roster row.
     "session_registered",
+    // One bounded stronger-model question from a worker session
+    // (consult.rs); figures are "unknown" when the envelope omits them.
+    "consult_call",
+    // The first-check sweep's notice beside the parent mail
+    // (first_check.rs); the notice index orders the repeats.
+    "first_check_notice",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the
