@@ -295,8 +295,10 @@ fn load_task_typed(path: &std::path::Path) -> Result<TaskSpec, LoadError> {
     })
 }
 
-/// `covers:` is a list of directory prefixes. A prefix with no trailing `/`
-/// would match a sibling (`crates/fno` also names `crates/fno-agents`).
+/// `covers:` is a list of directory prefixes and exact files. A prefix with
+/// no trailing `/` would match a sibling (`crates/fno` also names
+/// `crates/fno-agents`), so a bare stem refuses; a last segment with an
+/// extension names that one file.
 fn parse_covers(
     raw: Option<&serde_yaml_ng::Value>,
     task_id: &str,
@@ -307,7 +309,7 @@ fn parse_covers(
     };
     let bad = || {
         BankError(format!(
-            "task '{task_id}' ({}): 'covers' must be a list of path prefixes ending in '/'",
+            "task '{task_id}' ({}): 'covers' must be a list of path prefixes ending in '/' or exact files with an extension in the last segment",
             path.display()
         ))
     };
@@ -315,6 +317,7 @@ fn parse_covers(
     seq.iter()
         .map(|v| match v.as_str() {
             Some(s) if s.ends_with('/') => Ok(s.to_string()),
+            Some(s) if std::path::Path::new(s).extension().is_some() => Ok(s.to_string()),
             _ => Err(bad()),
         })
         .collect()
@@ -928,8 +931,18 @@ mod tests {
             load_task(&ok).unwrap().covers,
             vec!["crates/fno-agents/src/backlog/"]
         );
+        let file = write_task(
+            dir.path(),
+            "file.yaml",
+            &body("covers: [\"crates/fno-agents/src/pr_front.rs\"]\n"),
+        );
+        assert_eq!(
+            load_task(&file).unwrap().covers,
+            vec!["crates/fno-agents/src/pr_front.rs"]
+        );
         for (name, covers) in [
             ("bare", "covers: [\"crates/fno\"]\n"),
+            ("noslash", "covers: [\"crates/fno-agents/src\"]\n"),
             ("scalar", "covers: crates/fno/\n"),
             ("num", "covers: [3]\n"),
         ] {
