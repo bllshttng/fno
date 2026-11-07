@@ -189,7 +189,7 @@ pub fn pick<'a>(candidates: &'a [HostPick], local_free: Option<i64>) -> Option<&
     let best = candidates.iter().max_by(|a, b| {
         a.free.cmp(&b.free).then(
             a.cpu
-                .partial_cmp(&b.cpu)
+                .partial_cmp(&a.cpu)
                 .unwrap_or(std::cmp::Ordering::Equal),
         )
     });
