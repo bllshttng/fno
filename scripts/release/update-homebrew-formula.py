@@ -74,13 +74,16 @@ def fetch_shas(
     fetch = fetch or _fetch_shas_once
     tag = release_tag(version)
     last_err: Exception | None = None
+    missing: list[str] = []
     for attempt in range(1, tries + 1):
         try:
-            shas = fetch(tag)
+            shas = fetch(tag) or {}
         except (OSError, ValueError) as e:
             last_err = e
         else:
-            return shas
+            missing = [a for a in (X86_64, ARM64) if a not in shas]
+            if not missing:
+                return shas
         if attempt < tries:
             sys.stderr.write(
                 f"fno {version} ({tag}): macOS tarballs not on the release yet"
@@ -90,7 +93,7 @@ def fetch_shas(
     if last_err is not None:
         sys.stderr.write(f"fno {version}: could not read the release checksums: {last_err}\n")
     else:
-        sys.stderr.write(f"fno {version}: the release never served both checksums after {tries} tries\n")
+        sys.stderr.write(f"fno {version}: the release never served both checksums after {tries} tries (missing: {missing})\n")
     return None
 
 def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
@@ -143,6 +146,27 @@ def self_check() -> None:
     assert release_tag("0.4.7") == "v0.4.7"
     assert release_tag("0.4.7rc1") == "v0.4.7rc1"
     assert release_tag("0.4.7.dev.20261105") == "nightly"
+
+    # Retry contract: keep polling until both checksums answer; a spent
+    # budget returns None and names the cause on stderr. An incomplete
+    # fetch result keeps polling too - it never reaches rewrite().
+    calls: list[str] = []
+
+    def flaky(tag: str):
+        calls.append(tag)
+        if len(calls) < 3:
+            return {X86_64: ("https://new/x64.tar.gz", "1" * 64)}
+        return {X86_64: ("https://new/x64.tar.gz", "1" * 64), ARM64: ("https://new/arm.tar.gz", "2" * 64)}
+
+    got = fetch_shas("0.2.1", tries=5, delay=0, fetch=flaky, sleep=lambda _s: None)
+    assert got is not None and ARM64 in got, got
+    assert len(calls) == 3, calls
+    assert fetch_shas("0.2.1", tries=3, delay=0, fetch=lambda _tag: {}, sleep=lambda _s: None) is None
+
+    def refused(_tag: str):
+        raise OSError("connection refused")
+
+    assert fetch_shas("0.2.1", tries=3, delay=0, fetch=refused, sleep=lambda _s: None) is None
     print("self-check OK")
 
 def main() -> int:

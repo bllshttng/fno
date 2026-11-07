@@ -191,9 +191,11 @@ else
     x86_64) ARCH_DIR="macos-x64" ;;
   esac
   TARBALL="$STAGE/fno-agents-$ARCH_DIR.tar.gz"
-  mkdir -p "$STAGE/scripts"
   unzip -o "$WHEEL" 'fno-*.data/scripts/*' -d "$STAGE/unzipped" >/dev/null
-  tar -czf "$TARBALL" -C "$STAGE/unzipped/fno-*.data/scripts" fno fno-agents fno-agents-daemon fno-agents-worker
+  # The glob expands OUTSIDE the quotes; a quoted -C hands tar the literal
+  # pattern and the chdir fails (the one wheel data dir, unquoted).
+  SCRIPTS_DIR="$(cd "$STAGE/unzipped"/fno-*.data/scripts && pwd -P)"
+  tar -czf "$TARBALL" -C "$SCRIPTS_DIR" fno fno-agents fno-agents-daemon fno-agents-worker
   TSHA="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
 
   # Modern brew only installs formulae from a tap, so stage the concrete

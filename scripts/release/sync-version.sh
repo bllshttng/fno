@@ -72,12 +72,13 @@ if [[ "$arg" == "--check" ]]; then
     got="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "$cf")"
     [[ "$got" == "$want_semver" ]] || { echo "drift: $cf = $got (want $want_semver)"; bad=1; }
   done
+  # The bridge wheel's VERSION file must also agree with __init__.py; the
+  # Python deletion re-anchors this check on VERSION alone. One check, not
+  # one per JSON manifest.
+  if ! grep -qx "$want_pep" packaging/pypi/VERSION 2>/dev/null; then
+    echo "drift: packaging/pypi/VERSION = $(tr -d '[:space:]' < packaging/pypi/VERSION 2>/dev/null || echo missing) (want $want_pep)"; bad=1
+  fi
   for j in "${JSON_MANIFESTS[@]}"; do
-    # The bridge wheel's VERSION file must also agree with __init__.py; the
-    # Python deletion re-anchors this check on VERSION alone.
-    if ! grep -qx "$want_pep" packaging/pypi/VERSION 2>/dev/null; then
-      echo "drift: packaging/pypi/VERSION = $(tr -d '[:space:]' < packaging/pypi/VERSION 2>/dev/null || echo missing) (want $want_pep)"; bad=1
-    fi
     matches="$(perl -ne 'print "$1\n" while /"version"\s*:\s*"([^"]*)"/g' "$j")"
     # Zero version fields is itself drift: a dropped/renamed key would otherwise
     # pass silently (the while loop just never runs).

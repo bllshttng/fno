@@ -467,8 +467,14 @@ fn acquire_move_lock() -> Option<PathBuf> {
         .create_new(true)
         .open(&path)
         .ok()?;
-    f.write_all(format!("{}\n", std::process::id()).as_bytes())
-        .ok()?;
+    // A failed write leaves an EMPTY lockfile: the next reader cannot parse
+    // a pid and reads it as a live holder forever. Take the file with us.
+    if f.write_all(format!("{}\n", std::process::id()).as_bytes())
+        .is_err()
+    {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
     Some(path)
 }
 
@@ -530,6 +536,10 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
         match dir {
             Some(dir) => {
                 if let Err(e) = link_binaries(&bin, &dir) {
+                    // The marker went down inside adopt_unpacked before the
+                    // links existed; unwrite it so first_run_move retries
+                    // instead of reading this half-adopt as done.
+                    let _ = std::fs::remove_file(marker_path());
                     return failed("link", &e);
                 }
             }

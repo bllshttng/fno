@@ -69,9 +69,23 @@ count_once_per_day() {
 # that cannot read it (pre-floor binaries). Best effort, one line, only
 # when the installed version is below min_supported.
 floor_line() {
-  local url="https://github.com/${FNO_RELEASE_REPO:-fnodotdev/fno}/releases/latest/download/fno-release.json"
-  local meta
-  meta="$(curl -fsSL --max-time 10 "$url" 2>/dev/null)" || return 0
+  # The Rust floor cache (release_install.rs write_floor_cache) carries the
+  # same fields with a fetched stamp; fresh within a day it answers offline
+  # and SessionStart never waits on the network.
+  local meta=""
+  local cache="$STATE/install/fno-release-cache.json"
+  if [[ -f "$cache" ]]; then
+    local fetched now
+    fetched="$(grep -o '"fetched":[0-9]*' "$cache" | head -1 | cut -d: -f2)"
+    now="$(date +%s)"
+    if [[ -n "$fetched" ]] && (( now - fetched < 86400 )); then
+      meta="$(cat "$cache")"
+    fi
+  fi
+  if [[ -z "$meta" ]]; then
+    local url="https://github.com/${FNO_RELEASE_REPO:-fnodotdev/fno}/releases/latest/download/fno-release.json"
+    meta="$(curl -fsSL --max-time 10 "$url" 2>/dev/null)" || return 0
+  fi
   local floor
   floor="$(printf '%s' "$meta" | grep -o '"min_supported"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\(.*\)"$/\1/' 2>/dev/null)"
   [[ -n "$floor" ]] || return 0
