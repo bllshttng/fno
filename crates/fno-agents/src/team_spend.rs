@@ -214,8 +214,8 @@ fn team_spend_at(
         ..Default::default()
     });
 
-    // A member querying its team resolves upward to the lead, so both the
-    // spawn gate and loop-check measure the same complete lineage.
+    // A CHILD member resolves upward to its lead; a PEER handoff stays in its
+    // own session, matching the descendant fold below.
     let mut ancestor_seen = HashSet::new();
     while ancestor_seen.insert(root_key.clone()) {
         let Some(member) = members.get(&root_key) else {
@@ -228,7 +228,12 @@ fn team_spend_at(
             break;
         };
         let parent_key = session_key(parent_id);
-        if !members.contains_key(&parent_key) {
+        let Some(parent) = members.get(&parent_key) else {
+            break;
+        };
+        if crate::spawn_edge::lineage_kind(&member.name, parent.role_level.is_some())
+            != crate::spawn_edge::LineageKind::Child
+        {
             break;
         }
         root_key = parent_key;
@@ -427,5 +432,8 @@ mod tests {
         );
         assert_eq!(spend.unmetered, vec!["h-b".to_string()]);
         assert!((spend.metered_usd - 4.0).abs() < 0.001);
+
+        let peer_spend = team_spend_at(&home, "h-peer", &ledger, &otel_db).unwrap();
+        assert_eq!(peer_spend.members, vec!["h-peer".to_string()]);
     }
 }
