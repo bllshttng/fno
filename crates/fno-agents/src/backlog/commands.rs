@@ -20,7 +20,8 @@ pub struct Group {
     pub actions: &'static [(&'static str, &'static str)],
 }
 
-/// The canonical table, in plan order.
+/// The canonical table, in plan order. Each row is static data the help
+/// renderer walks in place.
 pub const GROUPS: &[Group] = &[
     Group {
         name: "add",
