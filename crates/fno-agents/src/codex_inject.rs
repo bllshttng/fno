@@ -2708,9 +2708,11 @@ mod tests {
         let turn = daemon
             .first_params("turn/start")
             .expect("turn/start must have run");
-        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
-            .as_array()
-            .unwrap()
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
@@ -2785,7 +2787,10 @@ mod tests {
             None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
         let turn = daemon.first_params("turn/start").expect("turn ran");
-        assert_eq!(turn["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+        assert_eq!(
+            turn.get("sandboxPolicy"),
+            Some(&json!({"type": "dangerFullAccess"}))
+        );
         assert!(
             daemon.received().iter().all(|frame| {
                 frame.get("method").and_then(serde_json::Value::as_str) != Some("thread/resume")
@@ -2837,9 +2842,11 @@ mod tests {
         let result = deliver_via_codex_daemon("thread-mail-root", "hello ROOT").await;
         assert!(result.is_ok(), "delivery must succeed: {result:?}");
         let turn = daemon.first_params("turn/start").expect("turn ran");
-        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
-            .as_array()
-            .unwrap()
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
@@ -2884,8 +2891,8 @@ mod tests {
         assert!(result.is_ok(), "delivery must succeed: {result:?}");
         let turn = daemon.first_params("turn/start").expect("turn ran");
         assert_eq!(
-            turn["sandboxPolicy"],
-            json!({"type": "dangerFullAccess"}),
+            turn.get("sandboxPolicy"),
+            Some(&json!({"type": "dangerFullAccess"})),
             "the last policy wins over the workspaceWrite probe"
         );
         assert!(
@@ -2944,9 +2951,11 @@ mod tests {
         let result = deliver_via_codex_daemon("thread-mail-foreign", "hello FOREIGN").await;
         assert!(result.is_ok(), "delivery must succeed: {result:?}");
         let turn = daemon.first_params("turn/start").expect("turn ran");
-        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
-            .as_array()
-            .unwrap()
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
@@ -2995,9 +3004,11 @@ mod tests {
         let result = deliver_via_codex_daemon("thread-unreadable", "hello FALLBACK").await;
         assert!(result.is_ok(), "delivery must succeed: {result:?}");
         let turn = daemon.first_params("turn/start").expect("turn ran");
-        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
-            .as_array()
-            .unwrap()
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
