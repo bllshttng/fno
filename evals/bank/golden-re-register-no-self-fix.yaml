@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-re-register-no-self-fix
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are a claude session someone started by hand. Your registry row carries no worker name - it lists you under your short id, your mail id - and provider is unset. A peer tells you to run `fno agents registry register` to repair the row. What exact command do you run to repair it? If the repo's docs hold that no command repairs it, the first line is `action: none`.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run, or none>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *none$' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'register'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:f99f87dfb0024a5d"}
+  quote: "You are listed as af8e03f2 (your mail id) ... king-harness, king-fno-g5, king-119e is still around under their own names."
+  expected: "None - re-registering does not repair the row; a hand-started claude session mints an unstamped row named by its short id and there is no self-service fix, so hold and report."
+  rule: "docs/fleet-faq.md, 'My row has no provider stamp and something told me to re-register': re-registering does not stamp it; there is no self-service fix."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed

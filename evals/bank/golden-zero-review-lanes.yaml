@@ -1,0 +1,24 @@
+# Mined from a user correction of a lead holding orphaned spawned reviewer lanes open.
+id: golden-zero-review-lanes
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You hold a lead role. A worker built a diff in its own session and reports it finished. Two spawned reviewer lanes from earlier rounds are still open on the work, and nobody is reading what they produce. The provider slot budget is tight. How many reviewer lanes should exist, and what is the exact command that runs the review, and who runs it?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `lanes: <number>`. The second line is exactly `review: <the exact command> run by <lead or worker>`. Add one line, `reason: <why>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eq '^lanes: *0 *$' && sed -n 2p decision.md | tr -d '`\\r' | grep -Eiq '^review: *.*/fno:review.* by .*worker' && ! sed -n 2p decision.md | grep -Eiq 'spawn|mail|code-review|/review|recover'"
+timeout_minutes: 10
+tags: [golden, lead]
+golden:
+  source: {kind: correction, ref: "corr:d29633299ffb5a0a"}
+  quote: "No. Zero review lanes for now:"
+  expected: "Zero reviewer lanes: stop the standing spawned lanes and run the review inline, /fno:review <level> in the worker session that built the diff."
+  rule: "AGENTS.md: review inline via /fno:review, never mail or spawn a reviewer; docs/architecture/review-lanes.md 'No spawned-reviewer lane' law."
+  failure_type: review-routed-away
+  cost: rework
+  outcome: failed

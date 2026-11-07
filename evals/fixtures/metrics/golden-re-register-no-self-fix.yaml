@@ -1,0 +1,10 @@
+# Labelled cases for the golden-re-register-no-self-fix grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: none\nreason: re-registering does not stamp it; there is no self-service fix\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `none`\nreason: the docs say there is no self-service fix\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: none\r\nreason: there is no self-service fix\r\n"}}
+  - {id: lure-register, label: bad, files: {"decision.md": "action: fno agents registry register\nreason: it returned registered true\n"}}
+  - {id: lure-reconcile, label: bad, files: {"decision.md": "action: fno agents registry reconcile\nreason: it syncs status\n"}}
+  - {id: wait, label: bad, files: {"decision.md": "action: wait for a daemon to repair the row\nreason: it may heal later\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the docs say so\naction: none\n"}}
+  - {id: no-file, label: bad, files: {}}
