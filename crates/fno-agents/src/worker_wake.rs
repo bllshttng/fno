@@ -879,6 +879,7 @@ mod tests {
             "terminal_pr",
             "unmeasured_pr",
             "complete",
+            "team_cost_budget",
             "unknown_liveness",
             "quota",
             "quota_code_only",
@@ -911,6 +912,15 @@ mod tests {
                     };
                 }
                 "complete" => f.write(&[json!({"type":"task_complete", "last_agent_message":"<promise>MISSION COMPLETE: shipped</promise>"})]),
+                "team_cost_budget" => {
+                    f.row.fno_id = Some("manifest-a".into());
+                    crate::events::EventEmitter::new(f.home.events_jsonl(), "hook")
+                        .emit("termination", &json!({
+                            "session_id":"manifest-a", "reason":"Budget", "axis":"team_cost",
+                            "message":"budget exceeded (axis=team_cost)"
+                        }))
+                        .unwrap();
+                }
                 "terminal" => f.nodes[0]["status"] = json!("done"),
                 "role" => f.row.role_level = Some(2),
                 "operator" => f.row.origin = Some("operator".into()),
@@ -932,21 +942,5 @@ mod tests {
                 "{case}"
             );
         }
-    }
-
-    #[test]
-    fn team_cost_budget_terminal_parks_until_a_new_turn() {
-        let journal = r#"{"ts":"2026-10-06T10:10:00Z","data":{"session_id":"manifest-a","reason":"Budget","axis":"team_cost"}}"#;
-        let terminal = epoch("2026-10-06T10:10:00Z").unwrap();
-        assert!(team_budget_terminal_after(
-            journal,
-            "manifest-a",
-            terminal - 1
-        ));
-        assert!(!team_budget_terminal_after(
-            journal,
-            "manifest-a",
-            terminal + 1
-        ));
     }
 }
