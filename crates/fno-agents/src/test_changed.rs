@@ -300,10 +300,10 @@ pub fn importer_neighbourhood(
 }
 
 /// (rel, text, import refs) for every test file, read once per selection.
-/// Covers cli/tests, the root tests/ tree, and tests co-located in cli/src.
+/// Covers the root tests/ tree, tests/py included.
 pub fn test_reach_index(root: &Path) -> Vec<(String, String, BTreeSet<String>)> {
     let mut out = Vec::new();
-    for base in ["cli/tests", "tests", "cli/src"] {
+    for base in ["tests"] {
         for rel in walk_py(&root.join(base), root) {
             if !rel.rsplit('/').next().unwrap_or("").starts_with("test_") {
                 continue;
@@ -323,7 +323,7 @@ pub fn test_reach_index(root: &Path) -> Vec<(String, String, BTreeSet<String>)> 
 /// named (claims.py -> test_claims_core.py, test_claims_io.py), so
 /// exact-match alone leaves them unmapped.
 pub fn conventional_tests(root: &Path, stem: &str) -> Vec<String> {
-    let tests = root.join("cli/tests");
+    let tests = root.join("tests/py");
     let hits: BTreeSet<String> = walk_py(&tests, root)
         .into_iter()
         .filter(|rel| {
@@ -717,17 +717,22 @@ pub fn changed_steps(root: &Path, selections: &[Selection], shard: &str) -> Vec<
         targets.sort();
         targets.dedup();
         // xdist costs more than it saves on a handful of files.
-        let par = if targets.len() > 3 {
-            " -n auto --maxprocesses=4 --dist=loadgroup"
+        let (xdist, par) = if targets.len() > 3 {
+            (
+                " --with pytest-xdist",
+                " -n auto --maxprocesses=4 --dist=loadgroup",
+            )
         } else {
-            ""
+            ("", "")
         };
         let quoted: Vec<String> = targets.iter().map(|t| shell_quote_arg(t)).collect();
+        // The same ephemeral env the tests-py CI job runs: no project
+        // manifest exists to sync.
         steps.push((
             format!("Pytest (changed subset, {} file(s))", targets.len()),
             ".".to_string(),
             format!(
-                "uv run --project cli pytest --tb=short -q{par} {}",
+                "uv run --with pytest --with pytest-timeout --with pyyaml --with psutil{xdist} pytest --tb=short -q{par} {}",
                 quoted.join(" ")
             ),
         ));

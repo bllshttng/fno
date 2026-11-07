@@ -70,12 +70,12 @@ if [[ ${#builtin[@]} -gt 0 ]]; then
   # no machine's config changes what holds.
   printf '%s\n' "${builtin[@]}" > "$patterns_file"
 elif [[ -f "$config" ]]; then
-  # Through the cli project env, not bare python3: tomllib needs 3.11+, the
-  # cli package pins that floor, and runners and workstations both already
+  # Through uv with a pinned interpreter, not bare python3: tomllib needs 3.11+,
+  # and runners and workstations both already
   # carry uv for it. The gate skips a config it cannot parse and falls to its
   # built-in list, so a parse error here does the same instead of failing the
   # selection.
-  uv run --project "$root/cli" python - "$config" ${builtin[@]+"${builtin[@]}"} > "$patterns_file" <<'PY'
+  uv run --no-project --python 3.12 python - "$config" ${builtin[@]+"${builtin[@]}"} > "$patterns_file" <<'PY'
 import sys, tomllib
 
 builtin = sys.argv[2:]

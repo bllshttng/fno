@@ -1839,7 +1839,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // that drops rows can never vanish without a door being named.
     "registry_rows_lost",
     // Orphan process sweep (daemon-emitted): the row GC beside it reaps
-    // registry ROWS, this reaps the `fno-py` children that init inherited and
+    // registry ROWS, this reaps the reparable children that init inherited and
     // nobody was waiting on. Emitted on EVERY run including the ones that reap
     // nothing, because a reaper that speaks only when it kills cannot be told
     // apart from a reaper that never ran.

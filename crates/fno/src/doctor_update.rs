@@ -33,12 +33,11 @@ const GUARD_MSG: &str = "[fno doctor update] refused: target-state.md shows stat
 /// legacy classifier must NOT reopen the unsafe cache path.
 const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agents could not answer source-pin (missing, pre-source-pin, or malformed); re-run the update with an explicit --source pointing at the canonical checkout, or rebuild the rust bins from it, so a stale helper cannot reopen the unsafe cache path";
 
-const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]]
+const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]] [--adopt DIR]
 
-A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/install/bin first. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
+A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/install/bin first. A source install rebuilds the Rust binaries from the checkout. `--adopt DIR` swaps an already-downloaded unpacked release into ~/.fno/install/bin (postinstall's staging door; no uv required). `fno doctor update` is the same command.";
 
 const UPDATE_CLAIM_KEY: &str = "update:fno";
-const UV_INSTALL_ATTEMPTS: u32 = 3;
 const UPDATE_BUDGET_SECS: u64 = 60;
 
 pub(crate) fn exe_suffix() -> &'static str {
@@ -109,6 +108,9 @@ pub(crate) struct Flags {
     pub(crate) published: bool,
     /// `--published <rev>`: that exact published build, older included.
     pub(crate) published_rev: Option<String>,
+    /// `--adopt <dir>`: the unpacked release dir postinstall.sh staged; the
+    /// Rust side owns proof, swap, links, marker and uv retire.
+    pub(crate) adopt: Option<PathBuf>,
 }
 
 pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
@@ -139,6 +141,12 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
                     f.published_rev = Some(rev.to_string());
                 }
             }
+            "--adopt" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| "--adopt requires a value".to_string())?;
+                f.adopt = Some(PathBuf::from(v));
+            }
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -164,52 +172,6 @@ pub(crate) fn create_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
         .write(true)
         .create_new(true)
         .open(path)
-}
-
-/// One blocking subprocess with captured output, NO bound: the installer
-/// shape. The deleted exec waited forever, so the port does too; probes keep
-/// their timeouts, installs keep none.
-fn run_captured(
-    bin: &Path,
-    args: &[String],
-    input: Option<&str>,
-) -> Result<(i32, String, String), String> {
-    let tag = capture_tag("fno-doctor-update");
-    let tmp = |suffix: &str| std::env::temp_dir().join(format!("{tag}.{suffix}"));
-    let out_path = tmp("out");
-    let err_path = tmp("err");
-    let in_path = tmp("in");
-    let keep = |p: &Path| {
-        let _ = std::fs::remove_file(p);
-    };
-    let mut command = crate::process_admission::std_command(bin);
-    command
-        .args(args)
-        .stdout(create_exclusive(&out_path).map_err(|e| format!("{}: {e}", out_path.display()))?);
-    command
-        .stderr(create_exclusive(&err_path).map_err(|e| format!("{}: {e}", err_path.display()))?);
-    if input.is_some() {
-        create_exclusive(&in_path)
-            .and_then(|mut f| f.write_all(input.unwrap_or_default().as_bytes()))
-            .map_err(|e| format!("{}: {e}", in_path.display()))?;
-        let f = std::fs::File::open(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
-        command.stdin(Stdio::from(f));
-    } else {
-        command.stdin(Stdio::null());
-    }
-    let mut child = crate::process_admission::std_spawn(&mut command)
-        .map_err(|e| format!("{}: {e}", bin.display()))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("{}: {e}", bin.display()))?;
-    let out = std::fs::read_to_string(&out_path).unwrap_or_default();
-    let err = std::fs::read_to_string(&err_path).unwrap_or_default();
-    keep(&out_path);
-    keep(&err_path);
-    if input.is_some() {
-        keep(&in_path);
-    }
-    Ok((status.code().unwrap_or(1), out, err))
 }
 
 /// One bounded blocking subprocess: stdout+stderr to private temp files (a
@@ -444,38 +406,6 @@ fn install_newest_published_arm(
         "fno doctor update: installed the newest published build (rev {got12}); the source rev {want12} is not published yet; the next update retries once CI publishes; NOT compiling"
     );
     "installed-newest-published".into()
-}
-
-/// The line naming the held half when the rust leg left fno-agents behind
-/// the source, or None when Python may move. A skipped leg on a machine with
-/// no cargo-installed bins (wheel-only) holds nothing: no rust to trail.
-pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
-    let outcome = rust_outcome?;
-    matches!(
-        outcome,
-        "waiting-ci"
-            | "installed-newest-published"
-            | "newest-published-current"
-            | "skipped-no-origin"
-            | "skipped-no-cargo"
-            | "failed"
-    )
-    .then(|| {
-        format!(
-            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel stays as installed (the plugin stage still restages: it is not compiled); the next update moves both halves together (`--published` installs both from the newest published rev; `--no-rust` moves python alone, at your risk)"
-        )
-    })
-}
-
-/// A planned hold: the rust leg sits on the newest build CI published, so
-/// the hold is publish lag, not a defect. It prints as a note and exits 0
-/// when the daemon runs the bins on disk, so `fno update && fno restart`
-/// still restarts.
-pub(crate) fn hold_is_planned(rust_outcome: Option<&str>) -> bool {
-    matches!(
-        rust_outcome,
-        Some("installed-newest-published") | Some("newest-published-current")
-    )
 }
 
 /// The newest commit on `repo`'s first-parent line whose crates/ rev is
@@ -1000,7 +930,6 @@ fn component_verdict(
     verdict_bin: &Path,
     attempted: bool,
     include_mux: Option<bool>,
-    python_tool: Option<(&str, Option<&str>, Option<&str>, Option<&str>)>,
 ) -> Option<Value> {
     let mut args: Vec<String> = [
         "component-verdict".to_string(),
@@ -1026,20 +955,6 @@ fn component_verdict(
     }
     if attempted {
         args.push("--attempted".into());
-    }
-    if let Some((rev, expected, evidence, error)) = python_tool {
-        args.push("--python-rev".into());
-        args.push(rev.to_string());
-        for (flag, v) in [
-            ("--python-expected", expected),
-            ("--python-evidence", evidence),
-            ("--python-error", error),
-        ] {
-            if let Some(v) = v {
-                args.push(flag.into());
-                args.push(v.to_string());
-            }
-        }
     }
     let Ok((code, out, err)) = run_bounded(verdict_bin, &args, Duration::from_secs(90), None)
     else {
@@ -1091,9 +1006,7 @@ fn short_rev(rev: &str) -> &str {
 }
 
 /// The component name and self-reported build rev of every cargo row whose
-/// probe answered. The python-tool row stays out: its marker carries the
-/// source HEAD the wheel installed from, not the crates/ rev the cargo rows
-/// report, so counting it would read a python-only advance as a mixed build.
+/// probe answered.
 pub(crate) fn component_build_revs(components: Option<&Value>) -> Vec<(String, String)> {
     let Some(rows) = components
         .and_then(|c| c.get("components"))
@@ -1102,7 +1015,6 @@ pub(crate) fn component_build_revs(components: Option<&Value>) -> Vec<(String, S
         return Vec::new();
     };
     rows.iter()
-        .filter(|c| c.get("component").and_then(Value::as_str) != Some("python-tool"))
         .filter_map(|c| {
             Some((
                 c.get("component")?.as_str()?.to_string(),
@@ -1579,7 +1491,6 @@ fn refresh_rust_bins(
                 bin,
                 false,
                 Some(true),
-                None,
             )
         })
     } else {
@@ -1734,7 +1645,7 @@ fn refresh_rust_bins(
     };
     let post_report = match &subtree {
         Some(st) if verdict_bin.is_file() => {
-            component_verdict(source, st, &bin_dir, &verdict_bin, true, None, None)
+            component_verdict(source, st, &bin_dir, &verdict_bin, true, None)
         }
         _ => None,
     };
@@ -1773,7 +1684,7 @@ fn refresh_rust_bins(
     // never freshness.
     let final_report = match &subtree {
         Some(st) if verdict_bin.is_file() => {
-            component_verdict(source, st, &bin_dir, &verdict_bin, true, None, None)
+            component_verdict(source, st, &bin_dir, &verdict_bin, true, None)
         }
         _ => None,
     };
@@ -1858,7 +1769,6 @@ fn refresh_fresh_path(
         installed_bin,
         !dry_run,
         None,
-        None,
     );
     if report.is_none() {
         eprintln!("{}", install_exec_dead(installed_bin, "fno doctor update"));
@@ -1937,7 +1847,7 @@ fn render_component_evidence(source: &Path, subtree: Option<&str>, install_root:
     let bin_dir = install_root.join("bin");
     let verdict_bin =
         cargo_installed_bin().unwrap_or_else(|| bin_dir.join(triad_names()[0].clone()));
-    let report = component_verdict(source, subtree, &bin_dir, &verdict_bin, false, None, None);
+    let report = component_verdict(source, subtree, &bin_dir, &verdict_bin, false, None);
     if report.is_none() {
         eprintln!("{}", install_exec_dead(&verdict_bin, "fno doctor update"));
         return;
@@ -1947,41 +1857,6 @@ fn render_component_evidence(source: &Path, subtree: Option<&str>, install_root:
     }
 }
 
-/// The fno-py console script: PATH first, else the uv tool venv bin.
-/// Absolute when found; the bare name is the last resort (PATH may still
-/// find it at spawn time).
-fn resolve_fno_py() -> PathBuf {
-    on_path(&format!("fno-py{}", exe_suffix())).unwrap_or_else(|| {
-        uv_tool_dir()
-            .map(|d| {
-                d.join("fno")
-                    .join("bin")
-                    .join(format!("fno-py{}", exe_suffix()))
-            })
-            .unwrap_or_else(|| PathBuf::from("fno-py"))
-    })
-}
-
-/// Bounded wait for the console script to reappear: uv deletes and recreates
-/// `<tools>/fno/bin/fno-py` for roughly half a second mid-install, so the
-/// post-install chain waits up to 3s (15 x 0.2s), the budget every
-/// provisioning path spends. True when the binary is there.
-fn await_fno_py(fno_py: &Path, dry_run: bool) -> bool {
-    if dry_run {
-        return true;
-    }
-    for _ in 0..15 {
-        if fno_py.is_file() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    eprintln!(
-        "fno doctor update: fno-py never reappeared after the install, so the launchd agents were NOT refreshed onto the new binary. Run by hand: fno do pr watch refresh; fno backlog groom --refresh-agent"
-    );
-    false
-}
-
 /// Best-effort commands chained after a successful install, each command
 /// self-gating. The plugin-stage restage rides last: live sessions exec
 /// hooks straight from the stage, so a restage IS the deploy; the codex
@@ -1989,13 +1864,8 @@ fn await_fno_py(fno_py: &Path, dry_run: bool) -> bool {
 /// whether the codex refresh ran (the update then runs the janitor itself,
 /// outside its budget).
 fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
-    let fno_py = resolve_fno_py();
-    if !await_fno_py(&fno_py, false) {
-        failed.push("fno-py reappearance (launchd refresh skipped)".into());
-        return false;
-    }
-    let args: Vec<String> = vec!["do".into(), "pr".into(), "watch".into(), "refresh".into()];
-    let code = run_inherit(&fno_py, &args);
+    let args: Vec<String> = vec!["pr-watch".into(), "refresh".into()];
+    let code = run_inherit(&fno_agents_bin(), &args);
     if code != 0 {
         eprintln!(
             "fno doctor update: WARNING: post-install `pr watch refresh` exited {code}; continuing"
@@ -2017,8 +1887,7 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
 
 /// The plugin-stage restage, plus the codex refresh when its channel marker
 /// says dev. The stage holds skills, hooks and scripts, none of them
-/// compiled, so it also rides a Python hold: a skill fix never waits on a
-/// Rust tarball. Returns whether the codex refresh ran; that refresh used to
+/// compiled. Returns whether the codex refresh ran; that refresh used to
 /// chain the reclaim inline (plugin-install chains it after every full
 /// install), and the update passes --no-reclaim and runs the janitor after
 /// its budget fold instead.
@@ -2078,68 +1947,6 @@ fn codex_channel_is_dev() -> bool {
     v.get("channel").and_then(Value::as_str) == Some("dev")
 }
 
-/// The uv install, run natively with the ENOTEMPTY retry: only the
-/// directory-race signature (uv's removal walk racing a concurrent
-/// importer's bytecode rewrite) retries, bounded at UV_INSTALL_ATTEMPTS; any
-/// other failure prints uv's stderr verbatim and stops. Success is accepted
-/// only via a positive marker - the fno-py console script plus shipped
-/// bytecode under the tool venv - never the exit code alone, re-checked up
-/// to 3s after uv exits (uv exits before its own artifacts settle).
-fn uv_install(cmd: &[String]) -> bool {
-    let mut attempt: u32 = 0;
-    loop {
-        attempt += 1;
-        let (code, _out, err) = match run_captured(Path::new("uv"), &cmd[1..], None) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("fno doctor update: uv transport failed: {e}");
-                return false;
-            }
-        };
-        if code == 0 {
-            if verify_uv_install() {
-                return true;
-            }
-            eprintln!(
-                "fno: uv exited 0 but the install does not verify after waiting 3s (no fno-py script or no shipped bytecode under the tool venv)"
-            );
-            return false;
-        }
-        let race = err.contains("Directory not empty") && err.contains("os error 66");
-        eprint!("{err}");
-        let _ = std::io::stderr().flush();
-        if race && attempt < UV_INSTALL_ATTEMPTS {
-            std::thread::sleep(Duration::from_secs(1));
-            continue;
-        }
-        if race {
-            eprintln!(
-                "fno: uv tool install hit the directory race (os error 66) three times. A concurrent fno process is rewriting bytecode into the venv mid-removal. Stop fno processes and re-run."
-            );
-        }
-        return false;
-    }
-}
-
-/// The positive install marker: the fno-py console script plus at least one
-/// shipped .pyc under the tool venv, re-checked up to 15 x 0.2s.
-fn verify_uv_install() -> bool {
-    let Some(td) = uv_tool_dir() else {
-        return false;
-    };
-    for _ in 0..15 {
-        let script = td
-            .join("fno")
-            .join("bin")
-            .join(format!("fno-py{}", exe_suffix()));
-        if script.is_file() && has_shipped_pyc(&td) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    false
-}
-
 /// `uv tool dir`, or None.
 fn uv_tool_dir() -> Option<PathBuf> {
     let mut cmd = crate::process_admission::std_command("uv");
@@ -2147,25 +1954,6 @@ fn uv_tool_dir() -> Option<PathBuf> {
     let out = cmd.output().ok()?;
     let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !dir.is_empty()).then(|| PathBuf::from(dir))
-}
-
-/// At least one *.pyc anywhere under `<tool dir>/fno/lib`.
-fn has_shipped_pyc(td: &Path) -> bool {
-    let mut stack = vec![td.join("fno").join("lib")];
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().and_then(|e| e.to_str()) == Some("pyc") {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Acquire the machine-global update claim. Held means another session is
@@ -2312,6 +2100,19 @@ pub(crate) fn is_release_install(pin: &Value, installed_rev: Option<&str>) -> bo
     pin.get("eligibility").and_then(Value::as_str) == Some("no_source") && installed_rev.is_none()
 }
 
+/// The bridge hook `main` calls before any door: a wheel install that has
+/// not yet moved runs the move here and execs the binary front door with
+/// this argv. Lives on the update surface module so the bin target reaches
+/// a pub(crate) helper through the pub API.
+pub fn first_run_move(args: &[std::ffi::OsString]) {
+    crate::release_install::first_run_move(args);
+}
+
+/// The floor gate `main` runs after the bridge hook: see release_install.
+pub fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
+    crate::release_install::floor_refusal(args)
+}
+
 /// The install channel comes from the receipt (the running exe beside its uv
 /// receipt), never from the cwd. A wheel or binary install run inside any
 /// footnote checkout follows the release path even when the pin resolved that
@@ -2330,34 +2131,6 @@ pub(crate) fn receipt_channel_wins(
     ) && pin_origin == Some("checkout")
 }
 
-fn upgrade_release(dry_run: bool) -> i32 {
-    let Some(uv) = which_uv() else {
-        eprintln!("fno update: FAILED: release install, and `uv` is not on PATH. Install uv, then run `uv tool upgrade fno`.");
-        return 1;
-    };
-    if dry_run {
-        println!("Would run: uv tool upgrade fno");
-        return 0;
-    }
-    println!("Release install: running uv tool upgrade fno");
-    match run_captured(&uv, &["tool".into(), "upgrade".into(), "fno".into()], None) {
-        Ok((0, out, err)) => {
-            print!("{out}{err}");
-            println!("fno update: done. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.");
-            0
-        }
-        Ok((code, out, err)) => {
-            eprint!("{out}{err}");
-            eprintln!("fno update: FAILED: uv tool upgrade fno exited {code}.");
-            1
-        }
-        Err(why) => {
-            eprintln!("fno update: FAILED: uv tool upgrade fno: {why}");
-            1
-        }
-    }
-}
-
 /// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
@@ -2373,6 +2146,20 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             return 2;
         }
     };
+    if let Some(dir) = flags.adopt.as_ref() {
+        if flags.check
+            || flags.source.is_some()
+            || flags.published
+            || flags.rust
+            || flags.no_rust
+            || flags.force
+            || flags.dry_run
+        {
+            eprintln!("fno doctor update: --adopt takes no other flag");
+            return 2;
+        }
+        return crate::release_install::adopt_release(dir);
+    }
     if flags.check {
         if flags.dry_run || flags.rust || flags.force {
             eprintln!("--check cannot be combined with --dry-run, --rust, or --force");
@@ -2406,7 +2193,10 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     if is_release_install(&pin, read_marker(&installed_rev_file()).as_deref()) {
         return match &channel {
-            crate::release_install::InstallChannel::Other => upgrade_release(flags.dry_run),
+            crate::release_install::InstallChannel::Other => {
+                eprintln!("fno update: FAILED: this fno is neither a release install nor a source checkout. Install the release with: curl -fsSL fno.sh | sh");
+                1
+            }
             _ => crate::release_install::update(&channel, flags.dry_run),
         };
     }
@@ -2466,37 +2256,15 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         } else if !flags.no_rust {
             refresh_rust_bins(&resolved, flags.rust, true, &mut failed);
         }
-        if which_uv().is_some() {
-            println!(
-                "Would run: uv tool install --reinstall-package fno --refresh-package fno --compile-bytecode {}",
-                resolved.display()
-            );
-        } else if which_pip().is_some() {
-            println!(
-                "Would run: python3 -m pip install --user --force-reinstall {}",
-                resolved.display()
-            );
-        } else {
-            eprintln!("Neither `uv` nor `pip` is available on PATH.");
-            return 1;
-        }
+        println!(
+            "Would run: fno-agents pr-watch refresh, then restage the plugin from {}",
+            resolved.display()
+        );
         return 0;
     }
 
-    // Machine-global mutations start here (cargo bins, the uv/pip env), so
-    // this is where the machine-scoped guard belongs.
-    // Before replacing the tool env in place, name anything still running
-    // from it (2026-10-02 gap audit, blockers 1 and 3): the repair is the
-    // same move that replaced a live study's CLI unnoticed. Advisory - the
-    // update proceeds, the naming is the fix.
-    let live_env = live_tool_env_processes();
-    if !live_env.is_empty() {
-        eprintln!(
-            "fno doctor update: {} live process(es) run from the tool env, e.g. {}. This update replaces that env in place; stop them first if the run matters.",
-            live_env.len(),
-            live_env[0]
-        );
-    }
+    // Machine-global mutations start here (the cargo bins), so this is where
+    // the machine-scoped guard belongs.
     if let Err(code) = acquire_update_claim(rev.as_deref()) {
         return code;
     }
@@ -2510,7 +2278,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     rev = source_rev(&resolved);
 
     // --published swaps the source for a detached checkout of the newest rev
-    // CI published, so the rust bins, the wheel, and the plugin stage all
+    // CI published, so the rust bins and the plugin stage both
     // come from that one rev. The pinned source checkout stays as it is.
     let mut last_green: Option<String> = None;
     if flags.published {
@@ -2601,125 +2369,60 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
                 "outcome",
                 if failed.is_empty() { "ok" } else { "failed" }.to_string(),
             ));
-            if let Some(held) = python_hold_line(rust_outcome.as_deref()) {
-                f.push(("reason", held));
-            }
             f
         };
         journal_call("built", &built_fields, None);
     }
 
-    // Python never moves ahead of the rust bins it talks to: a new wheel
-    // sends wire kinds an old fno-agents does not know, and every spawn
-    // fails until CI publishes. The wheel waits for the update that installs
-    // both halves together; the plugin stage restages regardless.
-    let held = python_hold_line(rust_outcome.as_deref());
-    let planned_hold = held.is_some() && hold_is_planned(rust_outcome.as_deref());
-    if let Some(line) = &held {
-        if planned_hold {
-            println!("fno doctor update: note: {line}");
-        } else {
-            eprintln!("fno doctor update: {line}");
-            failed.push("python held behind rust".into());
-        }
-    }
-
-    // The codex dev refresh used to chain the reclaim inline (plugin-install
-    // chains it after every full install), and a big reclaim (6.3 GB) was
-    // charged to this update's 60 s budget. The refresh passes --no-reclaim;
-    // the janitor runs after the budget fold below.
-    let mut codex_refresh_ran = false;
-    let cmd: Vec<String> = if held.is_some() {
-        Vec::new()
-    } else if which_uv().is_some() {
-        vec![
-            "uv".into(),
-            "tool".into(),
-            "install".into(),
-            "--reinstall-package".into(),
-            "fno".into(),
-            "--refresh-package".into(),
-            "fno".into(),
-            "--compile-bytecode".into(),
-            resolved.to_string_lossy().into_owned(),
-        ]
-    } else if which_pip().is_some() {
-        vec![
-            "python3".into(),
-            "-m".into(),
-            "pip".into(),
-            "install".into(),
-            "--user".into(),
-            "--force-reinstall".into(),
-            resolved.to_string_lossy().into_owned(),
-        ]
-    } else {
-        eprintln!("Neither `uv` nor `pip` is available on PATH.");
-        release_update_claim();
-        journal_call("failed", &[("rc", "1".to_string())], None);
-        return 1;
+    // The marker records the rev the binaries now carry, so `fno
+    // doctor` can detect installed-vs-source skew. Written only once
+    // every binary install proved out: a rust leg that failed, did not
+    // converge, or was skipped mid-refresh leaves the marker at the old
+    // rev, so the skew stays visible and the next update re-runs.
+    let rust_bins_proved = match rust_outcome.as_deref() {
+        None => true,
+        Some(outcome) => matches!(
+            outcome,
+            "refreshed"
+                | "fresh"
+                | "refreshed-no-marker"
+                | "skipped-no-crate"
+                | "skipped-no-binary"
+                | "skipped-no-rev"
+        ),
     };
-
-    let uv_ok = if held.is_some() {
-        false
-    } else if cmd[0] == "uv" {
-        uv_install(&cmd)
-    } else {
-        run_inherit(Path::new(&cmd[0]), &cmd[1..]) == 0
-    };
-    if uv_ok {
-        // The marker records the rev the binaries now carry, so `fno
-        // doctor` can detect installed-vs-source skew. Written only once
-        // every binary install proved out: a rust leg that failed, did not
-        // converge, or was skipped mid-refresh leaves the marker at the old
-        // rev, so the skew stays visible and the next update re-runs.
-        let rust_bins_proved = match rust_outcome.as_deref() {
-            None => true,
-            Some(outcome) => matches!(
-                outcome,
-                "refreshed"
-                    | "fresh"
-                    | "refreshed-no-marker"
-                    | "skipped-no-crate"
-                    | "skipped-no-binary"
-                    | "skipped-no-rev"
-            ),
-        };
-        if rust_bins_proved {
-            if let Some(rev) = &rev {
-                if let Err(e) = write_marker(&installed_rev_file(), rev) {
-                    eprintln!("fno doctor update: WARNING: marker write failed: {e}");
-                }
+    if rust_bins_proved {
+        if let Some(rev) = &rev {
+            if let Err(e) = write_marker(&installed_rev_file(), rev) {
+                eprintln!("fno doctor update: WARNING: marker write failed: {e}");
             }
-        } else {
-            eprintln!(
-                "fno doctor update: marker not written: rust bins did not prove current ({})",
-                rust_outcome.as_deref().unwrap_or_default()
-            );
         }
-        // Retire the stale `installed-rust-rev` marker: nothing has written
-        // or read it for verdicts in releases (the verdict keys on the
-        // binary's self-report), so every surviving copy reads stale
-        // forever. Best-effort: its absence is the point, not its removal.
-        let _ = std::fs::remove_file(retired_rust_marker_file());
-        // A failed pin record is a failed step, never a warning.
-        if let Err(e) = record_source_pin(&pin) {
-            eprintln!("fno doctor update: ERROR: {e}");
-            failed.push("source-pin record".into());
-        }
-        codex_refresh_ran = post_install_steps(&resolved, &mut failed);
-    } else if held.is_none() {
-        failed.push("uv install".into());
     } else {
-        codex_refresh_ran = restage_plugin(&resolved, &mut failed);
+        eprintln!(
+            "fno doctor update: marker not written: rust bins did not prove current ({})",
+            rust_outcome.as_deref().unwrap_or_default()
+        );
     }
+    // Retire the stale `installed-rust-rev` marker: nothing has written
+    // or read it for verdicts in releases (the verdict keys on the
+    // binary's self-report), so every surviving copy reads stale
+    // forever. Best-effort: its absence is the point, not its removal.
+    let _ = std::fs::remove_file(retired_rust_marker_file());
+    // A failed pin record is a failed step, never a warning.
+    if let Err(e) = record_source_pin(&pin) {
+        eprintln!("fno doctor update: ERROR: {e}");
+        failed.push("source-pin record".into());
+    }
+    // The codex dev refresh passes --no-reclaim; the janitor runs after the
+    // budget fold below, so a big reclaim never counts against the update.
+    let codex_refresh_ran = post_install_steps(&resolved, &mut failed);
 
     release_update_claim();
 
     let verdict = daemon_verdict();
 
     // The journal records the install; the daemon verdict only sets the exit.
-    let code = if failed.is_empty() && held.is_none() {
+    let code = if failed.is_empty() {
         let installed_fields: Vec<(&str, String)> = {
             let mut f: Vec<(&str, String)> = Vec::new();
             if let Some(r) = &rev {
@@ -2736,27 +2439,12 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         journal_call("installed", &installed_fields, front_door.as_deref());
         0
     } else {
-        // A planned hold with no failed step exits 0; the row still names
-        // the hold, so the journal never reads the wheel as installed.
-        let rc = if failed.is_empty() && planned_hold {
-            0
-        } else {
-            1
-        };
-        let mut fields: Vec<(&str, String)> = vec![("rc", rc.to_string())];
+        let mut fields: Vec<(&str, String)> = vec![("rc", "1".to_string())];
         if let Some(r) = &rev {
             fields.push(("new_rev", r.clone()));
         }
-        if let Some(line) = &held {
-            fields.push(("reason", line.clone()));
-        }
-        // A hold leaves the install skewed: the door pages it once per rev.
-        let front_door = std::env::current_exe()
-            .ok()
-            .filter(|_| held.is_some())
-            .map(|p| p.to_string_lossy().into_owned());
-        journal_call("failed", &fields, front_door.as_deref());
-        rc
+        journal_call("failed", &fields, None);
+        1
     };
     // An update finishes in 60 seconds (user order 2026-10-09). One that runs
     // longer still installs, but exits 1 and names its time, so a slow path
@@ -2775,18 +2463,13 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {
-        Ok(line) if failed.is_empty() => {
-            match &last_green {
-                Some(r) => println!(
-                    "fno update: done; last green rev {}; {line}.",
-                    &r[..r.len().min(12)]
-                ),
-                None if planned_hold => {
-                    println!("fno update: done; rust on the newest published build, python held; {line}.")
-                }
-                None => println!("fno update: done; {line}."),
-            }
-        }
+        Ok(line) if failed.is_empty() => match &last_green {
+            Some(r) => println!(
+                "fno update: done; last green rev {}; {line}.",
+                &r[..r.len().min(12)]
+            ),
+            None => println!("fno update: done; {line}."),
+        },
         Err(line) if failed.is_empty() => eprintln!("fno update: FAILED: installed, but {line}."),
         Ok(line) | Err(line) => {
             eprintln!("fno update: FAILED step(s): {}; {line}.", failed.join(", "))
@@ -2797,48 +2480,6 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     } else {
         code
     }
-}
-
-fn which_uv() -> Option<PathBuf> {
-    on_path(if cfg!(windows) { "uv.exe" } else { "uv" })
-}
-
-fn which_pip() -> Option<PathBuf> {
-    on_path(if cfg!(windows) { "pip.exe" } else { "pip" })
-}
-
-/// Live processes whose argv names a path inside the uv fno tool env. The
-/// update replaces that env in place, so `run` names anything still running
-/// from it before the claim: a session-start installer once replaced a live
-/// study's CLI this way unnoticed (2026-10-02 gap audit, blockers 1 and 3).
-/// Over-catching is safe: the line is advisory. Empty when uv, the env, or
-/// the process table is unreadable.
-fn live_tool_env_processes() -> Vec<String> {
-    let Some(uv) = which_uv() else {
-        return Vec::new();
-    };
-    let Ok((0, out, _)) = run_captured(&uv, &["tool".into(), "dir".into()], None) else {
-        return Vec::new();
-    };
-    let dir = out.trim();
-    if dir.is_empty() {
-        // An unreadable tool dir would leave the needle bare "fno", which
-        // matches every fno argv on the machine - refuse to scan instead.
-        return Vec::new();
-    }
-    let needle = PathBuf::from(dir).join("fno").to_string_lossy().to_string();
-    let ps = PathBuf::from("ps");
-    let Ok((0, ps_out, _)) = run_captured(&ps, &["-axo".into(), "pid=,args=".into()], None) else {
-        return Vec::new();
-    };
-    let me = format!("{} ", std::process::id());
-    ps_out
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.contains(&needle))
-        .filter(|l| !l.starts_with(&me) && !l.contains(" awk -") && !l.contains(" ps -"))
-        .map(String::from)
-        .collect()
 }
 
 /// `fno doctor update --check`: readiness as JSON on stdout, exit 0. The
@@ -3167,7 +2808,7 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
         degraded.push("running-process census unavailable".into());
     }
     let census_rows: Vec<Value> = census.unwrap_or_default();
-    // Census rows; never the name `running`: python_tool owns it.
+    // Census rows: the stale ones become `running`.
     let running_rows: Vec<Value> = census_rows
         .iter()
         .filter(|r| r.get("verdict").and_then(Value::as_str) == Some("stale"))
@@ -3215,18 +2856,6 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
             &running_rows,
         ),
     };
-    // Name both deployments: the front door's script and this binary.
-    let front_script = crate::bootstrap::resolved_python_script();
-    let running = std::env::current_exe().ok();
-    let same = match (&front_script, &running) {
-        (Some(s), Some(r)) => match (s.parent(), r.parent()) {
-            (Some(sp), Some(rp)) => sp == rp,
-            _ => false,
-        },
-        _ => false,
-    };
-    let script_str = front_script.map(|p| p.to_string_lossy().into_owned());
-    let running_str = running.map(|p| p.to_string_lossy().into_owned());
     let subtree = resolved_source.as_ref().and_then(|s| rust_subtree_rev(s));
     let components = match (&resolved_source, &subtree, cargo_installed_bin()) {
         (Some(src), Some(st), Some(bin)) => component_verdict(
@@ -3236,7 +2865,6 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
             &bin,
             false,
             Some(true),
-            None,
         )
         .unwrap_or(Value::Null),
         _ => Value::Null,
@@ -3287,11 +2915,6 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
         "installed_version": env!("CARGO_PKG_VERSION"),
         "source_prs_ahead": prs_ahead,
         "source_rev": src_rev,
-        "python_tool": {
-            "script": script_str,
-            "running": running_str,
-            "same": same,
-        },
         "wire": {
             "running": running_wires,
             "source": source_wire,

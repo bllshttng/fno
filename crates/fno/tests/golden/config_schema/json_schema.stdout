@@ -632,12 +632,6 @@
           "default": 4,
           "title": "Max Prs Per Epic",
           "type": "integer"
-        },
-        "python_repair_added_lines": {
-          "default": 30,
-          "minimum": 0,
-          "title": "Python Repair Added Lines",
-          "type": "integer"
         }
       },
       "title": "BlueprintBlock",
@@ -3338,6 +3332,9 @@
         "eval_events": {
           "$ref": "#/$defs/TelemetryEvalEventsBlock"
         },
+        "install_count": {
+          "$ref": "#/$defs/TelemetryInstallCountBlock"
+        },
         "otlp": {
           "$ref": "#/$defs/TelemetryOtlpBlock"
         }
@@ -3370,6 +3367,17 @@
         }
       },
       "title": "TelemetryEvalEventsBlock",
+      "type": "object"
+    },
+    "TelemetryInstallCountBlock": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "TelemetryInstallCountBlock",
       "type": "object"
     },
     "TelemetryOtlpBlock": {

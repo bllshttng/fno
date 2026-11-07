@@ -136,15 +136,6 @@
       "doc": "Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more."
     },
     {
-      "path": "blueprint.python_repair_added_lines",
-      "type": "int",
-      "default": 30,
-      "tier": "advanced",
-      "question": "",
-      "default_source": "",
-      "doc": "Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh."
-    },
-    {
       "path": "plan.default_diff_budget",
       "type": "int",
       "default": 300,
@@ -2096,6 +2087,15 @@
       "question": "",
       "default_source": "",
       "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
+    },
+    {
+      "path": "telemetry.install_count.enabled",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing."
     }
   ]
 }

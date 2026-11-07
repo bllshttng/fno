@@ -10,8 +10,8 @@
 # no data dir, no file under the tool bin (x-0143, user ruling 2026-10-01: we
 # always tell people before we install anything on their machine).
 #
-# Cases 1-4 cover the front-door probe (silent / hint). Cases 5-9 cover the
-# consent notice per machine shape: no uv, uv present, fno-py present, no
+# Cases 1-4 cover the front-door probe (silent / hint). Cases 5-8 cover the
+# consent notice per machine shape: no fno, an old Python fno, no
 # installer in the tree, and the XDG fallback with no CLAUDE_PLUGIN_DATA.
 #
 # Isolation: a FAKE `fno` is placed first on PATH per case, so no real mux is
@@ -61,18 +61,18 @@ out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null)
 [[ -z "$out" ]] || fail "active front door must be silent, got: $out"
 pass "active front door -> silent"
 
-# --- Case 2: fno-py only (fno exists but has no `mux` command) -> CONSENT NOTICE --
+# --- Case 2: an old Python fno (no `mux` command) -> CONSENT NOTICE --
 cat > "$FAKEBIN/fno" <<'FAKE'
 #!/usr/bin/env bash
-# Mimics the Python `fno-py`: any mux command is "No such command".
+# Mimics an old Python fno: any mux command is "No such command".
 echo "No such command 'mux'." >&2
 exit 2
 FAKE
 chmod +x "$FAKEBIN/fno"
 out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null)
-grep -q "Ask the user first" <<<"$out" || fail "fno-py-only must ask before installing, got: $out"
-grep -q "fno-py" <<<"$out" || fail "notice must name the Python CLI that already works, got: $out"
-pass "fno-py only -> consent notice naming the Python CLI"
+grep -q "Ask the user first" <<<"$out" || fail "an old Python fno must ask before installing, got: $out"
+grep -q "An older fno" <<<"$out" || fail "notice must name the old install, got: $out"
+pass "old Python fno -> consent notice naming it"
 
 # --- Case 3: no `fno` on PATH at all -> CONSENT NOTICE ------------------------
 rm -f "$FAKEBIN/fno"
@@ -113,7 +113,7 @@ rm -rf "$EMPTY_HOME/.cargo"
 # --- Case 4: wedged mux socket -> BOUNDED and SILENT --------------------------
 # This hook probes a socket at SessionStart, so an unbounded probe stalls every
 # session start. On a host with no coreutils timeout(1) it had no bound at all.
-# A wedged socket also PROVES the Rust front door is present (fno-py has no
+# A wedged socket also PROVES the Rust front door is present (an old Python fno has no
 # `mux` command and fails fast), so the correct behavior is silence, not a notice
 # telling the user to install what they already have.
 cat > "$FAKEBIN/fno" <<'FAKE'
@@ -161,35 +161,22 @@ run_hook() { PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" CLAUDE_PLUGIN_DATA="$
 TOOLBIN="$EMPTY_HOME/.local/bin"
 mkdir -p "$TOOLBIN"
 
-# --- Case 5: no uv, no fno, fresh HOME -> full notice, NOTHING started --------
+# --- Case 5: no fno, fresh HOME -> full notice, NOTHING started ---------------
 out=$(run_hook)
 grep -q "Ask the user first" <<<"$out" || fail "notice must ask for consent, got: $out"
-grep -q "astral.sh/uv/install.sh" <<<"$out" || fail "notice must name the uv installer, got: $out"
-grep -q "shell profile" <<<"$out" || fail "notice must name the profile edit, got: $out"
-grep -q "PyPI" <<<"$out" || fail "notice must name PyPI, got: $out"
+grep -q "GitHub Releases" <<<"$out" || fail "notice must name the direct download, got: $out"
+grep -q "sha256" <<<"$out" || fail "notice must name the sum check, got: $out"
+grep -q "no shell profile edit" <<<"$out" || fail "notice must say the profile stays untouched, got: $out"
+if grep -qE "astral.sh|PyPI" <<<"$out"; then
+  fail "notice must name no uv or PyPI step, got: $out"
+fi
 grep -qF "bash $PLUG/.claude-plugin/postinstall.sh" <<<"$out" || fail "notice must name the one command, got: $out"
 [[ ! -e "$MARK" ]] || fail "the hook started the installer (no child may run unasked)"
 [[ ! -e "$DATA" ]] || fail "the hook created the plugin data dir; the lock/log era is gone"
 [[ -z "$(ls -A "$TOOLBIN" 2>/dev/null)" ]] || fail "the tool bin grew files"
-pass "no uv, no fno -> full consent notice, nothing started, tool bin untouched"
+pass "no fno -> full consent notice, nothing started, tool bin untouched"
 
-# --- Case 6: uv already present -> notice scopes the touch to the fno tool ----
-cat > "$FAKEBIN/uv" <<'FAKE'
-#!/usr/bin/env bash
-exit 0
-FAKE
-chmod +x "$FAKEBIN/uv"
-out=$(run_hook)
-grep -q "uv is already installed" <<<"$out" || fail "uv present must be named, got: $out"
-grep -q "nothing but the fno tool" <<<"$out" || fail "uv-present notice must scope the touch, got: $out"
-if grep -q "astral.sh" <<<"$out"; then
-  fail "uv-present notice must skip the astral.sh step"
-fi
-[[ ! -e "$MARK" ]] || fail "the hook started the installer stub"
-rm -f "$FAKEBIN/uv"
-pass "uv present -> notice scopes to the fno tool, no astral.sh step"
-
-# --- Case 7: fno-py present (probe rc 2) -> notice says the Python CLI works --
+# --- Case 6: an old Python fno (probe rc 2) -> notice names it --
 cat > "$FAKEBIN/fno" <<'FAKE'
 #!/usr/bin/env bash
 echo "No such command 'mux'." >&2
@@ -197,13 +184,13 @@ exit 2
 FAKE
 chmod +x "$FAKEBIN/fno"
 out=$(run_hook)
-grep -q "fno-py" <<<"$out" || fail "fno-py presence must be named, got: $out"
-grep -q "Ask the user first" <<<"$out" || fail "fno-py-only still needs consent for the full install, got: $out"
+grep -q "An older fno" <<<"$out" || fail "the old install must be named, got: $out"
+grep -q "Ask the user first" <<<"$out" || fail "an old Python fno still needs consent for the full install, got: $out"
 [[ ! -e "$MARK" ]] || fail "the hook started the installer stub"
 rm -f "$FAKEBIN/fno"
-pass "fno-py only -> notice names it and still asks"
+pass "old Python fno -> notice names it and still asks"
 
-# --- Case 8: installer missing from the tree -> short note, nothing started ---
+# --- Case 7: installer missing from the tree -> short note, nothing started ---
 mv "$PLUG/.claude-plugin/postinstall.sh" "$WORK/postinstall.sh.bak"
 out=$(run_hook)
 grep -q "carries no installer" <<<"$out" || fail "missing installer must say so, got: $out"
@@ -211,7 +198,7 @@ grep -q "carries no installer" <<<"$out" || fail "missing installer must say so,
 mv "$WORK/postinstall.sh.bak" "$PLUG/.claude-plugin/postinstall.sh"
 pass "installer missing -> short note, nothing started"
 
-# --- Case 9: CLAUDE_PLUGIN_DATA unset -> same notice, nothing created ---------
+# --- Case 8: CLAUDE_PLUGIN_DATA unset -> same notice, nothing created ---------
 # A Codex session carries no CLAUDE_PLUGIN_DATA; the notice prints the same
 # way, and the hook still creates nothing in any fallback data dir.
 out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" XDG_STATE_HOME="$WORK/xdg-state" bash "$PHOOK" 2>/dev/null)

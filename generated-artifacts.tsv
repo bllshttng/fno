@@ -16,8 +16,6 @@ crates/fno/src/provider_key.rs	crates/fno-agents/src/provider_key.rs	cargo build
 crates/fno/src/effect_map.rs	crates/fno-agents/src/effect_map.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/repo_identity.rs	crates/fno-agents/src/repo_identity.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/footnote_transcript.rs	crates/fno-agents/src/footnote_transcript.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
-cli/src/fno/tombstones.toml	crates/fno-agents/src/tombstones.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
-cli/src/fno/ambient_vocab.toml	crates/fno-agents/src/ambient_vocab.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno-agents/src/events_limits.toml	crates/fno-agents/src/event_store/schema.yaml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/harnesses/capability-matrix.md	crates/fno-agents/src/harness_capabilities.toml	crates/fno-agents/target/debug/fno-agents harness-matrix --write
 docs/harnesses/command-matrix.md	crates/fno-agents/src/harness_capabilities.toml and skills/*/SKILL.md frontmatter	crates/fno-agents/target/debug/fno-agents harness-matrix --write

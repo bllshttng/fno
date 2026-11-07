@@ -507,44 +507,6 @@ fn the_check_readback_skips_a_corrupt_row_after_the_install() {
 }
 
 #[test]
-fn python_holds_whenever_rust_trails_the_source() {
-    // The 2026-10-14 iMac shape: no tarball for the merged rev, so the wheel
-    // must not move ahead of the bins it talks to.
-    for trails in [
-        "waiting-ci",
-        "installed-newest-published",
-        "newest-published-current",
-        "skipped-no-origin",
-        "skipped-no-cargo",
-        "failed",
-    ] {
-        let line = python_hold_line(Some(trails)).expect(trails);
-        assert!(
-            line.contains(trails) && line.starts_with("python held"),
-            "{line}"
-        );
-        // Only a hold on the newest published build is publish lag: it exits
-        // 0 so `fno update && fno restart` still restarts.
-        let planned = matches!(
-            trails,
-            "installed-newest-published" | "newest-published-current"
-        );
-        assert_eq!(hold_is_planned(Some(trails)), planned, "{trails}");
-    }
-    // Rust current, wheel-only machines, and --no-rust move Python freely.
-    for moves in [
-        "fresh",
-        "refreshed",
-        "partial",
-        "skipped-no-binary",
-        "skipped-no-crate",
-    ] {
-        assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
-    }
-    assert_eq!(python_hold_line(None), None);
-}
-
-#[test]
 fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("r");

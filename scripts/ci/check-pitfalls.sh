@@ -116,12 +116,13 @@ fi
 # at every SessionStart as a reason to distrust it. Titles only: a body may
 # cite a command as a specimen without claiming it is the trap.
 #
-# The command list is read from the CLI's lazy registry rather than by running
-# `fno`, so the gate stays hermetic and works on a checkout with nothing
-# installed. A consumer repo shipping this gate without the CLI skips it.
-REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/cli/src/fno/cli.py"
+# The command list is read from the front door's name table rather than by
+# running `fno`, so the gate stays hermetic and works on a checkout with nothing
+# installed: the live one-word rows are the root commands. A consumer repo
+# shipping this gate without the table skips it.
+REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/crates/fno/command-names.tsv"
 if [[ -n "$TITLES" && -f "$REGISTRY" ]]; then
-  SHIPPED_COMMANDS=$(sed -n 's/^[[:space:]]*"\([a-z][a-z0-9-]*\)":[[:space:]]*(.*/\1/p' "$REGISTRY")
+  SHIPPED_COMMANDS=$(awk -F'\t' '!/^#/ && $2 == "live" && $1 !~ / / {print $1}' "$REGISTRY")
   # An empty list here is a BROKEN READ, not a CLI with no commands. Every title
   # then matches nothing and the gate passes on anything, which is the shape
   # this gate exists to refuse. An ABSENT registry is the legitimate skip

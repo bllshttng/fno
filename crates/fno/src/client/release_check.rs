@@ -53,6 +53,13 @@ pub(crate) enum ReleaseOutcome {
         /// the versions and the upgrade command never do.
         notes: Vec<ReleaseNotesSection>,
     },
+    /// A floor above the running version (change 5): the modal names the one
+    /// command and skips the release read.
+    Unsupported {
+        channel: Channel,
+        installed: String,
+        floor: String,
+    },
     Degraded(String),
 }
 
@@ -311,7 +318,8 @@ async fn attach_notes(outcome: ReleaseOutcome) -> ReleaseOutcome {
 /// Runs off the UI loop; every failure degrades, never hangs.
 pub(crate) async fn probe_release() -> ReleaseOutcome {
     let found = tokio::task::spawn_blocking(|| {
-        crate::bootstrap::resolved_python_script()
+        std::env::current_exe()
+            .ok()
             .and_then(|p| std::fs::canonicalize(p).ok())
             .is_some_and(|p| p.to_string_lossy().contains("/Cellar/fno/"))
     })
@@ -347,6 +355,29 @@ pub(crate) async fn probe_release() -> ReleaseOutcome {
     .await
     .ok()
     .flatten();
+    // The floor (change 5) outranks the release read: below it the modal
+    // names the one command, and the fetch-and-cache round runs here, where
+    // the probe already went off-loop.
+    let floor = tokio::task::spawn_blocking(crate::release_install::refresh_floor)
+        .await
+        .ok()
+        .flatten();
+    let running = env!("CARGO_PKG_VERSION");
+    if let (Some(run_key), Some(fl_key), Some(fl)) = (
+        crate::release_install::version_key(running),
+        floor
+            .as_deref()
+            .and_then(crate::release_install::version_key),
+        floor.as_deref(),
+    ) {
+        if run_key < fl_key {
+            return ReleaseOutcome::Unsupported {
+                channel: channel.unwrap_or(Channel::Binary),
+                installed: running.to_string(),
+                floor: fl.to_string(),
+            };
+        }
+    }
     let outcome = github_outcome(channel, env!("CARGO_PKG_VERSION"), || async {
         tokio::task::spawn_blocking(crate::release_install::latest_release_tag)
             .await

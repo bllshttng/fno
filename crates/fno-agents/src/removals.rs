@@ -35,7 +35,7 @@ pub struct Removal {
     pub node: Option<String>,
     pub removed_by: String,
     /// The command that wrote the removal, joined from the same-second
-    /// `registry_rows_lost` line (`fno-py agents spawn --substrate pane --team`).
+    /// `registry_rows_lost` line (`fno agents spawn --substrate pane --team`).
     pub command: Option<String>,
     pub reason: Option<String>,
     pub cause: Option<String>,
@@ -401,8 +401,8 @@ mod tests {
     #[test]
     fn a_never_bound_teamed_removal_folds_to_one_removal_with_team_and_reason() {
         let agent = lines(&[
-            r#"{"ts":"2026-09-28T16:48:49Z","type":"registry_rows_lost","source":"python","data":{"lost":[{"name":"jolly-finch","harness_session_id":""}],"pid":40417,"verb":"fno-py agents spawn --substrate pane --team"}}"#,
-            r#"{"ts":"2026-09-28T16:48:49Z","type":"registry_row_removed","source":"python","data":{"harness":"codex","harness_session_id":"","name":"jolly-finch","pid":40417,"reason":"row 'jolly-finch': missing harness session identity","receipt_staged":false,"remover":"fno-py","short_id":""}}"#,
+            r#"{"ts":"2026-09-28T16:48:49Z","type":"registry_rows_lost","source":"python","data":{"lost":[{"name":"jolly-finch","harness_session_id":""}],"pid":40417,"verb":"fno agents spawn --substrate pane --team"}}"#,
+            r#"{"ts":"2026-09-28T16:48:49Z","type":"registry_row_removed","source":"python","data":{"harness":"codex","harness_session_id":"","name":"jolly-finch","pid":40417,"reason":"row 'jolly-finch': missing harness session identity","receipt_staged":false,"remover":"fno","short_id":""}}"#,
         ]);
         let global = lines(&[
             r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_promoted","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee,x-4444","vacated_scope":null}}"#,
@@ -413,10 +413,10 @@ mod tests {
         let r = &out[0];
         assert_eq!(r.name, "jolly-finch");
         assert_eq!(r.session_id, None, "never bound: no session id");
-        assert_eq!(r.removed_by, "fno-py");
+        assert_eq!(r.removed_by, "fno");
         assert_eq!(
             r.command.as_deref(),
-            Some("fno-py agents spawn --substrate pane --team")
+            Some("fno agents spawn --substrate pane --team")
         );
         assert_eq!(
             r.reason.as_deref(),

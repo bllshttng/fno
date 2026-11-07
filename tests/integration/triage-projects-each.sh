@@ -41,7 +41,7 @@ assert o['projects'] == [], f'expected empty list, got {o[\"projects\"]}'
 # adopt() infers project from the current repo's basename).
 # --------------------------------------------------------------------------
 mkdir -p "$TEST_HOME/.fno"
-cat <<'EOF' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$TEST_HOME/.fno/graph.json"
+cat <<'EOF' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$TEST_HOME/.fno/graph.json"
 {
     "entries": [
         {

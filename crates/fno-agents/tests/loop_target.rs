@@ -1201,7 +1201,7 @@ fn write_lead_manifest(dir: &Path, scope: &str, fno_id: &str, count: u64, ceilin
 /// Pin a CLEAN board at `dir`: the graph carries only the scope epic, closed
 /// done so the team reads drained, and the config makes the in-process
 /// collector resolve it on a bare machine (no global config, no `~/.fno`).
-/// Every shelled source (gh, fno-py) is stubbed in `dir/bin` so no read
+/// Every shelled source (gh) is stubbed in `dir/bin` so no read
 /// degrades into an unreadable row the loop would treat as work. The board
 /// is read in process since the port, so a stub `fno` can no longer serve
 /// it - except the drain read, which the walk shells and the stub answers.
@@ -1231,11 +1231,6 @@ fn pin_clean_board(dir: &Path, scope: &str) {
     fs::create_dir_all(&bin_dir).unwrap();
     fs::write(bin_dir.join("gh"), "#!/bin/sh\necho '[]'\n").unwrap();
     fs::write(
-        bin_dir.join("fno-py"),
-        "#!/bin/sh\ncase \"$*\" in\n  *\"backlog ready\"*) echo '[]';;\n  *) echo '{}';;\nesac\n",
-    )
-    .unwrap();
-    fs::write(
         bin_dir.join("fno"),
         &format!(
             "#!/bin/sh\nif [ \"$1\" = \"agents\" ] && [ \"$2\" = \"org\" ] && [ \"$3\" = \"drain\" ]; \
@@ -1245,7 +1240,7 @@ fn pin_clean_board(dir: &Path, scope: &str) {
     )
     .unwrap();
     #[cfg(unix)]
-    for stub in ["gh", "fno-py", "fno"] {
+    for stub in ["gh", "fno"] {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(bin_dir.join(stub), fs::Permissions::from_mode(0o755)).unwrap();
     }

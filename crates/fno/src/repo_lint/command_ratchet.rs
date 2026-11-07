@@ -3,7 +3,7 @@
 //! (deleted). The Rust half is live: the typed clap tree plus the fno-agents
 //! binary's own command surface (`agents_surface`), defended row-by-row in both
 //! directions - a command cannot be added or deleted silently. Recorded
-//! departure, loud by design: the fno-py registry half cannot outlive the
+//! departure, loud by design: the registry half cannot outlive the
 //! Python runtime it imports, so that half is pinned by the committed
 //! manifests now - every collapse-map row and every command-collapse-flags
 //! row must appear in the baseline, and the count cap (menu-caps) keeps
@@ -219,7 +219,7 @@ fn update_baseline(root: &Path) -> i32 {
     let header: &str = if comments.is_empty() {
         "# Known command surface held by the CI ratchet.\n\
          # The Rust half (typed clap tree + fno-agents) is enumerated live; the\n\
-         # fno-py registry rows are pinned by this file plus the collapse map and\n\
+         # registry rows are pinned by this file plus the collapse map and\n\
          # the collapse-flags file, all edited in the PR that changes a leaf.\n\
          # A deliberate addition carries a PR-body line:  command-exception: <rationale>\n"
     } else {
@@ -366,7 +366,7 @@ pub fn run(inv: &Invocation) -> i32 {
     let n_hidden = baseline.iter().filter(|r| r.contains(" !")).count();
     println!(
         "command-ratchet: ok ({} baseline leaves, {n_hidden} hidden-option row(s){}; \
-         the Rust half is live against the typed tree; the fno-py registry half is \
+         the Rust half is live against the typed tree; the registry half is \
          pinned by the committed manifests now)",
         baseline.len(),
         agents_ok_note

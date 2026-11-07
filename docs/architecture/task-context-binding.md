@@ -61,7 +61,6 @@ fno do resume receipt validate --node <node> --session-id <own session>
 cargo test --manifest-path crates/fno-agents/Cargo.toml task_context
 cargo test --manifest-path crates/fno-agents/Cargo.toml --test task_context_journey
 bash tests/hooks/test_target_context_binding.sh
-uv run --project cli pytest -q cli/tests/unit/test_task_context_binding.py
 ```
 
 The journey test closes with `TASK_CONTEXT_CONTINUITY_PASS`. The marker names the attempt and the retained constraint.

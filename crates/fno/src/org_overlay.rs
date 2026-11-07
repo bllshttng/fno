@@ -1174,7 +1174,7 @@ mod tests {
                  "share": {"leads": 4, "share": 7, "held": 2,
                            "unattributed": {"count": 2, "rows": ["ghost-a", "ghost-b"]}},
                  "top_consumers": [
-                   {"name": "fno-py", "procs": 23, "cpu_pct": 41.2,
+                   {"name": "fno-agents", "procs": 23, "cpu_pct": 41.2,
                     "worktree": ".fno/worktrees/x-aaaa", "worktree_procs": 22},
                    {"name": "fno-agents-worker", "procs": 18, "cpu_pct": 27.9,
                     "worktree": ".fno/worktrees/x-aaaa", "worktree_procs": 18}
@@ -1331,7 +1331,7 @@ mod tests {
             .as_ref()
             .expect("top consumers parse");
         assert_eq!(top.len(), 2);
-        assert_eq!(top[0].name, "fno-py");
+        assert_eq!(top[0].name, "fno-agents");
         assert_eq!(top[0].worktree.as_deref(), Some(".fno/worktrees/x-aaaa"));
 
         // A binary newer than the fno on PATH: the census defaults to all
@@ -1441,9 +1441,9 @@ mod tests {
             .expanded_lines(&age_rows(&AC6_AGES), 200, 40)
             .join("\n");
 
-        assert!(text.contains("fno-py 23 procs 41%"), "{text}");
+        assert!(text.contains("fno-agents 23 procs 41%"), "{text}");
         assert!(
-            text.contains("22 of fno-py in .fno/worktrees/x-aaaa"),
+            text.contains("22 of fno-agents in .fno/worktrees/x-aaaa"),
             "{text}"
         );
         assert!(

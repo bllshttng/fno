@@ -92,9 +92,8 @@ pub fn cpu_split_ns(_pid: u32) -> Option<(u64, u64)> {
 
 /// Program basenames whose rows are the fleet's own readers; the class is
 /// the basename plus the first two non-flag argv tokens.
-const FNO_PROGRAMS: [&str; 7] = [
+const FNO_PROGRAMS: [&str; 6] = [
     "fno",
-    "fno-py",
     "fno-agents",
     "fno-agents-daemon",
     "fno-agents-worker",
@@ -112,24 +111,13 @@ fn basename(token: &str) -> &str {
 /// Classify one command line by TOKEN match, never substring (the retired
 /// sampler's counting rule): a wrapper whose own line carries a pattern never
 /// becomes that class, because only the program basename is matched.
-/// `python3 .../fno-py agents truth` classifies by the script basename.
 pub fn classify(argv: &str) -> String {
     let tokens: Vec<&str> = argv.split_whitespace().collect();
     let Some(program) = tokens.first() else {
         return "other:unknown".to_string();
     };
-    let base = basename(program);
-    let (prog_base, rest): (&str, &[&str]) = if base.starts_with("python") {
-        match tokens[1..]
-            .iter()
-            .position(|t| FNO_PROGRAMS.contains(&basename(t)))
-        {
-            Some(i) => (basename(tokens[i + 1]), &tokens[i + 2..]),
-            None => return format!("other:{base}"),
-        }
-    } else {
-        (base, &tokens[1..])
-    };
+    let prog_base = basename(program);
+    let rest = tokens.get(1..).unwrap_or_default();
     if BUILD_TOOLS.contains(&prog_base) {
         return "build".to_string();
     }
@@ -147,7 +135,7 @@ pub fn classify(argv: &str) -> String {
 }
 
 /// The fleet's own readers: every class classify() named after an
-/// FNO_PROGRAMS entry (directly or hosted by python). `build` and `other:*`
+/// FNO_PROGRAMS entry. `build` and `other:*`
 /// are not.
 fn is_fno_class(class: &str) -> bool {
     !class.starts_with("other:") && class != "build"
@@ -821,30 +809,24 @@ mod tests {
             sample(
                 0,
                 600.0,
-                vec![row(101, "fno-py agents truth", 1.0), row(202, "build", 0.0)],
+                vec![row(101, "fno agents truth", 1.0), row(202, "build", 0.0)],
             ),
             sample(
                 1000,
                 690.0,
-                vec![
-                    row(101, "fno-py agents truth", 2.25),
-                    row(202, "build", 5.0),
-                ],
+                vec![row(101, "fno agents truth", 2.25), row(202, "build", 5.0)],
             ),
             sample(
                 2000,
                 700.0,
-                vec![
-                    row(101, "fno-py agents truth", 3.5),
-                    row(202, "build", 10.0),
-                ],
+                vec![row(101, "fno agents truth", 3.5), row(202, "build", 10.0)],
             ),
         ];
         let s = fold(&samples, 12.0, 2, 1000, 0.0, 0);
         let truth = s
             .classes
             .iter()
-            .find(|c| c.class == "fno-py agents truth")
+            .find(|c| c.class == "fno agents truth")
             .unwrap();
         let build = s.classes.iter().find(|c| c.class == "build").unwrap();
         assert!((truth.cpu_s - 2.5).abs() < 1e-9, "truth {}", truth.cpu_s);
@@ -864,21 +846,21 @@ mod tests {
     #[test]
     fn births_concurrency_and_life_track_the_window() {
         let samples = vec![
-            sample(0, 5.0, vec![row(1, "fno-py agents truth", 1.0)]),
+            sample(0, 5.0, vec![row(1, "fno agents truth", 1.0)]),
             sample(
                 1000,
                 5.0,
                 vec![
-                    row(1, "fno-py agents truth", 2.0),
-                    row(2, "fno-py agents truth", 4.0),
+                    row(1, "fno agents truth", 2.0),
+                    row(2, "fno agents truth", 4.0),
                 ],
             ),
             sample(
                 2000,
                 5.0,
                 vec![
-                    row(1, "fno-py agents truth", 3.0),
-                    row(2, "fno-py agents truth", 5.0),
+                    row(1, "fno agents truth", 3.0),
+                    row(2, "fno agents truth", 5.0),
                 ],
             ),
         ];
@@ -903,8 +885,8 @@ mod tests {
         // whole pre-window life as in-window spend.
         let samples = vec![
             sample(0, 5.0, vec![]),
-            sample(1000, 5.0, vec![row(7, "fno-py agents truth", 30.0)]),
-            sample(2000, 5.0, vec![row(7, "fno-py agents truth", 32.0)]),
+            sample(1000, 5.0, vec![row(7, "fno agents truth", 30.0)]),
+            sample(2000, 5.0, vec![row(7, "fno agents truth", 32.0)]),
         ];
         let s = fold(&samples, 12.0, 2, 1000, 0.0, 0);
         let c = s.classes.first().unwrap();

@@ -179,11 +179,13 @@ init_git_repo() {
 
 setup_delivery_project() {
     local dir="$1" session_id="$2" harness_id="$3" transcript_kind="$4"
-    mkdir -p "$dir/.fno" "$dir/home/.fno" "$dir/handoffs" "$dir/stubs" "$dir/hook-bin" "$dir/uv-tools"
-    ln -s "${REPO_ROOT}/cli/.venv" "$dir/uv-tools/fno"
+    mkdir -p "$dir/.fno" "$dir/home/.fno" "$dir/handoffs" "$dir/stubs" "$dir/hook-bin"
     init_git_repo "$dir"
+    local events_path
+    events_path="$(cd "$dir" && HOME="$dir/home" env -u FNO_EVENTS_PATH "$REAL_BIN" state path events)"
     PROJECT_DIR="$dir" SESSION_ID="$session_id" HARNESS_ID="$harness_id" \
-        TRANSCRIPT_KIND="$transcript_kind" uv run --project "${REPO_ROOT}/cli" python - <<'PY'
+        EVENTS_PATH="$events_path" FNO_FRONT="$MUX_BIN" \
+        TRANSCRIPT_KIND="$transcript_kind" uv run --no-project --with pyyaml python - <<'PY'
 import datetime as dt
 import hashlib
 import json
@@ -191,10 +193,9 @@ import os
 import sqlite3
 from pathlib import Path
 
-import yaml
+import subprocess
 
-from fno.events import store_client as events_mod
-from fno.paths import project_log
+import yaml
 
 root = Path(os.environ["PROJECT_DIR"])
 session_id = os.environ["SESSION_ID"]
@@ -256,7 +257,7 @@ conn.close()
 ids = {"work_order_id": bound["work_order_id"], "attempt_id": bound["attempt_id"],
        "effect_id": bound["effect_id"]}
 stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-journal = project_log("events.jsonl", project_root=root)
+journal = os.environ["EVENTS_PATH"]
 for n, (kind, data) in enumerate((
     ("approval_requested", {"request_digest": request_digest, "request_id": "request-e2e",
         "principal_id": bound["principal_id"], "effect_class": bound["effect_class"],
@@ -273,10 +274,12 @@ for n, (kind, data) in enumerate((
         "previous_state": "executing", "request_digest": request_digest,
         "external_ref": "message-e2e", "reconciliation_ref": None, **ids}),
 )):
-    events_mod.append_event(
-        {"ts": stamp, "type": kind, "source": "approvals",
-         "data": {**data, "event_id": f"e2e-event-{n}"}},
-        journal,
+    envelope = {"ts": stamp, "type": kind, "source": "approvals",
+                "data": {**data, "event_id": f"e2e-event-{n}"}}
+    subprocess.run(
+        [os.environ["FNO_FRONT"], "doctor", "event", "emit-envelope", "--events", journal],
+        input=json.dumps(envelope, separators=(",", ":")),
+        text=True, capture_output=True, check=True,
     )
 request = type("Request", (), {"request_digest": request_digest})
 
@@ -370,7 +373,7 @@ assert_delivery_artifacts() {
         || { echo "assert_delivery_artifacts: handoff session line missing" >&2; return 1; }
     grep -R -q 'fno-delivery://x-delivery-e2e/attempt-e2e/' "$dir/handoffs" \
         || { echo "assert_delivery_artifacts: handoff receipt missing" >&2; return 1; }
-    PROJECT_DIR="$dir" uv run --project "${REPO_ROOT}/cli" python - <<'PY'
+    PROJECT_DIR="$dir" python3 - <<'PY'
 import os
 import sqlite3
 from pathlib import Path
@@ -723,8 +726,8 @@ log "Case D: generic delivery through production mux and Claude hook"
     mkdir -p "$(dirname "$D_EVENTS")"
     EVAL_JSON=$(
         cd "$TMP_DIR" || exit 1
-        env HOME="$TMP_DIR/home" UV_TOOL_DIR="$TMP_DIR/uv-tools" \
-            FNO_BOOTSTRAP_WHEEL="$REPO_ROOT/cli" PATH="$COMMON_PATH" \
+        env HOME="$TMP_DIR/home" \
+            PATH="$COMMON_PATH" \
             "$MUX_BIN" do delivery evaluate --json --plan-path plan.md --events "$D_EVENTS"
     )
     cd_ok=true
@@ -739,8 +742,6 @@ log "Case D: generic delivery through production mux and Claude hook"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${TMP_DIR}/home" \
         "HANDOFFS_DIR=${TMP_DIR}/handoffs" \
-        "UV_TOOL_DIR=${TMP_DIR}/uv-tools" \
-        "FNO_BOOTSTRAP_WHEEL=${REPO_ROOT}/cli" \
         "FNO_AGENTS_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_FNO_BIN=${MUX_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${TMP_DIR}/stubs/gh" \
@@ -770,8 +771,6 @@ log "Case E: generic delivery through production mux and agy hook"
     run_agy_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${TMP_DIR}/home" \
         "HANDOFFS_DIR=${TMP_DIR}/handoffs" \
-        "UV_TOOL_DIR=${TMP_DIR}/uv-tools" \
-        "FNO_BOOTSTRAP_WHEEL=${REPO_ROOT}/cli" \
         "FNO_AGENTS_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_FNO_BIN=${MUX_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${TMP_DIR}/stubs/gh" \
@@ -799,7 +798,7 @@ log "Case F: malformed generic plan fails closed through production mux"
     SESSION_ID="delivery-malformed-e2e"
     HARNESS_ID="ffff-delivery-malformed"
     setup_delivery_project "$TMP_DIR" "$SESSION_ID" "$HARNESS_ID" "claude"
-    PROJECT_DIR="$TMP_DIR" uv run --project "${REPO_ROOT}/cli" python - <<'PY'
+    PROJECT_DIR="$TMP_DIR" python3 - <<'PY'
 import os
 from pathlib import Path
 
@@ -815,8 +814,8 @@ PY
     COMMON_PATH="$(dirname "$MUX_BIN"):${PATH}"
     DECISION=$(
         cd "$TMP_DIR" || exit 1
-        env HOME="$TMP_DIR/home" UV_TOOL_DIR="$TMP_DIR/uv-tools" \
-            FNO_BOOTSTRAP_WHEEL="$REPO_ROOT/cli" FNO_LOOPCHECK_FNO_BIN="$MUX_BIN" \
+        env HOME="$TMP_DIR/home" \
+            FNO_LOOPCHECK_FNO_BIN="$MUX_BIN" \
             PATH="$COMMON_PATH" "$REAL_BIN" loop-check \
             --state ".fno/target-state.md" \
             --transcript "${HARNESS_ID}.jsonl" \

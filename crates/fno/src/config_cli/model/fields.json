@@ -90,8 +90,7 @@
     {
      "name": "blueprint",
      "default": {
-      "max_prs_per_epic": 4,
-      "python_repair_added_lines": 30
+      "max_prs_per_epic": 4
      }
     },
     {
@@ -158,6 +157,9 @@
        "enabled": false,
        "host": "https://us.i.posthog.com",
        "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
+      },
+      "install_count": {
+       "enabled": true
       }
      }
     },
@@ -909,10 +911,6 @@
     {
      "name": "max_prs_per_epic",
      "default": 4
-    },
-    {
-     "name": "python_repair_added_lines",
-     "default": 30
     }
    ]
   },
@@ -1058,6 +1056,12 @@
       "host": "https://us.i.posthog.com",
       "token_env": "FNO_POSTHOG_PROJECT_TOKEN",
       "token_file": "~/.fno/secrets/posthog-project-token"
+     }
+    },
+    {
+     "name": "install_count",
+     "default": {
+      "enabled": true
      }
     }
    ]
@@ -2443,6 +2447,15 @@
     }
    ]
   },
+  "TelemetryInstallCountBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": true
+    }
+   ]
+  },
   "CrossModelBlock": {
    "extra": "ignore",
    "fields": [
@@ -3155,7 +3168,6 @@
   "project.id",
   "project.vision",
   "blueprint.max_prs_per_epic",
-  "blueprint.python_repair_added_lines",
   "plan.default_diff_budget",
   "backlog.page_reload_s",
   "backlog.maintain.staleness_days",
@@ -3194,6 +3206,7 @@
   "telemetry.eval_events.host",
   "telemetry.eval_events.token_env",
   "telemetry.eval_events.token_file",
+  "telemetry.install_count.enabled",
   "attention.enabled",
   "attention.sinks",
   "research.output_dir",

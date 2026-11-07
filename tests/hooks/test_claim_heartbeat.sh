@@ -672,7 +672,7 @@ REAL_CONFIG="$REAL_TMP/config.toml"
 mkdir -p "$REAL_REPO/.fno"
 git init -q "$REAL_REPO"
 git -C "$REAL_REPO" checkout -q -b feature/x-a166-real
-printf '{"entries":[{"id":"x-a166","status":"ready","title":"live node","priority":"p1","type":"feature","blocked_by":[],"locked_by":null,"session_id":null,"pr_number":null,"pr_url":null}]}\n' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$REAL_GRAPH"
+printf '{"entries":[{"id":"x-a166","status":"ready","title":"live node","priority":"p1","type":"feature","blocked_by":[],"locked_by":null,"session_id":null,"pr_number":null,"pr_url":null}]}\n' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$REAL_GRAPH"
 printf 'state_dir = "%s"\n' "$REAL_TMP" > "$REAL_CONFIG"
 REAL_AGENTS="${FNO_AGENTS_FRONT:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents}"
 if [[ -x "$REAL_AGENTS" ]]; then

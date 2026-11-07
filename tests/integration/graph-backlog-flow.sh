@@ -66,15 +66,15 @@ assert 'candidates' in p and len(p['candidates']) == 3, 'expected 3 candidates'
 " || fail "dry-run proposal schema check"
 
 # Step 4: Apply a synthetic proposal (billing blocked_by auth).
-AUTH_ID=$(uv run --project "$REPO_ROOT/cli" python -c "
+AUTH_ID=$(python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import read_graph_strict
 g = {'entries': read_graph_strict(Path('$TEST_HOME/.fno/graph.json'))}
 print(next(e['id'] for e in g['entries'] if e['title'] == 'Auth'))
 ")
-BILLING_ID=$(uv run --project "$REPO_ROOT/cli" python -c "
+BILLING_ID=$(python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import read_graph_strict
 g = {'entries': read_graph_strict(Path('$TEST_HOME/.fno/graph.json'))}
 print(next(e['id'] for e in g['entries'] if e['title'] == 'Billing'))
 ")
@@ -91,9 +91,9 @@ HOME="$TEST_HOME" fno backlog triage apply "$TEST_HOME/apply.json" > /dev/null \
     || fail "triage apply"
 
 # Step 5: graph.db reflects the new blocked_by edge, graph.md re-rendered.
-uv run --project "$REPO_ROOT/cli" python -c "
+python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import read_graph_strict
 g = {'entries': read_graph_strict(Path('$TEST_HOME/.fno/graph.json'))}
 billing = next(e for e in g['entries'] if e['title'] == 'Billing')
 assert '$AUTH_ID' in billing['blocked_by'], 'billing not blocked by auth'

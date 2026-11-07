@@ -1138,10 +1138,10 @@ fn json_quote(s: &str) -> String {
     serde_json::json!(s).to_string()
 }
 
-/// The repo's cli/tests/fixtures dir, resolved from the current checkout.
+/// The repo's tests/py/fixtures dir, resolved from the current checkout.
 fn repo_fixture_dir() -> Option<std::path::PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    crate::test_command::repo_root(&cwd).map(|r| r.join("cli/tests/fixtures/populated-state"))
+    crate::test_command::repo_root(&cwd).map(|r| r.join("tests/py/fixtures/populated-state"))
 }
 
 /// The test seam: `SMOKE_REGISTRY_FILE` names a JSON file
@@ -1203,7 +1203,7 @@ pub fn shard_selected_indices(
 ) -> Vec<usize> {
     let name_of = |i: usize| steps[i].0.as_str();
     let weight = |name: &str| weights.get(name).copied().unwrap_or(2.0);
-    let shared = ["Sync + build", "Pytest (unit + integration)"];
+    let shared = ["Pytest (unit + integration)"];
     let mut loads = vec![0.0f64; total];
     let mut mine: std::collections::BTreeSet<usize> = Default::default();
     let mut ordered: Vec<usize> = selected

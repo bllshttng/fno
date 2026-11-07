@@ -87,7 +87,7 @@ echo "AC1.2-HP: ab-id input resolves to CLAIMS_ID and CLAIMS_SEED_ARG"
 FIXTURE_HOME="$(mktemp -d -t parse-claims-fixture.XXXXXX)"
 trap 'rm -rf "$FIXTURE_HOME"' EXIT
 mkdir -p "$FIXTURE_HOME/.fno"
-cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$FIXTURE_HOME/.fno/graph.json"
+cat <<'JSON' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$FIXTURE_HOME/.fno/graph.json"
 {
   "entries": [
     {

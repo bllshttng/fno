@@ -88,20 +88,20 @@ if static is not None:
 script = open("scripts/ci/check-python-static.sh").read()
 check("set -euo pipefail" in script,
       "static script stops before its success marker on failure")
-check("${RUFF:-uv run ruff} check --no-respect-gitignore --color=never --output-format=concise src/" in script,
+RUFF_CMD = "${RUFF:-uvx ruff} check --no-respect-gitignore --color=never --output-format=concise"
+check(RUFF_CMD in script,
       "static script runs the exact Ruff command")
-check("${MYPY:-uv run mypy} --no-color-output src/" in script,
-      "static script runs the exact MyPy command")
-ruff_at = script.index("${RUFF:-uv run ruff} check") if "${RUFF:-uv run ruff} check" in script else -1
-mypy_at = script.index("${MYPY:-uv run mypy}") if "${MYPY:-uv run mypy}" in script else -1
+ruff_at = script.index(RUFF_CMD) if RUFF_CMD in script else -1
 marker = "python-static: checked"
 marker_at = script.index(marker) if marker in script else -1
-count_guard_at = script.index('test "$python_files" -gt 0') if 'test "$python_files" -gt 0' in script else -1
-check(ruff_at >= 0 and mypy_at > ruff_at and marker_at > mypy_at,
-      "Python success marker follows Ruff and MyPy")
-check(bool(re.search(r"find\s+src\b.*-name ['\"]\*\.py['\"]", script)) and
-      count_guard_at >= 0 and count_guard_at < ruff_at,
-      "static script requires a positive Python-file count")
+count_guard = 'if [ "$python_files" -eq 0 ]; then'
+count_guard_at = script.index(count_guard) if count_guard in script else -1
+check(ruff_at >= 0 and marker_at > ruff_at,
+      "Python success marker follows Ruff")
+check(bool(re.search(r"find\s+\..*-name ['\"]\*\.py['\"]", script)) and
+      count_guard_at >= 0 and count_guard_at < ruff_at and
+      "exit 1" in script[count_guard_at:ruff_at],
+      "static script refuses a zero Python-file count")
 
 rust = load(".github/workflows/rust-ci.yml")
 rust_events = event_map(rust)
@@ -132,7 +132,7 @@ check(str((cli.get("concurrency") or {}).get("cancel-in-progress", "")) ==
 check(bool(cli_events.get("schedule")),
       "cli-ci schedules a full run even when main is quiet")
 cli_jobs = cli["jobs"]
-for name in ("smoke-pytest", "smoke-rest"):
+for name in ("tests-py", "smoke-rest"):
     job_if = str(cli_jobs.get(name, {}).get("if", ""))
     check("needs.pr-affected.outputs.python_full" in job_if
           and "!cancelled()" in job_if,

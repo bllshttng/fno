@@ -237,15 +237,16 @@ fn scan_tree(
 
 /// The degrade proof: run each allowlisted command in a no-script env and
 /// require a graceful fail (exit != 0 and != 127, non-empty stderr, no
-/// traceback). The command base is `fno-py` on PATH or beside this binary.
+/// traceback). The command base is the `fno` front beside this binary or on
+/// PATH.
 fn degrade_proof(entries: &BTreeMap<String, Vec<String>>) -> Vec<(String, String, String)> {
     let mut failures: Vec<(String, String, String)> = Vec::new();
-    let Some(cmd_base) = resolve_fno_py() else {
+    let Some(cmd_base) = resolve_fno() else {
         failures.push((
             "(all)".to_string(),
             String::new(),
-            "could not locate the `fno-py` executable for the degrade proof (not on \
-             PATH and not beside this binary); run via `uv run`"
+            "could not locate the `fno` executable for the degrade proof (not beside \
+             this binary and not on PATH)"
                 .to_string(),
         ));
         return failures;
@@ -328,16 +329,13 @@ fn degrade_proof(entries: &BTreeMap<String, Vec<String>>) -> Vec<(String, String
     failures
 }
 
-/// `fno-py` on PATH, or beside this binary, or None.
-fn resolve_fno_py() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join("fno-py");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
+/// The `fno` front beside this binary, else `fno` on PATH, or None.
+fn resolve_fno() -> Option<std::path::PathBuf> {
+    let sibling = std::env::current_exe().ok()?.parent()?.join("fno");
+    if sibling.is_file() {
+        return Some(sibling);
     }
-    let sibling = std::env::current_exe().ok()?.parent()?.join("fno-py");
-    sibling.is_file().then_some(sibling)
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join("fno"))
+        .find(|candidate| candidate.is_file())
 }

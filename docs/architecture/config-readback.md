@@ -48,7 +48,7 @@ The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers
 
 `docs/path-config.md` names `config.toml` files and used to hand the reader YAML in the legacy `config:`-wrapped shape. `tomllib` raises on it, `_load_raw` swallows the raise, the doctor certified the file. An operator who copied the documented schema into the documented path got a file that no-ops.
 
-`cli/tests/unit/test_docs_fences.py` walks every fence in `docs/` and parses it as its declared language. Its non-zero fence count is the positive control on the walker. A walker that found no files can otherwise pass by finding nothing to reject.
+`tests/py/unit/test_docs_fences.py` walks every fence in `docs/` and parses it as its declared language. Its non-zero fence count is the positive control on the walker. A walker that found no files can otherwise pass by finding nothing to reject.
 
 ## Two blocks the walker skips
 

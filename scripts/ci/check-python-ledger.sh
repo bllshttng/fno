@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# check-python-ledger.sh - every tracked .py outside cli/ has one verdict row.
+# check-python-ledger.sh - every tracked .py has one verdict row.
 #
-# scripts/ci/python-ledger.tsv records a fate for every tracked .py outside
-# cli/: keep, tombstone, delete, delete-by <effort>, port-by <effort>. This
+# scripts/ci/python-ledger.tsv records a fate for every tracked .py: keep,
+# tombstone, delete, delete-by <effort>, port-by <effort>. This
 # gate holds the ledger to the tree it describes, in both directions:
 #
-#   - a tracked .py outside cli/ with no row is an unrecorded Python file.
+#   - a tracked .py with no row is an unrecorded Python file.
 #     The file-budget gate bars NEW .py outside the allowed homes, but a
 #     legacy file can still appear by rename or slip through unjudged; the
 #     refusal names it.
@@ -22,7 +22,7 @@
 #     trusts it.
 #
 # Run: bash scripts/ci/check-python-ledger.sh
-# Exit: 0 every live .py outside cli/ has exactly one valid row; 1 findings;
+# Exit: 0 every live .py has exactly one valid row; 1 findings;
 #       2 misuse (a missing ledger, a missing budget gate, an unreadable
 #       PY_ALLOWED) - a gate that cannot read its inputs never reports a pass.
 
@@ -49,9 +49,8 @@ HOMES="$(sed -n '/^PY_ALLOWED=(/,/^)/p' "$BUDGET_GATE" \
 # BSD awk refuses a multi-line -v value, so the homes travel by environment.
 export PY_LEDGER_HOMES="$HOMES"
 
-# Live tracked .py outside cli/. grep -v exits 1 on an empty set; an empty
-# live set is a pass, not an error, so the pipe carries || true.
-LIVE="$(git -c core.quotepath=off ls-files -- '*.py' | grep -v '^cli/' || true)"
+# Every tracked .py. An empty set is a pass, not an error.
+LIVE="$(git -c core.quotepath=off ls-files -- '*.py')"
 LIVE_COUNT="$(printf '%s\n' "$LIVE" | awk 'NF { n++ } END { print n + 0 }')"
 
 # One awk pass over the ledger with the live list in memory. Every finding
@@ -67,7 +66,7 @@ REPORT="$(awk -F'\t' -v live_file=<(printf '%s\n' "$LIVE") '
         path = $1; verdict = $2; reason = $3
         if (path in row) { print "duplicate\t" path; next }
         row[path] = verdict
-        if (path !~ /\.py$/ || path ~ /^cli\//) { print "out-of-scope\t" path; next }
+        if (path !~ /\.py$/) { print "out-of-scope\t" path; next }
         if (!(path in live)) { print "missing-file\t" path }
         if (verdict !~ /^(keep|tombstone|delete)$/ && verdict !~ /^(delete|port)-by .+/) {
             print "bad-verdict\t" path "\t" verdict
@@ -90,7 +89,7 @@ while IFS= read -r line; do
     rest="${line#*$'\t'}"
     case "$kind" in
         no-row)
-            echo "check-python-ledger: $rest is a tracked .py outside cli/ with no ledger row; give it a verdict" ;;
+            echo "check-python-ledger: $rest is a tracked .py with no ledger row; give it a verdict" ;;
         missing-file)
             echo "check-python-ledger: $rest names a file that no longer exists; drop the row" ;;
         duplicate)
@@ -98,7 +97,7 @@ while IFS= read -r line; do
         malformed)
             echo "check-python-ledger: $rest is not path<TAB>verdict<TAB>reason" ;;
         out-of-scope)
-            echo "check-python-ledger: $rest is not a .py outside cli/; the ledger records only that scope" ;;
+            echo "check-python-ledger: $rest is not a .py; the ledger records only that scope" ;;
         bad-verdict)
             echo "check-python-ledger: ${rest%%$'\t'*} has verdict '${rest#*$'\t'}'; a verdict is keep | tombstone | delete | delete-by <effort> | port-by <effort>" ;;
         no-reason)
@@ -108,5 +107,5 @@ while IFS= read -r line; do
     esac
 done <<< "$REPORT"
 
-[[ "$FAIL" -eq 0 ]] && echo "check-python-ledger: ok ($LIVE_COUNT tracked .py outside cli/, each with exactly one verdict row)"
+[[ "$FAIL" -eq 0 ]] && echo "check-python-ledger: ok ($LIVE_COUNT tracked .py, each with exactly one verdict row)"
 exit "$FAIL"

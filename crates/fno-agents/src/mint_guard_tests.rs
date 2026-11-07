@@ -7,9 +7,7 @@
 //! `harness_session_id` and a null parent edge. The type system cannot catch
 //! that, so this scan does: it fails, naming the site, on any literal whose
 //! struct-update base is `..Default::default()` outside test code. `state.rs`
-//! is the allowed exception as the struct's and the mint constructor's home,
-//! mirroring registry.py on the Python leg
-//! (cli/tests/unit/test_registry_mint_guard.py).
+//! is the allowed exception as the struct's and the mint constructor's home.
 
 use std::fs;
 use std::path::Path;

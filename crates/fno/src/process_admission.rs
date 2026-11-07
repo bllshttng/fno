@@ -805,18 +805,12 @@ pub fn std_status(command: &mut std::process::Command) -> io::Result<std::proces
     child.wait()
 }
 
-/// Bootstrap runs before the Python CLI and its configuration exist. These
+/// The sibling forwards run before fno-agents and its configuration exist. These
 /// helpers are intentionally separate from the normal launch seam so the
 /// first-run recovery path cannot be blocked by the policy it is meant to
 /// recover from.
 pub(crate) fn bootstrap_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     std::process::Command::new(program)
-}
-
-pub(crate) fn bootstrap_output(
-    command: &mut std::process::Command,
-) -> io::Result<std::process::Output> {
-    command.output()
 }
 
 pub(crate) fn bootstrap_status(

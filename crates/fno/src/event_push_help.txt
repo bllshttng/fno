@@ -1,4 +1,4 @@
-Usage: fno-py doctor event push-parent [OPTIONS]
+Usage: fno doctor event push-parent [OPTIONS]
 
   Push a status-breakpoint notice to the parent handle (push leg).
 

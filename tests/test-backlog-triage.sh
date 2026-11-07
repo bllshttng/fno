@@ -22,7 +22,7 @@ export HOME="$TMP/home"
 mkdir -p "$HOME/.fno"
 GRAPH_JSON="$HOME/.fno/graph.json"
 GRAPH_MD="$HOME/.fno/pages/graph.md"
-printf '{"entries": []}\n' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$GRAPH_JSON"
+printf '{"entries": []}\n' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$GRAPH_JSON"
 
 PASS=0
 FAIL=0
@@ -30,16 +30,11 @@ pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 resolve_fno() {
-    if command -v fno >/dev/null 2>&1; then
-        echo "fno"
+    if [[ -x "$REPO_ROOT/crates/fno/target/debug/fno" ]]; then
+        echo "$REPO_ROOT/crates/fno/target/debug/fno"
         return
     fi
-    local venv_py="$REPO_ROOT/cli/.venv/bin/python"
-    if [[ -x "$venv_py" ]]; then
-        echo "$venv_py -m fno.cli"
-        return
-    fi
-    echo "python3 -m fno.cli"
+    echo "fno"
 }
 
 ABI=$(resolve_fno)
@@ -131,20 +126,20 @@ else
 fi
 
 # Build a cycle: add blocker edge A -> B, then propose B -> A
-node_a=$(uv run --project "$REPO_ROOT/cli" python -c "
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
+node_a=$(python3 -c "
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import read_graph_strict
 d = {'entries': read_graph_strict(__import__('pathlib').Path('$GRAPH_JSON'))}
 print(d['entries'][0]['id'])
 ")
-node_b=$(uv run --project "$REPO_ROOT/cli" python -c "
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
+node_b=$(python3 -c "
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import read_graph_strict
 d = {'entries': read_graph_strict(__import__('pathlib').Path('$GRAPH_JSON'))}
 print(d['entries'][1]['id'])
 ")
 # Seed a direct blocked_by on B so any edge from A already traverses back
-uv run --project "$REPO_ROOT/cli" python -c "
+python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import commit_rows_via_store
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import commit_rows_via_store
 commit_rows_via_store(Path('$GRAPH_JSON'), lambda rows: [
     dict(row, blocked_by=['$node_a']) if row['id'] == '$node_b' else row
     for row in rows
@@ -176,9 +171,9 @@ fi
 
 # --- Scenario 5: apply mutates graph.db + re-renders graph.md exactly once
 # Reset blocked_by so a fresh apply has somewhere to go.
-uv run --project "$REPO_ROOT/cli" python -c "
+python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import commit_rows_via_store
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import commit_rows_via_store
 commit_rows_via_store(Path('$GRAPH_JSON'), lambda rows: [dict(row, blocked_by=[]) for row in rows])
 "
 
@@ -208,9 +203,9 @@ else
 fi
 
 # Check graph.db now has the blocker and priority
-applied_check=$(uv run --project "$REPO_ROOT/cli" python -c "
+applied_check=$(python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import read_graph_strict
 entries = read_graph_strict(Path('$GRAPH_JSON'))
 by_id = {e['id']: e for e in entries}
 a = by_id.get('$node_a', {})
@@ -253,9 +248,9 @@ fi
 
 # --- Scenario 7: projects emits an alphabetical JSON list ------------------
 # Seed two projects manually so the list is non-trivial.
-uv run --project "$REPO_ROOT/cli" python -c "
+python3 -c "
 from pathlib import Path
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import commit_rows_via_store
+import sys; sys.path.insert(0, '$REPO_ROOT/tests/py/fixtures'); from graph_seed import commit_rows_via_store
 def assign_projects(rows):
     return [dict(row, project=('zeta' if i == 0 else 'alpha')) for i, row in enumerate(rows)]
 commit_rows_via_store(Path('$GRAPH_JSON'), assign_projects)

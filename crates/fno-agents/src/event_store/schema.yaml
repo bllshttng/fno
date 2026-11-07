@@ -13,7 +13,7 @@
 # Adding a new event type:
 #   1. Add an entry under `event_types`.
 #   2. If gate-flipping, add the gate name to `gates`.
-#   3. Add a fixture record to cli/tests/events/parity_corpus.jsonl so
+#   3. Add a fixture record to tests/py/events/parity_corpus.jsonl so
 #      both validators agree on the shape.
 #   4. CI parity test (crates/fno-agents/tests/event_validate_parity.rs) runs both validators
 #      against the corpus; both must give the same verdict on every record.
@@ -1630,7 +1630,7 @@ event_types:
           description: "Rows read from the process table. One ps for the whole machine, not one probe per candidate."
         candidates:
           type: integer
-          description: "Rows passing all four reap clauses: the fno-py entrypoint in argv, parent pid 1, past the age threshold, and no live registry row naming the pid."
+          description: "Rows passing all four reap clauses: a reparable family in argv (a stdio MCP server or Claude pool host), parent pid 1, past the age threshold, and no live registry row naming the pid."
         reaped:
           type: integer
           description: "Candidates actually signalled. Lower than candidates when one had already exited or refused the signal."

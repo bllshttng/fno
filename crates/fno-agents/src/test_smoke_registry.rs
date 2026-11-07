@@ -7,8 +7,7 @@
 /// (name, cwd, cmd). cwd is repo-relative ("." = root). A multi-line cmd
 /// runs under `bash -eo pipefail -c`, matching GitHub's default shell.
 pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
-    ("Sync + build", "cli", "uv sync\nuv build"),
-    ("Pytest (unit + integration)", "cli", "uv run pytest --tb=short -q -n auto --maxprocesses=4 --dist=loadgroup -m 'not slow_e2e' --ignore=tests/unit/test_ambient_canary.py"),
+    ("Pytest (unit + integration)", ".", "uv run --with pytest --with pytest-timeout --with pyyaml --with psutil pytest tests/py --tb=short -q -m 'not slow_e2e'"),
     ("Bash events-validate harness", ".", "bash tests/events/test-bash-validator.sh"),
     ("frontend-craft gate harness", ".", "bash tests/lib/test_frontend_surface.sh\nbash tests/lib/test_infer_has_ui.sh\nbash tests/lib/test_resolve_plan_executor.sh"),
     ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh\nbash tests/lib/test_config_plans_chain.sh"),
@@ -25,7 +24,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Build fno-agents debug binary (for journey tests)", "crates/fno-agents", "CARGO_BUILD_BUILD_DIR=\"$PWD/target\" cargo build"),
     ("Build the fno front door (for the hash gate)", "crates/fno", "CARGO_BUILD_BUILD_DIR=\"$PWD/target\" cargo build --quiet --bin fno"),
     ("paths.sh hash gate", ".", "FNO_AGENTS_WORKER=\"$PWD/crates/fno-agents/target/debug/fno-agents-worker\" crates/fno/target/debug/fno config paths verify scripts/lib/paths.sh"),
-    ("Keyless dispatch-to-terminal smoke (binary present)", "cli", "uv run pytest --tb=short -q tests/unit/test_keyless_smoke.py"),
     ("registry-miss heal across the Rust/Python seam", ".", "bash tests/test-agents-heal-token.sh"),
     ("loop-check journey tests (e2e + emission-schema + backstop-subprocess)", ".", "bash tests/hooks/test_loop_check_e2e.sh\nbash tests/events/test-loop-check-emission-schema.sh\nbash tests/hooks/test_loop_check_backstop_subprocess.sh"),
     ("Target self-handoff harness", ".", "bash tests/test-handoff.sh\nbash tests/target/test_handoff_ledger_record.sh"),
@@ -39,14 +37,14 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("events-discipline lint", ".", "bash scripts/lint/events-discipline.sh"),
     ("events-discipline lint self-test", ".", "bash tests/lint/test-events-discipline.sh"),
     ("No quarantined events.invalid.jsonl rows", ".", "bash scripts/lint/no-invalid-events.sh"),
-    ("Smoke tests", ".", "bash cli/tests/smoke/run-all.sh"),
+    ("Smoke tests", ".", "bash tests/smoke/run-all.sh"),
     ("no hardcoded paths", ".", "bash scripts/ci/check-no-hardcoded-paths.sh"),
     ("placement rule", ".", "bash scripts/ci/check-placement-rule.sh"),
     ("No residual old-name patterns (rename guard)", ".", "bash scripts/rename/residual-check.sh"),
     ("No stale skill refs (consolidation audit)", ".", "bash scripts/ci/check-no-stale-skill-refs.sh"),
     ("Plugin function-agnosticism check", ".", "bash scripts/ci/check-plugins-function-agnostic.sh"),
     ("Company module boundary self-test", ".", "bash tests/ci/test_check_company_boundaries.sh"),
-    ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh --baseline"),
+    ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh"),
     ("Skill snippet hazard lint", ".", "bash scripts/ci/check-skill-snippets.sh"),
     ("Skill snippet lint self-test", ".", "bash tests/ci/test_check_skill_snippets.sh"),
     ("Pitfalls corpus cap", ".", "bash scripts/ci/check-pitfalls.sh"),
@@ -104,15 +102,10 @@ pub(super) const CHANGED_RC_UNSELECTED: i32 = 20;
 pub(super) const CHANGED_RC_UNEVALUATED: i32 = 21;
 pub(super) const CHANGED_RC_PREREQ: i32 = 22;
 pub(super) const CHANGED_RECEIPT_DEFAULT: &str = ".fno/changed-last-receipt.json";
-pub(super) const INFRA_EXACT: &[&str] = &[
-    "cli/src/fno/test_cmd.py",
-    "scripts/ci/preflight.sh",
-    "cli/pyproject.toml",
-];
+pub(super) const INFRA_EXACT: &[&str] = &["scripts/ci/preflight.sh"];
 pub(super) const INFRA_PREFIX: &[&str] = &[".github/workflows/"];
 pub(super) const INFRA_BASENAME: &[&str] = &["conftest.py"];
 pub(super) const INFRA_SELECTS: &[&str] = &[
-    "cli/tests/unit/test_test_cmd.py",
     "tests/ci/test_smoke_modes.sh",
     "tests/ci/test_preflight.sh",
     "tests/ci/test_changed_smoke_workflow.sh",
@@ -129,11 +122,8 @@ pub(super) const ALWAYS_LINTS: &[(&str, &str)] = &[
     ),
     ("Hook exec bits", "scripts/ci/check-hook-exec-bit.sh"),
 ];
-pub(super) const BUNDLE_TEST_TARGETS: &[&str] = &[
-    "cli/tests/unit/test_skill_bundles.py",
-    "cli/tests/unit/test_bundle_cli.py",
-];
-pub(super) const ORCHESTRATED_SUBTREES: &[(&str, &str)] = &[("cli/tests/smoke/", "Smoke tests")];
+pub(super) const BUNDLE_TEST_TARGETS: &[&str] = &["tests/py/unit/test_skill_bundles.py"];
+pub(super) const ORCHESTRATED_SUBTREES: &[(&str, &str)] = &[("tests/smoke/", "Smoke tests")];
 pub(super) const RUST_BIN_MARKERS: &[&str] = &[
     "target/debug/fno-agents",
     "target/release/fno-agents",

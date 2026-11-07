@@ -916,8 +916,8 @@ fn cmd_reply(args: &[String]) -> i32 {
     let tail = parse_reply_tail(args);
     // One exec hop for the whole reply surface: the front door claims every
     // `mail reply`, and any case the cross-host branch does not own execs
-    // the Python reply with the original tail, so its refusals, kinds and
-    // exit codes stay byte-identical (the parity contract).
+    // the native local reply with the original tail, so its refusals, kinds
+    // and exit codes stay its own.
     if !tail.routable() {
         return forward_reply(args);
     }
@@ -932,16 +932,16 @@ fn cmd_reply(args: &[String]) -> i32 {
     }
 }
 
-/// The verbatim Python forward: the original tail, same argv shape the
-/// front door would hand the Python CLI on main.
+/// The local reply: the original tail, exec'd as this binary's native
+/// `mail reply`. The relay's re-entry marker and hop count ride along, so a
+/// loop back into the relay stops at the hop limit.
 fn forward_reply(args: &[String]) -> i32 {
-    let mut argv: Vec<String> = vec![
-        "agents".to_string(),
-        "mail".to_string(),
-        "reply".to_string(),
-    ];
-    argv.extend(args.iter().cloned());
-    crate::scrape::exec_python("fno agents mail reply", argv)
+    let exe = std::env::current_exe()
+        .map(OsString::from)
+        .unwrap_or_else(|_| OsString::from("fno-agents"));
+    let mut argv: Vec<OsString> = vec![exe, "mail".into(), "reply".into()];
+    argv.extend(args.iter().map(OsString::from));
+    exec_forward(&argv, "fno agents mail reply", true)
 }
 
 fn cmd_status(_args: &[String]) -> i32 {

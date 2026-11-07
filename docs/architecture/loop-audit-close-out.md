@@ -124,7 +124,7 @@ All three fixes share an anti-pattern catalogued in past memory:
 | Subsystem | Path |
 |-----------|------|
 | Init | `hooks/helpers/init-target-state.sh` (lines 634-648) |
-| Init test | `cli/tests/hooks/test_init_target_state_skip_flags.py` |
+| Init test | `tests/py/hooks/test_init_target_state_skip_flags.py` |
 | Walker | `cli/src/fno/megawalk.py` (`run_walker` reload block, lines 1525-1531 + 1665-1695) |
 | Walker test | `cli/tests/megawalk/test_graph_reload.py` |
 | Walker schema | `cli/src/fno/events/schema.yaml` (`graph_reloaded`, `graph_reload_failed`) |

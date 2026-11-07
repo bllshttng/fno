@@ -93,125 +93,64 @@ sanitize_probe() {
   strip_ansi "$1" | tr -d '\000-\010\013\014\016-\037\177'
 }
 
-# Locate uv: on PATH, else the well-known dirs Astral's installer uses (the
-# same list scripts/install/fno.sh carries). UV_CALL is empty when absent.
-UV_CALL=
-resolve_uv() {
-  local p
-  if p="$(command -v uv 2>/dev/null)" && [[ -n "$p" ]]; then
-    UV_CALL="$p"; return 0
-  fi
-  for p in "${HOME:-}/.local/bin/uv" "${XDG_BIN_HOME:-}/uv" "${HOME:-}/.cargo/bin/uv"; do
-    if [[ -n "$p" && -x "$p" ]]; then UV_CALL="$p"; return 0; fi
-  done
-  return 1
-}
-
-# uv colorizes `tool dir` on a TTY; strip ANSI defensively (BSD sed cannot
-# interpret \033, so the ESC byte is built with printf - same as fno.sh).
+# Strip ANSI CSI escapes (BSD sed cannot interpret \033, so the ESC byte is
+# built with printf - same as fno.sh).
 strip_ansi() {
   local esc
   esc="$(printf '\033')"
   printf '%s' "$1" | sed -e "s/${esc}\[[0-9;]*[@-~]//g" -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
-TOOL_DIR=
-TOOL_BIN=
-resolve_tool_dirs() {
-  [[ -n "$UV_CALL" ]] || return 1
+# The binary install: the four binaries live in BIN_DIR, linked into LINK_DIR
+# (the PATH dir), the same two dirs fno.sh and postinstall.sh use.
+BIN_DIR="${FNO_STATE_DIR:-${HOME:-}/.fno}/install/bin"
+LINK_DIR="${FNO_INSTALL_DIR:-${HOME:-}/.local/bin}"
+
+# first_executable <name>: the binary from the install dir, the link dir, or
+# cargo's bin dir, in that order; empty when none.
+first_executable() {
   local d
-  d="$(NO_COLOR=1 UV_NO_COLOR=1 "$UV_CALL" tool dir 2>/dev/null)" || return 1
-  d="$(strip_ansi "$d")"
-  [[ -n "$d" ]] || return 1
-  TOOL_DIR="$d"
-  d="$(NO_COLOR=1 UV_NO_COLOR=1 "$UV_CALL" tool dir --bin 2>/dev/null)" || d=""
-  d="$(strip_ansi "$d")"
-  TOOL_BIN="${d:-${UV_TOOL_BIN_DIR:-${HOME:-}/.local/bin}}"
-  return 0
+  for d in "$BIN_DIR" "$LINK_DIR" "${HOME:-}/.cargo/bin"; do
+    if [[ -n "$d" && -x "$d/$1" ]]; then
+      printf '%s\n' "$d/$1"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # --- checks (each appends one JSON object; order is the report order) -------
-check_uv() {
-  if resolve_uv; then
-    emit_check "uv" "ok" 1 "$UV_CALL" "uv is available." ""
-  else
-    emit_check "uv" "missing" 1 "" "no uv on PATH and none in ~/.local/bin or ~/.cargo/bin." \
-      "curl -fsSL https://astral.sh/uv/install.sh | sh"
-  fi
-}
-
-check_wheel() {
-  local cand version out rc
-  if resolve_tool_dirs; then
-    cand="$TOOL_DIR/fno/bin/fno-py"
-  else
-    cand=""
-  fi
-  if [[ -z "$cand" || ! -x "$cand" ]]; then
-    cand="$(command -v fno-py 2>/dev/null || true)"
-  fi
-  if [[ -z "$cand" ]]; then
-    emit_check "wheel" "missing" 1 "" "the Python CLI (fno-py) is not installed." \
-      "run this script with --repair, or: uv tool install --force --compile-bytecode fno"
-    return 0
-  fi
-  out="$(run_bounded 5 "$cand" --version 2>&1)"; rc=$?
-  if [[ $rc -eq 0 && -n "$out" ]]; then
-    version="$(printf '%s\n' "$out" | head -1)"
-    version="$(sanitize_probe "$version")"
-    emit_check "wheel" "ok" 1 "$cand" "Python CLI answers: $version" ""
-  elif [[ -e "$cand" ]]; then
-    emit_check "wheel" "broken" 1 "$cand" "fno-py exists but --version failed (rc=$rc)." \
-      "run this script with --repair to reinstall the wheel"
-  else
-    emit_check "wheel" "missing" 1 "" "the Python CLI (fno-py) is not installed." \
-      "run this script with --repair, or: uv tool install --force --compile-bytecode fno"
-  fi
-}
-
 check_frontdoor() {
   local cand out rc
-  cand=""
-  if [[ -n "$TOOL_DIR" && -x "$TOOL_DIR/fno/bin/fno" ]]; then
-    cand="$TOOL_DIR/fno/bin/fno"
-  elif [[ -n "$TOOL_BIN" && -x "$TOOL_BIN/fno" ]]; then
-    cand="$TOOL_BIN/fno"
-  else
-    cand="$(command -v fno 2>/dev/null || true)"
-  fi
+  cand="$(first_executable fno || command -v fno 2>/dev/null || true)"
   if [[ -z "$cand" ]]; then
-    emit_check "frontdoor" "missing" 1 "" "the Rust front door (the 'fno' mux binary) is not installed; the wheel that carries it is the repair." \
-      "run this script with --repair"
+    emit_check "frontdoor" "missing" 1 "" "the fno front door is not installed (looked in $BIN_DIR, $LINK_DIR and ~/.cargo/bin)." \
+      "run this script with --repair, or: curl -fsSL fno.sh | sh"
     return 0
   fi
-  # `mux ls` is the discriminator: the Python CLI has no mux command and fails
-  # fast, so rc 0 (answered) or 124 (our bound fired on a wedged socket - it
-  # still proves the Rust front door is present, same reading as the
+  # `mux ls` is the discriminator: a foreign `fno` has no mux command and
+  # fails fast, so rc 0 (answered) or 124 (our bound fired on a wedged socket -
+  # it still proves the front door is present, same reading as the
   # session-start hook).
   run_bounded 3 "$cand" mux ls --json >/dev/null 2>&1; rc=$?
   if [[ $rc -ne 0 && $rc -ne 124 ]]; then
-    emit_check "frontdoor" "broken" 1 "$cand" "exists but 'mux ls --json' failed (rc=$rc); a non-mux 'fno' may shadow the front door." \
-      "run this script with --repair, or: cargo install fno"
+    emit_check "frontdoor" "broken" 1 "$cand" "exists but 'mux ls --json' failed (rc=$rc); a foreign 'fno' may shadow the front door." \
+      "run this script with --repair"
     return 0
   fi
   out="$(run_bounded 5 "$cand" --version 2>&1)"; rc=$?
   if [[ $rc -eq 0 && -n "$out" ]]; then
-    emit_check "frontdoor" "ok" 1 "$cand" "front door answers mux ls and forwards --version: $(sanitize_probe "$(printf '%s\n' "$out" | head -1)")" ""
+    emit_check "frontdoor" "ok" 1 "$cand" "front door answers mux ls and --version: $(sanitize_probe "$(printf '%s\n' "$out" | head -1)")" ""
   else
-    emit_check "frontdoor" "broken" 1 "$cand" "mux answered but --version did not forward (rc=$rc)." \
-      "run this script with --repair to reinstall the wheel"
+    emit_check "frontdoor" "broken" 1 "$cand" "mux answered but --version failed (rc=$rc)." \
+      "run this script with --repair"
   fi
 }
 
 check_agents() {
   local bin missing="" found_first="" p
   for bin in fno-agents fno-agents-daemon fno-agents-worker; do
-    p=""
-    if [[ -n "$TOOL_BIN" && -x "$TOOL_BIN/$bin" ]]; then
-      p="$TOOL_BIN/$bin"
-    elif [[ -n "${HOME:-}" && -x "$HOME/.cargo/bin/$bin" ]]; then
-      p="$HOME/.cargo/bin/$bin"
-    fi
+    p="$(first_executable "$bin" || true)"
     if [[ -z "$p" ]]; then
       missing="${missing:+$missing, }$bin"
     elif [[ -z "$found_first" ]]; then
@@ -221,7 +160,7 @@ check_agents() {
   if [[ -z "$missing" ]]; then
     emit_check "fno-agents" "ok" 1 "${found_first%/*}" "all three agent binaries resolve." ""
   else
-    emit_check "fno-agents" "missing" 1 "" "missing: $missing. The wheel bundles them; a Python-only source install does not." \
+    emit_check "fno-agents" "missing" 1 "" "missing: $missing. The release tarball carries them." \
       "run this script with --repair"
   fi
 }
@@ -229,21 +168,16 @@ check_agents() {
 PATH_STATE="unknown"
 check_path() {
   local fix="" detail=""
-  if [[ -z "$TOOL_BIN" ]]; then
-    emit_check "path" "unknown" 0 "" "no uv tool bin dir resolved; PATH state unknowable." ""
-    PATH_STATE="unknown"
-    return 0
-  fi
   case ":${PATH:-}:" in
-    *":$TOOL_BIN:"*)
-      emit_check "path" "ok" 0 "$TOOL_BIN" "the tool bin dir is on PATH." ""
+    *":$LINK_DIR:"*)
+      emit_check "path" "ok" 0 "$LINK_DIR" "the link dir is on PATH." ""
       PATH_STATE="ok"
       return 0
       ;;
   esac
-  fix="export PATH=\"$TOOL_BIN:\$PATH\""
-  detail="for this session, or run 'uv tool update-shell' yourself to edit the shell profile (this script never edits rc files)."
-  emit_check "path" "missing" 0 "$TOOL_BIN" "$detail" "$fix"
+  fix="export PATH=\"$LINK_DIR:\$PATH\""
+  detail="for this session, or add it to your shell profile yourself (this script never edits rc files)."
+  emit_check "path" "missing" 0 "$LINK_DIR" "$detail" "$fix"
   PATH_STATE="missing"
 }
 
@@ -268,7 +202,7 @@ check_rust() {
   local out rc p
   p="$(command -v cargo 2>/dev/null || true)"
   if [[ -z "$p" ]]; then
-    emit_check "rust" "optional_missing" 0 "" "no cargo; only the --from-source route needs it (the wheel ships the binaries)." \
+    emit_check "rust" "optional_missing" 0 "" "no cargo; only the --from-source route needs it (the release tarball ships the binaries)." \
       "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
     return 0
   fi
@@ -284,9 +218,6 @@ check_rust() {
 run_all_checks() {
   CHECKS_JSON=""
   READY=1
-  TOOL_DIR=""; TOOL_BIN=""
-  check_uv
-  check_wheel      # resolves TOOL_DIR/TOOL_BIN as a side effect
   check_frontdoor
   check_agents
   check_path
@@ -312,10 +243,9 @@ usage: scripts/install/bootstrap.sh [--repair | --from-source DIR | --help]
   (no flag)        report every prerequisite as JSON on stdout; exit 0 = ready
   --repair         run the plugin's own installer (.claude-plugin/postinstall.sh),
                    then re-report. Never edits shell rc files.
-  --from-source DIR  build+install from a checkout: the Python CLI via uv from
-                   DIR/cli, then cargo install of DIR/crates/fno and
-                   DIR/crates/fno-agents. Prints the plugin-registration step;
-                   never runs it.
+  --from-source DIR  build+install from a checkout: cargo install of
+                   DIR/crates/fno and DIR/crates/fno-agents. Prints the
+                   plugin-registration step; never runs it.
 EOF
 }
 
@@ -332,8 +262,8 @@ mode_repair() {
     EXTRA_JSON=',"repair":{"ran":false,"installer_exit":127}'
     return 0
   fi
-  # FNO_NO_MODIFY_PATH travels through to fno.sh (postinstall's no-uv
-  # delegation) so a repair can never edit a shell profile behind the user's
+  # FNO_NO_MODIFY_PATH travels through to fno.sh (postinstall's fallback)
+  # so a repair can never edit a shell profile behind the user's
   # back. The profile command is reported, not run.
   FNO_NO_MODIFY_PATH=1
   export FNO_NO_MODIFY_PATH
@@ -352,23 +282,12 @@ mode_repair() {
 mode_from_source() {
   local checkout="$1" rc
   MODE="from-source"
-  for f in cli/pyproject.toml crates/fno/Cargo.toml crates/fno-agents/Cargo.toml; do
+  for f in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml; do
     if [[ ! -f "$checkout/$f" ]]; then
       die "--from-source: $checkout does not look like an fno checkout (missing $f)."
     fi
   done
-  if ! resolve_uv; then
-    say "from-source needs uv; none found."
-    EXTRA_JSON=',"from_source":{"ran":false,"reason":"uv missing"}'
-    return 0
-  fi
   local actions=""
-  say "from-source: installing the Python CLI from $checkout/cli ..."
-  if run_bounded 600 "$UV_CALL" tool install --force --compile-bytecode "$checkout/cli" >&2; then
-    actions="$actions\"install the Python CLI from checkout cli via uv\""
-  else
-    say "from-source: the uv install step failed (rc=$?)."
-  fi
   if command -v cargo >/dev/null 2>&1; then
     say "from-source: cargo install crates/fno (the front door; bounded at 900s) ..."
     if run_bounded 900 cargo install --locked --path "$checkout/crates/fno" >&2; then
@@ -383,7 +302,7 @@ mode_from_source() {
       say "from-source: cargo install crates/fno-agents failed."
     fi
   else
-    say "from-source: no cargo; the Rust binaries were not built. The Python CLI works as fno-py."
+    say "from-source: no cargo; nothing was built. Install Rust (https://rustup.rs) and re-run."
   fi
   # Registering the checkout as the harness's plugin edits harness config, so
   # it is printed for the user, never run here.
@@ -400,13 +319,7 @@ run_setup_once() {
   # the setup pass too, because its harness-wiring step is the same work.
   [ -n "${FNO_NO_WIRE:-}" ] && return 0
   local cand=""
-  if [[ -n "$TOOL_DIR" && -x "$TOOL_DIR/fno/bin/fno" ]]; then
-    cand="$TOOL_DIR/fno/bin/fno"
-  elif [[ -n "$TOOL_BIN" && -x "$TOOL_BIN/fno" ]]; then
-    cand="$TOOL_BIN/fno"
-  else
-    cand="$(command -v fno 2>/dev/null || true)"
-  fi
+  cand="$(first_executable fno || command -v fno 2>/dev/null || true)"
   [[ -n "$cand" ]] || return 0
   local yes=""
   [[ -n "${FNO_YES:-}" ]] && yes="--yes"
@@ -449,7 +362,7 @@ main() {
   run_all_checks
 
   # The one run-once setup, best effort and only when the CLI landed ready:
-  # after a repair the wheel carries the command, its own done markers keep
+  # after a repair the binaries carry the command, its own done markers keep
   # reruns cheap, and FNO_YES / --yes passes through.
   if [[ "$READY" == 1 ]]; then
     run_setup_once

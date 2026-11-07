@@ -7,13 +7,12 @@
 //! - `fno --server <socket>` -> mux server (internal; what the client spawns)
 //! - `fno mux server [--server <name>]` -> mux server (public, scriptable)
 //! - `fno mux ls | attach <name> | kill-server [<name>]` -> server management
-//! - anything else -> forward to the provisioned Python CLI (`bootstrap`)
+//! - `fno --help`, `fno --version` and the group menus -> answered here
+//! - every other command -> its native classifier, or a usage refusal
 //!
 //! The leading `--server`/`--session` pair is intercepted ONLY as the exact
-//! pair `[flag, <name>]` (Locked 7): every other shape is MuxUsage, never a
-//! silent forward to Python - the Python namespace only carries a deprecated
-//! per-subcommand alias, never a leading flag, so the interception is
-//! collision-free. A `--server` value containing `/` keeps the internal
+//! pair `[flag, <name>]` (Locked 7): every other shape is MuxUsage. A
+//! `--server` value containing `/` keeps the internal
 //! ServerSocket role (what `client.rs` spawns with an absolute path); any
 //! other value is the attach.
 
@@ -497,8 +496,15 @@ enum Role {
     /// `fno backlog publish --local-snapshot`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
-    /// Any other args: the Python-CLI forwarding path.
-    Forward,
+    /// `fno --help [--all]`: the root menu.
+    RootHelp(bool),
+    /// `fno --version`: `fno <crate version>`.
+    RootVersion,
+    /// A group menu (`fno config`, `fno do --help`, ...), already rendered.
+    GroupHelp(String),
+    /// `fno do delivery evaluate ...`: the tail rides to
+    /// `fno-agents delivery-evaluate`, which owns the flags and defaults.
+    DoDelivery(Vec<OsString>),
 }
 
 /// Exit an `fno mux` command, surfacing any config warning recorded while the
@@ -1349,6 +1355,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     #[cfg(not(test))]
     fno::doctor_cost::default_report(args);
     use cli_args::FrontDoor;
+    // The group menus no other classifier claims answer first.
+    if let Some(menu) = fno::group_help::classify(args) {
+        return Role::GroupHelp(menu);
+    }
+    if args.len() >= 3 && args[0] == "do" && args[1] == "delivery" && args[2] == "evaluate" {
+        return Role::DoDelivery(args[3..].to_vec());
+    }
     // The event family is classified before the remaining doctor routes.
     if let Some(rest) = fno::doctor_cost::classify(args) {
         return Role::DoctorCost(rest);
@@ -1663,7 +1676,8 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
         None => {}
     }
     match cli_args::classify(args) {
-        FrontDoor::Forward => Role::Forward,
+        FrontDoor::RootHelp { all } => Role::RootHelp(all),
+        FrontDoor::RootVersion => Role::RootVersion,
         FrontDoor::Usage { message } => {
             // A removed command is refused BY NAME, before the catch-all
             // refusal turns it into an anonymous message (same order the
@@ -1826,6 +1840,17 @@ fn main() {
     if args.get(mail_at).and_then(|a| a.to_str()) == Some("mail") {
         args.insert(mail_at, OsString::from("agents"));
     }
+    // The bridge: a wheel install that has not yet moved
+    // runs the move here and execs the binary install's front door with this
+    // argv, so every door below - including this one - runs on the binary. A
+    // failed move prints one line and lets this command run on the wheel.
+    fno::doctor_update::first_run_move(&args);
+    // The floor gate (change 5): a version below min_supported refuses every
+    // command except the update doors, naming the one fix.
+    if let Some(line) = fno::doctor_update::floor_refusal(&args) {
+        eprintln!("{line}");
+        std::process::exit(2);
+    }
     // The worktree family's door claims before any forwarding: the Python
     // mounts die with the family port, so these argv shapes must answer
     // natively or not at all.
@@ -1919,7 +1944,23 @@ fn main() {
         std::env::remove_var(fno::remote_target::MAIL_HOP_ENV);
     }
     match role {
-        Role::Forward => bootstrap::forward(&args),
+        Role::RootHelp(all) => {
+            print!("{}", fno::group_help::root(all));
+            std::process::exit(0);
+        }
+        Role::RootVersion => {
+            println!("fno {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
+        Role::GroupHelp(menu) => {
+            print!("{menu}");
+            std::process::exit(0);
+        }
+        Role::DoDelivery(rest) => std::process::exit(fno_agents_exec(
+            "fno do delivery evaluate",
+            &["delivery-evaluate"],
+            &rest,
+        )),
         Role::AgentsClient(argv) => std::process::exit(fno_agents_exec("fno agents", &[], &argv)),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
@@ -2552,22 +2593,22 @@ mod tests {
         assert_eq!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
         // `stub-manifest` joined the native claim: the family commands
         // route through the TargetFamily door, no longer the wheel.
-        assert_ne!(
+        assert!(!matches!(
             decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false),
-            Role::Forward
-        );
+            Role::MuxUsage(_)
+        ));
         // The deprecated bare spelling re-claimed: it rides to the native
         // door once the Move row's Python group dies with the wheel.
-        assert_ne!(
+        assert!(!matches!(
             decide_role(&os(&["stub-manifest", "write", "--node", "x-1"]), false),
-            Role::Forward
-        );
+            Role::MuxUsage(_)
+        ));
         // The bare `pr stub-manifest` spelling puts the marker one word
         // earlier than the grouped form; both claim, neither forwards.
-        assert_ne!(
+        assert!(!matches!(
             decide_role(&os(&["pr", "stub-manifest", "list"]), false),
-            Role::Forward
-        );
+            Role::MuxUsage(_)
+        ));
         assert_eq!(
             decide_role(&os(&["pr", "stub-manifest", "list"]), false),
             decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false)
@@ -2832,9 +2873,29 @@ mod tests {
             decide_role(&os(&["backlog", "list", "ready"]), true),
             Role::Backlog
         );
-        assert_eq!(decide_role(&os(&["--help"]), false), Role::Forward);
-        // `fno --version` is a Python-forwarded callback, NOT the mux self-report.
-        assert_eq!(decide_role(&os(&["--version"]), false), Role::Forward);
+        // The root help and version answer natively; no argv forwards.
+        assert_eq!(decide_role(&os(&["--help"]), false), Role::RootHelp(false));
+        assert_eq!(
+            decide_role(&os(&["-h", "--all"]), false),
+            Role::RootHelp(true)
+        );
+        assert_eq!(decide_role(&os(&["--version"]), false), Role::RootVersion);
+        assert!(matches!(
+            decide_role(&os(&["do", "--help"]), false),
+            Role::GroupHelp(_)
+        ));
+        assert_eq!(
+            decide_role(&os(&["do", "delivery", "evaluate", "--json"]), false),
+            Role::DoDelivery(os(&["--json"]))
+        );
+        assert!(matches!(
+            decide_role(&os(&["config", "no-such-leaf"]), false),
+            Role::MuxUsage(m) if m.contains("Run fno config --help")
+        ));
+        assert!(matches!(
+            decide_role(&os(&["--wat"]), false),
+            Role::MuxUsage(_)
+        ));
     }
 
     #[test]

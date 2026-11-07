@@ -329,7 +329,7 @@ fn normalize(raw: &str, root: &Path) -> String {
     // and drops the block entirely for missing-argument errors. The leaf
     // contract is the diagnostic sentence, so a usage block reduces both legs
     // to the sentence after it and a leading `Error: ` comes off. The block
-    // names each leg's own argv[0] (fno-py vs fno), which goes with it.
+    // names each leg's own argv[0], which goes with it.
     let raw = if raw.contains("Usage: ") {
         match raw.rfind("\n\n") {
             Some(pos) => raw[pos + 2..].to_string(),

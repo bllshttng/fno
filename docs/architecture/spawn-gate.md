@@ -91,7 +91,7 @@ A worker that finished stops charging its lead. Two facts mark it finished: its 
 
 ## The exit-code allocation table
 
-One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py` and is mirrored in `spawn_gate.rs`. `cli/tests/unit/test_exit_code_allocation.py` keeps it unique. Values >= 64 claim a number once. The same NAME at the same number in both trees is byte-parity.
+One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py` and is mirrored in `spawn_gate.rs`. `tests/py/unit/test_exit_code_allocation.py` keeps it unique. Values >= 64 claim a number once. The same NAME at the same number in both trees is byte-parity.
 
 - 75 queue timeout
 - 76 no-wait

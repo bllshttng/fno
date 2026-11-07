@@ -4,7 +4,7 @@
 //! crate: the probe resolves the handle, reads the tail through per-file
 //! cursors, and decodes the answer through the same [`parse_truth_payload`]
 //! the wire always used, so the Rust list emitter reports the identical
-//! reading the Python `fno agents truth` command renders. No `fno-py` child
+//! reading the `fno agents truth` command renders. No child process
 //! starts on this path.
 //!
 //! Moved out of `claude_ask` because it answers a different question. That file

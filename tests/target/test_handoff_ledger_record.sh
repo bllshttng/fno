@@ -39,28 +39,23 @@ BIN_DIR="${TMP_DIR}/bin"; mkdir -p "$BIN_DIR"
 NODE_ID="ab-deadbeef"
 SID="hsess-001"
 CHILD_SID="00000000-0000-0000-0000-000000abc123"
-# The successor name contract IS the x-84b2 vocabulary: compute the expectation
-# through the same bridge handoff.sh mints with, else this harness certifies a
-# second copy of the shape.
-FNO_SRC="${REPO_ROOT}/cli/src"
-FNO_PYTHON=""
-for _cand in \
-  "${REPO_ROOT}/cli/.venv/bin/python" \
-  "$(command -v python3 || true)"
-do
-  [ -n "$_cand" ] && [ -x "$_cand" ] || continue
-  if PYTHONPATH="$FNO_SRC" "$_cand" -c 'import fno.cli' >/dev/null 2>&1; then
-    FNO_PYTHON="$_cand"
-    break
-  fi
-done
-[ -n "$FNO_PYTHON" ] || { fail "no interpreter can import fno.cli (cd cli && uv sync)"; exit 1; }
+# The successor name contract IS the session-name vocabulary: compute the
+# expectation through the same binary handoff.sh mints with, else this
+# harness certifies a second copy of the shape.
 # The vocabulary lives in the fno-agents binary; the sandbox stub below pins
 # FNO_AGENTS_BIN, so capture the REAL binary now for the stub to delegate the
 # naming commands to (naming is the contract under test, not a scenario input).
-# PATH is stripped for the resolution so a stale PATH-installed binary cannot
-# shadow the repo's own cargo build.
-REAL_AGENTS_BIN="$(env PATH='/usr/bin:/bin' PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.resolve_binary(); print(b or "")')"
+# The CI-built front comes first, then this checkout's own cargo build, so a
+# stale PATH-installed binary cannot shadow it.
+REAL_AGENTS_BIN=""
+for _cand in \
+  "${FNO_AGENTS_FRONT:-}" \
+  "${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents" \
+  "${REPO_ROOT}/crates/fno-agents/target/release/fno-agents" \
+  "$(command -v fno-agents || true)"
+do
+  if [ -n "$_cand" ] && [ -x "$_cand" ]; then REAL_AGENTS_BIN="$_cand"; break; fi
+done
 [ -n "$REAL_AGENTS_BIN" ] || { fail "no fno-agents binary resolves (cargo build --release -p fno-agents)"; exit 1; }
 CHILD_NAME="$("$REAL_AGENTS_BIN" status --name --source sh --command t "$NODE_ID" --slug work --discriminator g2)"
 CHILD_NAME="${CHILD_NAME##*$'\n'}"

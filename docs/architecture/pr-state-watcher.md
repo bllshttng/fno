@@ -52,7 +52,7 @@ The coupling is enforced on both ends: arming `auto_merge.grant = dispatch` thro
 
 The review poll fires `claude --print --output-format json --dangerously-skip-permissions "/fno:ship pr check <n>"`, run with `cwd` set to the PR's repo, default model Haiku. The plist carries `PATH` (captured at install time) + `HOME` in `EnvironmentVariables`. Authentication rides the macOS keychain OAuth, so no API key is injected, and `--bare` is never used.
 
-A merge is not a headless claude fire. When the origin session is live, the mechanical `fno do pr ritual <n> --autonomous` command is warm-injected there. Otherwise it runs as a bounded `fno-py` subprocess from the repo's canonical root. The command owns the ritual's mechanical legs and its own conditional headless judgment one-shot. The watcher never wraps the ritual in a `/fno:ship pr merged` LLM session, and it never spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting. That receipt is attribution and correlation only, and route selection never reads it.
+A merge is not a headless claude fire. When the origin session is live, the mechanical `fno do pr ritual <n> --autonomous` command is warm-injected there. Otherwise it runs as a bounded `fno` subprocess from the repo's canonical root. The command owns the ritual's mechanical legs and its own conditional headless judgment one-shot. The watcher never wraps the ritual in a `/fno:ship pr merged` LLM session, and it never spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting. That receipt is attribution and correlation only, and route selection never reads it.
 
 ## The park sweep
 

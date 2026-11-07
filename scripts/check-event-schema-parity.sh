@@ -44,19 +44,10 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ---------------------------------------------------------------------------
-# Python interpreter: prefer the cli venv's python (which has fno
-# installed) over the system python3. The cli venv is created by `uv sync`
-# in cli/. Fall back to `python3` if the venv isn't present (e.g. CI after
-# `uv sync` installs to PATH via uv's managed env or the wheel is installed
-# into the system python).
+# Python interpreter: the system python3 reads the JSON. The registry block
+# also wants PyYAML, and says so when it is absent.
 # ---------------------------------------------------------------------------
-if [[ -x "$REPO_ROOT/cli/.venv/bin/python" ]]; then
-    PYTHON3="$REPO_ROOT/cli/.venv/bin/python"
-elif [[ -x "$REPO_ROOT/cli/.venv/bin/python3" ]]; then
-    PYTHON3="$REPO_ROOT/cli/.venv/bin/python3"
-else
-    PYTHON3="python3"
-fi
+PYTHON3="${PYTHON3:-python3}"
 
 # Wall-clock bound for the two emitter invocations below. Unlike the hooks that
 # share this helper, this script is a gate: a missing lib must fail loudly here

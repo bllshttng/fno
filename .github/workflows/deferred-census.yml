@@ -92,7 +92,7 @@ jobs:
             echo "### Deferred census: a quarantined harness is passing"
             echo
             echo "One or more entries in \`_DISCOVERY_DEFERRED\`"
-            echo "(\`cli/src/fno/test_cmd.py\`) passed. A green entry there is"
+            echo "(\`crates/fno-agents/src/test_smoke_registry.rs\`) passed. A green entry there is"
             echo "silent coverage loss: the test works and nothing runs it."
             echo
             echo "Fix: delete the named line(s) from \`_DISCOVERY_DEFERRED\`."

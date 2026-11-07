@@ -284,8 +284,7 @@ fn a_stuck_finding_alone_pages_and_dedupes() {
     let finding = fno_agents::stuck_work::Finding {
         kind: "hung_command",
         key: "hung:66853@1788520000".to_string(),
-        line: "hung command pid 66853 3h29m fno-py backlog advance --loose (over 1800s)"
-            .to_string(),
+        line: "hung command pid 66853 3h29m fno backlog advance --loose (over 1800s)".to_string(),
         root: None,
         holder: None,
         claim_key: None,

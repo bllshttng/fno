@@ -110,6 +110,26 @@ jobs:
               "fno-agents" "fno-agents-daemon" "fno-agents-worker" \
             -C "$PWD/crates/fno/target/${{ matrix.target.rust-target }}/release" "fno"
 
+      # macos-x64 is cross-built on an Apple Silicon runner and cannot run its
+      # binaries here; the arm64 leg proves the identical packaging.
+      - name: fno.sh smoke (the installer adopts this tarball)
+        if: matrix.target.name != 'macos-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tgz="fno-agents-${{ matrix.target.name }}.tar.gz"
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum "$tgz" > "$tgz.sha256"; else shasum -a 256 "$tgz" > "$tgz.sha256"; fi
+          bash tests/smoke/fno_sh_smoke.sh "$tgz"
+          rm -f "$tgz.sha256"
+
+      - name: brew-channel smoke (the formula installs this tarball)
+        if: matrix.target.name == 'macos-arm64'
+        shell: bash
+        run: |
+          # CI=true gates the INSTALL tier on: a local-tarball formula is brew
+          # installed, tested and uninstalled. The structural tier always runs.
+          bash tests/smoke/brew_formula_smoke.sh "fno-agents-${{ matrix.target.name }}.tar.gz"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:

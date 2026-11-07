@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin, wheel-platform: "" }
+          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin, wheel-platform: macosx_11_0_arm64 }
           # macos-x64 is cross-compiled on the Apple Silicon runner (the native
           # Intel macos-13 image is retired). The arm64 leg infers its tag from
           # the host; this leg must set wheel-platform explicitly, else the build
@@ -108,100 +108,67 @@ jobs:
         working-directory: crates/fno
         run: cargo build --release --target ${{ matrix.target.rust-target }} --bin fno
 
-      - name: Stage binaries for the wheel build hook
+      - name: Stage binaries for the bridge wheel
         shell: bash
         run: |
-          mkdir -p cli/src/fno/_bin
-          # US6 + x-538e: stage the fno front door (the mux binary that owns
-          # `fno` on PATH) plus the client + daemon + worker so the wheel is
-          # binary-complete - the advertised `fno` command AND daemon-backed
-          # commands work on a pip-only machine with no second install. The build hook
-          # hard-fails if any is missing (a partial set never ships).
+          mkdir -p packaging/pypi/staged
+          # The bridge wheel ships the four binaries and nothing else. The cp set is all-or-nothing:
+          # a missing binary fails this step and names itself (AC2-ERR).
           cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
-             "cli/src/fno/_bin/fno"
+             "packaging/pypi/staged/fno"
           for b in fno-agents fno-agents-daemon fno-agents-worker; do
             cp "crates/fno-agents/target/${{ matrix.target.rust-target }}/release/${b}" \
-               "cli/src/fno/_bin/${b}"
+               "packaging/pypi/staged/${b}"
           done
 
       - name: Build wheel
-        working-directory: cli
-        # FNO_AGENTS_WHEEL_PLATFORM forces the manylinux tag on Linux (PyPI rejects
-        # plain linux_* tags; the musl-static binary is portable enough to claim
-        # manylinux). Empty on mac/windows -> the hook infers the platform tag.
-        env:
-          FNO_AGENTS_WHEEL_PLATFORM: ${{ matrix.target.wheel-platform }}
+        working-directory: packaging/pypi
+        shell: bash
         run: uv build --wheel
 
-      - name: Note - run-the-binary smokes skipped on the cross-compiled x86_64 leg
+      - name: Retag the wheel to its platform tag
+        # The TOML-only build is tag-less (py3-none-any) until this step: the
+        # `wheel` CLI renames the file and rewrites its WHEEL + RECORD tags in
+        # place, so PyPI accepts it and uv picks it for this platform.
+        working-directory: packaging/pypi
+        shell: bash
+        run: |
+          uvx wheel tags --platform-tag '${{ matrix.target.wheel-platform }}' --remove dist/*.whl
+          ls -1 dist
+
+      - name: Note - the bridge smoke is skipped on the cross-compiled x86_64 leg
         if: matrix.target.name == 'macos-x64'
         run: |
           echo "macos-x64 is cross-compiled on an Apple Silicon runner; its x86_64"
-          echo "binaries cannot run natively here (Rosetta-on-arm is not the real"
-          echo "target). The macos-arm64 leg validates the identical packaging"
-          echo "mechanism; the x86_64 wheel is smoke-tested on real Intel hardware"
-          echo "after publish. The wheel is still built, tagged, and uploaded below."
+          echo "binaries cannot run natively here. The macos-arm64 leg validates the"
+          echo "identical packaging. The wheel is still built, tagged, and uploaded below."
 
-      - name: Clean-machine smoke (binaries on PATH, commands run, clone-only commands degrade)
+      - name: Bridge-wheel smoke (uv installs the four binaries, no Python CLI)
         if: matrix.target.name != 'macos-x64'
-        working-directory: cli
+        working-directory: packaging/pypi
         shell: bash
         run: |
-          # US5/US6: the freshly built wheel must be binary-complete (all three
-          # binaries), run the internalized/folded commands from in-package code,
-          # and degrade the clone-only commands - on a clean machine with no clone.
-          # Per-command pass/fail; fails the release before PyPI on any miss.
+          # The bridge wheel carries only the four Rust binaries (law
+          # d-df1f42c1). Install it into a scratch HOME the way an old wheel
+          # user's `uv tool upgrade fno` would, then prove the front door and
+          # fno-agents answer and no Python CLI rides along.
+          set -euo pipefail
           wheel="$(ls dist/*.whl | head -1)"
-          bash tests/smoke/clean_machine_smoke.sh "$wheel"
-
-      - name: Cargo-channel smoke (cargo install fno self-bootstraps to the wheel)
-        if: matrix.target.name != 'macos-x64'
-        working-directory: cli
-        shell: bash
-        run: |
-          # ab-4040eee8 US6: the cargo front door must self-bootstrap. cargo
-          # install the shim, then a first `fno` run provisions THIS freshly
-          # built wheel (FNO_BOOTSTRAP_WHEEL - the by-name PyPI path is the
-          # launch gate) and lands all three binaries on PATH. Per-check
-          # pass/fail; fails the release on any miss.
-          wheel="$(ls dist/*.whl | head -1)"
-          bash tests/smoke/cargo_bootstrap_smoke.sh "$wheel"
-
-      - name: fno.sh-channel smoke (curl one-liner provisions the wheel)
-        if: matrix.target.name != 'macos-x64'
-        working-directory: cli
-        shell: bash
-        run: |
-          # ab-f49b54c1 US6: the fno.sh front door must provision end to end.
-          # Run the repo copy of scripts/install/fno.sh against THIS freshly
-          # built wheel (FNO_INSTALL_WHEEL - the by-name PyPI path is the launch
-          # gate) and land all three binaries on the uv tool bin. On the linux
-          # legs the smoke's `sh "$INSTALLER"` is dash (Ubuntu /bin/sh -> dash),
-          # so this also exercises the installer under a strict POSIX sh
-          # (AC6-ERR's dynamic dash execution). Per-check pass/fail; fails the
-          # release on any miss.
-          wheel="$(ls dist/*.whl | head -1)"
-          bash tests/smoke/fno_sh_smoke.sh "$wheel"
-
-      - name: brew-channel smoke (formula installs the wheel, binaries on PATH)
-        if: startsWith(matrix.target.name, 'macos') && matrix.target.name != 'macos-x64'
-        working-directory: cli
-        shell: bash
-        run: |
-          # ab-d59d219a US5: the brew front door must install end to end. macOS
-          # only (brew is the channel's host). CI=true gates the INSTALL tier on,
-          # so a concrete local-wheel formula (url=file://<this freshly built
-          # wheel>, real sha256, the same explicit fno-agents symlink) is
-          # `brew install`ed, `brew test`ed, its three binaries asserted on the
-          # keg bin, and `brew uninstall`ed clean. The structural tier
-          # (ruby -c + element asserts + brew style) always runs. The by-name
-          # `brew install <owner>/fno/fno` + the full `--new` audit are the
-          # PyPI-publish + tap-creation launch gate. Fails the release on any miss.
-          wheel="$(ls dist/*.whl | head -1)"
-          bash tests/smoke/brew_formula_smoke.sh "$wheel"
+          scratch="$(mktemp -d)"
+          export HOME="$scratch" UV_TOOL_DIR="$scratch/tools" UV_TOOL_BIN_DIR="$scratch/bin"
+          uv tool install "$wheel"
+          for b in fno fno-agents fno-agents-daemon fno-agents-worker; do
+            [ -x "$UV_TOOL_BIN_DIR/$b" ] || { echo "missing $b in the tool bin"; exit 1; }
+          done
+          if ls "$UV_TOOL_DIR/fno/bin" | grep -q '^fno-py$'; then
+            echo "the bridge wheel still installs a Python CLI"; exit 1
+          fi
+          "$UV_TOOL_BIN_DIR/fno-agents" --version
+          # FNO_STATE_DIR keeps the front door's first-run move inside the scratch HOME.
+          FNO_STATE_DIR="$scratch/.fno" "$UV_TOOL_BIN_DIR/fno" --version
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.target.name }}
-          path: cli/dist/*.whl
+          path: packaging/pypi/dist/*.whl

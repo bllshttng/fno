@@ -15,34 +15,23 @@
 #
 # Tests run by sourcing graph-resolve.sh in a subshell so each case starts
 # clean, and pointing GRAPH_JSON at a temporary graph.db anchor seeded from
-# tests/fixtures/graph-fuzzy.json. The
-# `fno` package must be importable for the resolver to call resolve_id;
-# we use `uv run` from the cli/ dir to provide that.
+# tests/fixtures/graph-fuzzy.json. The resolver calls the native node
+# matcher, so the harness needs only the fno-agents binary.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESOLVER="$REPO_ROOT/scripts/lib/graph-resolve.sh"
-CLI_DIR="$REPO_ROOT/cli"
 
 PASS=0
 FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 
-# Skip cleanly when uv isn't available - the harness needs uv to make the
-# fno package importable inside the python heredoc embedded in
-# graph-resolve.sh. The legacy fallback path (rc=5) is exercised by a
-# dedicated test below that intentionally bypasses uv.
-if ! command -v uv >/dev/null 2>&1; then
-    echo "SKIP: uv not installed; graph-resolve shell tests require it"
-    exit 0
-fi
-
 FIXTURE_HOME=$(mktemp -d -t graph-resolve-store.XXXXXX)
 FIXTURE="$FIXTURE_HOME/graph.json"
-cat "$SCRIPT_DIR/fixtures/graph-fuzzy.json" | uv run --project "$CLI_DIR" python "$CLI_DIR/tests/fixtures/graph_seed.py" "$FIXTURE"
+cat "$SCRIPT_DIR/fixtures/graph-fuzzy.json" | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$FIXTURE"
 
 # Run resolve_arg in a subshell so env / sourced state never leaks across
 # tests. The arg and any extra env vars are passed via the environment
@@ -54,7 +43,7 @@ run_resolve() {
     local arg="$1"
     local extra_env="${2:-}"
     (
-        cd "$CLI_DIR" || exit 99
+        cd "$REPO_ROOT" || exit 99
         export GRAPH_JSON="$FIXTURE"
         export RUN_RESOLVE_ARG="$arg"
         # Parse extra_env as one or more KEY=VALUE pairs, exporting each
@@ -68,10 +57,9 @@ run_resolve() {
                 export "$pair"
             done
         fi
-        # Use uv run to ensure the fno package is on PYTHONPATH.
         # The script body is a literal single-quoted string; the arg is
         # read from RUN_RESOLVE_ARG via the environment.
-        uv run --quiet bash -c 'source "$0" && resolve_arg "$RUN_RESOLVE_ARG"' "$RESOLVER" 2>"$STDERR_CAPTURE"
+        bash -c 'source "$0" && resolve_arg "$RUN_RESOLVE_ARG"' "$RESOLVER" 2>"$STDERR_CAPTURE"
     )
 }
 
@@ -188,9 +176,9 @@ fi
 echo "test 8: missing graph store soft-fails"
 : > "$STDERR_CAPTURE"  # reset
 result=$(
-    cd "$CLI_DIR" || exit 99
+    cd "$REPO_ROOT" || exit 99
     export GRAPH_JSON="/tmp/nonexistent-graph-$$-$RANDOM.json"
-    uv run --quiet bash -c "source '$RESOLVER' && resolve_arg 'ab-9728b70b'" 2>"$STDERR_CAPTURE"
+    bash -c "source '$RESOLVER' && resolve_arg 'ab-9728b70b'" 2>"$STDERR_CAPTURE"
 )
 if [[ "$result" == "ab-9728b70b" ]]; then
     pass "missing graph store echoes arg unchanged"

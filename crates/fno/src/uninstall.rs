@@ -104,6 +104,12 @@ fn env_dir(var: &str, default: &str) -> PathBuf {
         .unwrap_or_else(|| home().join(default))
 }
 
+/// The cache the deleted wheel bootstrap wrote (`fno-bootstrap` under the
+/// XDG cache). Old installs still carry it.
+fn legacy_bootstrap_cache() -> PathBuf {
+    env_dir("XDG_CACHE_HOME", ".cache").join("fno-bootstrap")
+}
+
 fn on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(name))
@@ -553,10 +559,7 @@ fn discover() -> Vec<Item> {
             );
         }
     }
-    if crate::bootstrap::sentinel_dir()
-        .join(UV_INSTALLED_MARKER)
-        .is_file()
-    {
+    if legacy_bootstrap_cache().join(UV_INSTALLED_MARKER).is_file() {
         // uv has no self-uninstall; its documented removal deletes the two
         // binaries its installer wrote.
         if let Some(dir) = uv_install_dir() {
@@ -576,7 +579,7 @@ fn discover() -> Vec<Item> {
             Action::Run(argv(&["brew", "uninstall", "fno"])),
         );
     }
-    let sentinel = crate::bootstrap::sentinel_dir();
+    let sentinel = legacy_bootstrap_cache();
     if sentinel.is_dir() {
         add("bootstrap cache".into(), Action::RemovePath(sentinel));
     }

@@ -633,12 +633,6 @@
       "default": 4,
       "title": "Max Prs Per Epic",
       "type": "integer"
-     },
-     "python_repair_added_lines": {
-      "default": 30,
-      "minimum": 0,
-      "title": "Python Repair Added Lines",
-      "type": "integer"
      }
     },
     "title": "BlueprintBlock",
@@ -3341,6 +3335,9 @@
      },
      "eval_events": {
       "$ref": "#/$defs/TelemetryEvalEventsBlock"
+     },
+     "install_count": {
+      "$ref": "#/$defs/TelemetryInstallCountBlock"
      }
     },
     "title": "TelemetryBlock",
@@ -3678,6 +3675,17 @@
      }
     },
     "title": "WorktreeBlock",
+    "type": "object"
+   },
+   "TelemetryInstallCountBlock": {
+    "properties": {
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "title": "TelemetryInstallCountBlock",
     "type": "object"
    }
   },
@@ -4209,15 +4217,6 @@
    "question": "",
    "default_source": "",
    "doc": "Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more."
-  },
-  {
-   "path": "blueprint.python_repair_added_lines",
-   "type": "int",
-   "default": 30,
-   "wizard": "advanced",
-   "question": "",
-   "default_source": "",
-   "doc": "Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh."
   },
   {
    "path": "plan.default_diff_budget",
@@ -7129,6 +7128,15 @@
    "question": "",
    "default_source": "",
    "doc": "Settings schema version; managed by fno, not hand-set."
+  },
+  {
+   "path": "telemetry.install_count.enabled",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing."
   }
  ]
 }

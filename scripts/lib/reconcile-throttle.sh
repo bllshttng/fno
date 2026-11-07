@@ -27,10 +27,13 @@ _reconcile_resolve_fno() {
         echo "fno"
         return 0
     fi
-    if [[ -x "$HOME/.local/bin/fno-py" ]]; then
-        echo "$HOME/.local/bin/fno-py"
-        return 0
-    fi
+    local bin
+    for bin in "${FNO_STATE_DIR:-$HOME/.fno}/install/bin/fno" "$HOME/.local/bin/fno"; do
+        if [[ -x "$bin" ]]; then
+            echo "$bin"
+            return 0
+        fi
+    done
     return 1
 }
 

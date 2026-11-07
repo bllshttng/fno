@@ -1,4 +1,4 @@
-Usage: fno-py backlog idea [OPTIONS] TITLE
+Usage: fno backlog idea [OPTIONS] TITLE
 
   Capture an idea (a plan-less backlog node) with minimal ceremony.
 

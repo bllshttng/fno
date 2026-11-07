@@ -1,64 +1,12 @@
 # Company Boundaries
 
-## Enforced layer direction
+## What the check enforces
 
-The sole layer map lives in `scripts/ci/check-company-boundaries.sh`, and this document intentionally does not duplicate it. Dependencies can point within a layer or to a lower-numbered layer, never upward. The `fno.company` package was core vocabulary; it left with the residue port, and the boundary map carries one platform layer now. The Rust `TOPOLOGIES` list in `crates/fno-agents/src/plugins/verify.rs` now owns the topology words.
+`bash scripts/ci/check-company-boundaries.sh` is the gate registered in `fno doctor test`. It enforces the pack boundary described under [Pack projections](#pack-projections). It takes an optional repository root and no mode.
 
-The check scans Python imports. Its positive control is a known-present downward edge out of the runtime layer. It reports the importing file, line, layers, and statement for every prohibited dependency.
-The current repository does not satisfy the declared map: the check reports two imports from the platform events CLI into the agents runtime, and a platform-to-runtime-to-platform layer cycle those two imports keep alive.
+The check once also scanned Python imports under `cli/src/fno/` against a declared layer map, with a strict audit and a checked-in baseline. That scan retired with the Python runtime. Its baseline had already drained to no prohibited edge and no layer cycle, and its last mapped modules (`fno.paths`, `fno.events.store_client`, `fno.rust_binary`) left with the runtime. The Rust `TOPOLOGIES` list in `crates/fno-agents/src/plugins/verify.rs` owns the topology words.
 
-### Map coverage is 35%, so a cleared finding is not automatically a removed dependency
-
-The map declares roughly a third of the Python modules under `cli/src/fno/`.
-Every run prints the live figure, so read it there rather than trusting a number in this document:
-
-```
-check-company-boundaries: map covers 153 of 431 modules (35%); 278 unmapped modules are not scanned
-```
-
-`fno.backlog`, `fno.done` and `fno.target_cli` are among the unmapped, and `layer_for` returns `None` for an unmapped module, so the scan skips those edges entirely.
-
-The consequence is load-bearing when reading a burndown: routing a call through an unmapped module clears a finding without removing the upward dependency, and so does relocating a module without also declaring it here.
-Judge a boundary change by whether the dependency disappeared, never by whether the line left the baseline.
-The three modules moved to the platform layer during the burndown below are named in the map for exactly this reason; declaring them is what puts them back under enforcement rather than into the blind spot.
-
-### Findings retired, and the two that remain
-
-Seven of the original nine prohibited imports were misplaced leaf utilities, and four of the five moves below removed a real edge:
-
-| Was | Now | Why it could move |
-|---|---|---|
-| `fno.graph._constants.RESERVED_PREFIXES` read by the deleted `fno.config` | owned by `fno.graph._constants` | a three-element frozenset whose only reader was the importing validator, deleted with the config family |
-| `fno.agents.events.emit` called by `fno backlog undefer` / `unsupersede` | `fno.graph.failure.emit_undefer_boundary` | the log is graph-owned and `fno.graph.failure` already reads it; the agents emitter was serving as a bare append-a-JSON-line helper |
-| `fno.agents.provider_resolve` | `fno.dispatch_flags` (since retired whole: the fold lives native behind route-slot's dispatch modes) | seven callers spanning every layer; the only remaining dependency was the harness-marker table, and see the caveat below |
-| `fno.agents.drive_authority` | `fno.drive_authority` | a read-only `state.json` reader whose only dependency is `fno.paths` |
-| the agents dispatch's `resolve_binary` | `fno.rust_binary` | a stdlib-only filesystem lookup |
-
-Applying this document's own test to the third row: `fno.dispatch_flags` was the one move that did not remove the dependency, only the direct spelling of it, and the module has since retired whole - the marker fold now rides the native dispatch modes of route-slot, whose identity tables live in `crates/fno-agents/src/claims.rs`.
-It imported `fno.harness_identity`, which built `LEGACY_HANDLE_RE` at import time from `fno.agents.harness_map.known_harnesses()`, so `import fno.dispatch_flags` pulled in `fno.agents`.
-That edge is now closed twice over: the identity modules left with the residue port, and the marker tables live in `crates/fno-agents/src/claims.rs` (`HARNESS_SESSION_MARKERS`), so no Python module carries the harness-name set at all.
-The runtime capability table (`fno.agents.harness_map`) asserts its keys stay in sync with the name list, so adding a harness stays a single coupled change.
-`fno.drive_authority`, `fno.rust_binary`, `fno.config` and `fno.graph.failure` were each verified to import no `fno.agents` module, eagerly or lazily.
-
-None of the moves left a re-export shim at the old path.
-A shim would keep the upward import spelling available and hide the move from the next reader.
-
-The two survivors form one finding. The `fno doctor event emit` builder stamps the sending session identity through `fno.agents.self_stamp`. It resolves spawn lineage through `fno.agents.registry`. That is platform-layer code reading agent-runtime state, and it is a genuine architectural finding rather than a misplaced file. Neither callee can move down. `agents.registry` is the agents registry. The remaining options are larger than a burndown. One option puts the stamp behind a registered hook, which leaves processes without `fno.agents` unstamped. Another moves envelope construction into the runtime layer and leaves `fno doctor event emit` as a thin caller.
-
-Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config` (deleted with the family), `fno.graph`, and `fno.approvals` all imported it. The move creates nine upward violations while erasing three.
-
-## Audit and CI modes
-
-`bash scripts/ci/check-company-boundaries.sh --strict` is the full audit and remains red while any prohibited dependency or declared-layer cycle exists. The strict result names every prohibited import the baseline holds, plus the platform-to-runtime-to-platform cycle, so it preserves the falsification finding.
-
-The cycle line reports the first cycle the detector finds, not every cycle present.
-Retiring the config-to-graph import did not clear "the" cycle; it revealed the next one, which the two surviving events-CLI imports keep alive.
-Expect a burndown to re-root the reported cycle rather than remove it, until the last upward edge out of a layer is gone.
-
-`bash scripts/ci/check-company-boundaries.sh --baseline` is the gate registered in `fno doctor test`. Its checked-in source of truth is `scripts/ci/company-boundary-baseline.txt`. The file records each finding's importing file, layer pair, import statement, and cycle. The line number is deliberately absent: an unrelated edit above an import must not churn the file. When the exact finding set is unchanged, the baseline gate passes. New or changed findings fail. Removed findings also fail until their readable baseline entries leave in the same pull request. Therefore, green means known debt did not grow. It does not mean the architecture is clean or supersede the red strict audit.
-
-The check enforces no edges for `fno-skills`, which is Markdown and shell content, or for `fno-mux`, which is Rust in `crates/fno/src/mux_cli.rs`.
-They remain named as uncovered seams instead of being counted as clean Python boundaries.
+The check enforces no import edges for the Rust crates, the skills (Markdown and shell), or the mux. They are uncovered seams, not clean boundaries.
 
 ## Extraction gate
 

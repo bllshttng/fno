@@ -30,19 +30,18 @@ fresh() {
   rm -rf "$TMP/repo"
   git init -q "$TMP/repo"
   cd "$TMP/repo" || exit 1
-  mkdir -p scripts/ci evals/fixtures cli
+  mkdir -p scripts/ci evals/fixtures
   cat > scripts/ci/check-file-budget.sh <<'BUDGET'
 #!/usr/bin/env bash
 # stand-in; this gate reads only its PY_ALLOWED block
 PY_ALLOWED=(
-    'cli/src/fno/'
+    'tests/py/'
     'evals/fixtures/'
 )
 BUDGET
   printf 'x' > evals/fixtures/task.py
   printf 'x' > scripts/tool.py
   printf 'x' > scripts/gone.py
-  printf 'x' > cli/old.py
   cat > scripts/ci/python-ledger.tsv <<'LEDGER'
 # path	verdict	reason
 evals/fixtures/task.py	keep	harbor task data
@@ -69,23 +68,12 @@ check() {
 
 # --- the two-sided invariant ---------------------------------------------------
 fresh
-check 'every live row and every row live passes' 0 'ok (3 tracked .py outside cli/'
-
-# The cli/ tree is outside the ledger's scope: an unrowed cli/ .py must not
-# fail the gate or be named.
-fresh
-out="$(bash "$GATE" 2>&1)"; got=$?
-if [[ "$got" -eq 0 && "$out" != *'cli/old.py'* ]]; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-  printf 'FAIL: an unrowed cli/ .py stays out of scope\nexit %s\n%s\n' "$got" "$out"
-fi
+check 'every live row and every row live passes' 0 'ok (3 tracked .py'
 
 # --- a live .py with no row (AC1-HP) --------------------------------------------
 fresh; printf 'x' > scripts/stray.py; commit
 check 'a tracked .py with no row is refused by path' 1 \
-  'scripts/stray.py is a tracked .py outside cli/ with no ledger row'
+  'scripts/stray.py is a tracked .py with no ledger row'
 
 # --- a row naming a missing file -------------------------------------------------
 fresh; git rm -q scripts/gone.py; commit
@@ -123,16 +111,12 @@ scripts/tool.py	tombstone	retired hook path stub
 scripts/gone.py	delete-by some-effort	dev tooling
 LEDGER
 commit
-check 'a tombstone outside the homes passes' 0 'ok (3 tracked .py outside cli/'
+check 'a tombstone outside the homes passes' 0 'ok (3 tracked .py'
 
 # --- out-of-scope rows -------------------------------------------------------------
 fresh; printf 'scripts/tool.sh\tdelete\tnot a py\n' >> scripts/ci/python-ledger.tsv; commit
 check 'a row for a non-.py path is refused' 1 \
-  'scripts/tool.sh is not a .py outside cli/; the ledger records only that scope'
-
-fresh; printf 'cli/src/fno/old.py\tdelete\tinside cli\n' >> scripts/ci/python-ledger.tsv; commit
-check 'a row inside cli/ is refused' 1 \
-  'cli/src/fno/old.py is not a .py outside cli/; the ledger records only that scope'
+  'scripts/tool.sh is not a .py; the ledger records only that scope'
 
 # --- misuse is a 2, never a pass ----------------------------------------------------
 fresh; printf '#!/usr/bin/env bash\n' > scripts/ci/check-file-budget.sh; commit

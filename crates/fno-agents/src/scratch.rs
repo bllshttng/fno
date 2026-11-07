@@ -1503,7 +1503,7 @@ mod tests {
         let tmp = temp_root("blobcopy");
         // A tracked .py file: a flat copy of it is a repo blob; the walker
         // only takes .py/.sh candidates, so the tracked file must be .py.
-        let tracked = std::fs::read_to_string(root.join("cli/src/fno/paths.py")).unwrap();
+        let tracked = std::fs::read_to_string(root.join("tests/py/_bins.py")).unwrap();
         write(&tmp.join("jobs"), "joba/tmp/paths_copy.py", &tracked);
         // The plan's copied-source fixture: a slice of paths.py whose blob
         // hash is injected into the set.

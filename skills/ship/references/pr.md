@@ -73,10 +73,8 @@ A branch cut from a stale local HEAD ships a PR full of phantom deletions. It ca
 BASE="${BASE:-origin/main}"   # re-default: this block may run standalone
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 candidate_fno() {
-  if [ -x "$ROOT/cli/.venv/bin/python" ]; then
-    PYTHONPATH="$ROOT/cli/src" "$ROOT/cli/.venv/bin/python" -m fno.cli "$@"
-  elif [ -f "$ROOT/cli/pyproject.toml" ] && command -v uv >/dev/null 2>&1; then
-    PYTHONPATH="$ROOT/cli/src" uv run --project "$ROOT/cli" fno-py "$@"
+  if [ -x "$ROOT/crates/fno/target/debug/fno" ]; then
+    "$ROOT/crates/fno/target/debug/fno" "$@"
   elif command -v fno >/dev/null 2>&1; then
     fno "$@"
   else

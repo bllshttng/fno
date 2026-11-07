@@ -154,7 +154,7 @@ The shapes, each measured:
 
 **A missing command reads as an empty list.** `fno inbox outstanding list` does not exist. The command printed a usage error, a grep filtered it to nothing, and the shell exited 0. When 283 questions were open, the read looked like none.
 
-**A path in an error is a path from somewhere.** CI reported `ERROR collecting tests/unit/test_lead_scope.py`. That path exists nowhere in the tree. The file is at `cli/tests/unit/test_lead_scope.py`, because CI reports relative to the root it runs pytest from. A session nearly filed the check as stale.
+**A path in an error is a path from somewhere.** CI reported `ERROR collecting tests/unit/test_lead_scope.py`. That path existed nowhere in the tree. The file was at `cli/tests/unit/test_lead_scope.py`, because CI reports relative to the root it runs pytest from. The pytest tree now lives at `tests/py`, and the same rule holds. A session nearly filed the check as stale.
 
 **A refusal blames the reader that worked.** `fno agents session rm` refuses with `its harness row's presence in 'claude agents --json --all' could not be confirmed (the roster read failed)`. The same command seconds later in the same shell: exit 0, 32,578 bytes on stdout, 0 on stderr, 121 rows, target row present with `state: done`. The code folds "row still present" and "roster unreadable" into one condition and reports the second. Its printed remedy asks the caller to retry once the roster is readable, which names a condition already true.
 

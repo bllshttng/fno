@@ -12,8 +12,8 @@
 //!
 //! The journal is machine-local by construction (it sits beside the
 //! ledger) and blind to every caller that never reaches admission: gh
-//! spawned by Python `fno-py` straight off PATH, the Python proxy when
-//! `FNO_AGENT_SELF` is unset, worker shells, and every other machine. The
+//! spawned by a worker shell or any caller with
+//! `FNO_AGENT_SELF` unset, and every other machine. The
 //! `spend` op names those blind spots in each report rather than letting a
 //! clean-sounding answer stand in for a partial one.
 use serde_json::{json, Value};
@@ -279,9 +279,9 @@ fn label_word(argv: &[String]) -> Label {
             Label::Skip
         }
         "fno-agents" => fno_agents_label(rest),
-        // The Python twin and the Rust front door name the caller the same
-        // way: the `fno` word plus the subcommand chain (do pr merge).
-        "fno" | "fno-py" => {
+        // The front door names the caller by the `fno` word plus the
+        // subcommand chain (do pr merge).
+        "fno" => {
             let words: Vec<&str> = rest
                 .iter()
                 .map(String::as_str)
@@ -313,8 +313,8 @@ fn label_word(argv: &[String]) -> Label {
     }
 }
 
-/// The program word: argv0, or argv1 under a script interpreter (`python3
-/// fno-py ...` is fno-py traffic).
+/// The program word: argv0, or argv1 under a script interpreter (`sh
+/// script ...` is the script's traffic).
 fn effective_program(argv: &[String]) -> Option<(usize, &str)> {
     let first = argv.first()?;
     if is_interpreter(file_basename(first).as_str()) {
@@ -469,7 +469,7 @@ pub(crate) fn append(path: &std::path::Path, line: &str) -> Result<(), String> {
 
 /// The fixed blind-spot sentence every spend report carries: a partial
 /// journal must never read as a complete answer.
-const BLIND_SPOTS: &str = "gh spawned by Python fno-py straight off PATH, the Python proxy when FNO_AGENT_SELF is unset, worker shells, and every other machine never reach this journal";
+const BLIND_SPOTS: &str = "gh spawned by a worker shell or any caller with FNO_AGENT_SELF unset, and every other machine never reach this journal";
 
 /// One exempt `gh api rate_limit` read: GitHub prices it at 0, so the
 /// probe answers even mid-outage and the report can name the real

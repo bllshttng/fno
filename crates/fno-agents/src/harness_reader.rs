@@ -563,9 +563,6 @@ impl IsolatedRoot {
     /// set, every ambient state and config pin stripped. The cwd is the
     /// isolated root too: a child left in the caller's checkout reads that
     /// project's `.fno/config.toml`, so its routing policy decides the probe.
-    /// `FNO_PY` pins the caller's own Python CLI, resolved before `HOME`
-    /// moves; under the isolated home the `fno` front finds no uv tool and
-    /// provisions the released wheel instead of the build being qualified.
     pub fn child_env(&self, cmd: &mut Command) {
         for name in AMBIENT_PINS {
             cmd.env_remove(name);
@@ -573,10 +570,6 @@ impl IsolatedRoot {
         cmd.env("FNO_HOME", &self.fno_home);
         cmd.env("HOME", &self.home);
         cmd.current_dir(&self.dir);
-        let py = PathBuf::from(crate::scrape::fno_py());
-        if py.is_absolute() && py.is_file() {
-            cmd.env("FNO_PY", py);
-        }
     }
 
     /// Copy the real config's record for `provider` into the isolated global

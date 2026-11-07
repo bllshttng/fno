@@ -21,7 +21,7 @@ mkdir -p "$HOME/.fno"
 # that delegates to the in-tree CLI so the harness is hermetic against the
 # machine's installed binary.
 mkdir -p "$TMP/bin"
-printf '#!/usr/bin/env bash\nexec uv run --project "%s/cli" python -m fno.cli "$@"\n' \
+printf '#!/usr/bin/env bash\nexec "%s/crates/fno/target/debug/fno" "$@"\n' \
   "$REPO_ROOT" > "$TMP/bin/fno"
 chmod +x "$TMP/bin/fno"
 export PATH="$TMP/bin:$PATH"
@@ -35,7 +35,7 @@ fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 # cutover moved paths.graph_json() to .fno/db/, so the legacy .fno/ anchor
 # would seed a file no reader opens.
 mkdir -p "$HOME/.fno/db"
-cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$HOME/.fno/db/graph.json"
+cat <<'JSON' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$HOME/.fno/db/graph.json"
 {"entries": [
   {"id": "ab-12345678", "title": "Test", "plan_path": "plans/test.md", "status": "ready"}
 ]}

@@ -23,8 +23,7 @@
     "both"
   ],
   "BUNDLE_TEST_TARGETS": [
-    "cli/tests/unit/test_skill_bundles.py",
-    "cli/tests/unit/test_bundle_cli.py"
+    "tests/py/unit/test_skill_bundles.py"
   ],
   "CENSUS_KILL_BOUND_S_DEFAULT": 300,
   "CENSUS_TRANCHE_BOUND_S": 60,
@@ -48,22 +47,19 @@
     "conftest.py"
   ],
   "INFRA_EXACT": [
-    "cli/src/fno/test_cmd.py",
-    "scripts/ci/preflight.sh",
-    "cli/pyproject.toml"
+    "scripts/ci/preflight.sh"
   ],
   "INFRA_PREFIX": [
     ".github/workflows/"
   ],
   "INFRA_SELECTS": [
-    "cli/tests/unit/test_test_cmd.py",
     "tests/ci/test_smoke_modes.sh",
     "tests/ci/test_preflight.sh",
     "tests/ci/test_changed_smoke_workflow.sh"
   ],
   "ORCHESTRATED_SUBTREES": [
     [
-      "cli/tests/smoke/",
+      "tests/smoke/",
       "Smoke tests"
     ]
   ],

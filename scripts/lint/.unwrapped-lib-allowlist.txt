@@ -4,7 +4,6 @@
 # Bash sourcing libraries
 common.sh
 config.sh
-fno-python.sh
 flock.sh
 events.sh
 events-validate.sh

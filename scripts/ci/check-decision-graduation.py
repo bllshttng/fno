@@ -18,7 +18,7 @@ REGISTERED_GRADUATION_PROBES: tuple[dict[str, str], ...] = (
     {
         "decision_id": "d-1ca0e711",
         "graduation": (
-            "test:cli/tests/integration/test_graph_cli.py::"
+            "test:tests/py/integration/test_graph_cli.py::"
             "test_new_p0_requires_breaking_acknowledgment"
         ),
     },

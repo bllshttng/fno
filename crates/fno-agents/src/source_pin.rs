@@ -156,11 +156,17 @@ fn git_ok(dir: &str, args: &[&str]) -> Option<String> {
     }
 }
 
-/// True if `dir` holds a `pyproject.toml` whose `[project] name` is `fno`.
-/// Parsed, not substring-matched, so a stray `name = "fno"` in another table
-/// cannot false-match. Any read/parse failure is "not a source".
+/// True if `dir` is the `cli/` of an fno checkout: its parent holds a
+/// `crates/fno/Cargo.toml` whose `[package] name` is `fno`. Every consumer
+/// reaches the checkout root as `source.parent()`, so the source path stays
+/// `<root>/cli` and pins cached before the Python tree was deleted still
+/// resolve. Parsed, not substring-matched, so a stray `name = "fno"` in
+/// another table cannot false-match. Any read/parse failure is "not a source".
 fn is_fno_source(dir: &str) -> bool {
-    let raw = match std::fs::read_to_string(Path::new(dir).join("pyproject.toml")) {
+    let Some(root) = Path::new(dir).parent() else {
+        return false;
+    };
+    let raw = match std::fs::read_to_string(root.join("crates/fno/Cargo.toml")) {
         Ok(raw) => raw,
         Err(_) => return false,
     };
@@ -169,7 +175,7 @@ fn is_fno_source(dir: &str) -> bool {
         Err(_) => return false,
     };
     value
-        .get("project")
+        .get("package")
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
         .map(|n| n == "fno")
@@ -499,7 +505,7 @@ struct ResolveArgs {
 }
 
 /// Precedence lives HERE, natively: override > env > checkout > cache >
-/// candidates, first directory whose `[project] name` is `fno` wins. Paths
+/// candidates, first directory that is the cli/ of an fno checkout wins. Paths
 /// arrive already expanded and resolved from the transport layer; duplicate
 /// paths keep the earliest origin bucket. `checkout` is the `cli/` of the main
 /// checkout that owns the process cwd, from a linked worktree too, so a run
@@ -553,7 +559,7 @@ fn no_source_answer(invalid_override: Option<&str>) -> ResolveAnswer {
         (
             "invalid_override",
             format!(
-                "--source {path} does not contain a pyproject.toml with name = 'fno'. Pass a path to the fno CLI source directory."
+                "--source {path} is not the cli/ directory of an fno checkout (no crates/fno/Cargo.toml beside it). Pass the cli/ path of an fno checkout."
             ),
         )
     } else {
@@ -901,13 +907,16 @@ mod tests {
         git_in(dir, &["commit", "-q", "-m", "c1"]);
     }
 
-    /// `cli/pyproject.toml` naming the package `fno` inside the given root.
+    /// A `cli/` source dir beside `crates/fno/Cargo.toml` naming the package
+    /// `fno`, inside the given root.
     fn add_cli(dir: &std::path::Path) -> String {
         let cli = dir.join("cli");
         fs::create_dir_all(&cli).unwrap();
+        let krate = dir.join("crates").join("fno");
+        fs::create_dir_all(&krate).unwrap();
         fs::write(
-            cli.join("pyproject.toml"),
-            "[project]\nname = \"fno\"\nversion = \"0.0.0\"\n",
+            krate.join("Cargo.toml"),
+            "[package]\nname = \"fno\"\nversion = \"0.0.0\"\n",
         )
         .unwrap();
         cli.to_string_lossy().into_owned()

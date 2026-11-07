@@ -1377,7 +1377,7 @@ mod tests {
         let rows = vec![disabled(
             "\u{2022}",
             "model list unavailable",
-            "account records unavailable: Usage: fno-py config get [OPTIONS] {key}",
+            "account records unavailable: Usage: fno config get [OPTIONS] {key}",
         )];
         for label_first in [false, true] {
             let mut p = Popup::new(rows.clone(), Anchor::At { row: 1, col: 1 })

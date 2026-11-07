@@ -33,26 +33,20 @@ skip() { SKIP_COUNT=$((SKIP_COUNT+1)); printf '[self-handoff] SKIP: %s\n' "$*"; 
 
 command -v git >/dev/null 2>&1 || { fail "git required"; exit 1; }
 
-PYTHON_CLI=""
-CLI_VENV="${REPO_ROOT}/cli/.venv/bin/python"
-if [[ -x "$CLI_VENV" ]] && PYTHONPATH="${REPO_ROOT}/cli/src" "$CLI_VENV" -c "import fno" 2>/dev/null; then
-  PYTHON_CLI="$CLI_VENV"
-else
-  # Fall back to uv-managed env if present (dev worktree without a committed venv).
-  if command -v uv >/dev/null 2>&1 && [[ -f "${REPO_ROOT}/cli/pyproject.toml" ]]; then
-    PYTHON_CLI="uv run --project ${REPO_ROOT}/cli python"
-  fi
-fi
-if [[ -z "$PYTHON_CLI" ]]; then
-  skip "no fno python available (need cli/.venv or uv); nothing to test"
+# The receipts and the claims both run binary-direct in fno-agents:
+# FNO_AGENTS_BIN, the checkout build, then PATH.
+CLAIM_BIN=""
+for _cand in "${FNO_AGENTS_BIN:-}" \
+  "${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents" \
+  "${REPO_ROOT}/crates/fno-agents/target/release/fno-agents" \
+  "$(command -v fno-agents 2>/dev/null || true)"; do
+  if [[ -n "$_cand" && -x "$_cand" ]]; then CLAIM_BIN="$_cand"; break; fi
+done
+if [[ -z "$CLAIM_BIN" ]]; then
+  fail "no fno-agents binary (build crates/fno-agents or install fno)"
   printf '[self-handoff] RESULTS: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP_COUNT"
-  exit 0
+  exit 1
 fi
-
-# The receipts and the claims both run binary-direct in fno-agents; the
-# resolver picks the same binary the wheel uses.
-CLAIM_BIN="$(PYTHONPATH="${REPO_ROOT}/cli/src" $PYTHON_CLI -c \
-  'from fno.rust_binary import resolve_binary; print(resolve_binary() or "")')"
 FNO() { (cd "$TMP" && "${CLAIM_BIN:-fno-agents}" resume-receipt "$@"); }
 CLAIM() { (cd "$TMP" && "${CLAIM_BIN:-fno-agents}" claim "$@"); }
 node_of() { python3 -c "import sys,json; print(json.load(sys.stdin)['identity']['node'])"; }

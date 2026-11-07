@@ -1,4 +1,4 @@
-Usage: fno-py doctor event emit [OPTIONS]
+Usage: fno doctor event emit [OPTIONS]
 
   Emit a single canonical event to the project event store (events.db beside
   the journal path).

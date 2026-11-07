@@ -29,7 +29,7 @@ on:
       - 'scripts/preflight.sh'
       - 'skills/tdd/SKILL.md'
       - '.github/workflows/install-channels.yml'
-      - 'cli/tests/smoke/channel_matrix_smoke.sh'
+      - 'tests/smoke/channel_matrix_smoke.sh'
       - 'scripts/ci/check-readme-install-commands.sh'
   schedule:
     - cron: '23 5 * * *'
@@ -76,14 +76,16 @@ jobs:
             expect: pass
             node: ''
             readme: ['curl -fsSL fno.sh | sh']
+          # Passes since the source update lost its Python step: run inside
+          # the checkout, the released fno updates from source cleanly.
           - id: fno-update-released
             runs-on: ubuntu-24.04
-            expect: fail
+            expect: pass
             node: ''
             readme: []
           - id: fno-update-released-macos
             runs-on: macos-15
-            expect: fail
+            expect: pass
             node: ''
             readme: []
           - id: fno-sh-head
@@ -164,7 +166,7 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          bash cli/tests/smoke/channel_matrix_smoke.sh '${{ matrix.row.id }}'
+          bash tests/smoke/channel_matrix_smoke.sh '${{ matrix.row.id }}'
           rc=$?
           set -e
           expect='${{ matrix.row.expect }}'

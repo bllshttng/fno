@@ -9,15 +9,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIB="$REPO_ROOT/scripts/lib/graph-resolve.sh"
-CLI_DIR="$REPO_ROOT/cli"
 
 if [[ ! -f "$LIB" ]]; then
     echo "test_graph_resolve: cannot find $LIB" >&2
     exit 2
-fi
-
-if [[ "${FNO_GRAPH_RESOLVE_UV:-0}" != "1" ]]; then
-    FNO_GRAPH_RESOLVE_UV=1 exec uv run --project "$CLI_DIR" bash "$0"
 fi
 
 TMP=$(mktemp -d -t graph-resolve.XXXXXX)
@@ -29,7 +24,7 @@ pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 
 # Seed a sandbox graph.db. Caller can point GRAPH_JSON at its stable anchor.
-cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$TMP/graph.json"
+cat <<'JSON' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$TMP/graph.json"
 {
   "entries": [
     {

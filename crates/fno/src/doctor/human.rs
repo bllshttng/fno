@@ -176,7 +176,7 @@ fn emit_status(rep: &Value, src: Option<&Path>, err: bool) {
         .unwrap_or_default();
     if status == "fresh" {
         emit(err, &format!(
-            "fno doctor: installed fno is up to date with source at {} (rev {}). Unmerged work in another branch or worktree is not included, and `fno` forwards to this installed build from anywhere. To exercise another checkout run: cd <checkout>/cli && uv run fno-py <command>",
+            "fno doctor: installed fno is up to date with source at {} (rev {}). Unmerged work in another branch or worktree is not included, and `fno` runs this installed build from anywhere. To exercise another checkout, build it with `cargo build` under <checkout>/crates and run that target's fno.",
             src.map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "the resolved source checkout".to_string()),
             rep.get("source_rev").and_then(Value::as_str).unwrap_or("unknown")
         ));
@@ -186,23 +186,13 @@ fn emit_status(rep: &Value, src: Option<&Path>, err: bool) {
         emit_status_stale(rep, src, err);
         return;
     }
-    emit_status_unknown(rep, src, err);
+    emit_status_unknown(src, err);
 }
 
 fn emit_status_stale(rep: &Value, src: Option<&Path>, err: bool) {
     let src_label = src
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "source".into());
-    let missing: Vec<String> = rep
-        .get("missing_commands")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let content_stale = rep.get("content_stale") == Some(&Value::Bool(true));
     let missing_keys: Vec<String> = rep
         .get("missing_config_keys")
         .and_then(Value::as_array)
@@ -212,27 +202,13 @@ fn emit_status_stale(rep: &Value, src: Option<&Path>, err: bool) {
                 .collect()
         })
         .unwrap_or_default();
-    let python_stale = rep.get("python_stale") == Some(&Value::Bool(true));
-    if !missing.is_empty() {
-        emit(err, &format!(
-            "fno doctor: installed fno is behind {src_label} (missing: {}). Run `fno doctor update` (or `fno doctor --fix`).",
-            missing.join(", ")
-        ));
-        return;
-    }
-    if content_stale {
-        emit(err, &format!(
-            "fno doctor: installed fno is STALE - {} .py file(s) on disk differ from {src_label} (a cache-hit reinstall can leave old bytes while the installed-rev marker still reads HEAD). Run `fno doctor update` (or `fno doctor --fix`).",
-            rep.get("content_drift_count").and_then(Value::as_i64).unwrap_or(0)
-        ));
-        return;
-    }
+    let marker_stale = rep.get("marker_stale") == Some(&Value::Bool(true));
     if !missing_keys.is_empty() {
         let first = missing_keys[0].clone();
         let inst = rep.get("installed_rev").and_then(Value::as_str);
         let srcrev = rep.get("source_rev").and_then(Value::as_str);
         let mut msg = format!(
-            "fno doctor: Python config schema is STALE (deployed is missing {} config key(s), e.g. {first}).",
+            "fno doctor: config schema is STALE (deployed is missing {} config key(s), e.g. {first}).",
             missing_keys.len()
         );
         if let (Some(i), Some(s)) = (inst, srcrev) {
@@ -246,7 +222,7 @@ fn emit_status_stale(rep: &Value, src: Option<&Path>, err: bool) {
         );
         return;
     }
-    if python_stale {
+    if marker_stale {
         emit(err, &format!(
             "fno doctor: installed fno is behind {src_label} (installed rev {} != source {}). Run `fno doctor update` (or `fno doctor --fix`).",
             rep.get("installed_rev").and_then(Value::as_str).unwrap_or("None"),
@@ -266,17 +242,7 @@ fn emit_status_stale(rep: &Value, src: Option<&Path>, err: bool) {
     emit(err, "fno doctor: rust bins STALE (a deployed component does not match the source build). Run fno doctor update (or fno doctor --fix); the component lines below name which one.");
 }
 
-fn emit_status_unknown(rep: &Value, src: Option<&Path>, err: bool) {
-    let indeterminate = rep.get("content_indeterminate") == Some(&Value::Bool(true));
-    let installed_rev = rep.get("installed_rev").and_then(Value::as_str);
-    let source_rev = rep.get("source_rev").unwrap_or(&Value::Null);
-    if indeterminate
-        && installed_rev.is_some()
-        && Some(installed_rev.unwrap_or_default()) == source_rev.as_str()
-    {
-        emit(err, "fno doctor: status unknown - the installed-rev marker matches HEAD, but the content check could not read the installed/source .py bytes to confirm it (the marker alone can lie about a cache-hit reinstall). Check file permissions, or run `fno doctor update` to be safe.");
-        return;
-    }
+fn emit_status_unknown(src: Option<&Path>, err: bool) {
     if src.is_none() {
         emit(
             err,
@@ -284,7 +250,10 @@ fn emit_status_unknown(rep: &Value, src: Option<&Path>, err: bool) {
         );
         return;
     }
-    emit(err, "fno doctor: status unknown (installed rev undeterminable; capability probe found no missing commands).");
+    emit(
+        err,
+        "fno doctor: status unknown (installed rev undeterminable).",
+    );
 }
 
 fn short12(v: &str) -> &str {

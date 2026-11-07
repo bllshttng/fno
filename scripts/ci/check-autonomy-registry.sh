@@ -113,9 +113,16 @@ if [[ -z "$ADDED" && -z "$REMOVED" ]]; then
   # the fno-agents binary, so the audit runs it directly (no typer import); a
   # lane with no binary names the SKIP instead of failing, and provisioning
   # the binary there is what makes it run again.
-  PY="$REPO_ROOT/cli/.venv/bin/python"
-  [[ -x "$PY" ]] || PY=python3
-  BINARY="$(PYTHONPATH="$REPO_ROOT/cli/src" "$PY" -c 'from fno import rust_binary; b = rust_binary.resolve_binary(); print(b or "")' 2>/dev/null)"
+  BINARY=""
+  for cand in "${FNO_AGENTS_BIN:-}" \
+              "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
+              "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
+              "$(command -v fno-agents 2>/dev/null || true)"; do
+    if [[ -n "$cand" && -x "$cand" ]]; then
+      BINARY="$cand"
+      break
+    fi
+  done
   if [[ -z "$BINARY" ]]; then
     echo "check-autonomy-registry: provenance audit SKIPPED (no fno-agents binary on this lane; build one to run it)" >&2
     exit 0

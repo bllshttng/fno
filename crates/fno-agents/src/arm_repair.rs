@@ -653,7 +653,7 @@ pub fn run_repair(action: &str, cwd: &Path) -> bool {
                 return false;
             };
             let project = action.strip_prefix("advance:").unwrap_or("");
-            let mut child = std::process::Command::new(crate::scrape::fno_py());
+            let mut child = std::process::Command::new(crate::scrape::fno_bin());
             child.args(["backlog", "advance"]);
             if !project.is_empty() && project != "-" {
                 child.args(["--project", project]);

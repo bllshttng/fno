@@ -44,29 +44,23 @@ export FNO_REPO_ROOT="$TMP/repo"
 export FNO_TRACKER_BACKEND=graph
 mkdir -p "$FNO_REPO_ROOT/.fno"
 cd "$TMP" || exit 1
-printf '{"entries": []}\n' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$GRAPH_JSON"
+printf '{"entries": []}\n' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$GRAPH_JSON"
 
 PASS=0
 FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-# Resolve the `fno` command: prefer the in-repo venv (the TREE's surface,
-# which the menu assertions below pin), fall back to an installed binary,
-# then to a bare python3. An installed fno can lag the tree by whole command
-# generations, and a menu test against it would pin a surface this checkout
-# no longer ships.
+# Resolve the `fno` command: prefer the checkout build (the TREE's surface,
+# which the menu assertions below pin), fall back to an installed binary. An
+# installed fno can lag the tree by whole command generations, and a menu test
+# against it would pin a surface this checkout no longer ships.
 resolve_fno() {
-    local venv_py="$REPO_ROOT/cli/.venv/bin/python"
-    if [[ -x "$venv_py" ]]; then
-        echo "$venv_py -m fno.cli"
+    if [[ -x "$REPO_ROOT/crates/fno/target/debug/fno" ]]; then
+        echo "$REPO_ROOT/crates/fno/target/debug/fno"
         return
     fi
-    if command -v fno >/dev/null 2>&1; then
-        echo "fno"
-        return
-    fi
-    echo "python3 -m fno.cli"
+    echo "fno"
 }
 
 ABI=$(resolve_fno)
@@ -179,9 +173,11 @@ else
     # The close-evidence guard refuses a bare `done` on a node carrying no
     # record of why, and the typer surface retired `update --completion-note`
     # (the leaf the guard's own remedy names). Stamp the note through the
-    # native binary, the same door test_defer.py drives, resolved by the same
-    # finder the store's worker spawn uses.
-    native_fno=$(uv run --project "$REPO_ROOT/cli" python -c "from fno.rust_binary import resolve_binary; b = resolve_binary(); print(b if b else '')")
+    # native binary: FNO_AGENTS_BIN, the checkout build, then PATH.
+    native_fno=""
+    for cand in "${FNO_AGENTS_BIN:-}" "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" "$(command -v fno-agents 2>/dev/null || true)"; do
+        if [[ -n "$cand" && -x "$cand" ]]; then native_fno="$cand"; break; fi
+    done
     if [[ -z "$native_fno" ]]; then
         fail "no fno-agents binary: cannot stamp the completion record done requires"
     fi

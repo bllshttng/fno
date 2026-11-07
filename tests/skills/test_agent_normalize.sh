@@ -626,19 +626,18 @@ OUT="$(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 DISPATCH_PROVIDER_RESOLVER="$STUB_EMP
 # calls `fno agents name`, the single owner. Overflow is not reachable HERE (the
 # tier-1 detector bounds a node id at ~17 chars, so the worst assembly is ~57);
 # what matters at this seam is PARITY - the same name is the spawn dedup token,
-# so a shell caller and a Python caller disagreeing would double-dispatch a node.
+# so two callers disagreeing would double-dispatch a node.
 # The overflow and refusal paths are exercised where ids come from the graph
 # unbounded: tests/test-bg-dispatch.sh and cli/tests/unit/test_advance.py.
-VENV_PY="$REPO_ROOT/cli/.venv/bin/python"
-if [[ ! -x "$VENV_PY" ]]; then
-  CANON="$(cd "$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"
-  [[ -n "$CANON" ]] && VENV_PY="$CANON/cli/.venv/bin/python"
-fi
-REAL_AGENTS_BIN="$("$VENV_PY" -c "
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/src')
-from fno import rust_binary
-b = rust_binary.find_dev_binary() or rust_binary.resolve_binary()
-print(b or '')" 2>/dev/null || true)"
+REAL_AGENTS_BIN=""
+for _cand in "${FNO_AGENTS_BIN:-}" \
+  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
+  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
+  "$(command -v fno-agents 2>/dev/null || true)"; do
+  if [[ -n "$_cand" && -x "$_cand" ]]; then REAL_AGENTS_BIN="$_cand"; break; fi
+done
+REAL_FRONT_BIN="$REPO_ROOT/crates/fno/target/debug/fno"
+[[ -x "$REAL_FRONT_BIN" ]] || REAL_FRONT_BIN="$(command -v fno 2>/dev/null || true)"
 # A REAL fno on PATH; the suite otherwise pins a failing one suite-wide. The
 # capabilities ask is answered from the fixture table first (x-3873): it is a
 # Rust-leaf read, and the installed binary may predate this branch.
@@ -663,7 +662,7 @@ REAL_FNO_DIR="$TMP/real-fno"; mkdir -p "$REAL_FNO_DIR"
   echo 'fi'
   # The name door is native, and the default router never execs a dev build.
   echo "[[ \"\$1 \$2\" == \"agents name\" ]] && exec \"$REAL_AGENTS_BIN\" status --name \"\${@:3}\""
-  echo "exec \"$VENV_PY\" -c 'import sys; sys.path.insert(0, \"$REPO_ROOT/cli/src\"); from fno.cli import app; app()' \"\$@\""
+  echo "exec \"$REAL_FRONT_BIN\" \"\$@\""
 } > "$REAL_FNO_DIR/fno"
 chmod +x "$REAL_FNO_DIR/fno"
 
@@ -676,7 +675,7 @@ if "$REAL_FNO_DIR/fno" agents name target x-1 >/dev/null 2>&1; then
   SHELL_NAME="$(field "$OUT" name)"
   PY_NAME="$("$REAL_AGENTS_BIN" status --name spawn ab-deadbeef --slug "path consolidation wave 0 delegate handoff")"
   [[ -n "$SHELL_NAME" && "$SHELL_NAME" == "$PY_NAME" ]] \
-    && pass "x-3218 shell bridge is byte-identical to direct Python generation" \
+    && pass "x-3218 shell bridge is byte-identical to direct generation" \
     || fail "x-3218 parity: shell=$SHELL_NAME python=$PY_NAME"
   # An exact expectation: "<= 64" would pass on a 20-char name and prove nothing
   # about the budget (this fixture's name is 43 chars, well clear of the limit).
@@ -724,7 +723,7 @@ EOF
     && pass "x-3218 slugless node still degrades to <command>-<hex>" \
     || fail "x-3218 slugless: $OUT"
 else
-  fail "x-3218 bridge unreachable: venv $VENV_PY, binary '${REAL_AGENTS_BIN}'"
+  fail "x-3218 bridge unreachable: front '${REAL_FRONT_BIN}', binary '${REAL_AGENTS_BIN}'"
 fi
 
 # --- x-0413: the handoff SEED carries the every-lane decisions check ---

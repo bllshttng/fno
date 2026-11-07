@@ -25,9 +25,9 @@ prompt: |                   # optional: omit for a grade-only task (no worker st
 repo_fixture: HEAD          # git ref or fixture dir (default HEAD)
 grade:                      # >=1 mechanical check; a gradeless task is rejected at load
   - kind: exit              # a shell command's exit code must equal `expect` (default 0)
-    command: "cd cli && uv run fno-py hello"
+    command: "fno --version"
   - kind: grep              # a workdir-relative file must contain a substring
-    path: "cli/src/fno/cli.py"
+    path: "crates/fno/src/main.rs"
     pattern: "hello"
   - kind: file-exists       # a workdir-relative path must exist
     path: "out/report.md"

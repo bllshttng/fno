@@ -11,7 +11,8 @@
 //! hand-off. `agents spawn` claims when the fno-owned `--name` value carries
 //! `@` (`--name <name>@<host>`, or `--name @<host>` to mint the name
 //! remotely) and execs the sibling `spawn-remote` command; words after a
-//! bare `--` fence are never scanned. Everything else forwards verbatim.
+//! bare `--` fence are never scanned. The root `mail` spelling claims the same
+//! way. Everything else goes to the local commands.
 
 use std::ffi::OsString;
 
@@ -27,9 +28,19 @@ pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
 /// onward (`send|peek` first), the shape `mail_remote::run` routes on;
 /// `None` forwards byte-verbatim.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.first()?.to_str()? != "agents" {
-        return None;
-    }
+    // `mail ...` is the root spelling of `agents mail ...`: read it at the
+    // same offsets with the `agents` word in front.
+    let agents_form: Vec<OsString>;
+    let args = match args.first()?.to_str()? {
+        "agents" => args,
+        "mail" => {
+            agents_form = std::iter::once(OsString::from("agents"))
+                .chain(args.iter().cloned())
+                .collect();
+            &agents_form
+        }
+        _ => return None,
+    };
     // The relay's own same-host forward: claiming it again recursed every send
     // until the machine ran out of processes. Clear it so a daemon or session
     // the local command starts never inherits the bypass.

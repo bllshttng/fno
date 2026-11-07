@@ -179,7 +179,7 @@ fi
 # LEAF under one, so the argument sits a word further along than shapes 1-3
 # look. One optional lowercase word closes that, and it applies to all three
 # shapes: `fno law set {subject}` is an f-string, which is how nearly every
-# caller-facing string in cli/src is written, and a concrete short id is
+# caller-facing string was written, and a concrete short id is
 # strictly more copyable than a placeholder.
 #
 # This DOES catch descriptive strings of the same shape. The measured specimen
@@ -263,7 +263,6 @@ printf '%s\n' "$TRAILING_PROSE_CANARY" | grep -qE "$PATTERN" &&
 # the operator guide is the most caller-facing surface there is, and leaving
 # it out would exempt the text most likely to be followed by hand.
 SURFACES=(
-    "cli/src:py"
     "crates:rs"
     "skills:md"
     "docs:md"
@@ -357,7 +356,7 @@ for surface in "${SURFACES[@]}"; do
     # `git ls-files`, which under `set -o pipefail` makes the pipeline status
     # 141 as soon as the file list outgrows the pipe buffer. That read as
     # "this surface holds no files" and failed the gate on the real tree
-    # (cli/src emits ~17 KB, over the 16 KiB macOS buffer) while every
+    # (a large surface emits over the 16 KiB macOS buffer) while every
     # synthetic-tree test stayed green. -c consumes all input.
     tracked="$(git ls-files -- "$dir" | grep -cE "\.${ext}\$" || true)"
     [ "${tracked:-0}" -gt 0 ] ||

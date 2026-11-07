@@ -491,7 +491,7 @@ pub(super) fn apply_same_model_guard(
 /// The built-in optional logins an UNSET `review.optional_apps` resolves to -
 /// the same default the Python side resolves (`DEFAULT_OPTIONAL_APPS` in
 /// fno.config, pinned with it against the shared golden file
-/// cli/tests/config/optional_apps_default.json). Without a shared default, this
+/// tests/py/config/optional_apps_default.json). Without a shared default, this
 /// side resolved empty while `fno do pr status` matched two hardcoded logins,
 /// so a worker following the remedy one printed was refused by the other.
 pub(super) const DEFAULT_OPTIONAL_APPS: [&str; 1] = ["chatgpt-codex-connector"];

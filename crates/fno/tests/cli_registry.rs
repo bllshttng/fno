@@ -1,23 +1,10 @@
-//! The native front door's registry gate (AC1-REGISTRY/AC1-FORWARD):
-//! the Python-forwarding boundary stays byte-verbatim, non-UTF-8 included.
+//! The native front door's registry gate (AC1-REGISTRY): typed native
+//! commands parse, and a malformed shape refuses with one usage line.
 //! Help on every root flag is pinned by the unit test in `cli_args.rs`.
 
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt;
 
 use fno::cli_args;
-
-#[test]
-fn the_python_surface_forwards_byte_verbatim() {
-    // Non-UTF-8 payload inside a forwarded tail must survive as raw bytes,
-    // never a parse error (AC1-FORWARD).
-    let argv = vec![
-        OsString::from("backlog"),
-        OsString::from("list"),
-        OsString::from_vec(vec![0xff]),
-    ];
-    assert_eq!(cli_args::classify(&argv), cli_args::FrontDoor::Forward);
-}
 
 #[test]
 fn typed_native_commands_parse_and_refuse() {
@@ -25,8 +12,7 @@ fn typed_native_commands_parse_and_refuse() {
         cli_args::classify(&[OsString::from("version"), OsString::from("--json")]),
         cli_args::FrontDoor::Version { json: true }
     );
-    // Native, never forwarded: uninstall removes the Python wheel it would
-    // forward to.
+    // Native: uninstall removes the binaries and the legacy uv tool.
     assert_eq!(
         cli_args::classify(&[OsString::from("uninstall"), OsString::from("--dry-run")]),
         cli_args::FrontDoor::Uninstall(fno::uninstall::Opts {
@@ -34,7 +20,7 @@ fn typed_native_commands_parse_and_refuse() {
             ..Default::default()
         })
     );
-    // A malformed native shape is usage, never a forward (AC3-ERR): the
+    // A malformed native shape is usage (AC3-ERR): the
     // refusal is one command-qualified line.
     assert!(matches!(
         cli_args::classify(&[OsString::from("--server")]),

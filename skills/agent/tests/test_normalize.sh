@@ -800,41 +800,6 @@ check_contains 'empty -C value message' "$(field "$out" error)" 'requires a proj
 out="$(bash "$NORM" --input 'backend work' -C)"
 check_eq       'bare trailing -C status' "$(field "$out" status)" 'error'
 
-# --- WAVE 2 (x-ab78): resolver prefers fno-py when `fno` is non-python --------
-# The shipped `fno` is the Rust mux binary (no python shebang); before the fix
-# -C died with "fno is not a python entrypoint". Stage a non-python `fno`
-# (run_nofno's _de43_stub) PLUS a python-shebang `fno-py` on PATH, with NO
-# injected PROJECT_ROOT_RESOLVER, and assert the resolver ran fno-py's
-# interpreter (so it never emits the dead-resolver "is not a python entrypoint"
-# error). Whether the host python can import fno decides import-vs-resolve, but
-# selection is the bug being fixed.
-if command -v python3 >/dev/null 2>&1; then
-  _fpy_stub="$(mktemp -d)"
-  printf '#!%s\n' "$(command -v python3)" > "$_fpy_stub/fno-py"
-  chmod +x "$_fpy_stub/fno-py"
-  out="$(PATH="$_de43_stub:$_fpy_stub:$PATH" bash "$NORM" --input 'backend work' -C etl)"
-  check_not_contains 'fno-py preferred over non-python fno' "$(field "$out" error)" 'is not a python entrypoint'
-  rm -rf "$_fpy_stub"
-fi
-
-# --- WAVE 2 (codex P2): cargo-only install - fno-py is NOT on PATH (only the
-#     mux `fno` is); resolve it via `uv tool dir` the way the mux does
-#     (crates/fno/src/bootstrap.rs). Stage a fake `uv` that prints a tool dir
-#     holding fno-py, and run on a RESTRICTED PATH so the host's real fno-py
-#     (in ~/.local/bin) cannot short-circuit the uv-tool-dir branch.
-if command -v python3 >/dev/null 2>&1; then
-  _uvroot="$(mktemp -d)"            # the fake "uv tool dir"
-  _binp="$(mktemp -d)"              # PATH dir holding the fake uv + the mux fno
-  mkdir -p "$_uvroot/fno/bin"
-  printf '#!%s\n' "$(command -v python3)" > "$_uvroot/fno/bin/fno-py"   # off PATH
-  chmod +x "$_uvroot/fno/bin/fno-py"
-  printf '#!/usr/bin/env bash\necho "%s"\n' "$_uvroot" > "$_binp/uv"     # `uv tool dir` -> $_uvroot
-  chmod +x "$_binp/uv"
-  out="$(PATH="$_binp:$_de43_stub:/usr/bin:/bin" bash "$NORM" --input 'backend work' -C etl)"
-  check_not_contains 'fno-py resolved via uv tool dir (cargo-only)' "$(field "$out" error)" 'is not a python entrypoint'
-  rm -rf "$_uvroot" "$_binp"
-fi
-
 rm -f "$_proj_res"
 
 # --- the node-id shape is config-agnostic, not hardcoded to ab- ---------------

@@ -120,6 +120,7 @@ mod gh_proxy_tests;
 #[cfg(feature = "full")]
 pub mod git_paths;
 pub mod glob;
+pub mod group_help;
 #[cfg(feature = "full")]
 pub mod inbox_user;
 #[cfg(feature = "full")]

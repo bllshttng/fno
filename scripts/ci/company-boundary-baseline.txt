@@ -1,8 +1,0 @@
-# Known company-boundary findings held by the CI ratchet.
-# Each entry is exact: importing file, layer pair, and import statement.
-# The import's line number is deliberately not recorded: it moves on every
-# unrelated edit above the import, and a ratchet that churns on such edits
-# teaches people to regenerate it. Strict mode still prints the line.
-# Remove an entry only in the same PR that removes the corresponding dependency.
-#
-# Drained: no prohibited edge and no layer cycle remain.

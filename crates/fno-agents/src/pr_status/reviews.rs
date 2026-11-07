@@ -1303,7 +1303,7 @@ mod shape_review_coverage_tests {
     #[test]
     fn every_golden_table_row_derives_its_expected_word() {
         let table: Value = serde_json::from_str(include_str!(
-            "../../../../cli/tests/config/review_state_table.json"
+            "../../../../tests/py/config/review_state_table.json"
         ))
         .unwrap();
         for row in table["rows"].as_array().unwrap() {

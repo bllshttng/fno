@@ -30,7 +30,6 @@ docs/architecture/batch-lane-loop-integration.md	contribute	contributor	keep	-	0
 docs/architecture/blast-radius-router.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/claim-commands-do-provenance.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/claude-mail-pane.md	fleet	guide	move	guides/claude-mail-pane.md	0	open delivered mail in Claude Code
-docs/architecture/cli-lazy-imports.md	contribute	contributor	keep	-	6	design note for contributors
 docs/architecture/cloud-substrate.md	fleet	concept	keep	-	1	remote claude workers
 docs/architecture/codex-thread-driver.md	contribute	contributor	keep	-	5	design note for contributors
 docs/architecture/codex-thread-sandbox-posture.md	contribute	contributor	keep	-	0	design note for contributors

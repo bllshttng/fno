@@ -609,8 +609,7 @@ pub struct ProcRow {
 /// The conjunction IS the gate, and every clause is load-bearing, because the
 /// cost of a false positive is killing a process a person is using:
 ///
-/// - **argv names a reparable family.** Either the `fno-py` entrypoint, a
-///   stdio MCP server in the codegraph family (measured 2026-10-02: every
+/// - **argv names a reparable family.** Either a stdio MCP server in the codegraph family (measured 2026-10-02: every
 ///   `claude bg-spare` held one `codegraph serve --mcp` server plus a
 ///   `--liftoff-only` worker, 24 servers at 5.6 GB, and after their session
 ///   died they sat on init unreaped), or Claude Code pool machinery whose
@@ -632,14 +631,7 @@ pub fn is_reapable_orphan(row: &ProcRow, older_than: Duration, live_pids: &[u32]
         && row.age_secs >= older_than.as_secs()
         && !live_pids.contains(&row.pid)
         && row.pid != std::process::id()
-        && (names_fno_py(&row.args)
-            || names_stdio_mcp_server(&row.args)
-            || is_claude_spare(&row.args))
-}
-
-fn names_fno_py(args: &str) -> bool {
-    args.split_whitespace()
-        .any(|token| token.rsplit('/').next() == Some("fno-py"))
+        && (names_stdio_mcp_server(&row.args) || is_claude_spare(&row.args))
 }
 
 /// True when argv names a stdio MCP server in the codegraph family: the
@@ -797,7 +789,7 @@ fn terminate(row: &ProcRow) -> bool {
     true
 }
 
-/// Reap every `fno-py` child that init inherited and nobody is waiting on.
+/// Reap every reparable child that init inherited and nobody is waiting on.
 ///
 /// `live_pids` are the pids the registry vouches for. `None` means the registry
 /// could not be read, and the sweep then reaps NOTHING: an unreadable registry
@@ -957,9 +949,8 @@ pub fn mux_prune_args(dry_run: bool, include_used_shells: bool) -> Vec<&'static 
 /// the leader's answer and reports that same receipt. The flight `ttl` is
 /// ZERO - a finished prune is never answered from cache, only from a run
 /// this call made or joined. The 2026-10-02 incident (~9,000 recursive
-/// `fno-py mux workspace prune` processes, 89 GB resident) was the Python
-/// hand-off loop; the `FNO_PY_HANDOFF` marker in the Python front closes
-/// that end and this latch closes the overlap end.
+/// `mux workspace prune` processes, 89 GB resident) was a hand-off loop;
+/// this latch closes the overlap end.
 ///
 /// `root` pins the claims root (tests); `None` uses the global one.
 ///
@@ -1935,8 +1926,7 @@ mod tests {
         }
     }
 
-    /// The argv clause matches a TOKEN, not a substring, in both reparable
-    /// families: the fno-py entrypoint by basename, and stdio MCP servers by
+    /// The argv clause matches a TOKEN, not a substring: stdio MCP servers by
     /// the `serve --mcp` pair or the codegraph `--liftoff-only` launcher flag
     /// paired with a codegraph path token. A flag that merely contains a
     /// marker string is not the family, and killing on it would end
@@ -1944,17 +1934,12 @@ mod tests {
     #[test]
     fn the_argv_clause_matches_its_families_by_token() {
         assert!(!is_reapable_orphan(
-            &orphan("/usr/bin/grep --include=fno-py-notes .", 1, 86_400),
+            &orphan("/usr/bin/grep --include=serve-notes .", 1, 86_400),
             Duration::from_secs(5400),
             &[]
         ));
         assert!(!is_reapable_orphan(
             &orphan("/usr/bin/vim notes.txt", 1, 86_400),
-            Duration::from_secs(5400),
-            &[]
-        ));
-        assert!(is_reapable_orphan(
-            &orphan("fno-py backlog advance --json", 1, 86_400),
             Duration::from_secs(5400),
             &[]
         ));

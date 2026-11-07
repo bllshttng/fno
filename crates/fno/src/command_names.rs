@@ -34,6 +34,22 @@ pub fn live_roots() -> Vec<&'static str> {
         .collect()
 }
 
+/// The live root rows as (name, note), in file order: the root menu.
+pub fn live_root_rows() -> Vec<(&'static str, &'static str)> {
+    rows()
+        .filter(|r| r.1 && !r.0.contains(' '))
+        .map(|r| (r.0, r.3))
+        .collect()
+}
+
+/// The retired root rows as (name, where it went), in file order.
+pub fn retired_root_rows() -> Vec<(&'static str, &'static str)> {
+    rows()
+        .filter(|r| !r.1 && !r.0.contains(' '))
+        .map(|r| (r.0, if r.2 == "-" { r.3 } else { r.2 }))
+        .collect()
+}
+
 /// The one stderr line for a root word the front door does not answer, or
 /// None when the word is live. A flag is not a name, so it passes; the global
 /// `-J` is skipped first, so it cannot carry a retired word past the check.

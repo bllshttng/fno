@@ -22,11 +22,6 @@ set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 PREFLIGHT_SRC="$REPO_ROOT/scripts/ci/preflight.sh"
-# The fixture's preflight falls back to bare python3, whose only route to the
-# fno package is this path; the smoke runner exports it for its steps, so a
-# bare `bash tests/ci/test_preflight.sh` must export it itself or every
-# receipt write dies with ModuleNotFoundError.
-export PYTHONPATH="$REPO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}"
 # pwd -P: resolve macOS /var -> /private/var so `git worktree list` paths match.
 TMP="$(cd "$(mktemp -d)" && pwd -P)"
 # Pids the explicit kills can miss: a TERM to the script mid-run skips every
@@ -213,13 +208,12 @@ chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rust
 export PATH="$BIN:$PATH"
 
 # --- build the fixture repo -------------------------------------------------
-FIX="$TMP/repo"; mkdir -p "$FIX/scripts/ci" "$FIX/scripts/lib" "$FIX/cli/src/fno"
+FIX="$TMP/repo"; mkdir -p "$FIX/scripts/ci" "$FIX/scripts/lib"
 git -C "$FIX" init -q
 git -C "$FIX" config user.email t@t.t; git -C "$FIX" config user.name t
 cp "$PREFLIGHT_SRC" "$FIX/scripts/ci/preflight.sh"
-# The lib dir ships as a unit: events-validate.sh sources its sibling
-# fno-python.sh for interpreter resolution.
-cp "$REPO_ROOT/scripts/lib/events-validate.sh" "$REPO_ROOT/scripts/lib/fno-python.sh" "$FIX/scripts/lib/"
+# The lib dir ships the one helper preflight sources.
+cp "$REPO_ROOT/scripts/lib/events-validate.sh" "$FIX/scripts/lib/"
 # Tracker gate stubs: the real gates need the full cli project and a live
 # registry; this fixture exercises preflight's orchestration (verdicts,
 # receipts, locks), so the gates stub green and honor POISON like the uv stub.

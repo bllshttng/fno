@@ -271,7 +271,7 @@ Defensive behavior: in-flight entries with missing `worktree_path`, missing grap
 
 ### Test Coverage (phase 06)
 
-`cli/tests/integration/`:
+`tests/py/integration/`:
 
 | File | Tests | AC |
 |------|-------|----|

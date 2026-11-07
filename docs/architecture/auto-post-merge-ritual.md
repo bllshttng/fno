@@ -73,4 +73,4 @@ The original per-repo-launchd sketch this section replaced is retained only as d
 | `skills/ship/scripts/inbox-has-pr.sh` | fno-free idempotency guard (marker grep) |
 | `cli/src/fno/config/__init__.py` | `PostMergeBlock` (parking_lot_path, enabled) + validator |
 | `cli/tests/unit/test_config_post_merge.py` | schema + `fno config get` resolution tests |
-| `cli/tests/unit/test_post_merge_inbox_idempotency.py` | idempotency-guard tests |
+| `tests/py/unit/test_post_merge_inbox_idempotency.py` | idempotency-guard tests |

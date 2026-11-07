@@ -15,7 +15,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string><CASE>/stub/fno-py</string>
+    <string><CASE>/stub/fno-agents</string>
     <string>do</string>
     <string>pr</string>
     <string>watch</string>

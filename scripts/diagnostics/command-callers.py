@@ -2,7 +2,7 @@
 """Report external callers of every fno command leaf.
 
 A diagnostic (not a CI gate): for each leaf in ``scripts/ci/command-baseline.txt``,
-count how many times it is named as ``fno``/``fno-py``/``fno-agents <leaf>`` in
+count how many times it is named as ``fno``/``fno-agents <leaf>`` in
 the corpus a contributor reads (everything except ``cli/src``, where commands are
 defined). A leaf that scores zero is a cull candidate, not a verdict - the
 operator triages the zero set.
@@ -19,7 +19,7 @@ corrected zero set is a subset of the uncorrected one):
       table cell and is left alone - the cell is split into separate tokens and
       the bare ``|`` is not a command token.
   (b) Binary-form invocation. ``fno-agents loop-check`` credits the
-      ``agents loop-check`` namespace; ``fno-py <leaf>`` credits the plain one.
+      ``agents loop-check`` namespace.
 
 Positive controls are ENFORCED, not printed: a control that does not fire means
 the sweep is broken, and no candidate list is emitted. A zero-reference result
@@ -49,9 +49,8 @@ Usage:
   python3 scripts/diagnostics/command-callers.py --summary  # counts + delta + clusters
   python3 scripts/diagnostics/command-callers.py --self-check  # controls + parity, exit code
 
-The sweep itself is stdlib-only. ``file:line`` and help columns require the fno
-environment (click/typer); run under ``uv run --project cli python ...`` for the
-enriched table, or accept blank columns under a bare interpreter.
+The sweep is stdlib-only. The ``file:line`` and help columns read the deleted
+Python command registry, so they print blank.
 """
 from __future__ import annotations
 
@@ -116,11 +115,11 @@ SKIP_DIRS = {
 # Uppercase stops a path; flags and brackets are not command tokens.
 _COMMAND_RE = re.compile(r"[a-z][a-z0-9-|]*")
 
-# Outer punctuation to strip so `` `fno-agents` `` and ``(fno-py)`` match; hyphen
+# Outer punctuation to strip so `` `fno-agents` `` and ``(fno)`` match; hyphen
 # and pipe are internal structure and stay.
 _STRIP = "".join(c for c in string.punctuation if c not in "-|")
 
-PREFIXES = {"fno", "fno-py", "fno-agents"}
+PREFIXES = {"fno", "fno-agents"}
 
 # Positive controls: a sweep where these do not fire is broken, not changed.
 CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
@@ -387,7 +386,7 @@ def sweep(
 ) -> Counter:
     """Count references. Returns a Counter keyed by leaf path."""
     counts: Counter = Counter()
-    prefixes = set(PREFIXES if binary_form else {"fno", "fno-py"}) | set(extra_prefixes)
+    prefixes = set(PREFIXES if binary_form else {"fno"}) | set(extra_prefixes)
     for path in (iter_corpus(root) if paths is None else paths):
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -602,7 +601,7 @@ def sweep_internal(root: Path, leaves: set[str]) -> tuple[Counter, Counter, list
 
 
 # A shell invocation whose command path comes from an array or a variable:
-# ``fno "${cmd[@]}"``, ``fno $command``, ``fno-py "$1"``. A literal token sweep
+# ``fno "${cmd[@]}"``, ``fno $command``, ``fno-agents "$1"``. A literal token sweep
 # cannot see the command, so each one is a hole in the dead set exactly the size of
 # what it can reach. Reported, never resolved: resolving would mean interpreting
 # shell, and a wrong resolution here silently authorises a deletion.
@@ -736,118 +735,14 @@ def sweep_buckets(root: Path, leaves: set[str], extra_prefixes=()) -> dict[str, 
     return out
 
 
-def _local_leaves():
-    """(path, cmd) for every fno-py leaf, visible and hidden.
-
-    The ratchet module's live walk, carried by its only remaining consumer
-    after the module deleted. Same rules: eager commands resolved to real
-    Click commands, Typer alias groups deduped by import target, and the
-    native-served leaves claimed as flagless pairs.
-    """
-    import importlib
-
-    import click
-    import typer
-    import typer.main
-
-    from fno._lazy_group import (
-        NATIVE_SERVED_LEAVES,
-        iter_group_leaves,
-        typer_group_shape,
-    )
-    from fno.cli import LAZY_SUBCOMMANDS, _EAGER_COMMAND_HELP, app as _root_app
-
-    for n in _EAGER_COMMAND_HELP:
-        root_cmd = typer.main.get_command(_root_app)
-        yield n, root_cmd.get_command(click.Context(root_cmd), n)
-
-    seen = set()
-    for name, entry in LAZY_SUBCOMMANDS.items():
-        import_path = entry[0]
-        module_path, _, attr = import_path.rpartition(":")
-        try:
-            module = importlib.import_module(module_path)
-        except Exception:
-            continue
-        obj = getattr(module, attr, None)
-        if obj is None:
-            continue
-        if isinstance(obj, typer.Typer):
-            if import_path in seen:
-                continue
-            seen.add(import_path)
-            cmd = typer_group_shape(obj)
-            if hasattr(cmd, "list_commands"):
-                ctx = click.Context(cmd, info_name=name)
-                yielded = False
-                for path, sub in iter_group_leaves(cmd, ctx, name):
-                    yield path, sub
-                    yielded = True
-                if not yielded:
-                    yield name, cmd
-            else:
-                yield name, cmd
-        elif isinstance(obj, click.Command):
-            yield name, obj
-        else:
-            sub = typer.Typer(add_completion=False)
-            sub.command(name=name)(obj)
-            yield name, typer.main.get_command(sub)
-    for native in sorted(NATIVE_SERVED_LEAVES):
-        yield native, None
-
-
 def load_enrichment(root: Path) -> dict[str, tuple[str, str]]:
-    """Best-effort ``{leaf: (file:line, help)}`` from the live registry.
+    """``{leaf: (file:line, help)}`` for the report's enrichment columns.
 
-    Returns ``{}`` when the fno environment (click/typer) is unavailable, so the
-    sweep and its controls still run under a bare interpreter.
+    The columns came from the Python command registry, which is deleted; every
+    command is native now and its help is ``fno <command> --help``. The table is
+    empty, so the report prints blank columns.
     """
-    try:
-        import inspect
-
-        from fno._lazy_group import NATIVE_SERVED_LEAVES
-    except Exception:
-        return {}
-    table: dict[str, tuple[str, str]] = {}
-    # A refusal is NOT the same as "no fno environment". The enumerator refuses
-    # when the imported package is not this checkout's source, and swallowing
-    # that into an empty table would report an unenriched sweep as if the
-    # registry simply had nothing to add - an absence reading as an answer. Let
-    # the sweep continue (enrichment is best-effort) but say why, with the
-    # named, actionable message rather than a bare traceback out of a diagnostic.
-    # Caught around the walk itself rather than by probing first: the enumerator
-    # imports every lazy subcommand module, so a separate probe call paid for
-    # that whole traversal twice.
-    try:
-        rel_root = root.resolve()
-        for path, cmd in _local_leaves():
-            file_line = ""
-            help_line = ""
-            cb = getattr(cmd, "callback", None) if cmd else None
-            # Typer wraps the user function; ``__wrapped__`` is the real source.
-            real = getattr(cb, "__wrapped__", cb) if cb else None
-            if real is not None:
-                try:
-                    sf = Path(inspect.getsourcefile(real))
-                    line = inspect.getsourcelines(real)[1]
-                    try:
-                        file_line = str(sf.resolve().relative_to(rel_root)) + f":{line}"
-                    except ValueError:
-                        file_line = f"{sf.name}:{line}"
-                except (TypeError, OSError):
-                    file_line = ""
-            help_text = (getattr(cmd, "help", None) or "").strip()
-            if not help_text and real is not None:
-                help_text = (inspect.getdoc(real) or "").strip()
-            help_line = help_text.splitlines()[0] if help_text else ""
-            table[path] = (file_line, help_line)
-    except CommandRatchetError as exc:
-        print(f"command enrichment SKIPPED: {exc}", file=sys.stderr)
-        return {}
-    except Exception:
-        pass
-    return table
+    return {}
 
 
 def check_controls(counts: Counter, controls: dict[str, int] = None) -> list[str]:

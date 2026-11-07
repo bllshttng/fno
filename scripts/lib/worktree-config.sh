@@ -9,18 +9,12 @@
 # a TOML `[worktree]` table.
 
 # wt_config <key> <default>: print worktree.<key>, or <default> when unset or
-# when neither fno nor fno-py is on PATH (fno-py is the wheel's entry point, on
-# PATH under `uv run`). Only the Python bool words are lowercased: the command
-# keys (setup_command, test_command) keep their case.
+# when fno is not on PATH. The Python bool words are lowercased for old
+# installs: the command keys (setup_command, test_command) keep their case.
 wt_config() {
-    local val="" cli=""
+    local val=""
     if command -v fno >/dev/null 2>&1; then
-        cli=fno
-    elif command -v fno-py >/dev/null 2>&1; then
-        cli=fno-py
-    fi
-    if [[ -n "$cli" ]]; then
-        val="$("$cli" config get "worktree.$1" 2>/dev/null)" || val=""
+        val="$(fno config get "worktree.$1" 2>/dev/null)" || val=""
     fi
     case "$val" in
         True) val=true ;;

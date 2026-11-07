@@ -5,7 +5,7 @@ id: regression-cli-help-smoke
 tier: regression
 grade:
   - kind: exit
-    command: "cd cli && uv run fno-py --help"
+    command: "cargo run -q --manifest-path crates/fno/Cargo.toml --bin fno -- --help"
     expect: 0
 timeout_minutes: 5
 tags: [smoke]

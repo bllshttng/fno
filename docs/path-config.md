@@ -103,7 +103,7 @@ Unknown keys are ignored for forward compatibility, so a typo'd section or leaf 
 | `FNO_CONFIG` | Absolute path to a specific config.toml file. Overrides all path-based discovery. |
 | `FNO_GLOBAL_SETTINGS_PATH` | Overrides the per-user global candidate (`~/.fno/config.toml`) without affecting the project-local candidate. Set to `/dev/null` to disable the global candidate entirely. Used by `cli/src/fno/conftest.py` to keep unit tests isolated from the developer's real global config. Empty-string value is treated as unset. |
 | `HOME` | Determines `~` expansion in path values. Set by the OS; override in tests only. |
-| `FNO_REPO_ROOT` | Overrides `git rev-parse --show-toplevel` for tests and CI environments where git is unavailable. Scopes **project/config resolution only**, not events-schema resolution (the schema self-locates inside the plugin; see [architecture/schema-config-resolution.md](architecture/schema-config-resolution.md)). Do NOT export it to fix a `schema unavailable` miss: pinning it to the footnote checkout from inside another repo silently repoints `fno config get` at the wrong project. `fno` warns (non-fatal) when it detects that foreign pin. |
+| `FNO_REPO_ROOT` | Overrides `git rev-parse --show-toplevel` for tests and CI environments where git is unavailable. Scopes **project/config resolution only**, not events-schema resolution (the schema is compiled into `fno-agents`; see [architecture/schema-config-resolution.md](architecture/schema-config-resolution.md)). Do NOT export it from inside another repo: pinning it to the footnote checkout silently repoints `fno config get` at the wrong project. |
 | `FNO_SKIP_MIGRATION` | Set to `1` to skip the automatic startup migration check. Useful in CI. |
 
 ## Template variables

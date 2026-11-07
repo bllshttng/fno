@@ -399,8 +399,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     // 1. Create/reuse the worktree off origin/main via the ensure command (the
     //    one create/reuse path). Forward the current session's harness so a
     //    claude cold-start lands harness-native; no ambient marker omits it
-    //    and ensure degrades to the external base. Plain `fno` off PATH,
-    //    never `fno-py`.
+    //    and ensure degrades to the external base. Plain `fno` off PATH.
     let ambient_harness = crate::claims::resolve_identity().1;
     let mut ensure_cmd = Command::new("fno");
     ensure_cmd
