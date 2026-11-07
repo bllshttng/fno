@@ -1481,6 +1481,10 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
             "blueprint_target_ready".into(),
             bp.value["target_ready"].clone(),
         );
+        data.insert(
+            "blueprint_plan_ready".into(),
+            bp.value.get("plan_ready").cloned().unwrap_or(Value::Null),
+        );
         data.insert("blueprint_skips".into(), bp.value["skips"].clone());
         // The idle-scope attention reads these; deliberately NOT diff keys
         // (NUMERIC_DIFF_KEYS), so every historical baseline stays measurable.
@@ -2017,50 +2021,7 @@ fn render_lines_with(
             let bp = by_name("blueprint")
                 .map(|r| &r.value)
                 .unwrap_or(&Value::Null);
-            lines.push(format!(
-                "blueprint: running {} of {} ({}); plans ready {} / slots {}",
-                dash(bp.get("running")),
-                dash(bp.get("ceiling")),
-                dash(bp.get("ceiling_source")),
-                dash(bp.get("plans_ready")),
-                dash(bp.get("slots")),
-            ));
-            for id in bp
-                .get("starts")
-                .and_then(|s| s.as_array())
-                .into_iter()
-                .flatten()
-            {
-                lines.push(format!(
-                    "  start /fno:blueprint subagent {}",
-                    dash(Some(id))
-                ));
-            }
-            for id in bp
-                .get("target_ready")
-                .and_then(|s| s.as_array())
-                .into_iter()
-                .flatten()
-            {
-                // The spawn command to copy: with no --name, spawn names the
-                // worker t-<short slug> and the lane picks its model.
-                lines.push(format!(
-                    "  target-ready: fno agents spawn \"/fno:target {}\"",
-                    dash(Some(id))
-                ));
-            }
-            for skip in bp
-                .get("skips")
-                .and_then(|s| s.as_array())
-                .into_iter()
-                .flatten()
-            {
-                lines.push(format!(
-                    "  skip {} : {}",
-                    dash(skip.get("id")),
-                    dash(skip.get("reason"))
-                ));
-            }
+            lines.extend(crate::lead_checkin_blueprint::render_lines(bp));
         }
     }
 

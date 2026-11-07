@@ -124,9 +124,29 @@ pub(crate) fn r_blueprint(
     } else {
         "two per lead".to_string()
     };
-    let plans_ready = crate::lead_checkin::board_queue(board, "undispatched")
-        .ok()
-        .and_then(|q| q.get("count").and_then(Value::as_u64).map(|c| c as usize));
+    let undispatched = crate::lead_checkin::board_queue(board, "undispatched").ok();
+    let plans_ready =
+        undispatched.and_then(|q| q.get("count").and_then(Value::as_u64).map(|c| c as usize));
+    // Planned, unclaimed rows: the plan is done, so the next move is a build
+    // worker, not a blueprint. A row a deeper live team owns skips like an
+    // unplanned one does; an unreadable queue names none.
+    let mut plan_ready: Vec<String> = Vec::new();
+    for row in undispatched
+        .and_then(|q| q.get("rows").and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            skips.push(json!({"id": null, "reason": "row carries no id"}));
+            continue;
+        };
+        match other_owned.get(id) {
+            Some(owner) => {
+                skips.push(json!({"id": id, "reason": format!("owned by team {owner}")}))
+            }
+            None => plan_ready.push(id.to_string()),
+        }
+    }
     let (pr_v, slots_v, gate_reason): (Value, Value, Option<String>) = match (plans_ready, &slots) {
         (Some(pr), Ok(s)) => {
             if pr < *s {
@@ -188,9 +208,58 @@ pub(crate) fn r_blueprint(
         "slots": slots_v,
         "starts": starts,
         "target_ready": target_ready,
+        "plan_ready": plan_ready,
         "idea_children": idea_children_json,
         "skips": skips,
     }))
+}
+
+/// The beat's `blueprint:` lines from an `r_blueprint` reading: the scope
+/// line, then start, target-ready, plan-ready and skip lines. The spawn
+/// commands are the ones to copy: with no --name, spawn names the worker
+/// t-<short slug> and the lane picks its model.
+pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
+    use crate::lead_checkin::dash;
+    let ids = |key: &str| -> Vec<Value> {
+        bp.get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut lines = vec![format!(
+        "blueprint: running {} of {} ({}); plans ready {} / slots {}",
+        dash(bp.get("running")),
+        dash(bp.get("ceiling")),
+        dash(bp.get("ceiling_source")),
+        dash(bp.get("plans_ready")),
+        dash(bp.get("slots")),
+    )];
+    for id in ids("starts") {
+        lines.push(format!(
+            "  start /fno:blueprint subagent {}",
+            dash(Some(&id))
+        ));
+    }
+    for id in ids("target_ready") {
+        lines.push(format!(
+            "  target-ready: fno agents spawn \"/fno:target {}\"",
+            dash(Some(&id))
+        ));
+    }
+    for id in ids("plan_ready") {
+        lines.push(format!(
+            "  plan-ready: fno agents spawn \"/fno:target {}\"",
+            dash(Some(&id))
+        ));
+    }
+    for skip in ids("skips") {
+        lines.push(format!(
+            "  skip {} : {}",
+            dash(skip.get("id")),
+            dash(skip.get("reason"))
+        ));
+    }
+    lines
 }
 
 /// The stop check's blueprint-ceiling reading: the same ceiling the
@@ -610,6 +679,101 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// A board with an empty unplanned queue and one undispatched queue
+    /// carrying the given planned rows.
+    fn undispatched_board(ids: &[&str]) -> Value {
+        json!({"queues": [
+            {"name": "unplanned", "status": "ok", "count": 0, "rows": []},
+            {"name": "undispatched", "status": "ok", "count": ids.len(),
+             "rows": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()},
+        ]})
+    }
+
+    /// A planned, unclaimed row in scope prints once as a spawn command, and
+    /// the starts and target-ready lists stay as they were.
+    #[test]
+    fn plan_ready_names_an_undispatched_row_as_one_spawn_line() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-planready-{}", std::process::id()));
+        let reading = blueprint_reading(
+            &dir,
+            "",
+            undispatched_board(&["x-pl"]),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+        )
+        .unwrap();
+        assert_eq!(
+            reading.get("plan_ready"),
+            Some(&json!(["x-pl"])),
+            "{reading}"
+        );
+        assert_eq!(reading["starts"], json!([]), "{reading}");
+        assert_eq!(reading.get("target_ready"), Some(&json!([])), "{reading}");
+        let lines = render_lines(&reading);
+        let want = "  plan-ready: fno agents spawn \"/fno:target x-pl\"";
+        assert_eq!(lines.iter().filter(|l| *l == want).count(), 1, "{lines:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A planned row a deeper live team owns never prints as plan-ready and
+    /// skips naming its owner; an unreadable undispatched queue names none
+    /// and keeps the unmeasured gate reason.
+    #[test]
+    fn plan_ready_skips_owned_rows_and_names_none_when_unreadable() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-planowned-{}", std::process::id()));
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            undispatched_board(&["x-mine", "x-theirs"]),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+            Ok(HashMap::from([(
+                "x-theirs".to_string(),
+                "x-cccc".to_string(),
+            )])),
+            Ok(0),
+        )
+        .unwrap();
+        assert_eq!(
+            reading.get("plan_ready"),
+            Some(&json!(["x-mine"])),
+            "{reading}"
+        );
+        // The empty unplanned queue also adds its null-id idle skip, so the
+        // owned row must read among the skips, not as the only one.
+        assert!(
+            reading
+                .get("skips")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|s| { s == &json!({"id": "x-theirs", "reason": "owned by team x-cccc"}) }),
+            "{reading}"
+        );
+        let reading = blueprint_reading(
+            &dir,
+            "",
+            unplanned_board(&[("x-1", "high")], None),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+        )
+        .unwrap();
+        assert_eq!(reading.get("plan_ready"), Some(&json!([])), "{reading}");
+        assert!(
+            render_lines(&reading)
+                .iter()
+                .all(|l| !l.contains("plan-ready")),
+            "{reading}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The stop check folds the provider cap into the same one-per-lead
