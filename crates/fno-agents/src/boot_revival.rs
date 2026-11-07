@@ -1817,8 +1817,8 @@ mod tests {
         let revived = revived.into_inner().unwrap();
         assert_eq!(
             revived,
-            vec!["c1", "k1", "c1"],
-            "the failed claude row retried once"
+            vec!["k1", "c1"],
+            "the keeper chunk runs first; the resolve-failed claude row never chunks and retries once"
         );
         let resolve_calls = resolve_calls.into_inner().unwrap();
         assert_eq!(resolve_calls, vec!["c1"]);
