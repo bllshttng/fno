@@ -705,7 +705,7 @@ pub fn legacy_worktrees_base(state: &Path) -> PathBuf {
     state.join("worktrees")
 }
 
-fn state_root_for_worktrees(cwd: &Path) -> PathBuf {
+pub(crate) fn state_root_for_worktrees(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
