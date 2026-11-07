@@ -8,10 +8,12 @@
 //! golden tier on `evals.gate.lane` as cohort `gate-main-<date>-<hash>`. The
 //! lead seat runs the `lead` goldens on the first lane of
 //! `agents.profiles.role.lanes` as `gate-main-<date>-<hash>-lead`. One seat
-//! runs at a time, and the worker goes first. The golden set is read at the
-//! fetched sha through a detached worktree, never from this repo's working tree: the
-//! checkout the daemon runs from can sit behind the ref, and a tag read
-//! there misses a golden main added. Each finished cohort that graded every
+//! runs at a time, and the worker goes first. The golden set and the route
+//! config hash are read at the fetched sha, never from this repo's working
+//! tree: the golden set through a detached worktree, the hash through `git
+//! show`, because the checkout the daemon runs from can sit behind the ref,
+//! and a tag or route read there misses what main added. Each finished
+//! cohort that graded every
 //! gate task of its seat becomes the baseline of that seat, and it is compared to
 //! that seat's one before. A cohort that graded only part of the set is no
 //! baseline: it retries the same day, then falls back. A regression files a
@@ -421,17 +423,50 @@ fn touches_tier_path(files: &[&str]) -> bool {
 
 /// FNV-1a over the route config. One hash decides a change, and a new binary
 /// must read the same value, which the std hasher does not promise.
+fn route_hash_of(text: &str) -> String {
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{:08x}", hash >> 32)
+}
+
+/// The route hash of the checkout working tree.
 fn route_hash(repo: &Path) -> String {
     let read = |keys: &[&str]| {
         crate::agents_config::config_value_deep(repo, keys)
             .map(|v| v.to_string())
             .unwrap_or_default()
     };
-    let text = read(&["routing", "models"]) + &read(&["agents", "profiles"]);
-    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    });
-    format!("{:08x}", hash >> 32)
+    route_hash_of(&(read(&["routing", "models"]) + &read(&["agents", "profiles"])))
+}
+
+/// The route hash at the tested ref: `git show <sha>:.fno/config.toml`, so a
+/// route change merged to main turns the cohort over before the checkout the
+/// daemon runs from catches up - the staleness family the bank's
+/// ref-checkout serves. Plumbing or parse failure hashes the checkout
+/// working tree instead, the behavior this replaces.
+fn route_hash_at(p: &Paths, d: &Deps, sha: &str) -> String {
+    let spec = format!("{sha}:.fno/config.toml");
+    let at_ref = (d.run)(&["git", "show", &spec], p.repo)
+        .filter(|r| r.ok)
+        .and_then(|r| toml::from_str::<toml::Value>(&r.stdout).ok())
+        .map(|root| {
+            let read = |keys: &[&str]| -> String {
+                let mut cur = &root;
+                for k in keys {
+                    match cur.get(*k) {
+                        Some(v) => cur = v,
+                        None => return String::new(),
+                    }
+                }
+                cur.to_string()
+            };
+            read(&["routing", "models"]) + &read(&["agents", "profiles"])
+        });
+    match at_ref {
+        Some(text) => route_hash_of(&text),
+        None => route_hash(p.repo),
+    }
 }
 
 pub(crate) fn history_rows(history: &Path) -> Vec<Value> {
@@ -1108,14 +1143,26 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
         return settle_main_run(p, d, state)
             .unwrap_or_else(|| format!("main {} running", run.cohort));
     }
+    if !can_launch {
+        return "main held by the spawn gate".into();
+    }
+    if !fetch(p, d, "main") {
+        return "main fetch failed".into();
+    }
+    let Some(sha) = (d.run)(&["git", "rev-parse", "FETCH_HEAD"], p.repo)
+        .filter(|r| r.ok)
+        .map(|r| r.stdout.trim().to_string())
+    else {
+        return "main rev unread".into();
+    };
     let day = format!(
         "gate-main-{}-{}",
         d.now.format("%Y-%m-%d"),
-        route_hash(p.repo)
+        route_hash_at(p, d, &sha)
     );
     let mut notes = Vec::new();
     for seat in SEATS {
-        let (note, settled) = main_seat(p, d, state, seat, &day, can_launch, daily_usd);
+        let (note, settled) = main_seat(p, d, state, seat, &day, &sha, daily_usd);
         notes.push(note);
         // The next seat waits until this one is settled for now.
         if !settled {
@@ -1133,7 +1180,7 @@ fn main_seat(
     state: &mut State,
     seat: &Seat,
     day: &str,
-    can_launch: bool,
+    sha: &str,
     daily_usd: f64,
 ) -> (String, bool) {
     let cohort = format!("{day}{}", seat.suffix);
@@ -1162,9 +1209,6 @@ fn main_seat(
             Some(_) => {}
         }
     }
-    if !can_launch {
-        return ("main held by the spawn gate".into(), false);
-    }
     let lane = if fallback {
         FALLBACK_LANE.to_string()
     } else {
@@ -1178,15 +1222,6 @@ fn main_seat(
         format!("{cohort}{FALLBACK_SUFFIX}")
     } else {
         cohort.clone()
-    };
-    if !fetch(p, d, "main") {
-        return ("main fetch failed".into(), false);
-    }
-    let Some(sha) = (d.run)(&["git", "rev-parse", "FETCH_HEAD"], p.repo)
-        .filter(|r| r.ok)
-        .map(|r| r.stdout.trim().to_string())
-    else {
-        return ("main rev unread".into(), false);
     };
     // The golden set is read at the sha the run grades, not at the checkout.
     let arg_bank =
@@ -2273,6 +2308,19 @@ mod tests {
                             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
                         })
                     }
+                    ["git", "show", ..] if self.real_git => {
+                        let out = std::process::Command::new("git")
+                            .args(&args[1..])
+                            .current_dir(self.dir.path())
+                            .output()
+                            .expect("git runs in the test repo");
+                        Some(Run {
+                            ok: out.status.success(),
+                            code: out.status.code(),
+                            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                        })
+                    }
                     ["git", "diff", "--quiet", ..] => Some(Run {
                         ok: false,
                         code: Some(1),
@@ -2723,6 +2771,74 @@ mod tests {
         assert!(!state_dir(&w.history())
             .join(format!("compare-{cohort}.json"))
             .exists());
+    }
+
+    #[test]
+    fn the_main_cohort_hashes_the_refs_config_not_the_checkouts() {
+        // The checkout sits at x while main carries a changed route table:
+        // the cohort embeds main's hash, so a route change merged to main
+        // re-baselines at once instead of waiting for the checkout to move.
+        let routes_a = "[[routing.models]]\nname = \"a\"\nroute = \"vendor/a\"\n";
+        let routes_b = "[[routing.models]]\nname = \"b\"\nroute = \"vendor/b\"\n";
+        let mut w = World::new("");
+        w.real_git = true;
+        let git = |args: &[&str]| -> std::process::Output {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(w.dir.path())
+                .output()
+                .expect("git runs in the test repo");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        World::config(w.dir.path(), routes_a);
+        git(&["add", "evals"]);
+        git(&["add", ".fno"]);
+        git(&["commit", "-m", "x"]);
+        let x = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string();
+        World::config(w.dir.path(), routes_b);
+        git(&["add", ".fno"]);
+        git(&["commit", "-m", "y"]);
+        git(&["checkout", "--detach", &x]);
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
+        w.tick(true, now);
+        let cohort = load_state(&state_dir(&w.history()))
+            .worker
+            .main_tried
+            .unwrap();
+        let ref_models = toml::from_str::<toml::Value>(routes_b)
+            .unwrap()
+            .get("routing")
+            .and_then(|r| r.get("models"))
+            .unwrap()
+            .to_string();
+        assert!(
+            cohort.contains(&route_hash_of(&ref_models)),
+            "the cohort embeds the ref's route hash: {cohort}"
+        );
+        assert_ne!(
+            cohort,
+            format!(
+                "gate-main-{}-{}",
+                now.format("%Y-%m-%d"),
+                route_hash(w.dir.path())
+            ),
+            "the checkout hash names no cohort here: {cohort}"
+        );
     }
 
     #[test]
