@@ -3,6 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
+#       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
@@ -36,6 +37,8 @@ PREV=""
 HOLD=""
 GROUP=""
 REMOTE_PANE=""
+WEB=""
+WEB_PORT=8722
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
@@ -48,11 +51,13 @@ for a in "$@"; do
     export FNO_MUX_WINDOW_SIZE="$a"
   elif [ "$PREV" = "--group" ]; then
     GROUP="$a"
+  elif [ "$PREV" = "--web-port" ]; then
+    WEB_PORT="$a"
   elif [ "$PREV" = "--sort" ]; then
     FNO_DEMO_SORT="$a"
   elif [ "$PREV" = "--layout" ]; then
     FNO_DEMO_LAYOUT="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ]; then
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ]; then
     :
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
@@ -62,6 +67,8 @@ for a in "$@"; do
     HOLD=1
   elif [ "$a" = "--remote-pane" ]; then
     REMOTE_PANE=1
+  elif [ "$a" = "--web" ]; then
+    WEB=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -248,6 +255,15 @@ case " $* " in
     ;;
 esac
 unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
+# A harness identity in the caller's env would join the demo's fresh store as
+# that real session: every seed call stamps it onto the demo nodes and the
+# shot leaks the id (x-d742 look flag). Strip the identity keys, so the demo
+# store carries only what the seed writes.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID CLAUDECODE CLAUDECODE_SESSION_ID \
+  CODEX_THREAD_ID CODEX_SESSION_ID CODEX_COMPANION_SESSION_ID \
+  CODEX_COMPANION_TRANSCRIPT_PATH GEMINI_SESSION_ID OPENCODE_SESSION_ID \
+  PI_SESSION_ID PI_SESSION_FILE HERMES_SESSION_ID TARGET_SESSION_ID \
+  FNO_HARNESS_NAME FNO_HARNESS_SESSION_ID REX_SERVER REX_SESSION REX_BLOCK
 # Under an owner session the server lives as long as its owner. Left alone,
 # the owner is the first short-lived `pane run`, and the server shuts down
 # before the shot. This script owns it instead, so it also dies with us.
@@ -341,10 +357,30 @@ for i in "${!IDS[@]}"; do
   "$FNO" backlog update "${IDS[$i]}" --set project="$s" >/dev/null
 done
 
+# The graph shot needs a real family, a cross-project blocker and live nodes;
+# every other snapshot keeps the compact, unrelated work fixture above.
+GRAPH_VIEW=""
+case " $* " in
+  *" --view backlog-graph "*)
+    GRAPH_VIEW=1
+    "$FNO" backlog update "${IDS[0]}" type=epic >/dev/null
+    "$FNO" backlog update "${IDS[1]}" parent="${IDS[0]}" "blocked_by+=${IDS[5]}" >/dev/null
+    "$FNO" backlog update "${IDS[2]}" parent="${IDS[0]}" >/dev/null
+    "$FNO" backlog update "${IDS[3]}" parent="${IDS[1]}" >/dev/null
+    "$FNO" backlog update "${IDS[4]}" parent="${IDS[0]}" >/dev/null
+    "$FNO" backlog done "${IDS[4]}" --force --reason "demo fixture includes one completed graph child" --note "demo fixture completed child" --skip-stamp >/dev/null
+    "$FNO" backlog update "${IDS[5]}" type=epic >/dev/null
+    ;;
+esac
+
 # The three panes work the first three nodes: a claim moves each node to In
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
+if [ -n "$GRAPH_VIEW" ]; then
+  SIDS=(0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2d)
+  HARNESSES=(codex codex codex)
+fi
 # The first backlog command migrates the store and publishes its tombstone AS
 # the claims path: a marker file where the lock needs a directory. The
 # marker's backup imported at publish, so retiring the marker and
@@ -856,4 +892,8 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
+if [ -n "$WEB" ]; then
+  "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
+else
+  "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
+fi

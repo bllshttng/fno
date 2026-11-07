@@ -56,6 +56,30 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .card.blocked { border-color: var(--red); }
 .more { color: var(--overlay1); font-size: 11px; padding: 2px 9px; }
 .empty { color: var(--overlay1); padding: 10px 2px; }
+.gsvg { display: block; min-width: 100%; margin-top: 14px; overflow: visible; }
+.gedge { fill: none; stroke: var(--overlay1); stroke-width: 1.5; }
+.gedge.contained { stroke-dasharray: 7 4; }
+.gedge.related { stroke-dasharray: 2 5; }
+.gedge.blocked_by { stroke: var(--red); stroke-width: 2; }
+.gnode { cursor: pointer; }
+.gnode rect { fill: var(--mantle); stroke: var(--surface1); stroke-width: 1.5; }
+.gnode:hover rect { stroke: var(--text); }
+.gnode.sel rect, .gnode.open rect { stroke: var(--blue); stroke-width: 3; }
+.gnode.blocked rect { stroke: var(--red); }
+.gnode text { fill: var(--text); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
+.gnode .gid { fill: var(--subtext0); font-size: 11px; font-weight: 700; }
+.gnode .gtitle { font: 600 12px system-ui, sans-serif; }
+.gnode.lead0 .gtitle { fill: var(--blue); }
+.gnode.lead1 .gtitle { fill: var(--yellow); }
+.gnode.lead2 .gtitle { fill: var(--green); }
+.gnode.lead3 .gtitle { fill: var(--red); }
+.gnode .glead { fill: var(--yellow); font-size: 10px; }
+.gnode .glive { fill: var(--green); }
+.gnode.stub rect { fill: var(--base); stroke-dasharray: 4 3; }
+.gnode.stub text { fill: var(--overlay1); }
+.glayer { fill: var(--blue); font: 700 12px system-ui, sans-serif; }
+.gempty { color: var(--overlay1); padding: 10px 2px; }
+.glegend { color: var(--overlay1); font-size: 11px; margin: 10px 2px 0; }
 #panel { position: fixed; top: var(--fno-nav-h, 0px); right: 0; bottom: 0; width: min(480px, 46vw); background: var(--mantle); border-left: 1px solid var(--surface1); overflow-y: auto; padding: 10px 14px 24px; z-index: 500; container-type: inline-size; container-name: panel; }
 #panelgrip { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
 #panel[hidden] { display: none; }
@@ -204,9 +228,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 <div id="f-qerr" role="status"></div>
 <div class="controls" id="controls">
   <span class="mark">Ｆ<b>[no]</b> backlog</span>
-  <span class="lbl">view <kbd title="switch kanban and list">tab</kbd></span>
+  <span class="lbl">view <kbd title="switch kanban, list and graph">tab</kbd></span>
   <button type="button" data-view="kanban">kanban</button>
   <button type="button" data-view="list">list</button>
+  <button type="button" data-view="graph">graph</button>
   <span class="lbl">lanes <kbd title="cycle lanes">l</kbd></span>
   <button type="button" data-lanes="project">project</button>
   <button type="button" data-lanes="epic">epic</button>
@@ -938,7 +963,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   let openSeq = 0;
   // The j/k selection: the id of the held card and the flat draw-order id
   // list rebuilt on every redraw.
-  let selId = "";
+  let selId = initial.get("focus") || initial.get("node") || "";
   let visibleIds = [];
   // The bridge stamps the flag only when it is bound to loopback; the
   // server-side write_guard decides every write, the flag only draws.
@@ -964,7 +989,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   // is a fixed rendering that takes nobody's prefs. Storage can refuse
   // (private mode): a failed read just leaves the defaults.
   const PREFS_KEY = "fno-backlog-prefs";
-  const hadUrlFilters = ["lanes", "view", "q", "all"].some((k) => initial.has(k)) ||
+  const hadUrlFilters = ["lanes", "view", "focus", "q", "all"].some((k) => initial.has(k)) ||
     FILTER_KEYS.some((k) => initial.has(k === "kind" ? "type" : k));
   if (!hadUrlFilters && !SNAPSHOT) {
     let saved = null;
@@ -1120,6 +1145,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   function filterParams(p) {
     if (state.lanes && state.lanes !== "project") p.set("lanes", state.lanes);
     if (state.view && state.view !== "kanban") p.set("view", state.view);
+    if (state.view === "graph" && selId) p.set("focus", selId);
     for (const k of FILTER_KEYS) for (const v of state[k]) p.append(k === "kind" ? "type" : k, v);
     if (state.q) p.set("q", state.q);
     if (state.all) p.set("all", "1");
@@ -1185,6 +1211,10 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     }
     for (const b of controls.querySelectorAll("button[data-view]")) {
       b.classList.toggle("active", b.dataset.view === state.view);
+      if (b.dataset.view === "graph" && SNAPSHOT) {
+        b.disabled = true;
+        b.title = "graph view needs the live board (fno mux serve --web)";
+      }
     }
     const f = (board && board.facets) ||
       { projects: [], epics: [], leads: [], priorities: [], sizes: [], statuses: [] };
@@ -1208,7 +1238,8 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     drawTiles();
     drawDateChips();
     visibleIds = [];
-    if (state.view === "list") drawList();
+    if (state.view === "graph") drawGraph();
+    else if (state.view === "list") drawList();
     else drawGrid();
     drawOffboard();
     if (selId && !visibleIds.includes(selId)) selId = "";
@@ -1324,24 +1355,230 @@ function laneKeyOf(card, lanesBy, parents, byId) {
         bars.appendChild(b);
       }
       statsEl.appendChild(bars);
+    } else {
+      const empty = document.createElement("span");
+      empty.className = "dim";
+      const sinceDays = Number(flow.window && flow.window.since_days);
+      empty.textContent = Number.isFinite(sinceDays) && sinceDays > 0
+        ? "No deliveries in the last " + sinceDays + " days"
+        : "No deliveries in the selected period";
+      statsEl.appendChild(empty);
     }
     const cycle = flow.cycle || {};
     const cl = document.createElement("span");
     cl.className = "dim";
     cl.textContent = cycle.available === false
-      ? "cycle unavailable: " + (cycle.reason || "unknown")
+      ? "Cycle unavailable: " + (cycle.reason || "unknown")
       : "cycle median " + cycle.median_days + " d, p85 " + cycle.p85_days + " d (n=" + cycle.n + ")";
     statsEl.appendChild(cl);
     const prs = flow.open_prs || {};
     const pr = document.createElement("span");
-    pr.textContent = "open PRs " + (prs.count || 0);
+    const prCount = prs.count || 0;
+    pr.textContent = prCount === 1 ? "1 open PR" : "open PRs " + prCount;
     statsEl.appendChild(pr);
     const waiting = flow.waiting || {};
     const w = document.createElement("span");
     w.className = "dim";
     const nOf = (v) => (v && typeof v === "object" ? v.count : v) || 0;
-    w.textContent = "waiting: in progress " + nOf(waiting.in_progress) + ", in review " + nOf(waiting.in_review) + ", blocked " + nOf(waiting.blocked);
+    w.textContent = "waiting: in review " + nOf(waiting.in_review) + ", blocked " + nOf(waiting.blocked);
     statsEl.appendChild(w);
+  }
+  function drawGraph() {
+    const top = mainEl.scrollTop;
+    const left = mainEl.scrollLeft;
+    gridEl.textContent = "";
+    gridEl.style.gridTemplateColumns = "minmax(0, 1fr)";
+    gridEl.style.width = "100%";
+    if (SNAPSHOT) {
+      const p = document.createElement("p");
+      p.className = "gempty";
+      p.textContent = "graph view needs the live board (fno mux serve --web)";
+      gridEl.appendChild(p);
+      return;
+    }
+    const graph = board && board.graph;
+    if (!graph || !(graph.nodes || []).length) {
+      const p = document.createElement("p");
+      p.className = "gempty";
+      p.textContent = "no graph nodes";
+      gridEl.appendChild(p);
+      return;
+    }
+    const layers = [...new Set(graph.nodes.map((node) => node.layer))].sort((a, b) => a - b);
+    const byLayer = new Map(layers.map((layer) => [layer,
+      graph.nodes.filter((node) => node.layer === layer).sort((a, b) => a.slot - b.slot)]));
+    const colW = 280, nodeW = 232, nodeH = 84, stepY = 108, padX = 22, padY = 56;
+    const svgWidth = Math.max(gridEl.clientWidth, padX * 2 + layers.length * colW);
+    const maxSlots = Math.max(1, ...layers.map((layer) => byLayer.get(layer).length));
+    const svgHeight = padY + maxSlots * stepY + 24;
+    const legend = document.createElement("p");
+    legend.className = "glegend";
+    legend.textContent = "parent: solid · contained: dashed · blocked_by: arrow · related: dotted";
+    gridEl.appendChild(legend);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("gsvg");
+    svg.setAttribute("width", String(svgWidth));
+    svg.setAttribute("height", String(svgHeight));
+    svg.setAttribute("viewBox", "0 0 " + svgWidth + " " + svgHeight);
+    svg.setAttribute("role", "group");
+    svg.setAttribute("aria-label", "Backlog family graph rooted at " + graph.root);
+    const defs = document.createElementNS(svg.namespaceURI, "defs");
+    const marker = document.createElementNS(svg.namespaceURI, "marker");
+    marker.setAttribute("id", "backlog-graph-arrow");
+    marker.setAttribute("markerWidth", "8");
+    marker.setAttribute("markerHeight", "8");
+    marker.setAttribute("refX", "7");
+    marker.setAttribute("refY", "4");
+    marker.setAttribute("orient", "auto");
+    const arrow = document.createElementNS(svg.namespaceURI, "path");
+    arrow.setAttribute("d", "M0,0 L8,4 L0,8 z");
+    arrow.setAttribute("fill", "var(--red)");
+    marker.appendChild(arrow);
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+    const positions = new Map();
+    for (const [col, layer] of layers.entries()) {
+      const x = padX + col * colW;
+      const label = document.createElementNS(svg.namespaceURI, "text");
+      label.setAttribute("x", String(x));
+      label.setAttribute("y", "28");
+      label.setAttribute("class", "glayer");
+      label.textContent = "layer " + layer;
+      svg.appendChild(label);
+      for (const [slot, node] of byLayer.get(layer).entries()) {
+        positions.set(node.id, { x, y: padY + slot * stepY });
+      }
+    }
+    for (const edge of graph.edges || []) {
+      const from = positions.get(edge.from), to = positions.get(edge.to);
+      if (!from || !to) continue;
+      const x1 = from.x + nodeW, y1 = from.y + nodeH / 2;
+      const x2 = to.x, y2 = to.y + nodeH / 2;
+      const bend = x1 < x2 ? (x1 + x2) / 2 : Math.max(6, Math.min(x1, x2) - 12);
+      const path = document.createElementNS(svg.namespaceURI, "path");
+      path.setAttribute("class", "gedge " + edge.kind);
+      path.setAttribute("d", "M" + x1 + " " + y1 + " H" + bend + " V" + y2 + " H" + x2);
+      if (edge.kind === "blocked_by") path.setAttribute("marker-end", "url(#backlog-graph-arrow)");
+      svg.appendChild(path);
+    }
+    const actionId = (node) => node.card ? node.card.id :
+      node.stub === "outside" ? String(node.id).slice("outside:".length) : "";
+    const fitGraphText = (value, limit) => {
+      const text = String(value || "");
+      return text.length > limit ? text.slice(0, limit - 1) + "…" : text;
+    };
+    const wrapGraphTitle = (value, limit) => {
+      let rest = String(value || "").trim();
+      const lines = [];
+      while (rest && lines.length < 2) {
+        if (rest.length <= limit) {
+          lines.push(rest);
+          rest = "";
+          break;
+        }
+        let cut = rest.lastIndexOf(" ", limit);
+        if (cut <= 0) cut = limit;
+        lines.push(rest.slice(0, cut).trim());
+        rest = rest.slice(cut).trim();
+      }
+      if (rest && lines.length === 2) {
+        lines[1] = fitGraphText(lines[1] + " " + rest, limit);
+      }
+      return [lines[0] || "", lines[1] || ""];
+    };
+    const leadClass = (name) => {
+      let hash = 0;
+      for (const ch of String(name || "")) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+      return "lead" + (hash % 4);
+    };
+    const actions = (graph.nodes || []).map(actionId).filter(Boolean);
+    if (!selId || !actions.includes(selId)) selId = graph.focus || actions[0] || "";
+    for (const node of graph.nodes) {
+      const pos = positions.get(node.id);
+      const card = node.card;
+      const id = actionId(node);
+      const group = document.createElementNS(svg.namespaceURI, "g");
+      group.classList.add("gnode");
+      if (!card) group.classList.add("stub");
+      if (card && card.blocked) group.classList.add("blocked");
+      if (card && card.lead && card.lead.name) group.classList.add(leadClass(card.lead.name));
+      if (id && id === selId) group.classList.add("sel");
+      if (id && id === openId) group.classList.add("open");
+      group.setAttribute("transform", "translate(" + pos.x + " " + pos.y + ")");
+      if (id) {
+        group.setAttribute("role", "button");
+        group.setAttribute("tabindex", "0");
+        group.setAttribute("aria-label", id + (card ? ": " + card.title : ""));
+      }
+      const rect = document.createElementNS(svg.namespaceURI, "rect");
+      rect.setAttribute("width", String(nodeW));
+      rect.setAttribute("height", String(nodeH));
+      group.appendChild(rect);
+      const idText = document.createElementNS(svg.namespaceURI, "text");
+      idText.setAttribute("x", "10");
+      idText.setAttribute("y", "20");
+      idText.setAttribute("class", "gid");
+      idText.textContent = card ? fitGraphText(card.id, 27) : node.stub && node.stub.done
+        ? node.stub.done.count + " done"
+        : node.stub && node.stub.more
+          ? "+" + node.stub.more.count + " more"
+          : fitGraphText(id || node.id, 27);
+      group.appendChild(idText);
+      const titleLines = card ? wrapGraphTitle(card.title, 32) :
+        [node.stub === "outside" ? "outside family" : "", ""];
+      for (const [index, text] of titleLines.entries()) {
+        if (!text) continue;
+        const title = document.createElementNS(svg.namespaceURI, "text");
+        title.setAttribute("x", "10");
+        title.setAttribute("y", String(index === 0 ? 41 : 55));
+        title.setAttribute("class", "gtitle");
+        title.textContent = text;
+        group.appendChild(title);
+      }
+      if (card && card.lead && card.lead.name) {
+        const lead = document.createElementNS(svg.namespaceURI, "text");
+        lead.setAttribute("x", "10");
+        lead.setAttribute("y", String(titleLines[1] ? 73 : 61));
+        lead.setAttribute("class", "glead");
+        lead.textContent = fitGraphText(card.lead.name, 30);
+        group.appendChild(lead);
+      }
+      if (card && card.live) {
+        const live = document.createElementNS(svg.namespaceURI, "circle");
+        live.setAttribute("cx", String(nodeW - 12));
+        live.setAttribute("cy", "12");
+        live.setAttribute("r", "4");
+        live.setAttribute("class", "glive");
+        group.appendChild(live);
+      }
+      if (id) {
+        group.addEventListener("click", () => {
+          setSel(id);
+          openNode(id);
+        });
+        group.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setSel(id);
+            openNode(id);
+          }
+        });
+        visibleIds.push(id);
+      }
+      svg.appendChild(group);
+    }
+    gridEl.appendChild(svg);
+    for (const unavailable of graph.unavailable || []) {
+      const note = document.createElement("p");
+      note.className = "unavail";
+      note.textContent = unavailable.feature + ": " + unavailable.reason;
+      gridEl.appendChild(note);
+    }
+    mainEl.scrollTop = top;
+    mainEl.scrollLeft = left;
+    const selectedNode = svg.querySelector(".gnode.sel");
+    if (selectedNode) selectedNode.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   function drawGrid() {
     // A redraw replaces the grid node's children only, so an open panel and
@@ -2527,6 +2764,11 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     if (prev) prev.classList.remove("sel");
     selId = id;
     savePrefs();
+    if (state.view === "graph") {
+      syncUrl();
+      fetchBoard();
+      return;
+    }
     if (!id) return;
     const el = gridEl.querySelector('[data-id="' + id + '"]');
     if (el) {
@@ -2550,7 +2792,9 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     setSel(visibleIds[i]);
   }
   function setView(v) {
+    if (SNAPSHOT && v === "graph") return;
     state.view = v;
+    if (v === "graph" && !selId) selId = openId || visibleIds[0] || "";
     syncUrl();
     fetchBoard();
   }
@@ -2728,7 +2972,10 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     else if (action === "sel-prev") moveSel(-1);
     else if (action === "open") openNode(selId || openId);
     else if (action === "copy") copyId(selId || openId);
-    else if (action === "toggle-view") setView(state.view === "list" ? "kanban" : "list");
+    else if (action === "toggle-view") {
+      const views = ["kanban", "list", "graph"];
+      setView(views[(views.indexOf(state.view) + 1) % views.length]);
+    }
     else if (action === "cycle-lanes") cycleLanes();
     else if (action === "filters") openFilters();
     else if (action === "sheet") openSheet();

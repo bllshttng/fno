@@ -80,6 +80,34 @@ fn board_render_rows() {
         lines[0]
     );
 
+    let mut inp = board_inputs();
+    inp.flow = json!({
+        "available": true,
+        "window": {"since_days": 28},
+        "deliveries": {"weeks": [{"week_start": "2026-11-02", "code": 0, "doc": 0}]},
+        "cycle": {
+            "available": false,
+            "reason": "no merged PR dates in window"
+        },
+        "open_prs": {"count": 1}
+    });
+    let b = board_with(inp);
+    let (lines, _) = render(&b, 200);
+    assert!(
+        lines
+            .first()
+            .is_some_and(|line| line.contains("No deliveries this week")),
+        "{:?}",
+        lines.first()
+    );
+    assert!(
+        lines.first().is_some_and(|line| {
+            line.contains("cycle unavailable: no merged PR dates in window")
+        }),
+        "{:?}",
+        lines.first()
+    );
+
     let b = board_with(board_inputs());
     let (lines, _) = render(&b, 80);
     let stacked = lines
@@ -935,7 +963,7 @@ fn memo_rebuilds_only_when_the_key_moves() {
         col: 0,
         row,
         w: 120,
-        list: false,
+        view: backlog_model::View::Kanban,
         query: None,
         errors: 0,
         columns: vec!["ready".into()],
@@ -1018,6 +1046,97 @@ fn board_remembers_filters_search_view_and_selection_across_reopen() {
         cursor_card_id(b).as_deref(),
         Some("x-2"),
         "selection restored"
+    );
+}
+
+#[test]
+fn tab_cycles_kanban_list_and_graph_views() {
+    let mut inputs = board_inputs();
+    if let Some(row) = inputs.rows.get_mut(1) {
+        if let Some(obj) = row.as_object_mut() {
+            obj.insert("parent".into(), json!("x-1"));
+        }
+    }
+    inputs.rows.push(json!({
+        "id": "x-4", "status": "ready", "priority": "p2",
+        "title": "Rate limit the checkout api per key", "project": "fno", "parent": "x-1"
+    }));
+    inputs.order.push("x-4".into());
+    inputs.rows.push(json!({
+        "id": "x-done", "status": "done", "priority": "p2", "parent": "x-1"
+    }));
+    inputs.order.push("x-done".into());
+    let mut view = key_view(board_with(inputs));
+    toggle_view(&mut view);
+    assert_eq!(
+        view.backlog_board.as_ref().unwrap().query.view,
+        backlog_model::View::List
+    );
+    toggle_view(&mut view);
+    assert_eq!(
+        serde_json::to_value(view.backlog_board.as_ref().unwrap().query.view).unwrap(),
+        "graph"
+    );
+    let b = view.backlog_board.as_ref().unwrap();
+    let (lines, follow) = render(b, 120);
+    assert!(
+        follow.is_some_and(|line| lines.get(line).is_some_and(|row| !row.band)),
+        "the graph cursor uses its node border, not a stripe across other nodes"
+    );
+    let painted = lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cursor_rows = lines
+        .iter()
+        .filter(|line| {
+            line.roles
+                .iter()
+                .any(|role| matches!(role, crate::text_style::TextStyle::Tab))
+        })
+        .count();
+    assert_eq!(
+        cursor_rows, 5,
+        "exactly the focused box wears the inverse cursor border: {painted}"
+    );
+    assert!(
+        painted.contains("family"),
+        "graph header missing: {painted}"
+    );
+    assert!(
+        painted.contains("x-1") && painted.contains("x-2"),
+        "family nodes missing: {painted}"
+    );
+    assert!(
+        painted.contains("Rate limit the checkout api") && painted.contains("per key"),
+        "the graph keeps a long title readable across its node lines: {painted}"
+    );
+    assert!(painted.contains("─"), "graph connectors missing: {painted}");
+    assert_eq!(
+        cursor_card_id(b).as_deref(),
+        Some("x-2"),
+        "Tab keeps the focused card"
+    );
+    move_row(&mut view, true);
+    assert_eq!(
+        cursor_card_id(view.backlog_board.as_ref().unwrap()).as_deref(),
+        Some("x-4"),
+        "j moves to the next node in the layer"
+    );
+    move_col(&mut view, false);
+    assert_eq!(
+        edit_target(view.backlog_board.as_ref().unwrap()).as_deref(),
+        Some("x-1"),
+        "h moves to the parent layer and keeps actions on its node"
+    );
+    move_col(&mut view, true);
+    move_row(&mut view, true);
+    move_row(&mut view, true);
+    let (lines, follow) = render(view.backlog_board.as_ref().unwrap(), 120);
+    assert!(
+        follow.is_some(),
+        "a focused Done stub remains visible: {lines:?}"
     );
 }
 

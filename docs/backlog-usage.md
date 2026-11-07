@@ -410,7 +410,13 @@ Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctr
 
 ![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
 
-The board shows one lane per project or epic, and a card for each node. `Tab` flips between kanban and list. `/` searches, `f` filters, and `enter` opens the node details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
+The board shows one lane per project or epic, and a card for each node. `Tab` cycles kanban, list and graph. `/` searches and `f` filters. `enter` opens the selected node's details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
+
+The graph shows the focused node's family. Parent and contained edges form its layers. Done children fold into one count under each parent. A one-hop `blocked_by` or `related` link outside the family appears as a stub. The graph displays at most 80 nodes. Press `h` or `l` to move between layers. Press `j` or `k` to move between nodes. Other node actions use the selected node.
+
+![The mux backlog graph: three layers of parent-linked nodes, a selected node, and an outside blocker stub](images/backlog-mux-graph.png)
+
+This screenshot uses seeded demo data. Its counts do not describe a live project.
 
 The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
 
@@ -432,7 +438,7 @@ The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setu
 
 When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
 
-The page follows your OS light or dark setting by default. The theme button at the right end of the filter bar forces light or dark instead. The choice stays in that browser until you click back to auto. The served web board (`fno mux serve --web`) is the same page, so the switch works there too.
+The page follows your OS light or dark setting by default. The theme button at the right end of the filter bar forces light or dark instead. The choice stays in that browser until you click back to auto. The graph view needs the live board, so this embedded page disables its graph button and shows `graph view needs the live board (fno mux serve --web)`.
 
 `fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same command. Set `FNO_NO_OPEN=1` to print the path only.
 
@@ -460,7 +466,7 @@ Do not point a row at the state root, for example `~/.fno/graph.html`. The daemo
 
 ### Served on the web
 
-`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. On a loopback bind the page can also write. It runs the same backlog commands an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
+`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. Its graph button draws the selected node's family from the same model answer. Clicking a graph node opens its existing detail panel. On a loopback bind the page can also write. It runs the same backlog commands an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
 
 For a board anyone can open, use `fno backlog publish` (also `fno backlog board publish`). It renders the public projection: open, public rows only, with titles gated for leaks. [Publish a public board](#publish-a-public-board) covers the targets and the schedule.
 

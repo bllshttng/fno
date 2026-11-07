@@ -2105,8 +2105,10 @@ mod tests {
                 }]
             }
         });
-        let mut snap = Snapshot::default();
-        snap.layout = Some(layout.to_string());
+        let snap = Snapshot {
+            layout: Some(layout.to_string()),
+            ..Default::default()
+        };
         let snap = Arc::new(Mutex::new(snap));
         let agents = layout_agents(&snap).expect("the layout parses");
         assert_eq!(agents.len(), 1);
@@ -2694,6 +2696,38 @@ console.log("framePacer: 12 cases ok");
         assert!(
             BACKLOG_PAGE.contains(r#"class="controls""#),
             "the filter bar keeps the controls class the nav offset targets"
+        );
+        assert!(
+            BACKLOG_PAGE.contains(r#"data-view="graph""#)
+                && BACKLOG_PAGE.contains("function drawGraph()"),
+            "the live board exposes its graph view"
+        );
+        assert!(
+            BACKLOG_PAGE.contains("createElementNS")
+                && BACKLOG_PAGE.contains("graph.edges")
+                && BACKLOG_PAGE.contains("graph.nodes"),
+            "the browser builds SVG nodes and paths from the model answer"
+        );
+        assert!(
+            BACKLOG_PAGE.contains("graph view needs the live board (fno mux serve --web)")
+                && BACKLOG_PAGE.contains("if (SNAPSHOT)"),
+            "the static page explains its disabled graph view"
+        );
+        assert!(
+            BACKLOG_PAGE.contains("graph.edges")
+                && BACKLOG_PAGE.contains("graph.nodes")
+                && BACKLOG_PAGE.contains("openNode(id)"),
+            "the graph draws model edges and nodes into the existing detail action"
+        );
+        assert!(
+            BACKLOG_PAGE.contains("const wrapGraphTitle")
+                && BACKLOG_PAGE.contains("wrapGraphTitle(card.title, 32)"),
+            "the SVG keeps a long card title visible on a second line"
+        );
+        assert!(
+            BACKLOG_PAGE.contains("svg.setAttribute(\"role\", \"group\")")
+                && BACKLOG_PAGE.contains("group.setAttribute(\"role\", \"button\")"),
+            "graph nodes stay accessible as controls inside a labeled group"
         );
         // The copied-id surface: the three render sites bind the one copy
         // handler, and no fourth site appeared unbound.

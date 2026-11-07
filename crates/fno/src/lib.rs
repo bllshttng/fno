@@ -27,6 +27,8 @@ pub mod attention_api;
 #[cfg(feature = "full")]
 pub mod attest;
 #[cfg(feature = "full")]
+pub mod backlog_graph;
+#[cfg(feature = "full")]
 pub mod backlog_list;
 #[cfg(feature = "full")]
 pub mod backlog_model;

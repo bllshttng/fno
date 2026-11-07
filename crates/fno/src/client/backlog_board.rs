@@ -63,6 +63,7 @@ pub(crate) struct QueryState {
     pub(crate) sets: std::collections::BTreeMap<&'static str, Vec<String>>,
     pub(crate) q: Option<String>,
     pub(crate) view: backlog_model::View,
+    pub(crate) focus: Option<String>,
 }
 
 impl QueryState {
@@ -74,8 +75,11 @@ impl QueryState {
                 p.push((k.to_string(), v.clone()));
             }
         }
-        if self.view == backlog_model::View::List {
-            p.push(("view".into(), "list".into()));
+        if self.view != backlog_model::View::Kanban {
+            p.push(("view".into(), view_name(&self.view).into()));
+        }
+        if let Some(focus) = &self.focus {
+            p.push(("focus".into(), focus.clone()));
         }
         if let Some(q) = &self.q {
             p.push(("q".into(), q.clone()));
@@ -171,7 +175,7 @@ pub(crate) struct BodyKey {
     pub(crate) col: usize,
     pub(crate) row: usize,
     pub(crate) w: usize,
-    pub(crate) list: bool,
+    pub(crate) view: backlog_model::View,
     pub(crate) query: Option<String>,
     pub(crate) errors: usize,
     pub(crate) columns: Vec<String>,
@@ -588,12 +592,34 @@ pub(crate) fn card_at(b: &BoardView) -> Option<&backlog_model::Card> {
 
 /// The card id under the cursor.
 pub(crate) fn cursor_card_id(b: &BoardView) -> Option<String> {
+    if b.query.view == backlog_model::View::Graph {
+        return graph_cursor_node(b).and_then(backlog_graph_paint::action_id);
+    }
     card_at(b).map(|c| c.id.clone())
+}
+
+fn graph_cursor_node(b: &BoardView) -> Option<&crate::backlog_graph::GraphNode> {
+    b.body
+        .as_ref()?
+        .graph
+        .as_ref()?
+        .nodes
+        .iter()
+        .filter(|node| node.layer == b.lane as u16)
+        .nth(b.row)
+}
+
+fn graph_cursor_node_id(b: &BoardView) -> Option<String> {
+    graph_cursor_node(b).map(|node| node.id.clone())
 }
 
 /// Put the cursor on `id` when the board still shows it, else on the first
 /// painted card anywhere.
-fn focus_card(b: &mut BoardView, id: Option<&str>) {
+pub(crate) fn focus_card(b: &mut BoardView, id: Option<&str>) {
+    if b.query.view == backlog_model::View::Graph {
+        focus_graph_card(b, id);
+        return;
+    }
     let Some(id) = id else {
         first_card(b);
         return;
@@ -618,9 +644,43 @@ fn focus_card(b: &mut BoardView, id: Option<&str>) {
     first_card(b);
 }
 
+fn focus_graph_card(b: &mut BoardView, id: Option<&str>) {
+    let Some(graph) = b.body.as_ref().and_then(|board| board.graph.as_ref()) else {
+        return;
+    };
+    let index = id
+        .and_then(|id| {
+            graph
+                .nodes
+                .iter()
+                .position(|node| backlog_graph_paint::action_id(node).as_deref() == Some(id))
+        })
+        .or_else(|| graph.nodes.iter().position(|node| node.card.is_some()));
+    let Some(index) = index else {
+        return;
+    };
+    let Some(node) = graph.nodes.get(index) else {
+        return;
+    };
+    let row = graph
+        .nodes
+        .get(..index)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|candidate| candidate.layer == node.layer)
+        .count();
+    b.lane = node.layer as usize;
+    b.col = 0;
+    b.row = row;
+}
+
 /// Park the cursor on the first painted card of the first lane that has
 /// one, leaving it at the origin when the board is empty.
 fn first_card(b: &mut BoardView) {
+    if b.query.view == backlog_model::View::Graph {
+        focus_graph_card(b, None);
+        return;
+    }
     let Some(board) = b.body.as_ref() else {
         return;
     };
@@ -658,6 +718,7 @@ fn view_name(view: &backlog_model::View) -> &'static str {
     match view {
         backlog_model::View::Kanban => "kanban",
         backlog_model::View::List => "list",
+        backlog_model::View::Graph => "graph",
     }
 }
 
@@ -665,6 +726,7 @@ fn view_name(view: &backlog_model::View) -> &'static str {
 fn view_from_name(name: Option<&str>) -> backlog_model::View {
     match name {
         Some("list") => backlog_model::View::List,
+        Some("graph") => backlog_model::View::Graph,
         _ => backlog_model::View::Kanban,
     }
 }
@@ -704,11 +766,15 @@ fn restore_board_prefs(b: &mut BoardView) {
             (!v.is_empty()).then_some((name, v))
         })
         .collect();
+    let view = view_from_name(p.view.as_deref());
     let candidate = QueryState {
         lanes: lanes_from_name(p.lanes.as_deref()),
         sets,
         q: p.q.filter(|q| !q.is_empty()),
-        view: view_from_name(p.view.as_deref()),
+        view,
+        focus: (view == backlog_model::View::Graph)
+            .then(|| p.sel.clone())
+            .flatten(),
     };
     if candidate.to_query().is_err() {
         return;
@@ -750,7 +816,18 @@ pub(crate) fn render(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>) {
         };
         lines.push(TLine::meta(line));
     }
-    push_lanes(b, &mut lines, &mut follow, board, w);
+    if b.query.view == backlog_model::View::Graph {
+        if let Some(graph) = &board.graph {
+            let start = lines.len();
+            let selected = graph_cursor_node_id(b);
+            let (graph_lines, graph_follow) =
+                backlog_graph_paint::lines(graph, selected.as_deref(), w);
+            follow = graph_follow.map(|line| start + line);
+            lines.extend(graph_lines);
+        }
+    } else {
+        push_lanes(b, &mut lines, &mut follow, board, w);
+    }
     (lines, follow)
 }
 
@@ -801,7 +878,7 @@ fn flow_line(flow: &Value) -> String {
         .get("deliveries")
         .and_then(|d| d.get("weeks"))
         .and_then(Value::as_array);
-    let shipped = weeks
+    let delivered = weeks
         .and_then(|w| w.last())
         .and_then(|e| {
             let code = e.get("code").and_then(Value::as_u64).unwrap_or(0);
@@ -809,20 +886,36 @@ fn flow_line(flow: &Value) -> String {
             Some(code + doc)
         })
         .unwrap_or(0);
+    let delivered = if delivered == 0 {
+        "No deliveries this week".to_string()
+    } else {
+        format!("{delivered} deliveries this week")
+    };
     let cycle = flow
         .get("cycle")
         .and_then(|c| c.get("median_days"))
         .and_then(Value::as_f64);
     let cycle = match cycle {
         Some(d) => format!("cycle {d:.1}d median"),
-        None => "cycle n/a".into(),
+        None => format!(
+            "cycle unavailable: {}",
+            flow.get("cycle")
+                .and_then(|c| c.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        ),
     };
     let prs = flow
         .get("open_prs")
         .and_then(|p| p.get("count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    format!("{shipped} shipped this week · {cycle} · {prs} open PRs")
+    let prs = if prs == 1 {
+        "1 open PR".to_string()
+    } else {
+        format!("{prs} open PRs")
+    };
+    format!("{delivered} · {cycle} · {prs}")
 }
 
 /// The persistent filter bar's cells: Search, Status, Type, Priority,
@@ -1450,6 +1543,10 @@ fn move_row(view: &mut View, down: bool) {
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
+    if b.query.view == backlog_model::View::Graph {
+        move_graph_node(b, down);
+        return;
+    }
     if b.query.view == backlog_model::View::List {
         move_row_list(b, down);
         return;
@@ -1474,6 +1571,37 @@ fn move_row(view: &mut View, down: bool) {
     } else {
         b.row.saturating_sub(1)
     };
+    save_board_prefs(b);
+}
+
+fn move_graph_node(b: &mut BoardView, down: bool) {
+    let count = b
+        .body
+        .as_ref()
+        .and_then(|board| board.graph.as_ref())
+        .map(|graph| {
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.layer == b.lane as u16)
+                .count()
+        })
+        .unwrap_or(0);
+    if count == 0 {
+        return;
+    }
+    b.row = if down {
+        (b.row + 1).min(count - 1)
+    } else {
+        b.row.saturating_sub(1)
+    };
+    let focus =
+        graph_cursor_node(b).and_then(|node| node.card.as_ref().map(|card| card.id.clone()));
+    if let Some(id) = focus {
+        b.query.focus = Some(id.clone());
+        rederive(b);
+        focus_graph_card(b, Some(&id));
+    }
     save_board_prefs(b);
 }
 
@@ -1523,6 +1651,10 @@ fn move_col(view: &mut View, right: bool) {
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
+    if b.query.view == backlog_model::View::Graph {
+        move_graph_layer(b, right);
+        return;
+    }
     if b.query.view == backlog_model::View::List || b.body.is_none() {
         return;
     }
@@ -1536,11 +1668,72 @@ fn move_col(view: &mut View, right: bool) {
     save_board_prefs(b);
 }
 
+fn move_graph_layer(b: &mut BoardView, right: bool) {
+    let layers = b
+        .body
+        .as_ref()
+        .and_then(|board| board.graph.as_ref())
+        .map(|graph| {
+            graph
+                .nodes
+                .iter()
+                .map(|node| node.layer)
+                .fold(Vec::new(), |mut layers, layer| {
+                    if layers.last() != Some(&layer) {
+                        layers.push(layer);
+                    }
+                    layers
+                })
+        })
+        .unwrap_or_default();
+    if layers.is_empty() {
+        return;
+    }
+    let current = layers
+        .iter()
+        .position(|layer| *layer == b.lane as u16)
+        .unwrap_or(0);
+    let next = if right {
+        (current + 1).min(layers.len().saturating_sub(1))
+    } else {
+        current.saturating_sub(1)
+    };
+    let Some(&layer) = layers.get(next) else {
+        return;
+    };
+    b.lane = layer as usize;
+    b.col = 0;
+    let count = b
+        .body
+        .as_ref()
+        .and_then(|board| board.graph.as_ref())
+        .map(|graph| {
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.layer == layer)
+                .count()
+        })
+        .unwrap_or(0);
+    b.row = b.row.min(count.saturating_sub(1));
+    let focus =
+        graph_cursor_node(b).and_then(|node| node.card.as_ref().map(|card| card.id.clone()));
+    if let Some(id) = focus {
+        b.query.focus = Some(id.clone());
+        rederive(b);
+        focus_graph_card(b, Some(&id));
+    }
+    save_board_prefs(b);
+}
+
 /// Jump to the previous/next lane and land on its first non-empty cell.
 fn move_lane(view: &mut View, next: bool) {
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
+    if b.query.view == backlog_model::View::Graph {
+        return;
+    }
     let Some(board) = b.body.as_ref() else {
         return;
     };
@@ -1574,6 +1767,9 @@ fn cycle_lanes(view: &mut View) {
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
+    if b.query.view == backlog_model::View::Graph {
+        return;
+    }
     cycle_lanes_b(b);
 }
 
@@ -1590,8 +1786,7 @@ fn reset_filters(view: &mut View) {
     view.set_notice("filters reset".to_string());
 }
 
-/// Tab: flip the board between the kanban grid and the uncapped list,
-/// keeping the cursor on the card it left.
+/// Tab: cycle the board's kanban, list and graph views, keeping its focus.
 fn toggle_view(view: &mut View) {
     let focus = view.backlog_board.as_ref().and_then(cursor_card_id);
     let Some(b) = view.backlog_board.as_mut() else {
@@ -1599,8 +1794,12 @@ fn toggle_view(view: &mut View) {
     };
     b.query.view = match b.query.view {
         backlog_model::View::Kanban => backlog_model::View::List,
-        backlog_model::View::List => backlog_model::View::Kanban,
+        backlog_model::View::List => backlog_model::View::Graph,
+        backlog_model::View::Graph => backlog_model::View::Kanban,
     };
+    b.query.focus = (b.query.view == backlog_model::View::Graph)
+        .then(|| focus.clone())
+        .flatten();
     rederive(b);
     focus_card(b, focus.as_deref());
     save_board_prefs(b);
@@ -1806,6 +2005,40 @@ fn rank_move(view: &mut View, word: &str, up: Option<bool>) -> Result<(), String
 /// The nearest card above (`true`) or below (`false`) in the same cell
 /// with the same parent - the rank anchor.
 fn same_parent_anchor(b: &BoardView, up: bool) -> Option<String> {
+    if b.query.view == backlog_model::View::Graph {
+        let current = graph_cursor_node(b)?;
+        current.card.as_ref()?;
+        let graph = b.body.as_ref()?.graph.as_ref()?;
+        let parent = graph
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.to == current.id
+                    && matches!(
+                        edge.kind,
+                        crate::backlog_graph::EdgeKind::Parent
+                            | crate::backlog_graph::EdgeKind::Contained
+                    )
+            })
+            .map(|edge| (edge.from.as_str(), edge.kind))?;
+        let siblings: Vec<&crate::backlog_graph::GraphNode> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.layer == current.layer && node.card.is_some())
+            .filter(|node| {
+                graph.edges.iter().any(|edge| {
+                    edge.from == parent.0 && edge.to == node.id && edge.kind == parent.1
+                })
+            })
+            .collect();
+        let index = siblings.iter().position(|node| node.id == current.id)?;
+        return if up {
+            siblings.get(..index).and_then(|prefix| prefix.last())
+        } else {
+            siblings.get(index + 1)
+        }
+        .and_then(|node| node.card.as_ref().map(|card| card.id.clone()));
+    }
     let card = card_at(b)?;
     let parent = card.parent.as_deref();
     let cell = b.body.as_ref()?.lanes.get(b.lane)?.cells.get(b.col)?;
@@ -1959,7 +2192,7 @@ fn find_card<'a>(b: &'a BoardView, id: &str) -> Option<&'a backlog_model::Card> 
 
 /// Re-derive the board from the current query over the gathered inputs,
 /// with no re-gather. Filters and lane cycling share this one path.
-fn rederive(b: &mut BoardView) {
+pub(crate) fn rederive(b: &mut BoardView) {
     let Some(inputs) = b.inputs.as_ref() else {
         return;
     };
@@ -2329,6 +2562,9 @@ mod tests;
 #[path = "backlog_panes.rs"]
 pub(crate) mod backlog_panes;
 
+#[path = "backlog_graph_paint.rs"]
+pub(crate) mod backlog_graph_paint;
+
 #[path = "pr_review.rs"]
 pub(crate) mod pr_review;
 
@@ -2534,10 +2770,11 @@ fn board_keys_popup() -> Popup {
     let rows: Vec<PopupRow> = vec![
         PopupRow::Header("read".into()),
         PopupRow::Rule,
-        pick_row("hjkl move - [ ] lane - L lanes"),
+        pick_row("hjkl move - [ ] lane - L lanes (kanban/list)"),
         pick_row("/ find - f filter - r re-read"),
         pick_row("x reset filters"),
-        pick_row("Tab list/kanban - space toggle (in f)"),
+        pick_row("Tab kanban/list/graph - space toggle (in f)"),
+        pick_row("graph: h/l layers - j/k nodes"),
         pick_row("enter node detail - F full screen"),
         pick_row("y copy id - Y copy session command (in detail)"),
         pick_row("c comment on the detail's node"),
