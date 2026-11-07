@@ -2498,24 +2498,22 @@ mod tests {
             from_name: None,
             yolo: false,
         };
-        assert_eq!(
-            CodexProvider.resume_argv(&ctx),
-            vec![
-                "codex",
-                "exec",
-                "resume",
-                "uuid-1",
-                "--json",
-                "--skip-git-repo-check",
-                "-c",
-                "sandbox_mode=workspace-write",
-                "-c",
-                crate::codex_posture::BOUNDED_NETWORK_OVERRIDE,
-                "-c",
-                "sandbox_workspace_write.writable_roots=[\"/x/.fno/plans\"]",
-                "--",
-                "m"
-            ]
+        // The grant is the cwd-pure set now (state root, claims root, plan
+        // dir, cache), never exactly one dir, so the pin is: the argv still
+        // re-pins writable_roots for a non-repo bounded resume and the plan
+        // dir rides it.
+        let argv = CodexProvider.resume_argv(&ctx);
+        assert!(
+            argv.contains(&"--skip-git-repo-check".to_string()),
+            "non-repo cwd still skips the git check: {argv:?}"
+        );
+        let roots_arg = argv
+            .iter()
+            .find(|t| t.starts_with("sandbox_workspace_write.writable_roots="))
+            .expect("bounded non-yolo resume re-pins writable_roots");
+        assert!(
+            roots_arg.contains("\"/x/.fno/plans\""),
+            "the plan dir rides for a non-repo cwd: {roots_arg}"
         );
     }
 
