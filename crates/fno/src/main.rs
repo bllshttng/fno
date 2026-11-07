@@ -374,7 +374,7 @@ enum Role {
     /// no `@` in any fno-owned `--name` value forwards byte-verbatim to the
     /// local command, and words after a `--` fence are never scanned.
     /// `fno agents spawn --machine <host>` reaches the same relay through
-    /// the client's placement intercept (x-8460), keeping the default name.
+    /// the client's placement intercept, keeping the default name.
     RemoteSpawn(Vec<OsString>),
 
     /// `fno agents mail reply ...`: the native reply leaf. The carried tail

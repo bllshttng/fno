@@ -31,7 +31,7 @@ pub struct SpawnPlan {
 /// Build the plan from the relay tail (everything after `spawn-remote`).
 /// `local_host` arrives pre-resolved, so tests pin the shapes without env
 /// reads. The address rides in one of two slots: a `--name` value with an
-/// `@host` part, or a bare `--machine <host>` pin (x-8460), which keeps the
+/// `@host` part, or a bare `--machine <host>` pin, which keeps the
 /// default name. `--machine` beside a plain `--name` is legal: the name
 /// rides and the pin carries the host. Every other word rides in order.
 /// `--name @<host>` drops the flag from the exec'd words, so the remote slug

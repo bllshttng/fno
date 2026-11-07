@@ -1607,7 +1607,7 @@ async fn run(
             Ok(planned) => planned,
             Err(code) => return code,
         };
-        // Cross-host placement (x-8460): a --machine pin relays to that host; with
+        // Cross-host placement: a --machine pin relays to that host; with
         // no pin, the fleet map's least-loaded host takes the worker when it beats
         // this machine's free slots. A relayed or forwarded spawn never re-places:
         // --spawned-by marks the ssh leg, and FNO_MAIL_LOCAL_FORWARD marks the
@@ -3725,6 +3725,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--split",
         "--portal",
         "--tab",
+        "--machine",
         "--at",
         "--permission-mode",
         "--effort",
@@ -3848,6 +3849,12 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             }
             "--tab" => {
                 params.insert("tab".into(), str_arg(&mut it, "--tab")?);
+            }
+            "--machine" if command == "spawn" => {
+                // The cross-host pin: the placement intercept reads
+                // the raw argv; parsed here so the flag is known and its
+                // value never reads as the prompt.
+                params.insert("machine_host".into(), str_arg(&mut it, "--machine")?);
             }
 
             "--pane" if command == "spawn" => {

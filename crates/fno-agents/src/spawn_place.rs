@@ -1,4 +1,4 @@
-//! The spawn placement read (x-8460): which host takes the next worker.
+//! The spawn placement read: which host takes the next worker.
 //!
 //! A `--machine <host>` pin relays the spawn through the existing
 //! spawn-remote relay. With no pin, the fleet map answers: each machine's
@@ -109,6 +109,7 @@ pub fn relay_args(args: &[String], host: &str, name_to_carry: &str, strip: &[&st
         }
         if flag == "--name" && !name_seen {
             name_seen = true;
+            let was_inline = inline.is_some();
             let value = match inline {
                 Some(v) => v,
                 // A dangling bare --name rides: the gate refuses it with its
@@ -123,7 +124,7 @@ pub fn relay_args(args: &[String], host: &str, name_to_carry: &str, strip: &[&st
             };
             if !value.contains('@') {
                 let extended = format!("{value}@{host}");
-                if inline.is_none() {
+                if !was_inline {
                     out.push(word.clone());
                     out.push(extended);
                 } else {
