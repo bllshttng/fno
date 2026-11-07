@@ -898,8 +898,7 @@ fn is_deferral_only(t: &str) -> bool {
     }
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        regex::Regex::new(r"(?i)^(queued|will report|report back|will update|looking into|on it|noted|in progress|will circle back)\b")
-            .expect("valid pattern")
+        regex::Regex::new(r"(?i)^(queued|noted|on it|ack\w*|in progress)\b").expect("valid pattern")
     })
     .is_match(t)
 }
@@ -1292,7 +1291,7 @@ mod tests {
             ),
             payload_row("assistant", None, "Understood the instructions."),
             payload_row("user", None, "status on the gate?"),
-            payload_row("assistant", None, "Green."),
+            payload_row("assistant", Some("final_answer"), "Green."),
         ]
         .join("\n");
         let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
@@ -1312,9 +1311,13 @@ mod tests {
     #[test]
     fn codex_derived_turn_id_survives_resume() {
         let payload_row = |role: &str, text: &str| {
+            let mut payload = json!({"type": "message", "role": role,
+                     "content": [{"type": "text", "text": text}]});
+            if role == "assistant" {
+                payload["phase"] = json!("final_answer");
+            }
             json!({"timestamp": "2026-11-05T02:00:00Z", "type": "response_item",
-                   "payload": {"type": "message", "role": role,
-                               "content": [{"type": "text", "text": text}]}})
+                   "payload": payload})
             .to_string()
         };
         let noise_row = || {

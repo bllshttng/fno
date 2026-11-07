@@ -710,7 +710,11 @@ fn messages_paint_reads_rows_built_once_per_projection() {
     let _ = b.columns(200, (50, 50));
     let cold = cold.elapsed();
     let first = b.tree_rows();
-    assert_eq!(first.len(), 3012, "every agent plus each unheld You thread");
+    assert_eq!(
+        first.len(),
+        3013,
+        "the pinned asks row, every agent, each unheld You thread"
+    );
     let started = Instant::now();
     for _ in 0..30 {
         let _ = b.columns(200, (50, 50));
@@ -737,8 +741,8 @@ fn messages_paint_reads_rows_built_once_per_projection() {
         .apply(json!({"participants":[{"key":"s1","name":"a1","live":true}]}));
     assert_eq!(
         b.tree_rows().len(),
-        1,
-        "a landed projection rebuilds the rows"
+        2,
+        "the asks row plus the one agent; a landed projection rebuilds the rows"
     );
 }
 
@@ -820,9 +824,10 @@ async fn ac7_ac8_asks_paint_pending_first_and_the_empty_state() {
         .map(|l| l.text.clone())
         .filter(|t| !t.trim().is_empty())
         .collect();
-    assert_eq!(
-        body,
-        vec!["Your asks".to_string(), "(no asks yet)".to_string()],
-        "title plus one empty-state line: {body:?}"
+    assert_eq!(body.len(), 2, "title plus one empty-state line: {body:?}");
+    assert!(
+        body[0].starts_with("Your asks"),
+        "the title names the view: {body:?}"
     );
+    assert_eq!(body[1], "(no asks yet)", "one empty-state line");
 }
