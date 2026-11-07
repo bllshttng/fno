@@ -8,6 +8,28 @@ use std::time::Duration;
 /// `Err` on a non-zero exit, spawn failure, or timeout - the caller keeps the
 /// in-memory value either way and reports honestly.
 pub(crate) async fn spawn_config_set(key: &str, value: &str) -> Result<(), String> {
+    spawn_scoped(key, value, true).await
+}
+
+/// Write one bool key without waiting, so the flip stays instant; a lost write
+/// just means the flip was session-only. The writes serialize: config set is a
+/// read-modify-write of one file, and two overlapping processes could persist
+/// the earlier flip last.
+pub(crate) fn persist_in_background(key: &'static str, on: bool) {
+    tokio::spawn(async move {
+        static TOGGLE_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _guard = TOGGLE_WRITE.lock().await;
+        let _ = spawn_config_set(key, if on { "true" } else { "false" }).await;
+    });
+}
+
+/// The same bounded write into the per-user global file: a host list belongs
+/// to the user, not to the workspace the mux attached from.
+pub(crate) async fn spawn_config_set_global(key: &str, value: &str) -> Result<(), String> {
+    spawn_scoped(key, value, false).await
+}
+
+async fn spawn_scoped(key: &str, value: &str, local: bool) -> Result<(), String> {
     // spawn + wait rather than .output(): the exit check reads `.success()` on
     // the child's ExitStatus directly, so the word the plan-readiness ratchet
     // (check-plan-rung-authority) watches for never appears here. That ratchet
@@ -24,11 +46,8 @@ pub(crate) async fn spawn_config_set(key: &str, value: &str) -> Result<(), Strin
     // FNO_CONFIG is the exception: when it pins an explicit file, that file is
     // the ONLY candidate on both write and read, and --local would land the
     // write somewhere the latch never looks.
-    let scope: &[&str] = if std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty()) {
-        &[]
-    } else {
-        &["--local"]
-    };
+    let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
+    let scope: &[&str] = if pinned || !local { &[] } else { &["--local"] };
     command
         .args(["config", "set", key, value])
         .args(scope)

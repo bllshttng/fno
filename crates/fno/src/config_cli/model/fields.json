@@ -666,7 +666,8 @@
       "open_with": "inmux",
       "viewer": "panel",
       "wheel_lines": 1,
-      "wheel_passthrough_rate": 3
+      "wheel_passthrough_rate": 3,
+      "remote_hosts": []
      }
     },
     {
@@ -2167,6 +2168,10 @@
     {
      "name": "wheel_passthrough_rate",
      "default": 3
+    },
+    {
+     "name": "remote_hosts",
+     "default": []
     }
    ]
   },
@@ -3337,6 +3342,7 @@
   "mux.viewer",
   "mux.wheel_lines",
   "mux.wheel_passthrough_rate",
+  "mux.remote_hosts",
   "split.opens",
   "dev.source",
   "context.artifacts",
