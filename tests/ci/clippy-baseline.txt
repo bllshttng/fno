@@ -12556,3 +12556,24 @@ crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let named
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let squad = store["squads"]
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let trees = squad["tab_trees"].as_array().map(|t| t.len());
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	trees[0]["slots"].as_array().map(Vec::len),
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["baseline"]["green_without_rescue"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["baseline"]["mean_cost_usd"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["baseline"]["rescued_by_frontier_worker"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["baseline"]["stuck_nodes"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["consult"]["green_without_rescue"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["consult"]["mean_cost_usd"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["consult"]["rescued_by_frontier_worker"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	arms["consult"]["stuck_nodes"],
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	assert_eq!(report["arms"]["baseline"]["mean_cost_usd"], Value::Null);
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	assert_eq!(report["arms"]["baseline"]["stuck_nodes"], json!(0));
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	assert_eq!(report["arms"]["consult"]["green_without_rescue"], json!(0));
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	assert_eq!(report["arms"]["consult"]["stuck_nodes"], json!(0));
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	cost_ns[arm] += 1;
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	cost_sums[arm] += c;
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	greens[arm] += 1;
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	let arms = &report["arms"];
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	let data = &rows[0]["data"];
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	rescued[arm] += 1;
+crates/fno-agents/src/consult.rs	clippy::indexing_slicing	return run_report_with(&args[1..], deps);
+crates/fno-agents/src/loop_target.rs	clippy::indexing_slicing	return Ok(crate::consult::run(&args[1..]));
+crates/fno-agents/src/route_slot.rs	clippy::indexing_slicing	out["candidate"]["lane_fields"]["args"],
