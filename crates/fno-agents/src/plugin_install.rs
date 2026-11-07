@@ -3326,7 +3326,6 @@ fn swap_grok_symlink(plugins: &Path, link: &Path, stage: &Path) -> Result<(), St
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     // zcode install: a malformed config is refused byte-identical.
     #[test]
@@ -3524,14 +3523,12 @@ mod tests {
         .unwrap();
         let bin = base.join("bin");
         fs::create_dir_all(&bin).unwrap();
-        let claude = bin.join("claude");
         let log = base.join("claude.log");
-        fs::write(
-            &claude,
-            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
-        )
-        .unwrap();
-        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::write_exec_stub(
+            &bin,
+            "claude",
+            &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        );
         let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
         let previous_home = std::env::var_os("FNO_HOME");
         let previous_user_home = std::env::var_os("HOME");
