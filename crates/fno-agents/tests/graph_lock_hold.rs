@@ -149,13 +149,19 @@ fn a_hold_past_two_seconds_journals_one_graph_lock_held_row() {
     rx.recv_timeout(Duration::from_secs(10))
         .expect("holder signals");
     drop(holder.join().expect("holder thread finishes"));
-    let text = std::fs::read_to_string(&events).expect("events journal exists");
-    let row = text
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("each line parses"))
-        .find(|row| row["type"] == "graph_lock_held")
-        .expect("one graph_lock_held row lands");
-    let data = &row["data"];
+    // The rows live in the event store beside the journal path, not in a
+    // plain JSONL file: the store retired the file append.
+    let rows = fno_agents::event_store::query_events(
+        &events,
+        &fno_agents::event_store::EventQuery {
+            types: vec!["graph_lock_held".into()],
+            ..Default::default()
+        },
+    )
+    .expect("the event store reads");
+    let row = rows.first().expect("one graph_lock_held row lands");
+    let envelope: Value = serde_json::from_str(&row.line).expect("the envelope parses");
+    let data = &envelope["data"];
     assert!(
         data["hold_ms"].as_u64().unwrap() >= 2_000,
         "hold_ms records the hold: {data}"

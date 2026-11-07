@@ -18,7 +18,11 @@ pub fn append_row(kind: &str, data: serde_json::Value) {
         let _ = std::fs::create_dir_all(parent);
     }
     let journal = crate::loop_runtime::Journal::new_raw(path.clone(), path);
-    let _ = journal.append(kind, data);
+    if let Err(error) = journal.append(kind, data) {
+        // A lost row is a lost measurement; the judge or the store refused
+        // it, so name both instead of vanishing.
+        eprintln!("chokepoint_events: {kind} row lost: {error}");
+    }
 }
 
 /// Register the journal sink. Each binary calls this first thing in `main`.
