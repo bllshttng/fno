@@ -44,8 +44,10 @@
 
 HOOK_BUDGET_IDLE_SECS=3
 HOOK_BUDGET_BUSY_SECS=1
-# Async tier: a hook the harness runs in the background (FNO_HOOK_ASYNC=1 on
-# its command) holds no turn, so load does not shorten it.
+# Async tier, RESERVED: no hook sets FNO_HOOK_ASYNC=1 today, so the branch in
+# hook_budget_secs is unreachable. The tier stays so the first background hook
+# lands on a measured budget instead of inventing one; load does not shorten
+# a hook that holds no turn.
 HOOK_BUDGET_ASYNC_SECS=10
 # Skip tier: at this many waiting jobs per core the hook's own preamble can
 # pass the harness's outer cap on its own. FNO_HOOK_BUDGET_SKIP_PER_CORE
