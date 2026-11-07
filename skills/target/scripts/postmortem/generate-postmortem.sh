@@ -56,10 +56,6 @@ if [[ -z "${POSTMORTEMS_DIR:-}" ]] && command -v fno >/dev/null 2>&1; then
     unset _PATHS_SH
 fi
 OUTPUT_DIR="${OUTPUT_DIR_ARG:-${POSTMORTEMS_DIR:-$HOME/.fno/postmortems}}"
-# corrections.log lives under ~/.fno/ (placement rule, ab-f063 Wave 2), not
-# ~/.claude/. Inlined (not sourced from scripts/lib/) so this driver skill
-# stays self-contained per AGENTS.md - no scripts/ path escapes.
-CORRECTIONS_LOG="${POSTMORTEM_CORRECTIONS_LOG:-${FNO_HOME:-$HOME/.fno}/corrections.log}"
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -299,7 +295,7 @@ case "$BR_KIND" in
         # details, and only budget_exceeded normalizes to a taxonomy
         # alias (cost_exceeded). thrash, no_gate_progress, and
         # repeated_help_no_progress have their own hypothesis arms
-        # in hypothesis_for_kind so the autocorrect signal is preserved.
+        # in hypothesis_for_kind so the signal is preserved.
         [[ -z "$BR_DETAILS" ]] && BR_DETAILS="stuck-detector: $BR_RAW"
         case "$BR_KIND" in
             budget_exceeded) BR_KIND="cost_exceeded" ;;
@@ -514,8 +510,8 @@ STATE_FILE_MISSING="false"
         echo "mode: $MODE"
     fi
     if [[ "$STATE_FILE_MISSING" == "true" ]]; then
-        # Surface "state file vanished" as a distinct signal so the
-        # autocorrect reviewer can dedupe from "session never started".
+        # Surface "state file vanished" as a distinct signal so an
+        # auditor can dedupe it from "session never started".
         echo "state_file_missing: true"
     fi
     echo "blocked_phase: ${CURRENT_PHASE:-unknown}"
@@ -602,24 +598,6 @@ if ! mv "$PM_TMP" "$OUT_PATH" 2>>"${POSTMORTEM_ERR_LOG:-/dev/null}"; then
     log_stderr "could not rename $PM_TMP to $OUT_PATH; aborting"
     rm -f "$PM_TMP"
     exit 1
-fi
-
-# ── Append to corrections.log (autocorrect link) ────────────────────────
-
-# Best-effort: only if corrections.log exists (autocorrect feature creates it).
-# Format: {timestamp} | S1 | target-postmortem | {path} | {kind}: {details_truncated}
-# Don't redirect stderr - if the append fails, the autocorrect feedback loop
-# (the whole reason this feature exists) silently breaks. The error message
-# must reach the caller's $LOG_FILE so postmortem-vs-no-postmortem audits
-# can find the cause.
-if [[ -f "$CORRECTIONS_LOG" ]]; then
-    DETAILS_TRUNC="${BR_DETAILS:0:80}"
-    [[ -z "$DETAILS_TRUNC" ]] && DETAILS_TRUNC="-"
-    if ! printf "%s | S1 | target-postmortem | %s | %s: %s\n" \
-            "$NOW_ISO" "$OUT_PATH" "$BR_KIND" "$DETAILS_TRUNC" \
-            >> "$CORRECTIONS_LOG"; then
-        log_stderr "could not append to $CORRECTIONS_LOG (rc=$?); autocorrect link missing"
-    fi
 fi
 
 echo "$OUT_PATH"

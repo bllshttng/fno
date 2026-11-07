@@ -432,6 +432,7 @@ mod tests {
             PostResult {
                 status: self.status,
                 body: String::new(),
+                error: None,
             }
         }
     }

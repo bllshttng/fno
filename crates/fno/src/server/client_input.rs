@@ -10,6 +10,41 @@ pub(crate) struct PaneInputRequest {
 }
 
 impl Core {
+    fn watch_input(&mut self, pane: u64, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        if let Some(entry) = self.panes.get(&pane) {
+            self.input_echo
+                .entry(pane)
+                .or_default()
+                .sent(Instant::now(), entry.last_output);
+        }
+    }
+
+    pub(super) fn poll_input_echo(&mut self) {
+        let now = Instant::now();
+        let panes = &self.panes;
+        let agents = &self.agents;
+        let session = &self.session_name;
+        self.input_echo.retain(|pane, watch| {
+            let Some(entry) = panes.get(pane) else {
+                return false;
+            };
+            if watch.poll(now, entry.last_output) {
+                let name = super::pane_meta::pane_registry_name(
+                    agents,
+                    session,
+                    *pane,
+                    entry.pty.child_pid(),
+                )
+                .unwrap_or_else(|| "unnamed".into());
+                crate::mux_log!(warn; "fno mux: input-no-echo pane={pane} name={name:?}");
+            }
+            true
+        });
+    }
+
     pub(super) fn handle_input(&mut self, id: u64, bytes: Vec<u8>) {
         let focus = self.links.pane(id).or_else(|| {
             self.client_view(id)
@@ -40,9 +75,15 @@ impl Core {
             // instead of dropping them on the missing pane entry.
             if !self.buffer_in_flight_input(focus, &bytes) {
                 if let Some(entry) = self.panes.get(&focus) {
-                    if let Err(crate::pty::PtyError::Write(error)) = entry.pty.write_input(&bytes) {
-                        if error.kind() == std::io::ErrorKind::WouldBlock {
+                    match entry.pty.write_input(&bytes) {
+                        Ok(()) => self.watch_input(focus, &bytes),
+                        Err(crate::pty::PtyError::Write(error))
+                            if error.kind() == std::io::ErrorKind::WouldBlock =>
+                        {
                             self.notice(id, "pane not accepting input; keys dropped");
+                        }
+                        Err(error) => {
+                            crate::mux_log!(error; "fno mux: input failed pane={focus}: {error}")
                         }
                     }
                 }
@@ -80,7 +121,7 @@ impl Core {
                 failed
             });
         if failed {
-            eprintln!(
+            crate::mux_log!(error;
                 "fno mux: client {} reliable channel wedged on PaneInputResult; dropping it",
                 request.id
             );
@@ -126,6 +167,7 @@ impl Core {
                     self.broadcast_pane(pane);
                 }
                 self.input_tail(pane, bytes);
+                self.watch_input(pane, bytes);
                 Ok(())
             }
             ServerMsg::Err { msg, .. } => Err(msg),
