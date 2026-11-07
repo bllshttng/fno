@@ -976,7 +976,7 @@ fn share_reading_with(
                 }
             }
         }
-        match e.spawned_by_session.as_deref() {
+        match e.current_owner_session() {
             Some(spawner) if Some(spawner) == caller => held_rows.push(e.name.clone()),
             Some(spawner) => *by_spawner.entry(spawner.to_string()).or_default() += 1,
             None => unattributed.push(e.name.clone()),
@@ -1480,6 +1480,14 @@ mod tests {
         )
     }
 
+    /// A live worker born to one session and reowned to another: the
+    /// provenance owner names the successor, the birth edge stays history.
+    fn reowned_row(name: &str, sid: &str, born_to: &str, owner: &str) -> String {
+        format!(
+            r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"{sid}","spawned_by_session":"{born_to}","spawn_provenance":{{"origin":{{"kind":"session","parent":{{"harness":"claude","session_id":"{born_to}","cwd":"/tmp"}}}},"owner":{{"kind":"session","harness":"claude","session_id":"{owner}","cwd":"/tmp"}}}}}}"#
+        )
+    }
+
     /// A live caller-spawned row with a terminal-run receipt stops counting
     /// toward lead_share, and counts again once the receipt clears.
     #[test]
@@ -1520,6 +1528,45 @@ mod tests {
             reading.held,
             Some(1),
             "cleared receipt: the row counts again"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Workers reowned by a lead hand-off charge the successor's share and
+    /// stop charging the vacated lead; a provenance-less worker keeps
+    /// charging its birth edge (the accessor's fallback, today's behavior).
+    #[test]
+    fn a_reowned_worker_charges_the_successors_share_not_the_birth_leads() {
+        let dir = std::env::temp_dir().join(format!("fno-lanes-reown-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        write_registry(
+            &reg,
+            &[
+                reowned_row("w-one", "11111111", "lead-a", "lead-b"),
+                reowned_row("w-two", "22222222", "lead-a", "lead-b"),
+                spawned_row("w-legacy", "33333333", "lead-a"),
+            ],
+        );
+
+        let successor = share_reading(&reg, 3, Some("lead-b"), None);
+        assert_eq!(
+            successor.held,
+            Some(2),
+            "both reowned workers charge the successor"
+        );
+        assert_eq!(
+            successor.held_rows,
+            Some(vec!["w-one".into(), "w-two".into()]),
+            "the provenance-less worker stays off the successor"
+        );
+
+        let vacated = share_reading(&reg, 3, Some("lead-a"), None);
+        assert_eq!(
+            vacated.held,
+            Some(1),
+            "the vacated lead keeps only the provenance-less worker"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

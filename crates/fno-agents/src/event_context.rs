@@ -116,12 +116,12 @@ fn parent_for(rows: &[crate::state::RegistryEntry], sid: &str, harness: &str) ->
             || (row.harness.as_deref() == Some(harness)
                 && stored.is_some_and(|id| id == sid || id == handle));
         if matches {
-            let parent = row
-                .spawned_by_session
-                .as_deref()
-                .filter(|v| !v.is_empty())?;
-            row.spawned_by_harness
-                .as_deref()
+            let parent = row.current_owner_session().filter(|v| !v.is_empty())?;
+            // The harness guard rides the same ownership switch: a session
+            // reowned by succession takes the provenance owner's harness, a
+            // birth-edge parent keeps the row's own.
+            row.current_owner_harness()
+                .or(row.spawned_by_harness.as_deref())
                 .filter(|v| !v.is_empty())?;
             return Some(crate::identity::canonical_handle(parent));
         }
@@ -229,6 +229,51 @@ mod tests {
         assert_eq!(
             parent_for(&[row], "03401fb3-92b2-cafe", "claude").as_deref(),
             Some("parentse")
+        );
+    }
+
+    /// A worker reowned by lead succession reports to its owner session, and
+    /// a birth-edge row with no provenance and no harness keeps returning no
+    /// parent at all.
+    #[test]
+    fn parent_for_routes_a_reowned_worker_to_its_owner_session() {
+        let session_ref = |sid: &str| crate::spawn_contract::SessionRef {
+            harness: "claude".into(),
+            session_id: sid.into(),
+            cwd: "/tmp".into(),
+        };
+        let reowned = crate::state::RegistryEntry {
+            name: "w-reowned".into(),
+            harness: Some("claude".into()),
+            short_id: "03401fb3".into(),
+            spawned_by_session: Some("vacatedlead1".into()),
+            spawned_by_harness: Some("claude".into()),
+            spawn_provenance: Some(crate::spawn_contract::SpawnProvenance {
+                origin: crate::spawn_contract::SpawnOrigin::Session {
+                    parent: session_ref("vacatedlead1"),
+                    invocation: None,
+                },
+                owner: crate::spawn_contract::SpawnOwner::Session(session_ref("succsess1")),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            parent_for(&[reowned], "03401fb3-92b2-cafe", "claude").as_deref(),
+            Some("succsess"),
+            "the reowned worker's reports route to its owner session"
+        );
+
+        let bare = crate::state::RegistryEntry {
+            name: "w-bare".into(),
+            harness: Some("claude".into()),
+            short_id: "03401fb3".into(),
+            spawned_by_session: Some("parentsess1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            parent_for(&[bare], "03401fb3-92b2-cafe", "claude"),
+            None,
+            "no provenance and no birth harness still names no parent"
         );
     }
 

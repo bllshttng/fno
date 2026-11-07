@@ -898,3 +898,55 @@ fn registry_snapshot_pins_last_good_copy_on_collapse() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The owner accessor reads the succession reown's owner session and falls
+/// back to the birth edge everywhere else (no provenance, non-session
+/// owner), so no pre-hand-off row changes its answer.
+#[test]
+fn current_owner_session_reads_the_reown_owner_and_falls_back_to_the_birth_edge() {
+    let session_ref = |sid: &str| crate::spawn_contract::SessionRef {
+        harness: "claude".into(),
+        session_id: sid.into(),
+        cwd: "/tmp".into(),
+    };
+    let reowned = RegistryEntry {
+        spawn_provenance: Some(crate::spawn_contract::SpawnProvenance {
+            origin: crate::spawn_contract::SpawnOrigin::Session {
+                parent: session_ref("birth-lead1"),
+                invocation: None,
+            },
+            owner: crate::spawn_contract::SpawnOwner::Session(session_ref("successor1")),
+        }),
+        spawned_by_session: Some("birth-lead1".into()),
+        ..Default::default()
+    };
+    assert_eq!(reowned.current_owner_session(), Some("successor1"));
+    assert_eq!(reowned.current_owner_harness(), Some("claude"));
+
+    let teamed = RegistryEntry {
+        spawn_provenance: Some(crate::spawn_contract::SpawnProvenance {
+            origin: crate::spawn_contract::SpawnOrigin::NonSession {
+                source: crate::spawn_contract::NonSessionSource::Daemon {
+                    exe: "fno-agents-daemon".into(),
+                    arm: "active-backlog".into(),
+                    cause: "ab".into(),
+                },
+            },
+            owner: crate::spawn_contract::SpawnOwner::Team {
+                project: "fno".into(),
+                scope: "core".into(),
+            },
+        }),
+        spawned_by_session: Some("birth-lead1".into()),
+        ..Default::default()
+    };
+    assert_eq!(teamed.current_owner_session(), Some("birth-lead1"));
+    assert_eq!(teamed.current_owner_harness(), None);
+
+    let bare = RegistryEntry {
+        spawned_by_session: Some("birth-lead1".into()),
+        ..Default::default()
+    };
+    assert_eq!(bare.current_owner_session(), Some("birth-lead1"));
+    assert_eq!(bare.current_owner_harness(), None);
+}
