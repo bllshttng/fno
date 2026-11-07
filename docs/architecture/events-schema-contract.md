@@ -27,28 +27,21 @@ promise of a fresh session always failed `verify_provenance`, requiring
 an out-of-band `emit-gate-transition.sh` retry. That tax was the
 canonical "first promise always fails" symptom.
 
-The contract has six pieces, one job each.
+The contract has four pieces, one job each.
 
-## Six components
+## Components
 
 ```
-cli/src/fno/events/schema.yaml      single source of truth
+crates/fno-agents/src/event_store/schema.yaml   single source of truth
         |
-        +-> cli/src/fno/events/__init__.py    (Python validator + builders)
+        +-> crates/fno-agents/src/event_store/validate.rs   (Rust validator)
         |
-        +-> scripts/lib/events-validate.sh          (bash validator with cached parse)
+        +-> scripts/lib/events-validate.sh                  (bash validator with cached parse)
         |
-        +-> scripts/lib/set-gate.sh                 (atomic flip+emit)
-        |
-        +-> scripts/migrate-events-shape.py         (one-shot legacy rewriter)
-        |
-        +-> producer call sites                     (target, megatron, fno-loop)
+        +-> producer call sites                             (target, fno-loop, hooks)
 ```
 
-A CI parity test (`cli/tests/events/test_validator_parity.py`) runs both
-validators against a hand-crafted corpus (`parity_corpus.jsonl`) on
-every PR; either side drifting fails the test with a side-by-side
-diagnostic.
+The Python validator, the legacy rewriter and the Python parity test left with the Python runtime. `tests/py/events/` keeps the schema-file and manifest checks against `parity_corpus.jsonl`.
 
 ## Canonical envelope
 
@@ -57,7 +50,7 @@ diagnostic.
 ```
 
 Required fields and allowed source enum live in
-`cli/src/fno/events/schema.yaml`. Per-type required-data fields
+`crates/fno-agents/src/event_store/schema.yaml`. Per-type required-data fields
 live under `event_types[].data.required`. A `phase_transition` with
 `gate_bearing: true` MUST carry a `data.gate` value drawn from the
 schema's `gates:` allowlist; `gate_bearing: false` is for audit-only
@@ -94,7 +87,7 @@ Malformed JSON and UTF-8 rows are byte-preserved rather than blocking migration.
 The `.think-offer-cursor` is shared beside the journal and resolves its symlink before taking its owner-token mutex. Once-per-project offer consumption is preserved across worktrees.
 
 `schemas/events-v3.json` is the JSON-Schema mirror of this envelope,
-used by the cross-language parity gate; `cli/src/fno/events/schema.yaml`
+used by the parity gate; `crates/fno-agents/src/event_store/schema.yaml`
 is the source of truth both validators load.
 
 ### One envelope, both languages
@@ -129,7 +122,7 @@ tolerated.
 | `fno-loop` | HISTORICAL: the pre-wedge headless `fno loop` driver (command removed in step-5 group 3); the source value survives in old journals |
 | `hook` | every other in-tree hook (PostToolUse, PreToolUse, etc.) |
 | `subagent` | reserved for direct subagent emissions |
-| `migration` | the one-shot `scripts/migrate-events-shape.py` |
+| `migration` | HISTORICAL: the retired one-shot legacy rewriter; the source value survives in old journals |
 | `test` | test-only fixtures |
 | `backlog` | `fno backlog` graph mutations (done/refused/forced, capture, triage) |
 | `daemon` | the Rust `fno-agents` supervisor daemon (agent/drive/reconcile lifecycle) |
@@ -350,59 +343,25 @@ not a write dependency.
 
 ## Validating events
 
-Both validators load the same YAML manifest and enforce the same
-shape. Run them against the parity corpus on every PR:
+The Rust and bash validators load the same YAML manifest and enforce the same shape:
 
 ```bash
-fno doctor test cli/tests/events/test_validator_parity.py
 bash tests/events/test-bash-validator.sh
 cargo test --manifest-path crates/fno-agents/Cargo.toml verify_evidence::tests --lib
 ```
 
-Either side drifting fails the parity test with a side-by-side
-diagnostic naming which validator accepted vs rejected and the
-rejection messages each produced.
-
-## Migrating legacy files
-
-`scripts/migrate-events-shape.py` is a one-shot stream rewriter that
-walks every `events.jsonl` in the repo (root, cli/, artifacts/,
-.claude/worktrees/*) and rewrites legacy `{timestamp, ...}` rows to
-the canonical `{ts, ...}` envelope.
-
-Properties:
-
-- Idempotent: canonical-only files produce byte-for-byte equal output;
-  no `.bak` is written when migrated count is zero.
-- Stream processing: line-at-a-time, safe for million-row files.
-- Corrupt-row tolerant: malformed JSON rows pass through verbatim and
-  land in a sidecar `<file>.corrupt` log with line numbers; migration
-  continues processing subsequent rows.
-- Lock-shared with `set-gate.sh`: acquires `<file>.lock.d` via the
-  same mkdir-based mutex so a live target session and a migration run
-  cross-serialize.
-- Symlink-safe: resolves shared worktree journals before deriving sidecars or replacing bytes, deduplicates canonical targets, and preserves each symlink.
-
-Run once at ship time:
-
-```bash
-python3 scripts/migrate-events-shape.py
-```
-
-Pass `--dry-run` to see what would change without writing. Override
-the lock timeout with `MIGRATE_LOCK_TIMEOUT_SECONDS=N` (defaults to 30).
+The one-shot legacy rewriter retired with the Python runtime. Journals it never rewrote keep their legacy rows, and readers still accept both envelopes.
 
 ## CI gates
 
-Three checks that prevent regressions on the substrate:
+Two checks that prevent regressions on the substrate:
 
 | Check | Where | What |
 |-------|-------|------|
-| Parity test | `cli/tests/events/test_validator_parity.py` | Python and bash validators agree on every corpus row |
 | `events-discipline.sh` | `scripts/lint/events-discipline.sh` | Catches bypass-echo, --soft outside hooks, unwrapped set-gate calls |
 | `no-invalid-events.sh` | `scripts/lint/no-invalid-events.sh` | Fails CI when any `events.invalid.jsonl` is non-empty across repo + worktrees |
 
-All three are wired into `cli-ci.yml` along with five bash test
+Both are wired into `cli-ci.yml` along with five bash test
 harnesses (`test-bash-validator`, `test-set-gate`,
 `test-target-ledger-set-gate`, `test-verify-child-promise`,
 `test-events-discipline`).
@@ -411,26 +370,18 @@ harnesses (`test-bash-validator`, `test-set-gate`,
 
 Event data is an open registry: `data.required` keys must be present and `data.forbidden` aliases are refused, but an undeclared key validates for every type. Extra keys are evidence, not series: trend and diff on the declared keys, and read one-off keys as the noise they are. The one closed exception is `protocol_family`, and it is closed at the envelope level, not inside event data.
 
-A typed builder can still refuse an unknown keyword. That refusal is a Python signature, not the contract. `phase_transition` rejects unknown kwargs because it is a keyword-only function. The schema and both validators accept the same key on the wire. The signature is a caller convenience. The `schema.yaml` entry is the rule.
-
 Provenance keys are reserved and writer-stamped from ambient identity at the mint. Journal rows that name the session that wrote them are a separate change. That change moves the events envelope across three writers and needs a hook-path cost measurement first.
 
 ## Adding a new event type
 
 1. Add an entry under `event_types` in
-   `cli/src/fno/events/schema.yaml`. Declare `data.required`
+   `crates/fno-agents/src/event_store/schema.yaml`. Declare `data.required`
    and `data.properties`.
 2. If the type is gate-bearing, add the gate name to `gates:`.
-3. Add a typed builder in `cli/src/fno/events/__init__.py`
-   following the existing `phase_transition` / `child_promise` shape.
-   Builders use keyword-only args.
-
-   A type written only by Rust ships no Python builder. It names its Rust writer in the description: `attention_answer`, written by the daemon arm in `crates/fno-agents/src/attention_arm.rs`. Rust emits the envelope directly and the parity corpus keeps both languages honest.
+3. Name the Rust writer in the description, for example `attention_answer`, written by the daemon arm in `crates/fno-agents/src/attention_arm.rs`. Rust emits the envelope directly.
 4. Add fixture rows to `tests/py/events/parity_corpus.jsonl` covering
-   happy path + at least one rejection case. The parity test runs
-   both validators against every row and fails on any disagreement.
-5. Update `__all__` in the events module if exporting new symbols.
-6. Update this doc.
+   happy path + at least one rejection case.
+5. Update this doc.
 
 ## Removing an event type
 
@@ -452,7 +403,7 @@ old `phase: produce` and `phase: review_fix` strings indefinitely. New
 emissions use the new names. Any reader that filters by phase string
 must accept both the historical and current spellings (the schema
 itself does not constrain the phase field). Today no reader in
-`cli/src/`, `scripts/`, or `hooks/` actually filters on these phase
+`crates/`, `scripts/`, or `hooks/` actually filters on these phase
 names, so no tolerance branch is required at the moment of the rename;
 this note exists so a future reader knows not to narrow the filter back
 down without restoring the old-name branch.
@@ -462,7 +413,7 @@ down without restoring the old-name branch.
 These were locked during the design phase and codified by the spec
 ship. Re-litigating any of them is out of scope:
 
-1. Schema home: YAML at `cli/src/fno/events/schema.yaml`
+1. Schema home: YAML at `crates/fno-agents/src/event_store/schema.yaml`
    (language-neutral; both validators parse directly).
 2. Two validators that both load the YAML; CI parity test catches
    drift.
