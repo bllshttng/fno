@@ -959,8 +959,9 @@ fn skew_popup_names_the_command_and_versions_and_offers_one_restart() {
         labels.contains("v120"),
         "the server's version renders: {labels}"
     );
+    let client_v = format!("v{}", crate::proto::PROTO_VERSION);
     assert!(
-        labels.contains("v122"),
+        labels.contains(&client_v),
         "the client's version renders: {labels}"
     );
 }
