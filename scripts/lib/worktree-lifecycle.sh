@@ -574,7 +574,7 @@ _cargo_free_bytes() {
 
 _cargo_build_base() {
     # Where cargo intermediates live: paths.cargo_targets_base when set, else
-    # ~/.fno/cargo-build. FNO_CARGO_TARGETS_BASE overrides the read so tests
+    # ~/.fno/cache/cargo-build. FNO_CARGO_TARGETS_BASE overrides the read so tests
     # can point the sweep at a sandbox. Mirrors fno_build_base in
     # crates/fno-agents/src/cargo_build_dirs.rs.
     local raw=""
@@ -587,7 +587,7 @@ _cargo_build_base() {
     fi
     # The state-dir fallback form is the shape the hardcoded-path gate
     # exempts: honor a configured state_dir, else the standard ~/.fno.
-    [[ "$raw" == "null" || -z "$raw" ]] && raw="${STATE_DIR:-$HOME/.fno}/cargo-build"
+    [[ "$raw" == "null" || -z "$raw" ]] && raw="${STATE_DIR:-$HOME/.fno}/cache/cargo-build"
     # Config stores ~ literally; expand a leading ~ to $HOME.
     printf '%s\n' "${raw/#\~/$HOME}"
 }
@@ -601,8 +601,9 @@ _cargo_legacy_offload_base() {
 }
 
 _cargo_cache_dir_owned() {
-    # Is $1 a directory this repo's tooling created: under the build base (or
-    # the retired offload base) AND carrying cargo's own CACHEDIR.TAG? Both
+    # Is $1 a directory this repo's tooling created: under the current build
+    # base, its draining legacy base, or the retired offload base AND carrying
+    # cargo's own CACHEDIR.TAG? Both
     # conjuncts are load-bearing: the base is fno-owned, the tag is cargo's,
     # so a symlink reaching outside either is not ours to delete. Both sides
     # are normalised through pwd -P: /tmp is a symlink to /private/tmp, and a
@@ -611,7 +612,10 @@ _cargo_cache_dir_owned() {
     [[ -d "$resolved" ]] || return 1
     [[ -f "$resolved/CACHEDIR.TAG" ]] || return 1
     resolved="$(cd -- "$resolved" 2>/dev/null && pwd -P)" || return 1
-    for base in "$(_cargo_build_base)" "$(_cargo_legacy_offload_base)"; do
+    for base in \
+        "$(_cargo_build_base)" \
+        "${STATE_DIR:-$HOME/.fno}/cargo-build" \
+        "$(_cargo_legacy_offload_base)"; do
         base="$(cd -- "$base" 2>/dev/null && pwd -P)" || continue
         case "$resolved/" in
             "$base/"*) return 0 ;;

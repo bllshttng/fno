@@ -60,6 +60,10 @@ pub(crate) fn persist_manifest_identity(
     if let Some(receipt) = receipt {
         journal_agent_revived(home, "adopt", &receipt, &entry);
     }
+    // A revived titled lead re-seats the role its vacate set aside: the
+    // receipt restored the name, the re-seat restores the seat, and the
+    // check-in the lead makes next finds its team live.
+    crate::boot_revival::reseat_resumed_row(home, &entry.name);
     serde_json::to_value(&entry).map_err(|error| AdoptError::Io(error.to_string()))
 }
 
