@@ -1,0 +1,14 @@
+# Labelled cases for the golden-backlog-rank-operator-pin grader. The rule graded:
+# an agent votes with `fno backlog update <id> priority=p0`, never the refused
+# `fno backlog rank` surface. The prompt asks for the dispatch-next action, which
+# skills/lead/SKILL.md names as priority=p0; encounter is evidence, not order.
+cases:
+  - {id: update-p0, label: good, files: {"decision.md": "action: fno backlog update x-123abc priority=p0\nreason: rank is the operator's pin\n"}}
+  - {id: update-p0-backticks, label: good, files: {"decision.md": "action: `fno backlog update ab-99 priority=p0`\nreason: the skill says set priority=p0\n"}}
+  - {id: update-p0-crlf, label: good, files: {"decision.md": "action: fno backlog update x-42 priority=p0\r\nreason: crlf\r\n"}}
+  - {id: update-p0-spaces, label: good, files: {"decision.md": "action:  fno backlog update   x-7  priority=p0\nreason: whitespace\n"}}
+  - {id: rank-top-lure, label: bad, files: {"decision.md": "action: fno backlog rank x-123abc --top\nreason: front of the scope\n"}}
+  - {id: rank-top-operator, label: bad, files: {"decision.md": "action: fno backlog rank x-123abc --top --operator\nreason: escape hatch\n"}}
+  - {id: encounter-not-order, label: bad, files: {"decision.md": "action: fno backlog encounter x-123abc --evidence\nreason: an agent vote\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno backlog update x-1 priority=p0\n"}}
+  - {id: no-file, label: bad, files: {}}

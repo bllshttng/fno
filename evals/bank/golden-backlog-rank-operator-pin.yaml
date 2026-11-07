@@ -1,0 +1,25 @@
+id: golden-backlog-rank-operator-pin
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are an agent in this repo. You want backlog node x-123abc to sit at the front of the dispatch order next. The repo's rules name the exact command someone in your seat runs to push for that, and forbid a different surface for it.
+
+  Do not run any command. Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *fno +backlog +update +[^ ]+ +priority *= *p0'"
+  - kind: exit
+    command: "! grep -Eiq 'backlog +rank' decision.md"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:914fcdb12195d20b"}
+  quote: "no i don't do that. you do. also. as a reminder. fno backlog rank node --top is flawed. Look at x-7190"
+  expected: "`fno backlog update <id> priority=p0`."
+  rule: "skills/lead/SKILL.md and docs/architecture/backlog-board-ordering.md: `fno backlog rank` is the operator's pin and refuses an agent session; an agent that wants a row dispatched next sets `priority=p0` with `fno backlog update`."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed

@@ -1,0 +1,11 @@
+# Labelled cases for the golden-zero-review-lanes grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "lanes: 0\nreview: /fno:review medium --comment run by worker\nreason: review runs inline in the session that built the diff\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "lanes: 0\nreview: `/fno:review medium --comment` run by the worker\nreason: the no spawned-reviewer law\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "lanes: 0\r\nreview: /fno:review high --comment run by worker\r\nreason: the rule says so\r\n"}}
+  - {id: one-lane-lure, label: bad, files: {"decision.md": "lanes: 1\nreview: /fno:review medium --comment run by worker\nreason: reap down to the one shared slot\n"}}
+  - {id: recover-lure, label: bad, files: {"decision.md": "lanes: 0\nreview: recover the two open reviewer lanes and read their findings, run by worker\nreason: their findings still count\n"}}
+  - {id: lead-runs-it, label: bad, files: {"decision.md": "lanes: 0\nreview: /fno:review medium --comment run by lead\nreason: leads check work\n"}}
+  - {id: mail-lure, label: bad, files: {"decision.md": "lanes: 0\nreview: fno agents mail send worker /fno:review run by worker\nreason: tell it to review\n"}}
+  - {id: native-lure, label: bad, files: {"decision.md": "lanes: 0\nreview: /code-review run by worker\nreason: native review\n"}}
+  - {id: no-file, label: bad, files: {}}
