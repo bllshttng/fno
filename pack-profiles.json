@@ -35,6 +35,7 @@
     "hooks/effect-guard-dispatch.sh",
     "hooks/eval-sweep-session-start.sh",
     "hooks/format-on-edit.sh",
+    "hooks/ask-push.sh",
     "hooks/friction-offer-inject.sh",
     "hooks/frontdoor-nudge-prompt-submit.sh",
     "hooks/frontdoor-nudge-session-start.sh",

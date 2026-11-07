@@ -182,3 +182,40 @@ fn a_delivery_without_an_asker_names_the_lead_escalation_lane() {
         "outstanding: q-d1 answered; no asker on record (lead escalation), nobody to wake. Decision d-abc1; recover it via: fno backlog decisions"
     );
 }
+
+// claude-push payload: composition, cap, and the relay line format.
+
+#[test]
+fn push_payload_names_the_question_the_decision_and_the_pick() {
+    let payload = crate::question_ladder::push_payload(
+        "q-1a2b",
+        "Which lane ships the release?",
+        Some("Ship 0.3.1"),
+        &["ship now".to_string(), "hold".to_string()],
+    );
+    assert_eq!(payload, "Question q-1a2b: Ship 0.3.1 - pick: ship now");
+}
+
+#[test]
+fn push_payload_falls_back_to_the_first_question_line() {
+    let payload = crate::question_ladder::push_payload(
+        "q-3c4d",
+        "\nWhich lane ships the release?\nsecond line",
+        None,
+        &[],
+    );
+    assert_eq!(payload, "Question q-3c4d: Which lane ships the release?");
+}
+
+#[test]
+fn push_payload_caps_at_200_chars() {
+    let long = "x".repeat(500);
+    let payload = crate::question_ladder::push_payload("q-5e6f", &long, None, &[]);
+    assert!(payload.chars().count() <= 200);
+}
+
+#[test]
+fn push_line_carries_one_tab_between_qid_and_body() {
+    let line = crate::question_ladder::push_line("q-7g8h", "Question q-7g8h: s");
+    assert!(line.starts_with("claude-push: q-7g8h\t"));
+}

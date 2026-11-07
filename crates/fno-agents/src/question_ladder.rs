@@ -218,6 +218,43 @@ pub fn rung_is_user(rung: Option<&Value>) -> bool {
     )
 }
 
+/// The phone-sized push body a user-board question carries: question
+/// number, the decision it asks about (subject, else the first question
+/// line), and the recommended option, capped for the phone. The relay hook
+/// turns the printed line into one PushNotification from this session.
+pub(crate) fn push_payload(
+    qid: &str,
+    question: &str,
+    subject: Option<&str>,
+    options: &[String],
+) -> String {
+    let decision = subject
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            question
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or_default()
+                .to_string()
+        });
+    let mut body = format!("Question {qid}: {decision}");
+    if let Some(option) = options.iter().map(|s| s.trim()).find(|s| !s.is_empty()) {
+        body.push_str(" - pick: ");
+        body.push_str(option);
+    }
+    body.chars().take(200).collect()
+}
+
+/// The machine line the Claude relay hook parses off stdout: one tab
+/// separates the qid from the body. Both user-board emitters (ask, climb)
+/// print it, and nothing else does.
+pub(crate) fn push_line(qid: &str, payload: &str) -> String {
+    format!("claude-push: {qid}\t{payload}")
+}
+
 /// The rung a holder climbs to: the node lead's higher-up when one lives
 /// and has not held the row yet, else the user (`None`).
 fn next_rung(cwd: &Path, node: Option<&str>, data: &Value) -> Option<Value> {
@@ -338,6 +375,13 @@ pub fn run_climb(args: &[String]) -> i32 {
         wake_holder(rung, &qid, node, data["question"].as_str().unwrap_or(""));
         rung["holder_name"].as_str().unwrap_or("the next lead")
     });
+    if next.is_none() {
+        // The row just became the user's to answer and no toast fires on
+        // this path, so hand the climbing session its mobile push line.
+        let subject = data.get("subject").and_then(Value::as_str);
+        let payload = push_payload(&qid, data["question"].as_str().unwrap_or(""), subject, &[]);
+        println!("{}", push_line(&qid, &payload));
+    }
     println!("{qid} climbed to {to}");
     0
 }

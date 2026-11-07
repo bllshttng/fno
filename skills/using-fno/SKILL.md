@@ -60,7 +60,7 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 | `fno agents mail send\|reply\|unread\|ack\|hold` | Cross-project jsonl messaging; live-inject-first, durable fallback. |
 | `fno agents spawn\|ask\|peek\|attach\|resume\|wait` | Cross-CLI agent lifecycle; per-harness support in `docs/harness-command-matrix.md`. |
 | `fno backlog carveout add` | Last resort: work too big for this PR. Else fix it here. |
-| `fno outstanding` / `fno backlog` | Awaiting a human: carve-outs + questions; `ask`/`clear`. `clear --answer` prints per-id receipts, resumes the same answer, and mails the asker or explains why. `backlog decide` records a ruling; `backlog decisions` recovers it (no subject = recent). |
+| `fno outstanding` / `fno backlog` | Awaiting a human: carve-outs + questions; `ask`/`clear`. `clear --answer` prints per-id receipts, resumes the same answer, and mails the asker or explains why. `backlog decide` records a ruling; `backlog decisions` recovers it (no subject = recent). A user-board ask (or climb) prints a `claude-push:` line. Its hook turns it into one PushNotification from the filing lead's session. The tap opens the session and the user answers in chat. Workers never push. ntfy stays the second path. |
 
 **Replying to a2a mail (one rule).** Answer delivered mail (`` `@sender · X · summary` ``) with `fno agents mail reply --to X "..."`. It threads the reply and resolves the sender itself, live or drained. Never re-type a handle. Optional for FYIs.
 
