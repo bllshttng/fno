@@ -267,6 +267,7 @@ fn reseat_one_name(
         return Ok(());
     };
     let emitter = crate::events::EventEmitter::new(home.events_jsonl(), source);
+    let mut first: Option<String> = None;
     let mut vacated: Vec<std::path::PathBuf> = read.flatten().map(|e| e.path()).collect();
     vacated.sort();
     for path in vacated {
@@ -316,14 +317,22 @@ fn reseat_one_name(
                 );
             }
             Err(reason) => {
-                return Err(format!(
-                    "re-seat for {} over {scope} refused ({reason})",
-                    row.name
-                ));
+                // One refused manifest never stops the scan: the boot loop
+                // printed and kept going, so the first refusal is held and
+                // the remaining manifests still get their pass.
+                if first.is_none() {
+                    first = Some(format!(
+                        "re-seat for {} over {scope} refused ({reason})",
+                        row.name
+                    ));
+                }
             }
         }
     }
-    Ok(())
+    match first {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
 }
 
 /// One re-seat: re-stamp the row under the live-rival check (registry
