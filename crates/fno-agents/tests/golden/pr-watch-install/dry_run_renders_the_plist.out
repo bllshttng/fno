@@ -11,7 +11,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>sh.fno.pr-watcher</string>
+  <string>sh.fno.pr-watcher.testhome</string>
 
   <key>ProgramArguments</key>
   <array>
