@@ -75,10 +75,12 @@ full = [
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
 axum = { version = "0.8", features = ["ws"], optional = true }
-# rio-vt replaces alacritty_terminal as the mux VT engine, pinned to the
-# audited upstream commit. `default-features = false` drops the PTY stack
-# (the mux owns PTYs) and every renderer/windowing dep.
-rio-vt = { git = "https://github.com/raphamorim/rio", rev = "0d9ede193a", default-features = false, optional = true }
+# rio-vt replaces alacritty_terminal as the mux VT engine. `default-features
+# = false` drops the PTY stack (the mux owns PTYs) and every renderer and
+# windowing dep. The 0.5.29 registry tarball was verified byte-identical to
+# the audited upstream source (raphamorim/rio at 0d9ede193ace8a); the exact
+# pin keeps that audit true.
+rio-vt = { version = "=0.5.29", default-features = false, optional = true }
 crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 # The sideline's widget layer: `draw_sideline` renders a `Table` into a
 # standalone `Buffer` and `ratatui_blit` copies it into the compositor's
