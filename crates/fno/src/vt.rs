@@ -1,23 +1,28 @@
 //! Server-side VT emulation: PTY bytes -> a styled cell grid -> `proto::Frame`.
 //!
-//! Seeded from `crates/fno-agents/src/screen.rs` (headless
-//! `Term<VoidListener>` + `vte::ansi::Processor`) and its grid compositor's
-//! cell mapping, adapted for the mux: alt-screen is exercised (vim under
-//! detach/reattach, AC3-EDGE), scrollback is bounded (10k lines - a cap, not
-//! an upfront allocation, so server memory per pane is bounded), and the
-//! snapshot is a full styled [`Frame`], not trimmed text. The server grid is
-//! the single source of truth; the client never emulates VT itself.
+//! The engine is `rio-vt` (Rio's embeddable terminal core: `Crosswords`
+//! terminal + its ANSI `Processor`), which extracted and hardened the
+//! alacritty model this file originally seeded from
+//! (`crates/fno-agents/src/screen.rs`). The mux contract is unchanged:
+//! alt-screen is exercised (vim under detach/reattach, AC3-EDGE), scrollback
+//! is bounded (100k lines - a cap, not an upfront allocation, so server
+//! memory per pane is bounded), and the snapshot is a full styled [`Frame`],
+//! not trimmed text. The server grid is the single source of truth; the
+//! client never emulates VT itself.
 
 use std::collections::VecDeque;
 use std::path::Path;
 
-use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::cell::{Flags, Hyperlink};
-use alacritty_terminal::term::{point_to_viewport, viewport_to_point, Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color as VtColor, NamedColor, Processor, Rgb};
+use rio_vt::ansi::CursorShape;
+use rio_vt::config::colors::{AnsiColor as VtColor, ColorRgb, NamedColor};
+use rio_vt::crosswords::grid::{Dimensions, Scroll};
+use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
+use rio_vt::crosswords::selection::{Selection, SelectionType};
+use rio_vt::crosswords::square::{CellFlags, ContentTag, Hyperlink, Square, Wide};
+use rio_vt::crosswords::style::{Style, StyleFlags};
+use rio_vt::crosswords::{Crosswords, Mode};
+use rio_vt::event::{VoidListener, WindowId};
+use rio_vt::performer::handler::Processor;
 
 use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
 use serde::{Deserialize, Serialize};
@@ -53,12 +58,13 @@ pub struct LinkSpan {
 pub const DEFAULT_ROWS: u16 = 24;
 pub const DEFAULT_COLS: u16 = 80;
 
-/// Default scrollback cap per pane. `Term::new` treats `scrolling_history` as a
-/// bound the history grows toward, not an allocation, so a pane that emits 500
-/// lines costs 500 lines even at this ceiling. 100k is alacritty's documented
-/// max; a memory-constrained deployment lowers it via the
-/// `FNO_MUX_SCROLLBACK_LINES` env var (see `scrollback_lines`). Governs how far
-/// `pane read --lines` and a still-streaming block can reach into history (4b).
+/// Default scrollback cap per pane. `Crosswords::new` treats
+/// `scrollback_history_limit` as a bound the history grows toward, not an
+/// allocation, so a pane that emits 500 lines costs 500 lines even at this
+/// ceiling. 100k is the alacritty-family documented max; a memory-constrained
+/// deployment lowers it via the `FNO_MUX_SCROLLBACK_LINES` env var (see
+/// `scrollback_lines`). Governs how far `pane read --lines` and a
+/// still-streaming block can reach into history (4b).
 const SCROLLBACK_LINES: usize = 100_000;
 
 /// Resolve the per-pane scrollback cap. Read directly from the
@@ -94,7 +100,7 @@ impl Dimensions for GridSize {
 
 /// The one Phase-1 pane: a terminal grid fed raw PTY bytes.
 pub struct Pane {
-    term: Term<VoidListener>,
+    term: Crosswords<VoidListener>,
     processor: Processor,
     rows: u16,
     cols: u16,
@@ -210,20 +216,19 @@ impl Pane {
         let rows = rows.max(1);
         let cols = cols.max(1);
         let scrollback = scrollback.max(1);
-        let config = Config {
-            scrolling_history: scrollback,
-            ..Config::default()
-        };
         Pane {
-            term: Term::new(
-                config,
-                &GridSize {
+            term: Crosswords::new(
+                GridSize {
                     rows: rows as usize,
                     cols: cols as usize,
                 },
+                CursorShape::Block,
                 VoidListener,
+                WindowId::from(0u64),
+                0,
+                scrollback,
             ),
-            processor: Processor::new(),
+            processor: Processor::default(),
             rows,
             cols,
             scanner: Osc133Scanner::default(),
@@ -298,7 +303,7 @@ impl Pane {
 
     /// When the open synchronized update (DEC mode 2026) expires, if one is open.
     pub fn sync_deadline(&self) -> Option<std::time::Instant> {
-        self.processor.sync_timeout().sync_timeout()
+        self.term.sync_update_deadline()
     }
 
     /// Apply a synchronized update whose deadline has passed, and report whether
@@ -308,7 +313,7 @@ impl Pane {
         if self.sync_deadline().is_none_or(|deadline| deadline > now) {
             return false;
         }
-        self.processor.stop_sync(&mut self.term);
+        self.term.end_sync_update();
         true
     }
 
@@ -393,12 +398,11 @@ impl Pane {
     /// internally, so vim's screen is what a reattaching client redraws from)
     /// into a self-contained [`Frame`].
     pub fn frame(&self) -> Frame {
-        let grid = self.term.grid();
+        let grid = &self.term.grid;
         // Display offset (US1): 0 = live bottom, >0 = scrolled into history.
-        // Viewport row `r` shows grid line `r - offset` (alacritty's
-        // `viewport_to_point`), so at offset 0 this is byte-identical to the
-        // live-view render.
-        let offset = grid.display_offset() as i32;
+        // Viewport row `r` shows grid line `r - offset`, so at offset 0 this is
+        // byte-identical to the live-view render.
+        let offset = self.term.display_offset() as i32;
         // Selection (US2): resolved to a concrete grid-point range once, then
         // each cell is tested against it so every co-viewer's frame carries the
         // same highlight (brief Locked 4). `None` when nothing is selected.
@@ -407,16 +411,17 @@ impl Pane {
             .selection
             .as_ref()
             .and_then(|s| s.to_range(&self.term));
-        let cursor_point = grid.cursor.point;
+        let cursor_point = self.term.cursor().pos;
+        let styles = grid.styles();
         let mut cells = Vec::with_capacity(self.rows as usize * self.cols as usize);
         for r in 0..(self.rows as usize) {
             let line = Line(r as i32 - offset);
             for c in 0..(self.cols as usize) {
-                let cell = &grid[line][Column(c)];
-                let mut mapped = map_cell(cell.c, cell.fg, cell.bg, cell.flags);
+                let square = &grid[line][Column(c)];
+                let mut mapped = map_square(square, styles);
                 if sel
                     .as_ref()
-                    .is_some_and(|range| range.contains(Point::new(line, Column(c))))
+                    .is_some_and(|range| range.contains(Pos::new(line, Column(c))))
                 {
                     mapped.flags |= cell_flags::SELECTED;
                 }
@@ -428,14 +433,14 @@ impl Pane {
         // history. At offset 0 the cursor row is unchanged.
         let scrolled = offset != 0;
         let history_lines =
-            (grid.history_size() as u64 + self.rows as u64).min(u32::MAX as u64) as u32;
+            (self.term.history_size() as u64 + self.rows as u64).min(u32::MAX as u64) as u32;
         Frame {
             rows: self.rows,
             cols: self.cols,
             cells,
-            cursor_row: (cursor_point.line.0 + offset).max(0) as u16,
-            cursor_col: cursor_point.column.0 as u16,
-            cursor_visible: !scrolled && self.term.mode().contains(TermMode::SHOW_CURSOR),
+            cursor_row: (cursor_point.row.0 + offset).max(0) as u16,
+            cursor_col: cursor_point.col.0 as u16,
+            cursor_visible: !scrolled && self.term.mode().contains(Mode::SHOW_CURSOR),
             scroll_offset: offset.max(0).min(u16::MAX as i32) as u16,
             history_lines,
         }
@@ -475,7 +480,7 @@ impl Pane {
     /// Lines currently scrolled above the live bottom; 0 = live. Drives the
     /// `[+N]` indicator and the frame's cursor-hide (AC1-UI: present iff != 0).
     pub fn display_offset(&self) -> usize {
-        self.term.grid().display_offset()
+        self.term.display_offset()
     }
 
     // -- Selection (US2) -------------------------------------------------------
@@ -515,10 +520,10 @@ impl Pane {
 
     /// Map a viewport cell to a grid point through the current display offset,
     /// clamping the column into the grid so an edge drag never indexes O.O.B.
-    fn viewport_point(&self, row: u16, col: u16) -> Point {
+    fn viewport_point(&self, row: u16, col: u16) -> Pos {
         let col = (col as usize).min(self.cols.saturating_sub(1) as usize);
         let row = (row as usize).min(self.rows.saturating_sub(1) as usize);
-        viewport_to_point(self.display_offset(), Point::new(row, Column(col)))
+        Pos::new(Line(row as i32 + self.display_offset() as i32), Column(col))
     }
 
     // -- Links --------------------------------------------------------
@@ -553,7 +558,7 @@ impl Pane {
     /// candidates are resolved; see [`crate::link::find_paths`].
     pub fn link_span(&self, row: u16, col: u16, cwd: &str) -> Option<LinkSpan> {
         let point = self.viewport_point(row, col);
-        let line = self.logical_line(point.line);
+        let line = self.logical_line(point.row);
         if let Some((text, points)) = &line {
             if let Some(idx) = points.iter().position(|p| *p == point) {
                 // Hover fires this per mouse move, and each finder below
@@ -614,7 +619,7 @@ impl Pane {
                 }
             }
         }
-        if let Some(h) = self.term.grid()[point.line][point.column].hyperlink() {
+        if let Some(h) = self.term.cell_hyperlink(point.row, point.col) {
             // OSC 8 wins when present (see `link_at`); the span is the run of
             // cells carrying the SAME anchor, soft wraps included.
             let uri = h.uri().to_string();
@@ -648,14 +653,14 @@ impl Pane {
     /// Map grid points to pane-local viewport cells, dropping everything the
     /// current viewport does not show (a link may run into scrolled history;
     /// only the on-screen part is an affordance).
-    fn visible_cells(&self, points: &[Point]) -> Vec<(u16, u16)> {
-        let d = self.display_offset();
+    fn visible_cells(&self, points: &[Pos]) -> Vec<(u16, u16)> {
+        let d = self.display_offset() as i32;
         let rows = self.rows as usize;
         points
             .iter()
             .filter_map(|p| point_to_viewport(d, *p))
-            .filter(|p| p.line < rows)
-            .map(|p| (p.line as u16, p.column.0 as u16))
+            .filter(|p| p.row.0 >= 0 && (p.row.0 as usize) < rows)
+            .map(|p| (p.row.0 as u16, p.col.0 as u16))
             .collect()
     }
 
@@ -670,33 +675,33 @@ impl Pane {
     /// run, so each row of the span is collected exactly once (a single walk
     /// list extended from whichever end fired last would re-derive rows on the
     /// other side and duplicate them).
-    fn osc8_span_cells(&self, point: Point, anchor: &Hyperlink) -> Vec<(u16, u16)> {
-        let ((lo, hi), _, _) = self.wrap_region(point.line);
-        let grid = self.term.grid();
+    fn osc8_span_cells(&self, point: Pos, anchor: &Hyperlink) -> Vec<(u16, u16)> {
+        let ((lo, hi), _, _) = self.wrap_region(point.row);
+        let grid = &self.term.grid;
         let cols = self.cols as usize;
         let last = Column(cols.saturating_sub(1));
         let same = |line: Line, c: usize| {
-            grid[line][Column(c)]
-                .hyperlink()
+            self.term
+                .cell_hyperlink(line, Column(c))
                 .is_some_and(|h| h == *anchor)
         };
         // The pointed row's own run.
-        let mut s = point.column.0;
-        let mut e = point.column.0;
-        while s > 0 && same(point.line, s - 1) {
+        let mut s = point.col.0;
+        let mut e = point.col.0;
+        while s > 0 && same(point.row, s - 1) {
             s -= 1;
         }
-        while e + 1 < cols && same(point.line, e + 1) {
+        while e + 1 < cols && same(point.row, e + 1) {
             e += 1;
         }
         // Rows above: while the current run starts at col 0 and the row above
         // wraps into it on the same anchor, collect that row's tail run.
         // Pushed nearest-first; reversed below into row order.
         let mut above: Vec<(i32, usize, usize)> = Vec::new();
-        let (mut cs, mut cur) = (s, point.line.0);
+        let (mut cs, mut cur) = (s, point.row.0);
         while cs == 0
             && cur > lo
-            && grid[Line(cur - 1)][last].flags.contains(Flags::WRAPLINE)
+            && grid[Line(cur - 1)][last].contains_cell_flag(CellFlags::WRAPLINE)
             && same(Line(cur - 1), cols - 1)
         {
             let a = Line(cur - 1);
@@ -711,10 +716,10 @@ impl Pane {
         // Rows below: while the current run ends at the last column and the
         // current row wraps, collect the next row's head run.
         let mut below: Vec<(i32, usize, usize)> = Vec::new();
-        let (mut ce, mut cur) = (e, point.line.0);
+        let (mut ce, mut cur) = (e, point.row.0);
         while ce + 1 == cols
             && cur < hi
-            && grid[Line(cur)][last].flags.contains(Flags::WRAPLINE)
+            && grid[Line(cur)][last].contains_cell_flag(CellFlags::WRAPLINE)
             && same(Line(cur + 1), 0)
         {
             let b = Line(cur + 1);
@@ -729,11 +734,11 @@ impl Pane {
         let runs = above
             .into_iter()
             .rev()
-            .chain(std::iter::once((point.line.0, s, e)))
+            .chain(std::iter::once((point.row.0, s, e)))
             .chain(below);
         self.visible_cells(
             &runs
-                .flat_map(|(ln, s, e)| (s..=e).map(move |c| Point::new(Line(ln), Column(c))))
+                .flat_map(|(ln, s, e)| (s..=e).map(move |c| Pos::new(Line(ln), Column(c))))
                 .collect::<Vec<_>>(),
         )
     }
@@ -744,7 +749,7 @@ impl Pane {
     /// comes from the anchor, so only the row bounds matter) so the two walks
     /// can never disagree about where a wrapped line begins and ends.
     fn wrap_region(&self, line: Line) -> ((i32, i32), bool, bool) {
-        let grid = self.term.grid();
+        let grid = &self.term.grid;
         let cols = self.cols as usize;
         let last = Column(cols.saturating_sub(1));
         let (top, bot) = (grid.topmost_line().0, grid.bottommost_line().0);
@@ -759,19 +764,21 @@ impl Pane {
         let mut lo = line.0;
         while lo > top
             && line.0 - lo < max_rows
-            && grid[Line(lo - 1)][last].flags.contains(Flags::WRAPLINE)
+            && grid[Line(lo - 1)][last].contains_cell_flag(CellFlags::WRAPLINE)
         {
             lo -= 1;
         }
         let mut hi = line.0;
         while hi < bot
             && hi - line.0 < max_rows
-            && grid[Line(hi)][last].flags.contains(Flags::WRAPLINE)
+            && grid[Line(hi)][last].contains_cell_flag(CellFlags::WRAPLINE)
         {
             hi += 1;
         }
-        let truncated_above = lo > top && grid[Line(lo - 1)][last].flags.contains(Flags::WRAPLINE);
-        let truncated_below = hi < bot && grid[Line(hi)][last].flags.contains(Flags::WRAPLINE);
+        let truncated_above =
+            lo > top && grid[Line(lo - 1)][last].contains_cell_flag(CellFlags::WRAPLINE);
+        let truncated_below =
+            hi < bot && grid[Line(hi)][last].contains_cell_flag(CellFlags::WRAPLINE);
         ((lo, hi), truncated_above, truncated_below)
     }
 
@@ -787,13 +794,13 @@ impl Pane {
     /// wrapping: the collected text is then a prefix, and a prefix of a URL is a
     /// different URL that `find_urls` would happily accept and open. Refusing is
     /// the only safe answer (codex, PR 702).
-    fn logical_line(&self, line: Line) -> Option<(String, Vec<Point>)> {
+    fn logical_line(&self, line: Line) -> Option<(String, Vec<Pos>)> {
         let ((start, end), truncated_above, truncated_below) = self.wrap_region(line);
         // Stopped on the cap rather than on a real line end: we hold a fragment.
         if truncated_above || truncated_below {
             return None;
         }
-        let grid = self.term.grid();
+        let grid = &self.term.grid;
         let cols = self.cols as usize;
 
         let mut text = String::new();
@@ -801,18 +808,12 @@ impl Pane {
         for ln in start..=end {
             let l = Line(ln);
             for c in 0..cols {
-                let cell = &grid[l][Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
-                {
+                let square = &grid[l][Column(c)];
+                if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
                     continue;
                 }
-                text.push(if cell.flags.contains(Flags::HIDDEN) {
-                    ' '
-                } else {
-                    cell.c
-                });
-                points.push(Point::new(l, Column(c)));
+                text.push(square_text_char(square, grid.styles()));
+                points.push(Pos::new(l, Column(c)));
             }
         }
         Some((text, points))
@@ -830,20 +831,20 @@ impl Pane {
     /// nearby row, never a panic and never a wrong-text read (block text/command
     /// come from the byte-captured store, not these rows).
     fn anchor_row(&self) -> i64 {
-        let grid = self.term.grid();
-        grid.cursor.point.line.0 as i64 + grid.history_size() as i64
+        let hist = self.term.history_size() as i64;
+        self.term.cursor().pos.row.0 as i64 + hist
     }
 
     /// The [`anchor_row`](Self::anchor_row) currently at the viewport top.
     fn viewport_top_abs(&self) -> i64 {
-        self.term.grid().history_size() as i64 - self.display_offset() as i64
+        self.term.history_size() as i64 - self.display_offset() as i64
     }
 
     /// Scroll so `abs_row` sits at the viewport top, clamped into the live window
     /// (an evicted/oldest target lands on the oldest retained line, never a stale
     /// row). Returns the resulting display offset.
     fn scroll_to_abs(&mut self, abs_row: i64) -> usize {
-        let hist = self.term.grid().history_size() as i64;
+        let hist = self.term.history_size() as i64;
         let target = (hist - abs_row).clamp(0, hist);
         let cur = self.display_offset() as i64;
         self.term
@@ -940,8 +941,8 @@ impl Pane {
             return;
         };
         let (start_abs, end_abs) = (b.start_abs, b.end_abs);
-        let grid = self.term.grid();
-        let hist = grid.history_size() as i64;
+        let grid = &self.term.grid;
+        let hist = self.term.history_size() as i64;
         let top = grid.topmost_line().0 as i64;
         let bot = grid.bottommost_line().0 as i64;
         let sl = (start_abs - hist).clamp(top, bot) as i32;
@@ -949,10 +950,10 @@ impl Pane {
         let last_col = Column(self.cols.saturating_sub(1) as usize);
         let mut sel = Selection::new(
             SelectionType::Simple,
-            Point::new(Line(sl), Column(0)),
+            Pos::new(Line(sl), Column(0)),
             Side::Left,
         );
-        sel.update(Point::new(Line(el), last_col), Side::Right);
+        sel.update(Pos::new(Line(el), last_col), Side::Right);
         self.term.selection = Some(sel);
         self.scroll_to_abs(start_abs);
     }
@@ -1033,7 +1034,7 @@ impl Pane {
             .selection
             .as_ref()
             .and_then(|s| s.to_range(&self.term))
-            .map(|r| r.start.line.0 as i64 + self.term.grid().history_size() as i64);
+            .map(|r| r.start.row.0 as i64 + self.term.history_size() as i64);
         let matches = self.scan_matches(&needle);
         if matches.is_empty() {
             self.search_clear();
@@ -1088,18 +1089,18 @@ impl Pane {
             return;
         };
         // Clamp the stored anchor into the live grid (mirrors set_block_selection)
-        // so an evicted/drifted row selects a valid span, never an O.O.B. point.
-        let grid = self.term.grid();
-        let hist = grid.history_size() as i64;
+        // so an evicted/drifted row selects, never an O.O.B. point.
+        let grid = &self.term.grid;
+        let hist = self.term.history_size() as i64;
         let top = grid.topmost_line().0 as i64;
         let bot = grid.bottommost_line().0 as i64;
         let line = (m.abs_row - hist).clamp(top, bot) as i32;
         let mut sel = Selection::new(
             SelectionType::Simple,
-            Point::new(Line(line), Column(m.col_start)),
+            Pos::new(Line(line), Column(m.col_start)),
             Side::Left,
         );
-        sel.update(Point::new(Line(line), Column(m.col_end)), Side::Right);
+        sel.update(Pos::new(Line(line), Column(m.col_end)), Side::Right);
         self.term.selection = Some(sel);
         self.selected_block = None; // search now owns the shared selection
         self.scroll_to_abs(m.abs_row);
@@ -1110,8 +1111,8 @@ impl Pane {
     /// not cross rows (Locked 6). Case folding is ASCII-only.
     // ponytail: ASCII case fold; Unicode fold (Turkish i, ß) deferred until asked.
     fn scan_matches(&self, needle: &[char]) -> Vec<SearchMatch> {
-        let grid = self.term.grid();
-        let hist = grid.history_size() as i64;
+        let grid = &self.term.grid;
+        let hist = self.term.history_size() as i64;
         let top = grid.topmost_line().0 as i64;
         let bot = grid.bottommost_line().0 as i64;
         let cols = self.cols as usize;
@@ -1127,17 +1128,11 @@ impl Pane {
             // char stream and the column map stay aligned for wide chars.
             cells.clear();
             for c in 0..cols {
-                let cell = &row[Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
-                {
+                let square = &row[Column(c)];
+                if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
                     continue;
                 }
-                let ch = if cell.flags.contains(Flags::HIDDEN) {
-                    ' '
-                } else {
-                    cell.c
-                };
+                let ch = square_text_char(square, grid.styles());
                 cells.push((ch, c));
             }
             let abs_row = ln + hist;
@@ -1241,7 +1236,7 @@ impl Pane {
     /// Render grid rows `[start ..= end]` (Line coords; negatives reach history)
     /// as trimmed text, trailing blank rows dropped. Clamps to the live window.
     fn rows_text(&self, start: i64, end: i64) -> String {
-        let grid = self.term.grid();
+        let grid = &self.term.grid;
         let cols = self.cols as usize;
         let top = grid.topmost_line().0 as i64;
         let bot = grid.bottommost_line().0 as i64;
@@ -1253,17 +1248,11 @@ impl Pane {
             let row = &grid[Line(ln as i32)];
             let mut s = String::with_capacity(cols);
             for c in 0..cols {
-                let cell = &row[Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
-                {
+                let square = &row[Column(c)];
+                if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
                     continue;
                 }
-                s.push(if cell.flags.contains(Flags::HIDDEN) {
-                    ' '
-                } else {
-                    cell.c
-                });
+                s.push(square_text_char(square, grid.styles()));
             }
             while s.ends_with(' ') {
                 s.pop();
@@ -1281,8 +1270,7 @@ impl Pane {
     /// below the viewport height reproduces the visible grid (AC5-UI); above it,
     /// history is included up to the scrollback window.
     pub fn read_tail(&self, lines: u16) -> String {
-        let grid = self.term.grid();
-        let bot = grid.bottommost_line().0 as i64;
+        let bot = self.term.bottommost_line().0 as i64;
         let start = bot - (lines.max(1) as i64) + 1;
         self.rows_text(start, bot)
     }
@@ -1346,9 +1334,9 @@ impl Pane {
     /// The whole output (history + grid) as one implicit block for a pane that
     /// never emitted markers.
     fn implicit_block(&self) -> BlockRead {
-        let grid = self.term.grid();
+        let grid = &self.term.grid;
         let top = grid.topmost_line().0 as i64;
-        let bot = grid.cursor.point.line.0 as i64;
+        let bot = self.term.cursor().pos.row.0 as i64;
         BlockRead {
             seq: None,
             exit: None,
@@ -1367,16 +1355,16 @@ impl Pane {
     pub fn modes(&self) -> Modes {
         let m = self.term.mode();
         Modes {
-            app_cursor: m.contains(TermMode::APP_CURSOR),
-            app_keypad: m.contains(TermMode::APP_KEYPAD),
-            bracketed_paste: m.contains(TermMode::BRACKETED_PASTE),
-            focus_in_out: m.contains(TermMode::FOCUS_IN_OUT),
-            mouse_click: m.contains(TermMode::MOUSE_REPORT_CLICK),
-            mouse_drag: m.contains(TermMode::MOUSE_DRAG),
-            mouse_motion: m.contains(TermMode::MOUSE_MOTION),
-            sgr_mouse: m.contains(TermMode::SGR_MOUSE),
-            utf8_mouse: m.contains(TermMode::UTF8_MOUSE),
-            alternate_scroll: m.contains(TermMode::ALTERNATE_SCROLL),
+            app_cursor: m.contains(Mode::APP_CURSOR),
+            app_keypad: m.contains(Mode::APP_KEYPAD),
+            bracketed_paste: m.contains(Mode::BRACKETED_PASTE),
+            focus_in_out: m.contains(Mode::FOCUS_IN_OUT),
+            mouse_click: m.contains(Mode::MOUSE_REPORT_CLICK),
+            mouse_drag: m.contains(Mode::MOUSE_DRAG),
+            mouse_motion: m.contains(Mode::MOUSE_MOTION),
+            sgr_mouse: m.contains(Mode::SGR_MOUSE),
+            utf8_mouse: m.contains(Mode::UTF8_MOUSE),
+            alternate_scroll: m.contains(Mode::ALTERNATE_SCROLL),
             kitty_flags: kitty_bits(m),
         }
     }
@@ -1406,21 +1394,21 @@ pub struct Modes {
 
 /// The kitty progressive-enhancement bits from a live mode set, in the wire
 /// order the kitty protocol defines.
-fn kitty_bits(m: &TermMode) -> u8 {
+fn kitty_bits(m: &Mode) -> u8 {
     let mut bits = 0u8;
-    if m.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+    if m.contains(Mode::DISAMBIGUATE_ESC_CODES) {
         bits |= 1;
     }
-    if m.contains(TermMode::REPORT_EVENT_TYPES) {
+    if m.contains(Mode::REPORT_EVENT_TYPES) {
         bits |= 2;
     }
-    if m.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+    if m.contains(Mode::REPORT_ALTERNATE_KEYS) {
         bits |= 4;
     }
-    if m.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+    if m.contains(Mode::REPORT_ALL_KEYS_AS_ESC) {
         bits |= 8;
     }
-    if m.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+    if m.contains(Mode::REPORT_ASSOCIATED_TEXT) {
         bits |= 16;
     }
     bits
@@ -1573,33 +1561,61 @@ fn strip_ansi(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn map_cell(c: char, fg: VtColor, bg: VtColor, flags: Flags) -> Cell {
+/// Map one rio-vt [`Square`] to the wire [`Cell`]. A Codepoint cell resolves
+/// fg/bg/style flags through the grid's style table; a bg-only cell (a
+/// clear-with-bg fill) carries its background inline and renders as a space.
+/// The second cell of a wide glyph: the client must skip it so the glyph's
+/// right half is never overdrawn.
+fn map_square(square: &Square, styles: &[Style]) -> Cell {
     let mut f = 0u8;
-    // BOLD_ITALIC sets both bits; DIM_BOLD sets BOLD - `contains` covers them.
-    if flags.contains(Flags::BOLD) {
+    let style_flags = styles
+        .get(square.style_id() as usize)
+        .map(|s| s.flags)
+        .unwrap_or(StyleFlags::empty());
+    if style_flags.contains(StyleFlags::BOLD) {
         f |= cell_flags::BOLD;
     }
-    if flags.contains(Flags::ITALIC) {
+    if style_flags.contains(StyleFlags::ITALIC) {
         f |= cell_flags::ITALIC;
     }
-    if flags.intersects(Flags::ALL_UNDERLINES) {
+    if style_flags.intersects(StyleFlags::ALL_UNDERLINES) {
         f |= cell_flags::UNDERLINE;
     }
-    if flags.contains(Flags::INVERSE) {
+    if style_flags.contains(StyleFlags::INVERSE) {
         f |= cell_flags::INVERSE;
     }
-    if flags.contains(Flags::DIM) {
+    if style_flags.contains(StyleFlags::DIM) {
         f |= cell_flags::DIM;
     }
-    // The second cell of a wide glyph: the client must skip it so the glyph's
-    // right half is never overdrawn.
-    if flags.contains(Flags::WIDE_CHAR_SPACER) || flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
+    if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
         f |= cell_flags::WIDE_SPACER;
     }
-    let c = if flags.contains(Flags::HIDDEN) {
-        ' '
-    } else {
-        c
+    let (c, fg, bg) = match square.content_tag() {
+        ContentTag::Codepoint => {
+            let style = styles
+                .get(square.style_id() as usize)
+                .copied()
+                .unwrap_or_default();
+            let c = if style_flags.contains(StyleFlags::HIDDEN) {
+                ' '
+            } else {
+                square.c()
+            };
+            (c, style.fg, style.bg)
+        }
+        ContentTag::BgPalette => (
+            ' ',
+            VtColor::Named(NamedColor::Foreground),
+            VtColor::Indexed(square.bg_palette_index()),
+        ),
+        ContentTag::BgRgb => {
+            let (r, g, b) = square.bg_rgb();
+            (
+                ' ',
+                VtColor::Named(NamedColor::Foreground),
+                VtColor::Spec(ColorRgb { r, g, b }),
+            )
+        }
     };
     Cell {
         c,
@@ -1609,14 +1625,31 @@ fn map_cell(c: char, fg: VtColor, bg: VtColor, flags: Flags) -> Cell {
     }
 }
 
+/// The cell's visible char for text walks: bg-only cells and hidden text
+/// render as spaces, matching the wire [`Cell`] mapping.
+fn square_text_char(square: &Square, styles: &[Style]) -> char {
+    if !matches!(square.content_tag(), ContentTag::Codepoint) {
+        return ' ';
+    }
+    let hidden = styles
+        .get(square.style_id() as usize)
+        .is_some_and(|s| s.flags.contains(StyleFlags::HIDDEN));
+    if hidden {
+        ' '
+    } else {
+        square.c()
+    }
+}
+
 /// Same folding as the fno-agents compositor: concrete indices and true-color
 /// pass through; the 16 ANSI names fold to their palette index; semantic
-/// names (Foreground/Background/Cursor/...) map to `Default`.
+/// names (Foreground/Background/Cursor/...) map to `Default`. rio-vt names
+/// its bright palette `Light*` where alacritty said `Bright*`.
 fn map_color(c: VtColor) -> Color {
     use NamedColor::*;
     match c {
         VtColor::Indexed(i) => Color::Indexed(i),
-        VtColor::Spec(Rgb { r, g, b }) => Color::Rgb(r, g, b),
+        VtColor::Spec(ColorRgb { r, g, b }) => Color::Rgb(r, g, b),
         VtColor::Named(named) => {
             let idx: u8 = match named {
                 Black | DimBlack => 0,
@@ -1627,15 +1660,15 @@ fn map_color(c: VtColor) -> Color {
                 Magenta | DimMagenta => 5,
                 Cyan | DimCyan => 6,
                 White | DimWhite => 7,
-                BrightBlack => 8,
-                BrightRed => 9,
-                BrightGreen => 10,
-                BrightYellow => 11,
-                BrightBlue => 12,
-                BrightMagenta => 13,
-                BrightCyan => 14,
-                BrightWhite => 15,
-                Foreground | Background | Cursor | BrightForeground | DimForeground => {
+                LightBlack => 8,
+                LightRed => 9,
+                LightGreen => 10,
+                LightYellow => 11,
+                LightBlue => 12,
+                LightMagenta => 13,
+                LightCyan => 14,
+                LightWhite => 15,
+                Foreground | Background | Cursor | LightForeground | DimForeground => {
                     return Color::Default
                 }
             };
