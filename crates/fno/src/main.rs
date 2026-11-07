@@ -1359,8 +1359,10 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(menu) = fno::group_help::classify(args) {
         return Role::GroupHelp(menu);
     }
-    if args.len() >= 3 && args[0] == "do" && args[1] == "delivery" && args[2] == "evaluate" {
-        return Role::DoDelivery(args[3..].to_vec());
+    if let [verb, family, leaf, rest @ ..] = args {
+        if verb == "do" && family == "delivery" && leaf == "evaluate" {
+            return Role::DoDelivery(rest.to_vec());
+        }
     }
     // The event family is classified before the remaining doctor routes.
     if let Some(rest) = fno::doctor_cost::classify(args) {

@@ -80,14 +80,18 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
         ["config", "history", rest @ ..] => Some(Door::History(
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
-        ["config", "build-dir", ..] => Some(Door::BuildDir(args[2..].to_vec())),
+        ["config", "build-dir", ..] => {
+            Some(Door::BuildDir(args.get(2..).unwrap_or_default().to_vec()))
+        }
         ["config", "assert-subagent-budget", rest @ ..] => Some(Door::Budget(
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
         ["config", "status-sinks", rest @ ..] => Some(Door::StatusSinks(
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
-        ["config", "active-backlog", ..] => Some(Door::ActiveBacklog(args[2..].to_vec())),
+        ["config", "active-backlog", ..] => Some(Door::ActiveBacklog(
+            args.get(2..).unwrap_or_default().to_vec(),
+        )),
         ["config", "plugin", "install", ..] => Some(Door::PluginInstall(args[3..].to_vec())),
         ["config", "plugin", rest @ ..] => Some(Door::PluginGroup(
             rest.iter().map(|w| OsString::from(*w)).collect(),

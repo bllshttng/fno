@@ -1331,8 +1331,9 @@ mod tests {
             .as_ref()
             .expect("top consumers parse");
         assert_eq!(top.len(), 2);
-        assert_eq!(top[0].name, "fno-agents");
-        assert_eq!(top[0].worktree.as_deref(), Some(".fno/worktrees/x-aaaa"));
+        let first = top.first().expect("a first consumer");
+        assert_eq!(first.name, "fno-agents");
+        assert_eq!(first.worktree.as_deref(), Some(".fno/worktrees/x-aaaa"));
 
         // A binary newer than the fno on PATH: the census defaults to all
         // unknown rather than failing the whole fold.

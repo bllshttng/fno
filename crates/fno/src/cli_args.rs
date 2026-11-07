@@ -601,7 +601,7 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
     match args.first().and_then(|a| a.to_str()) {
         Some("--help" | "-h") => {
             return FrontDoor::RootHelp {
-                all: args[1..].iter().any(|a| a == "--all" || a == "-A"),
+                all: args.iter().skip(1).any(|a| a == "--all" || a == "-A"),
             }
         }
         Some("--version" | "-V") if args.len() == 1 => return FrontDoor::RootVersion,
