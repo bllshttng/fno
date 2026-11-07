@@ -1,9 +1,13 @@
 //! Bring the fleet back after a reboot.
 //!
 //! On the first daemon start of a boot, every registry worker that was live
-//! at the boot comes back without a retire-arm tap: `claude agents --json
-//! --all` lists its job as stopped or failed, so `claude respawn <job id>`
-//! restarts it. A worker whose node is done or superseded stays stopped.
+//! at the boot comes back without a retire-arm tap. A claude row answers the
+//! `claude agents --json --all` listing: it names the job stopped or failed,
+//! and `claude respawn <job id>` restarts it. A keeper-lane row of a harness
+//! whose `[harness.<h>.keeper]` carries `resume_session_id` (agy,
+//! cursor-agent) never rides that listing - it never lists their jobs - and
+//! comes back through its own keeper revival on the contract's resume form.
+//! A worker whose node is done or superseded stays stopped.
 //! Leads go first. A revival re-seats a row that already held a seat, so it
 //! never asks the spawn gate. One receipt row per worker lands in
 //! `<agents home>/boot-revival.json`; that file's boot stamp makes the pass
@@ -136,21 +140,24 @@ pub(crate) fn start(home: &AgentsHome) {
         return;
     };
     let listing = crate::claude_roster::read_all_agents_union();
-    // An unread listing reads every job as unlisted. Stamping the boot then
-    // would skip the whole fleet for good, so the retire arm's interval kick
-    // retries, and the hold binds until its ceiling.
-    if !listing.is_known() || !listing.warning_text().is_empty() {
+    // An unread listing reads every claude job as unlisted. The claude rows
+    // wait as named skip rows; keeper rows need no listing and revive
+    // regardless. Stamping done then would skip the claude fleet for good,
+    // so the receipt stays unfinished and the retire arm's interval kick
+    // retries until a listing reads, bounded by the hold ceiling.
+    let listing_readable = listing.is_known() && listing.warning_text().is_empty();
+    if !listing_readable {
         eprintln!(
-            "boot revival: claude agents --json --all unread ({}); the retire arm's interval kick retries",
+            "boot revival: claude agents --json --all unread ({}); claude rows wait for the retire arm's interval kick",
             listing.warning_text()
         );
-        return;
     }
     if BATCH_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
     let (closed, merged) = closed_and_merged_nodes();
-    let (leads, workers, mut rows) = plan(&registry.entries, &listing, &closed, &merged, boot);
+    let (leads, workers, keepers, mut rows) =
+        plan(&registry.entries, &listing, &closed, &merged, boot);
     // Stamp before the batch. The in-process guard holds the same-daemon
     // case; a re-run after death is safe because the listing re-reads live
     // truth, and the tap is the fallback for a row the pass never reached.
@@ -161,6 +168,7 @@ pub(crate) fn start(home: &AgentsHome) {
             &pass_home,
             &leads,
             &workers,
+            &keepers,
             |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
             |home, name| revive_unattended(home, name),
             |home, name| {
@@ -177,7 +185,7 @@ pub(crate) fn start(home: &AgentsHome) {
             // Re-seat before the gate opens: the first post-revival sweep
             // must read the world after the role re-seat, not before it.
             reseat_vacated_roles(&pass_home, &revived_names(&rows));
-            write_receipt(&receipt, boot, &rows, true);
+            write_receipt(&receipt, boot, &rows, listing_readable);
             notify(&pass_home, &rows);
         }));
         // The guard releases on every path: a panicked batch leaves the
@@ -412,11 +420,14 @@ fn plan_env_key(plan: &crate::reentry::ReentryPlan) -> String {
 /// respawn, leads sequentially, then the workers through bounded chunks,
 /// then one sequential retry over every failed row. `resolve_fn`, `guard_fn`
 /// and `revive_fn` are injected so tests observe the ordering without
-/// spawning claude.
+/// spawning claude. Keeper rows chunk through the same bound without the
+/// claude resolve: that resolve exists to feed the supervisor birth guard,
+/// and a keeper launch takes no claude birth.
 fn revive_batch<F, G, R>(
     home: &AgentsHome,
     leads: &[String],
     workers: &[String],
+    keepers: &[String],
     guard_fn: G,
     revive_fn: F,
     resolve_fn: R,
@@ -446,26 +457,13 @@ where
     // attempt through the batch would record the name twice and retry it
     // twice.
     for chunk in planned.chunks(REVIVE_CONCURRENCY) {
-        let revive = &revive_fn;
-        std::thread::scope(|s| {
-            let handles: Vec<_> = chunk
-                .iter()
-                .map(|(name, _)| {
-                    let home = home.clone();
-                    let value = name.clone();
-                    let handle = s.spawn(move || revive(&home, &value));
-                    (name.clone(), handle)
-                })
-                .collect();
-            for (name, handle) in handles {
-                match handle.join() {
-                    Ok(row) => rows.push(row),
-                    // A panicked thread's row still lands, so the receipt
-                    // keeps one row per worker and the retry loop sees it.
-                    Err(_) => rows.push(ReceiptRow::new(&name, "failed", "revive thread panicked")),
-                }
-            }
-        });
+        let names: Vec<String> = chunk.iter().map(|(name, _)| name.clone()).collect();
+        revive_chunk(home, &names, &revive_fn, &mut rows);
+    }
+    // Keeper rows skip the resolve phase entirely, for the reason in the
+    // doc comment above.
+    for chunk in keepers.chunks(REVIVE_CONCURRENCY) {
+        revive_chunk(home, chunk, &revive_fn, &mut rows);
     }
     rows.extend(resolve_failed);
     let failed: Vec<String> = rows
@@ -480,6 +478,34 @@ where
         }
     }
     rows
+}
+
+/// One bounded chunk of revivals on scoped threads. A panicked thread's row
+/// still lands, so the receipt keeps one row per name and the retry loop
+/// sees it.
+fn revive_chunk<F>(home: &AgentsHome, names: &[String], revive_fn: &F, rows: &mut Vec<ReceiptRow>)
+where
+    F: Fn(&AgentsHome, &str) -> ReceiptRow + Sync,
+{
+    std::thread::scope(|s| {
+        let handles: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let home = home.clone();
+                let value = name.clone();
+                let handle = s.spawn(move || revive_fn(&home, &value));
+                (name.clone(), handle)
+            })
+            .collect();
+        for (name, handle) in handles {
+            match handle.join() {
+                Ok(row) => rows.push(row),
+                // A panicked thread's row still lands, so the receipt
+                // keeps one row per worker and the retry loop sees it.
+                Err(_) => rows.push(ReceiptRow::new(&name, "failed", "revive thread panicked")),
+            }
+        }
+    });
 }
 
 /// resolve_targets over an injected resolver, the tests' seam for plans.
@@ -704,21 +730,28 @@ pub(crate) fn failed_rows_this_boot(home: &AgentsHome) -> Option<Vec<ReceiptRow>
     )
 }
 
-/// Split the registry into leads to revive, workers to revive, and the rows
-/// skipped with their reason. A row counts only when it was live at the
-/// boot: a live-ish status, or an exit stamped after the boot began.
+/// Split the registry into leads, claude workers, keeper-lane rows, and the
+/// rows skipped with their reason. A row counts only when it was live at the
+/// boot: a live-ish status, or an exit stamped after the boot began. Claude
+/// rows answer the `claude agents` listing; keeper rows skip it (it never
+/// lists their jobs) and ride their own list, because the batch resolves
+/// claude workers only to feed the supervisor birth guard a keeper launch
+/// does not take.
 pub(crate) fn plan(
     entries: &[RegistryEntry],
     listing: &ClaudeAgentsSnapshot,
     closed_nodes: &HashSet<String>,
     merged_nodes: &HashSet<String>,
     boot: u64,
-) -> (Vec<String>, Vec<String>, Vec<ReceiptRow>) {
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<ReceiptRow>) {
     let mut leads = Vec::new();
     let mut workers = Vec::new();
+    let mut keepers = Vec::new();
     let mut skipped = Vec::new();
+    let listing_readable = listing.is_known() && listing.warning_text().is_empty();
+    let contract = crate::harness_capabilities::HarnessContract::packaged();
     for e in entries {
-        if e.harness_name() != "claude" || e.mux.is_some() {
+        if e.mux.is_some() {
             continue;
         }
         let exited_after_boot = e
@@ -727,6 +760,81 @@ pub(crate) fn plan(
             .and_then(crate::state::rfc3339_like_to_secs)
             .is_some_and(|at| at >= boot);
         if !crate::daemon::is_non_terminal(e.status) && !exited_after_boot {
+            continue;
+        }
+        if e.harness_name() == "claude" {
+            // An unread listing reads every claude job as unlisted, so the
+            // claude half waits as a named skip row and the retire arm's
+            // interval kick retries it; the receipt stamps done only when
+            // the listing read, which is what keeps that kick coming.
+            if !listing_readable {
+                skipped.push(ReceiptRow::new(
+                    &e.name,
+                    "skipped",
+                    format!(
+                        "claude agents --json --all unread ({}); the retire arm's interval kick retries",
+                        listing.warning_text()
+                    ),
+                ));
+                continue;
+            }
+        } else {
+            // A keeper-lane row: the contract decides. A harness whose
+            // keeper carries no same-id revival skips with that named,
+            // never silence, and the listing match below is claude's
+            // answer, never the keeper row's.
+            let carries = contract
+                .as_ref()
+                .ok()
+                .map(|c| crate::resume_route::keeper_carries_revival(c, e.harness_name()))
+                .unwrap_or(false);
+            if !carries {
+                skipped.push(ReceiptRow::new(
+                    &e.name,
+                    "skipped",
+                    format!(
+                        "[harness.{}.keeper] does not carry resume_session_id",
+                        e.harness_name()
+                    ),
+                ));
+                continue;
+            }
+            if e.harness_session_id
+                .as_deref()
+                .filter(|s| s.len() >= 8)
+                .is_none()
+            {
+                skipped.push(ReceiptRow::new(
+                    &e.name,
+                    "skipped",
+                    "no session id recorded",
+                ));
+                continue;
+            }
+            if let Some(node) = e.node.as_deref().filter(|n| closed_nodes.contains(*n)) {
+                skipped.push(ReceiptRow::new(
+                    &e.name,
+                    "skipped",
+                    format!("node {node} is done or superseded"),
+                ));
+                continue;
+            }
+            if e.role_level.is_some() {
+                leads.push(e.name.clone());
+            } else if let Some(node) = e
+                .node
+                .as_deref()
+                .filter(|n| merged_nodes.contains(*n))
+                .filter(|_| deliberate_stop(e))
+            {
+                skipped.push(ReceiptRow::new(
+                    &e.name,
+                    "skipped",
+                    format!("node {node}'s PR merged; worker stopped on purpose; never revived"),
+                ));
+            } else {
+                keepers.push(e.name.clone());
+            }
             continue;
         }
         let Some(sid) = e.harness_session_id.as_deref().filter(|s| s.len() >= 8) else {
@@ -780,23 +888,86 @@ pub(crate) fn plan(
             )),
         }
     }
-    (leads, workers, skipped)
+    (leads, workers, keepers, skipped)
 }
 
-/// One revival through the canonical re-entry plan: the listing lists the
-/// job, so the plan is `claude respawn <job id>`.
-/// A revive no user asked for: `autonomy.mode` may hold it. The row's own cwd
-/// picks the project config. A hold reads `failed`, so the lead hears of it and
-/// the explicit rerun can reach it.
+/// One revival through the dispatcher: a claude row takes the canonical
+/// re-entry plan (`claude respawn <job id>`), a keeper-lane row takes its
+/// own keeper revival on the contract's resume form. A revive no user asked
+/// for: `autonomy.mode` may hold either. The row's own cwd picks the project
+/// config. A hold reads `failed`, so the lead hears of it and the explicit
+/// rerun can reach it.
 pub(crate) fn revive_unattended(home: &AgentsHome, name: &str) -> ReceiptRow {
-    let cwd = crate::state::load_registry(&home.registry_json())
+    let entry = crate::state::load_registry(&home.registry_json())
         .ok()
-        .and_then(|r| r.entries.into_iter().find(|e| e.name == name))
-        .map(|e| e.cwd);
-    match cwd {
-        Some(cwd) if !crate::autonomy_policy::restart_allowed(std::path::Path::new(&cwd)) => {
-            ReceiptRow::new(name, "failed", "autonomy.mode holds unattended restart")
+        .and_then(|r| r.entries.into_iter().find(|e| e.name == name));
+    let Some(entry) = entry else {
+        return ReceiptRow::new(name, "failed", "no registry row left to revive");
+    };
+    if !crate::autonomy_policy::restart_allowed(std::path::Path::new(&entry.cwd)) {
+        return ReceiptRow::new(name, "failed", "autonomy.mode holds unattended restart");
+    }
+    if entry.harness_name() == "claude" {
+        return revive(home, name);
+    }
+    revive_keeper(home, &entry)
+}
+
+/// The keeper half of the dispatcher: the same gate, reservation and launch
+/// the manual `fno agents session resume` door runs for a KeeperRevive row,
+/// sized to a receipt row instead of an exit code. The contract decides: a
+/// harness whose keeper lane carries no same-id revival is a failed row
+/// naming the missing word, never the claude resolver's refusal.
+fn revive_keeper(home: &AgentsHome, entry: &RegistryEntry) -> ReceiptRow {
+    let name = &entry.name;
+    let harness = entry.harness_name();
+    let contract = match crate::harness_capabilities::HarnessContract::packaged() {
+        Ok(contract) => contract,
+        Err(_) => {
+            return ReceiptRow::new(name, "failed", "harness contract unread");
         }
+    };
+    if !crate::resume_route::keeper_carries_revival(&contract, harness) {
+        return ReceiptRow::new(
+            name,
+            "failed",
+            format!("[harness.{harness}.keeper] does not carry resume_session_id"),
+        );
+    }
+    let Some(sid) = entry.harness_session_id.as_deref().filter(|s| s.len() >= 8) else {
+        return ReceiptRow::new(name, "failed", "no session id recorded");
+    };
+    let argv = match contract.render_session_argv_raw(harness, "interactive_resume", Some(sid)) {
+        Ok(argv) => argv,
+        Err(_) => {
+            return ReceiptRow::new(name, "failed", "the resume form did not render");
+        }
+    };
+    // The manual door reserves before anything launches; the reservation is
+    // what revive_with's failure releases read against.
+    if let Some(code) = crate::resume_gate::gate_and_reserve(home, name, sid) {
+        return ReceiptRow::new(name, "failed", format!("resume gate refused (exit {code})"));
+    }
+    let code = crate::keeper_revival::revive(home, name, harness, sid, &entry.cwd, &argv, None);
+    match code {
+        0 => ReceiptRow::new(name, "revived", argv.join(" ")),
+        code => ReceiptRow::new(
+            name,
+            "failed",
+            format!("{harness} keeper revival exited {code}"),
+        ),
+    }
+}
+
+/// The rerun's dispatcher: an explicit operator command, so the autonomy
+/// hold does not bind (the same bypass the claude rerun always had), and a
+/// keeper row still takes its own launch.
+fn rerun_revive(home: &AgentsHome, name: &str) -> ReceiptRow {
+    let entry = crate::state::load_registry(&home.registry_json())
+        .ok()
+        .and_then(|r| r.entries.into_iter().find(|e| e.name == name));
+    match entry {
+        Some(e) if e.harness_name() != "claude" => revive_keeper(home, &e),
         _ => revive(home, name),
     }
 }
@@ -1006,18 +1177,15 @@ pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
         return 1;
     };
     let listing = crate::claude_roster::read_all_agents_union();
-    if !listing.is_known() || !listing.warning_text().is_empty() {
-        eprintln!(
-            "fno agents session recover: claude agents --json --all unread ({}); fix the listing and rerun",
-            listing.warning_text()
-        );
-        return 1;
-    }
+    // The unread-listing refusal scoped to the claude half: claude rows
+    // re-judge to named skip rows while keeper rows still re-judge and
+    // revive.
     let (closed, merged) = closed_and_merged_nodes();
-    let (mut leads, mut workers, fresh_skips) =
+    let (mut leads, mut workers, mut keepers, fresh_skips) =
         plan(&registry.entries, &listing, &closed, &merged, boot);
     leads.retain(|n| rerun.contains(n));
     workers.retain(|n| rerun.contains(n));
+    keepers.retain(|n| rerun.contains(n));
     let fresh_skips: Vec<ReceiptRow> = fresh_skips
         .into_iter()
         .filter(|r| rerun.contains(&r.name))
@@ -1026,8 +1194,9 @@ pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
         home,
         &leads,
         &workers,
+        &keepers,
         |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
-        |home, name| revive(home, name),
+        |home, name| rerun_revive(home, name),
         |home, name| {
             crate::reentry::resolve_reentry(
                 &home.registry_json(),
@@ -1121,7 +1290,7 @@ mod tests {
         ]);
         let closed = HashSet::from(["x-done".to_string()]);
         let boot = crate::state::rfc3339_like_to_secs("2026-09-26T01:00:00Z").unwrap();
-        let (leads, workers, skipped) = plan(
+        let (leads, workers, _keepers, skipped) = plan(
             &[
                 lead,
                 failed,
@@ -1164,7 +1333,7 @@ mod tests {
             ClaudeAgentRow::new("33334444", Some("stopped")),
         ]);
         let merged = HashSet::from(["x-merged".to_string()]);
-        let (leads, workers, skipped) = plan(
+        let (leads, workers, _keepers, skipped) = plan(
             &[standing_stop, stale_stop, reboot_death],
             &listing,
             &HashSet::new(),
@@ -1497,5 +1666,212 @@ mod tests {
         );
         let code = rerun_failed(&home);
         assert_eq!(code, 1, "a previous boot's receipt is not this boot's news");
+    }
+
+    fn keeper_row(name: &str, sid: &str, harness: &str, status: AgentStatus) -> RegistryEntry {
+        RegistryEntry {
+            name: name.into(),
+            harness: Some(harness.into()),
+            harness_session_id: Some(sid.into()),
+            status,
+            ..Default::default()
+        }
+    }
+
+    /// A carrying harness's live-at-boot rows land in the keeper list (a
+    /// post-boot exit stamp, the sweep's write, included) and a lead rides
+    /// the leads list; a pre-boot exit stays out; the claude plan is
+    /// unchanged beside them.
+    #[test]
+    fn plan_sends_live_keeper_rows_of_a_carrying_harness_to_the_revive_list() {
+        let claude_worker = row("kestrel", "11112222-bbbb", AgentStatus::Orphaned);
+        let mut agy_post_boot = keeper_row("agy-a", "agy11111-session", "agy", AgentStatus::Exited);
+        agy_post_boot.exited_at = Some("2026-09-26T01:01:00Z".into());
+        let cursor = keeper_row(
+            "cursor-a",
+            "cur11111-session",
+            "cursor-agent",
+            AgentStatus::Live,
+        );
+        let mut agy_lead = keeper_row("agy-lead", "agy44444-session", "agy", AgentStatus::Live);
+        agy_lead.role_level = Some(1);
+        let mut agy_pre_boot =
+            keeper_row("agy-old", "agy22222-session", "agy", AgentStatus::Exited);
+        agy_pre_boot.exited_at = Some("2026-01-01T00:00:00Z".into());
+        let listing =
+            ClaudeAgentsSnapshot::known(vec![ClaudeAgentRow::new("11112222", Some("failed"))]);
+        let (leads, workers, keepers, skipped) = plan(
+            &[claude_worker, agy_post_boot, cursor, agy_lead, agy_pre_boot],
+            &listing,
+            &HashSet::new(),
+            &HashSet::new(),
+            BOOT,
+        );
+        assert!(leads == vec!["agy-lead".to_string()], "{leads:?}");
+        assert_eq!(workers, vec!["kestrel"]);
+        assert_eq!(keepers, vec!["agy-a", "cursor-a"]);
+        assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    /// A live pi, grok or gemini row is a skipped receipt row whose reason
+    /// names the harness's keeper stanza and the missing revival word.
+    #[test]
+    fn plan_names_the_missing_keeper_revival() {
+        let pi = keeper_row("pi-a", "pi11111-session", "pi", AgentStatus::Live);
+        let grok = keeper_row("grok-a", "grok1111-session", "grok", AgentStatus::Live);
+        let gemini = keeper_row("gem-a", "gem11111-session", "gemini", AgentStatus::Live);
+        let listing = ClaudeAgentsSnapshot::known(vec![]);
+        let (leads, workers, keepers, skipped) = plan(
+            &[pi, grok, gemini],
+            &listing,
+            &HashSet::new(),
+            &HashSet::new(),
+            BOOT,
+        );
+        assert!(leads.is_empty() && workers.is_empty() && keepers.is_empty());
+        assert_eq!(skipped.len(), 3, "{skipped:?}");
+        for r in &skipped {
+            assert!(
+                r.reason.contains("does not carry resume_session_id"),
+                "{skipped:?}"
+            );
+        }
+        assert!(
+            skipped[0].reason.contains("[harness.pi.keeper]"),
+            "{skipped:?}"
+        );
+        assert!(
+            skipped[1].reason.contains("[harness.grok.keeper]"),
+            "{skipped:?}"
+        );
+        assert!(
+            skipped[2].reason.contains("[harness.gemini.keeper]"),
+            "{skipped:?}"
+        );
+    }
+
+    /// The unread listing is claude's answer: the claude row waits as a
+    /// named skip row while the keeper row still plans.
+    #[test]
+    fn an_unread_listing_skips_only_claude_rows() {
+        let claude = row("kestrel", "11112222-bbbb", AgentStatus::Orphaned);
+        let agy = keeper_row("agy-a", "agy11111-session", "agy", AgentStatus::Live);
+        let listing = ClaudeAgentsSnapshot::unknown("no roster file");
+        let (leads, workers, keepers, skipped) = plan(
+            &[claude, agy],
+            &listing,
+            &HashSet::new(),
+            &HashSet::new(),
+            BOOT,
+        );
+        assert!(leads.is_empty() && workers.is_empty());
+        assert_eq!(keepers, vec!["agy-a"]);
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert!(skipped[0].reason.contains("unread"), "{skipped:?}");
+        assert!(skipped[0].reason.contains("interval kick"), "{skipped:?}");
+    }
+
+    /// Keeper rows chunk through the batch without the claude resolve: that
+    /// resolve exists to feed the supervisor birth guard, and its refusal is
+    /// never a keeper row's receipt.
+    #[test]
+    fn the_batch_chunks_keeper_rows_without_the_claude_resolve() {
+        let home = AgentsHome::at(tempfile::tempdir().unwrap().keep());
+        let revived: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let resolve_calls: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let rows = revive_batch(
+            &home,
+            &[],
+            &["c1".to_string()],
+            &["k1".to_string()],
+            |_| {},
+            |_, name| {
+                revived.lock().unwrap().push(name.to_string());
+                ReceiptRow::new(name, "revived", "x")
+            },
+            |_, name| {
+                resolve_calls.lock().unwrap().push(name.to_string());
+                Err("the re-entry resolver is claude-only".to_string())
+            },
+        );
+        let revived = revived.into_inner().unwrap();
+        assert_eq!(
+            revived,
+            vec!["c1", "k1", "c1"],
+            "the failed claude row retried once"
+        );
+        let resolve_calls = resolve_calls.into_inner().unwrap();
+        assert_eq!(resolve_calls, vec!["c1"]);
+        assert!(rows.iter().all(|r| r.outcome == "revived"), "{rows:?}");
+    }
+
+    /// The dispatcher routes a non-claude row whose harness carries no
+    /// revival to a named refusal, never the claude-only resolver's error.
+    #[test]
+    fn the_dispatcher_names_a_missing_keeper_revival_instead_of_the_claude_resolver() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let home = AgentsHome::at(dir.path().join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        let registry = home.registry_json();
+        crate::registry_store::seed_raw(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [
+                    {"name": "gem-a", "cwd": cwd.display().to_string(), "status": "live",
+                     "harness": "gemini", "harness_session_id": "gem11111-session"},
+                    {"name": "pi-a", "cwd": cwd.display().to_string(), "status": "live",
+                     "harness": "pi", "harness_session_id": "pi11111-session"},
+                ],
+            })
+            .to_string(),
+        );
+        for name in ["gem-a", "pi-a"] {
+            let r = revive_unattended(&home, name);
+            assert_eq!(r.outcome, "failed", "{r:?}");
+            assert!(r.reason.contains("[harness."), "{:?}", r.reason);
+            assert!(
+                r.reason.contains("does not carry resume_session_id"),
+                "{:?}",
+                r.reason
+            );
+        }
+        std::fs::remove_dir_all(dir.path()).ok();
+    }
+
+    /// The keeper mirror of the claude standing-stop rule: a row stopped on
+    /// purpose on a merged node stays down; a stop a resume already passed
+    /// (live row) and a bare reboot death still come back.
+    #[test]
+    fn a_deliberately_stopped_keeper_row_on_a_merged_node_stays_down() {
+        let mut standing = keeper_row("agy-s", "agy11111-session", "agy", AgentStatus::Exited);
+        standing.node = Some("x-merged".into());
+        standing.exited_at = Some("2026-09-26T01:01:00Z".into());
+        crate::state::record_stop(&mut standing, "lead", None);
+        let mut stale = keeper_row("agy-b", "agy22222-session", "agy", AgentStatus::Live);
+        stale.node = Some("x-merged".into());
+        crate::state::record_stop(&mut stale, "lead", None);
+        let mut closed = keeper_row("agy-c", "agy33333-session", "agy", AgentStatus::Live);
+        closed.node = Some("x-done".into());
+        let closed_set = HashSet::from(["x-done".to_string()]);
+        let merged = HashSet::from(["x-merged".to_string()]);
+        let listing = ClaudeAgentsSnapshot::known(vec![]);
+        let (leads, workers, keepers, skipped) = plan(
+            &[standing, stale, closed],
+            &listing,
+            &closed_set,
+            &merged,
+            BOOT,
+        );
+        assert!(leads.is_empty() && workers.is_empty());
+        assert_eq!(keepers, vec!["agy-b"]);
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
+        assert!(skipped[0].reason.contains("never revived"), "{skipped:?}");
+        assert!(
+            skipped[1].reason.contains("done or superseded"),
+            "{skipped:?}"
+        );
     }
 }
