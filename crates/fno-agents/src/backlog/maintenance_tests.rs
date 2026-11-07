@@ -139,6 +139,8 @@ impl Run<'_> {
             roster: &roster,
             history: Some(fx.dir.path().join("history.jsonl")),
             deck_dir: Some(fx.dir.path().join("validity-decks")),
+            history_dir: Some(fx.dir.path().join("history")),
+            vision_grade: &|_, _| None::<(String, String)>,
             sweep: SweepSeams {
                 exists_for: &no_exists,
                 search: &no_search,

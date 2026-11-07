@@ -749,10 +749,20 @@ fn judge_rows(
     lenses: &Lenses,
     spawn: Spawn,
     budget: u64,
+    dimension_filter: Option<&[String]>,
 ) -> (String, Vec<Value>, Option<String>) {
     let entries: Vec<Value> =
         crate::graph_store::read_rows(&default_graph_path()).unwrap_or_default();
-    judge_rows_in(&entries, plan_text, node_id, cwd, lenses, spawn, budget)
+    judge_rows_in(
+        &entries,
+        plan_text,
+        node_id,
+        cwd,
+        lenses,
+        spawn,
+        budget,
+        dimension_filter,
+    )
 }
 
 /// [`judge_rows`] against a handed-in graph, so a test can pin a fixture.
@@ -764,10 +774,17 @@ fn judge_rows_in(
     lenses: &Lenses,
     spawn: Spawn,
     budget: u64,
+    dimension_filter: Option<&[String]>,
 ) -> (String, Vec<Value>, Option<String>) {
     let kind = node_kind(node_id, entries);
     let node_text = node_text_of(node_id, entries);
-    let dimensions = dimensions_for(&kind);
+    let dimensions: Vec<&'static str> = match dimension_filter {
+        Some(filter) => dimensions_for(&kind)
+            .into_iter()
+            .filter(|d| filter.iter().any(|name| name == d))
+            .collect(),
+        None => dimensions_for(&kind),
+    };
     let started = std::time::Instant::now();
     let mut timeout_reason: Option<String> = None;
     let rows = dimensions
@@ -894,6 +911,7 @@ fn run_single_plan(
     lenses: &Lenses,
     spawn: Spawn,
     budget: u64,
+    dimension_filter: Option<&[String]>,
 ) -> i32 {
     let plan_text = match std::fs::read_to_string(plan_path) {
         Ok(t) => t,
@@ -905,7 +923,15 @@ fn run_single_plan(
             return 1;
         }
     };
-    let (kind, rows, timeout_reason) = judge_rows(&plan_text, node_id, cwd, lenses, spawn, budget);
+    let (kind, rows, timeout_reason) = judge_rows(
+        &plan_text,
+        node_id,
+        cwd,
+        lenses,
+        spawn,
+        budget,
+        dimension_filter,
+    );
     let tripped = timeout_reason.is_some();
     if let Some(reason) = timeout_reason {
         stamp_judge_timeout(plan_path, &reason);
@@ -1080,6 +1106,7 @@ pub fn run_judge(args: &[String]) -> i32 {
     let mut labels: Option<PathBuf> = None;
     let mut split = "dev".to_string();
     let mut budget = JUDGE_BUDGET_SECS;
+    let mut dimension_filter: Option<Vec<String>> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1108,6 +1135,37 @@ pub fn run_judge(args: &[String]) -> i32 {
                         return 2;
                     }
                 }
+            }
+            "--dimensions" => {
+                i += 1;
+                let raw = match args.get(i) {
+                    Some(v) => v.clone(),
+                    None => {
+                        eprintln!("fno-agents judge: --dimensions needs a comma-separated list");
+                        return 2;
+                    }
+                };
+                let names: Vec<String> = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if names.is_empty() {
+                    eprintln!("fno-agents judge: --dimensions needs a comma-separated list");
+                    return 2;
+                }
+                if let Some(bad) = names
+                    .iter()
+                    .find(|n| !JUDGE_DIMENSIONS.contains(&n.as_str()))
+                {
+                    eprintln!(
+                        "fno-agents judge: unknown dimension {bad}; the menu: {}",
+                        JUDGE_DIMENSIONS.join(", ")
+                    );
+                    return 2;
+                }
+                dimension_filter = Some(names);
             }
             "--force" | "-F" => {
                 // Accepted, ignored: the level=report gate is a Python-side
@@ -1143,7 +1201,97 @@ pub fn run_judge(args: &[String]) -> i32 {
         &lenses,
         &default_spawn,
         budget,
+        dimension_filter.as_deref(),
     )
+}
+
+/// The mission_fit-only grade of one text against the node's vision
+/// sources. None when no vision source exists (`mission_bundle` finds
+/// neither a `vision_path` ancestor nor `[project] vision`), so callers
+/// skip cleanly instead of grading against nothing - the same degrade
+/// hooks/inject-project-vision.sh applies. One row, the shared grader.
+pub(crate) fn vision_fit_row(
+    text: &str,
+    node_id: Option<&str>,
+    entries: &[Value],
+    cwd: &Path,
+    lenses: &Lenses,
+    spawn: Spawn,
+    budget: u64,
+) -> Option<Value> {
+    mission_bundle(node_id, entries, cwd)?;
+    let (_, rows, _) = judge_rows_in(
+        entries,
+        text,
+        node_id,
+        cwd,
+        lenses,
+        spawn,
+        budget,
+        Some(&["mission_fit".to_string()][..]),
+    );
+    rows.into_iter()
+        .find(|r| s_str(r, "dimension") == Some("mission_fit"))
+}
+
+/// The project's vision text exactly as the mission_fit reader sees it:
+/// `[project] vision` (and, for a handed-in node, its `vision_path`
+/// ancestors). None when unset, so callers skip cleanly.
+pub(crate) fn vision_source_text(entries: &[Value], cwd: &Path) -> Option<String> {
+    mission_bundle(None, entries, cwd)
+}
+
+/// The deferred-pile sweep's grader: one mission_fit verdict for a row
+/// text against the project vision. None is the skip arm: no vision
+/// source, or the judge could not answer.
+pub(crate) fn vision_grade_row_text(text: &str, cwd: &Path) -> Option<(String, String)> {
+    let lenses = load_lenses(
+        lens_dir(
+            &worktree_repo_root(cwd),
+            crate::provider::plugin_root().as_deref(),
+        )
+        .as_deref(),
+    );
+    let row = vision_fit_row(
+        text,
+        None,
+        &[],
+        cwd,
+        &lenses,
+        &default_spawn,
+        JUDGE_BUDGET_SECS,
+    )?;
+    let verdict = row
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_string();
+    let reason = row
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Some((verdict, reason))
+}
+
+/// The convenience arm the intake post steps use: lenses and the default
+/// spawn resolved here, one call from the caller.
+pub(crate) fn vision_fit_row_auto(
+    text: &str,
+    node_id: Option<&str>,
+    entries: &[Value],
+    cwd: &Path,
+    budget: u64,
+    spawn: Spawn,
+) -> Option<Value> {
+    let lenses = load_lenses(
+        lens_dir(
+            &worktree_repo_root(cwd),
+            crate::provider::plugin_root().as_deref(),
+        )
+        .as_deref(),
+    );
+    vision_fit_row(text, node_id, entries, cwd, &lenses, spawn, budget)
 }
 
 #[cfg(test)]
@@ -1292,6 +1440,7 @@ mod tests {
             &lenses,
             &spawn,
             600,
+            None,
         );
         assert_eq!(kind, "bug");
         assert_eq!(rows.len(), 10, "{rows:?}");
@@ -1337,6 +1486,7 @@ mod tests {
             &lenses,
             &spawn,
             600,
+            None,
         );
         assert_eq!(kind, "feature");
         assert_eq!(rows.len(), 12, "{rows:?}");
@@ -1400,5 +1550,95 @@ mod tests {
         );
         assert_eq!(verdict.as_deref(), Some("fail"));
         assert!(reason.contains("the alternative already does this"));
+    }
+
+    #[test]
+    fn dimension_filter_picks_rows_and_skips_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let vision = dir.path().join("vision.md");
+        std::fs::write(&vision, "the project vision text").unwrap();
+        let entries = vec![
+            serde_json::json!({
+                "id": "e-epic",
+                "slug": "slug-e-epic",
+                "title": "the epic",
+                "vision_path": "vision.md",
+                "parent": Value::Null,
+            }),
+            serde_json::json!({
+                "id": "x-f9",
+                "slug": "slug-x-f9",
+                "title": "the feature",
+                "type": "feature",
+                "parent": "e-epic",
+            }),
+        ];
+        let seen = std::sync::Mutex::new(Vec::new());
+        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
+            seen.lock().unwrap().push(name.to_string());
+            Ok((0, "VERDICT: pass".to_string(), String::new()))
+        };
+        let lenses = (
+            String::new(),
+            JUDGE_DIMENSIONS
+                .iter()
+                .map(|d| (d.to_string(), "grade it".to_string()))
+                .collect(),
+        );
+        let (kind, rows, _) = judge_rows_in(
+            &entries,
+            "a plan",
+            Some("x-f9"),
+            dir.path(),
+            &lenses,
+            &spawn,
+            600,
+            Some(&["mission_fit".to_string()][..]),
+        );
+        assert_eq!(kind, "feature");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["dimension"], "mission_fit");
+        assert_eq!(rows[0]["verdict"], "pass");
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "only the filtered dimension spawns: {seen:?}"
+        );
+        assert!(seen[0].ends_with("mission_fit"));
+    }
+
+    #[test]
+    fn vision_fit_row_skips_when_no_vision_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries = vec![serde_json::json!({
+            "id": "x-n9",
+            "slug": "slug-x-n9",
+            "title": "a node with no vision home",
+            "type": "feature",
+        })];
+        let seen = std::cell::Cell::new(0u32);
+        let spawn = |_: &str, _: &str, _: &Path, _: u64, _: &str| {
+            seen.set(seen.get() + 1);
+            Ok((0, "VERDICT: pass".to_string(), String::new()))
+        };
+        let lenses = (
+            String::from(""),
+            JUDGE_DIMENSIONS
+                .iter()
+                .map(|d| (d.to_string(), "grade it".to_string()))
+                .collect(),
+        );
+        let row = vision_fit_row(
+            "the node text",
+            Some("x-n9"),
+            &entries,
+            dir.path(),
+            &lenses,
+            &spawn,
+            600,
+        );
+        assert!(row.is_none());
+        assert_eq!(seen.get(), 0, "no source, no spawn");
     }
 }

@@ -2388,6 +2388,7 @@ fn intake_commit(args: &IntakeArgs, graph: &Path, plan_path: &str, prep: IntakeO
         .unwrap_or(spec.title.as_str());
     println!("intake {new_id} -> {destination}: \"{title}\"");
     intake_post_steps(graph, &new_id, &node);
+    vision_fit_post(graph, &new_id, &node);
     0
 }
 
@@ -2429,6 +2430,60 @@ fn intake_post_steps(graph: &Path, new_id: &str, node: &Value) {
         crate::plan_doc::project::project_graph_nodes(&rows_now, &minted, None, None, None, None);
     }
     let _ = super::birth::on_node_born(graph, node, None);
+}
+
+/// The advisory vision-fit leg of the single-file intake lane. The node's
+/// own text (title plus details) grades once on mission_fit against the
+/// project's vision sources. No vision source, or a judge fault, prints
+/// the skip line and never fails the intake; the receipt line lands before
+/// this runs, so the score joins it, and the verdict rides the node as a
+/// progress note through the same door `fno backlog note` uses.
+fn vision_fit_post(graph: &Path, new_id: &str, node: &Value) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let title = node
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let details = node
+        .get("details")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let mut text = title;
+    if !details.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&details);
+    }
+    let rows = crate::graph_store::read_rows(graph).unwrap_or_else(|_| vec![node.clone()]);
+    let Some(row) = crate::blueprint_judge::vision_fit_row_auto(
+        &text,
+        Some(new_id),
+        &rows,
+        &cwd,
+        crate::blueprint_judge::JUDGE_BUDGET_SECS,
+        &crate::blueprint_judge::default_spawn,
+    ) else {
+        println!("vision-fit: skipped (no vision source configured)");
+        return;
+    };
+    let verdict = row
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_string();
+    let reason = row.get("reason").and_then(Value::as_str).unwrap_or("");
+    println!("vision-fit: {verdict} ({reason})");
+    let store = super::api::Store::new(graph);
+    let input = super::api::CommentCreateInput {
+        body: format!("vision-fit: {verdict} ({reason})"),
+        kind: Some("progress".to_string()),
+        title: Some("vision fit".to_string()),
+        ..Default::default()
+    };
+    if let Err(e) = super::api::comment_create(&store, new_id, input) {
+        eprintln!("vision-fit note skipped: {e:?}");
+    }
 }
 
 /// The dedup receipt with the intake remedy: re-file with --claims names the
@@ -2865,5 +2920,78 @@ mod tests {
         assert_eq!(values, vec!["ab-33333333".to_string()]);
         assert_eq!(plan_dir, PathBuf::from(&dir));
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn intake_vision_fit_paths() {
+        // AC4 both paths through one injected-spawn harness: a visioned
+        // parent grades mission_fit, a node with no vision home skips with
+        // no spawn at all.
+        let dir = tempfile::tempdir().unwrap();
+        let vision = dir.path().join("vision.md");
+        std::fs::write(&vision, "ship the idea-to-PR toolchain").unwrap();
+        let entries = vec![
+            serde_json::json!({
+                "id": "e-vi",
+                "slug": "slug-e-vi",
+                "title": "the visioned epic",
+                "vision_path": "vision.md",
+                "parent": Value::Null,
+            }),
+            serde_json::json!({
+                "id": "x-vi",
+                "slug": "slug-x-vi",
+                "title": "the visioned child",
+                "type": "feature",
+                "parent": "e-vi",
+            }),
+            serde_json::json!({
+                "id": "x-vo",
+                "slug": "slug-x-vo",
+                "title": "the orphan child",
+                "type": "feature",
+                "parent": Value::Null,
+            }),
+        ];
+        let seen = std::cell::Cell::new(0u32);
+        let spawn = |_: &str, _: &str, _: &Path, _: u64, _: &str| {
+            seen.set(seen.get() + 1);
+            Ok((0, "VERDICT: pass".to_string(), String::new()))
+        };
+        let lenses = (
+            String::new(),
+            crate::blueprint_judge::JUDGE_DIMENSIONS
+                .iter()
+                .map(|d| (d.to_string(), "grade it".to_string()))
+                .collect(),
+        );
+
+        // Happy path: the visioned child grades through the filter.
+        let row = crate::blueprint_judge::vision_fit_row(
+            "the child text",
+            Some("x-vi"),
+            &entries,
+            dir.path(),
+            &lenses,
+            &spawn,
+            600,
+        );
+        let row = row.expect("visioned child grades");
+        assert_eq!(row["dimension"], "mission_fit");
+        assert_eq!(row["verdict"], "pass");
+        assert_eq!(seen.get(), 1, "exactly one spawn for the graded node");
+
+        // Skip path: the orphan node finds no vision source, no spawn.
+        let row = crate::blueprint_judge::vision_fit_row(
+            "the orphan text",
+            Some("x-vo"),
+            &entries,
+            dir.path(),
+            &lenses,
+            &spawn,
+            600,
+        );
+        assert!(row.is_none());
+        assert_eq!(seen.get(), 1, "the skip path spawns nothing");
     }
 }

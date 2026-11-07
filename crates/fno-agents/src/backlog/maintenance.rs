@@ -45,6 +45,9 @@ Options:
   --no-validity      Skip the validity sweep (the leg that calls the analyzer).
   --suspect-reverts  Read-only: print drained nodes carrying evidence of a
                      human curation decision, then exit.
+  --vision-sweep     Score the deferred pile against the project vision and
+                     print the ranked kill list. --apply defers the judged
+                     kill list wont_do in one batch.
   -h, --help         Show this message and exit.";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +61,7 @@ pub(crate) struct Flags {
     pub recheck: bool,
     pub no_validity: bool,
     pub suspect_reverts: bool,
+    pub vision_sweep: bool,
 }
 
 fn parse_flags(tail: &[String]) -> Result<Flags, i32> {
@@ -69,6 +73,7 @@ fn parse_flags(tail: &[String]) -> Result<Flags, i32> {
             "--recheck" => flags.recheck = true,
             "--no-validity" => flags.no_validity = true,
             "--suspect-reverts" => flags.suspect_reverts = true,
+            "--vision-sweep" => flags.vision_sweep = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Err(0);
@@ -1260,6 +1265,10 @@ pub(crate) struct Seams<'a> {
     pub roster: Roster<'a>,
     pub history: Option<PathBuf>,
     pub deck_dir: Option<PathBuf>,
+    /// Where the vision kill list artifact lands (the state history dir).
+    pub history_dir: Option<PathBuf>,
+    /// One mission_fit verdict per row text; None is the skip arm.
+    pub vision_grade: &'a dyn Fn(&str, &Path) -> Option<(String, String)>,
     pub sweep: SweepSeams<'a>,
 }
 
@@ -1621,6 +1630,11 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
             "(read-only: no node was changed. Rule on these yourself with `fno backlog undefer <id>...`)",
         );
         return 0;
+    }
+
+    if flags.vision_sweep {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        return maintenance_vision::run_vision_sweep(flags, seams, out, &entries, &cwd);
     }
 
     // Apply legs never touch a node a live target session is driving.
@@ -2220,6 +2234,15 @@ impl Report<'_> {
     }
 }
 
+/// The production vision grader behind the seam: the shared mission_fit
+/// machinery, one row at a time.
+fn vision_grade_prod(text: &str, cwd: &Path) -> Option<(String, String)> {
+    crate::blueprint_judge::vision_grade_row_text(text, cwd)
+}
+
+#[path = "maintenance_vision.rs"]
+mod maintenance_vision;
+
 /// `fno backlog maintain`: parse the command's flags, wire the production
 /// readers, run the pass, and return the exit code (4 on a budget overrun,
 /// with the partial receipt already printed).
@@ -2248,6 +2271,9 @@ pub fn run_maintain(tail: &[String]) -> i32 {
         history: super::triage_health::history_path(&Value::Null),
         deck_dir: super::settings::state_dir()
             .and_then(|d| crate::state_layout::place_dir(&d, "validity-decks")),
+        history_dir: super::settings::state_dir()
+            .and_then(|d| crate::state_layout::place_dir(&d, "history")),
+        vision_grade: &vision_grade_prod,
         sweep: SweepSeams {
             exists_for: &validity::validity_exists_for,
             search: &validity::validity_search,
@@ -2258,6 +2284,10 @@ pub fn run_maintain(tail: &[String]) -> i32 {
     let mut out = Out::live();
     run_pass(flags, &seams, &mut out)
 }
+
+#[cfg(test)]
+#[path = "maintenance_vision_tests.rs"]
+mod vision_tests;
 
 #[cfg(test)]
 #[path = "maintenance_tests.rs"]
