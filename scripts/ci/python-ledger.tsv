@@ -175,7 +175,6 @@ tests/py/unit/test_product_qualification_manifest.py	keep	dev-only live-contract
 tests/py/unit/test_prove_it.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/unit/test_pytest_shard_partition.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/unit/test_pytest_timeout_configured.py	keep	dev-only live-contract test, run by the tests-py job
-tests/py/unit/test_registry_mint_guard.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/unit/test_resolve_executor_emit.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/unit/test_retired_command_gate.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/unit/test_scope_growth.py	keep	dev-only live-contract test, run by the tests-py job

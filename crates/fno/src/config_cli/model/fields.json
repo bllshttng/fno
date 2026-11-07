@@ -1057,6 +1057,12 @@
       "token_env": "FNO_POSTHOG_PROJECT_TOKEN",
       "token_file": "~/.fno/secrets/posthog-project-token"
      }
+    },
+    {
+     "name": "install_count",
+     "default": {
+      "enabled": true
+     }
     }
    ]
   },
@@ -2438,6 +2444,15 @@
     {
      "name": "token_file",
      "default": "~/.fno/secrets/posthog-project-token"
+    }
+   ]
+  },
+  "TelemetryInstallCountBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": true
     }
    ]
   },

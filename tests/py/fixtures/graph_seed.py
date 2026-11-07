@@ -8,8 +8,6 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-
 
 def _store_is_live(connection: sqlite3.Connection, tables: set[str]) -> bool:
     """True once the native one-time setup has stamped the store.

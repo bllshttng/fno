@@ -96,7 +96,6 @@ JSON
   PATH="${TMP_A}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_A}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_A}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="tst-11000a" \
@@ -132,7 +131,6 @@ rm -f "${TMP_B}/home/.fno/graph.json"
   PATH="${TMP_B}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_B}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_B}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="ab-1100b0b0" \
@@ -176,7 +174,6 @@ JSON
   PATH="${TMP_C}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_C}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_C}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="ab-deadbeef" \
@@ -212,7 +209,7 @@ seed_graph "${TMP_E}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-ca7471","title":"handover fallback test node","session_id":null}]}
 JSON
 
-HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_E}/home" \
   fno agents claim acquire "node:tst-ca7471" \
   --holder "spawn-handover:t-ho-worker" --ttl 15m --pid-unavailable \
   --reason "test stage" >/dev/null 2>&1 \
@@ -223,7 +220,6 @@ HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_E}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_E}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_E}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   FNO_WORKER_NAME="t-ho-worker" \
   TARGET_START=1 \
@@ -232,7 +228,7 @@ HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(e): init exited non-zero"
 
-_HOLDER_E="$(HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_E="$(HOME="${TMP_E}/home" \
   fno agents claim status "node:tst-ca7471" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_E" == target-session:* ]] \
@@ -255,7 +251,7 @@ seed_graph "${TMP_G}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-feed42","title":"bystander control node","session_id":null}]}
 JSON
 
-HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_G}/home" \
   CLAUDE_CODE_SESSION_ID="g0000000-foreign-stage" \
   fno agents claim acquire "node:tst-feed42" \
   --holder "spawn-handover:someone-elses-worker" --ttl 15m --pid-unavailable \
@@ -267,7 +263,6 @@ HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_G}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_G}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_G}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   FNO_WORKER_NAME="this-worker" \
   CLAUDE_CODE_SESSION_ID="g1111111-foreign-reader" \
@@ -278,7 +273,7 @@ HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(g): init exited non-zero"
 
-_HOLDER_G="$(HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_G="$(HOME="${TMP_G}/home" \
   fno agents claim status "node:tst-feed42" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_G" == "spawn-handover:someone-elses-worker" ]] \
@@ -294,7 +289,7 @@ seed_graph "${TMP_F}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-c0ffee","title":"no-takeover control node","session_id":null}]}
 JSON
 
-HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_F}/home" \
   fno agents claim acquire "node:tst-c0ffee" \
   --holder "target-session:resident" --ttl 2h --pid-unavailable \
   --reason "control stage" >/dev/null 2>&1 \
@@ -305,7 +300,6 @@ HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_F}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_F}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_F}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="tst-c0ffee" \
@@ -313,7 +307,7 @@ HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(f): init exited non-zero"
 
-_HOLDER_F="$(HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_F="$(HOME="${TMP_F}/home" \
   fno agents claim status "node:tst-c0ffee" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_F" == "target-session:resident" ]] \
@@ -333,7 +327,7 @@ seed_graph "${TMP_H}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-deadbe1","title":"dead-launcher adoption node","session_id":null}]}
 JSON
 
-HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_H}/home" \
   fno agents claim acquire "node:tst-deadbe1" \
   --holder "spawn-handover:bp-stopped-planner" --ttl 15m --pid 999999999 \
   --reason "dead launcher stage" >/dev/null 2>&1 \
@@ -344,7 +338,6 @@ HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_H}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_H}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_H}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   FNO_WORKER_NAME="this-builder" \
   TARGET_START=1 \
@@ -353,7 +346,7 @@ HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(h): init exited non-zero"
 
-_HOLDER_H="$(HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_H="$(HOME="${TMP_H}/home" \
   fno agents claim status "node:tst-deadbe1" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_H" == target-session:* ]] \
@@ -376,7 +369,7 @@ seed_graph "${TMP_I}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-5e5510","title":"session-id adoption node","session_id":null}]}
 JSON
 
-HOME="${TMP_I}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_I}/home" \
   CLAUDE_CODE_SESSION_ID="i2222222-window-beneficiary" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
   fno agents claim acquire "node:tst-5e5510" \
@@ -389,7 +382,6 @@ HOME="${TMP_I}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_I}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_I}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_I}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="i2222222-window-beneficiary" \
   TARGET_START=1 \
@@ -399,7 +391,7 @@ HOME="${TMP_I}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(i): init exited non-zero"
 
-_DISK_I="$(HOME="${TMP_I}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_DISK_I="$(HOME="${TMP_I}/home" \
   fno agents claim status "node:tst-5e5510" --json 2>/dev/null)"
 _HOLDER_I="$(printf '%s' "$_DISK_I" \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
@@ -417,7 +409,7 @@ seed_graph "${TMP_J}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-5e5520","title":"session-id bystander node","session_id":null}]}
 JSON
 
-HOME="${TMP_J}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_J}/home" \
   CLAUDE_CODE_SESSION_ID="j3333333-foreign-beneficiary" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
   fno agents claim acquire "node:tst-5e5520" \
@@ -430,7 +422,6 @@ HOME="${TMP_J}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_J}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_J}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_J}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="j4444444-bystander-reader" \
   TARGET_START=1 \
@@ -440,7 +431,7 @@ HOME="${TMP_J}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(j): init exited non-zero"
 
-_HOLDER_J="$(HOME="${TMP_J}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_J="$(HOME="${TMP_J}/home" \
   fno agents claim status "node:tst-5e5520" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_J" == "spawn-handover:t-foreign-window" ]] \
@@ -459,7 +450,7 @@ seed_graph "${TMP_I2}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-5e5511","title":"proven session-id adoption node","session_id":null}]}
 JSON
 
-HOME="${TMP_I2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_I2}/home" \
   CLAUDE_CODE_SESSION_ID="i5555555-proven-beneficiary" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
   fno agents claim acquire "node:tst-5e5511" \
@@ -473,7 +464,6 @@ HOME="${TMP_I2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_I2}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_I2}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_I2}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="i5555555-proven-beneficiary" \
   TARGET_START=1 \
@@ -483,7 +473,7 @@ HOME="${TMP_I2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(i2): init exited non-zero"
 
-_HOLDER_I2="$(HOME="${TMP_I2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_I2="$(HOME="${TMP_I2}/home" \
   fno agents claim status "node:tst-5e5511" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_I2" == target-session:* ]] \
@@ -498,7 +488,7 @@ seed_graph "${TMP_J2}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-5e5521","title":"proven session-id bystander node","session_id":null}]}
 JSON
 
-HOME="${TMP_J2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+HOME="${TMP_J2}/home" \
   CLAUDE_CODE_SESSION_ID="j6666666-foreign-proven" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
   fno agents claim acquire "node:tst-5e5521" \
@@ -512,7 +502,6 @@ HOME="${TMP_J2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   PATH="${TMP_J2}/bin:$PATH" \
   FNO_AGENTS_BIN="${TMP_J2}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_J2}/space" \
-  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="j7777777-bystander-proven" \
   TARGET_START=1 \
@@ -522,7 +511,7 @@ HOME="${TMP_J2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(j2): init exited non-zero"
 
-_HOLDER_J2="$(HOME="${TMP_J2}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+_HOLDER_J2="$(HOME="${TMP_J2}/home" \
   fno agents claim status "node:tst-5e5521" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_J2" == "spawn-handover:t-foreign-window-2" ]] \
