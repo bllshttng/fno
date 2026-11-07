@@ -684,10 +684,15 @@ fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     let mut waiter = agent_row("waiter", 5, Some(AgentBadge::Working), false);
     waiter.build = Some(crate::proto::BuildMark::waiting(Some(2)));
     let plain = agent_row("plain", 6, Some(AgentBadge::Working), false);
-    let mut v = wide_view(vec![builder, waiter, plain]);
+    let mut v = wide_view(vec![builder.clone(), waiter.clone(), plain.clone()]);
     // The list cell is the contract under test: pin the layout so the test
-    // reads the code, never the ambient config's own choice.
+    // reads the code, never the ambient config's own choice. The panel is
+    // pinned wide because the list's five columns need ~46; wide_view's
+    // 28-column panel collapses the status column to one cell, where the
+    // mark degrades (asserted separately below).
     v.sideline_layout = sideline_color::SidelineLayout::List;
+    v.sideline_width = 60;
+    v.term = (24, 120);
     let text = frame_text(&v.compose());
     let builder_row = text.lines().find(|line| line.contains("builder")).unwrap();
     assert!(
@@ -714,6 +719,20 @@ fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     assert!(
         plain_row.contains('\u{25cf}'),
         "an unmarked working row keeps the plain glyph: {plain_row:?}"
+    );
+    // The narrow panel (wide_view's default 28 columns) collapses the list
+    // status column to one cell; there the mark degrades to the hourglass
+    // alone, never a bare position digit (the 2026-11-07 CI frame finding).
+    let mut narrow = wide_view(vec![builder.clone(), waiter.clone(), plain.clone()]);
+    narrow.sideline_layout = sideline_color::SidelineLayout::List;
+    let narrow_text = frame_text(&narrow.compose());
+    let narrow_waiter = narrow_text
+        .lines()
+        .find(|line| line.contains("waiter"))
+        .unwrap();
+    assert!(
+        narrow_waiter.contains('\u{29d7}') && !narrow_waiter.contains("\u{29d7}2"),
+        "the collapsed list cell paints the hourglass alone: {narrow_waiter:?}"
     );
 }
 

@@ -691,12 +691,23 @@ impl View {
         let rects = self.worker_column_rects(text_w as u16);
         if density != Density::Slim {
             let name_w = rects[1].width as usize;
+            // The status column's SOLVED width rides the slots: the mark's
+            // cell budget reads the geometry the solver admitted, not the
+            // constraint's wish (the list's Length(5) collapses on a narrow
+            // panel, and a two-cell waiting mark there loses its hourglass
+            // to the column crop - the 2026-11-07 CI frame finding).
+            let status_w = rects.first().map_or(1, |r| r.width as usize);
             // Card mode carries two columns; the meter slots it empties
             // answer zero instead of indexing past the pair.
             let slots = if card {
-                (name_w, 0, 0)
+                (name_w, 0, 0, status_w)
             } else {
-                (name_w, rects[2].width as usize, rects[4].width as usize)
+                (
+                    name_w,
+                    rects.get(2).map_or(0, |r| r.width as usize),
+                    rects.get(4).map_or(0, |r| r.width as usize),
+                    status_w,
+                )
             };
             let table_rows: Vec<RtRow> = display
                 .iter()
@@ -1127,7 +1138,7 @@ impl View {
         &self,
         drow: &DisplayRow<'_>,
         depth: usize,
-        (name_w, _meter_w, _right_slot_w): (usize, usize, usize),
+        (name_w, _meter_w, _right_slot_w, status_w): (usize, usize, usize, usize),
         now: u64,
     ) -> RtRow<'static> {
         let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
@@ -1321,7 +1332,11 @@ impl View {
                         // A Working row's spin glyph takes the blank lead
                         // column of the right-aligned word, so the word stays put.
                         rt_cell(
-                            match build_status_cell(a.build, lat, if card { 1 } else { 5 }) {
+                            match build_status_cell(
+                                a.build,
+                                lat,
+                                status_w.min(if card { 1 } else { 5 }),
+                            ) {
                                 // The build mark wins where it applies: a
                                 // compiling row renders the BRAILLE_SIX frame
                                 // in place of the working spin (never both),
