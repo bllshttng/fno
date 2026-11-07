@@ -273,6 +273,10 @@ struct State {
     #[serde(default)]
     lead: SeatState,
     last_note: String,
+    /// When a gate run was first seen in flight with no grade landed since.
+    /// A grade at or after it clears it.
+    #[serde(default)]
+    ungraded_since: Option<i64>,
 }
 
 impl State {
@@ -1903,6 +1907,84 @@ fn launch_head(
     }
 }
 
+/// A gate that launches and grades nothing for this long is down, whatever
+/// the cause: a renamed lane, a wrong build root and a mis-resolved binary
+/// all read the same from outside.
+const DROUGHT_S: i64 = 2 * 3600;
+const DROUGHT_LANE: &str = "evals";
+const DROUGHT_KEY: &str = "gate-grade-drought";
+
+/// Epoch seconds of the newest graded gate row.
+fn last_gate_grade(rows: &[Value]) -> Option<i64> {
+    rows.iter()
+        .filter(|r| row_cohort(r).starts_with("gate-"))
+        .filter(|r| r.get("status").and_then(Value::as_str) == Some("graded"))
+        .filter_map(|r| r.get("ts").and_then(Value::as_str))
+        .filter_map(|ts| DateTime::parse_from_rfc3339(ts).ok())
+        .map(|t| t.timestamp())
+        .max()
+}
+
+/// Advances the drought clock. Returns the epoch the drought began once it
+/// passes `DROUGHT_S`, and whether a grade just cleared one.
+fn drought(state: &mut State, rows: &[Value], now: i64) -> (Option<i64>, bool) {
+    let mut cleared = false;
+    if let (Some(since), Some(graded)) = (state.ungraded_since, last_gate_grade(rows)) {
+        if graded >= since {
+            state.ungraded_since = None;
+            cleared = true;
+        }
+    }
+    if state.ungraded_since.is_none() && (state.head_run.is_some() || state.main_run.is_some()) {
+        state.ungraded_since = Some(now);
+    }
+    let overdue = state
+        .ungraded_since
+        .filter(|since| now - since >= DROUGHT_S);
+    (overdue, cleared)
+}
+
+fn drought_store() -> Option<PathBuf> {
+    crate::paths::AgentsHome::from_env_opt().map(|home| crate::provider_cap::questions_path(&home))
+}
+
+/// Files one attention row per drought; `file_once` keeps a later tick from
+/// filing it again.
+fn page_drought(repo: &Path, since: i64, now: i64) {
+    let Some(store) = drought_store() else {
+        return;
+    };
+    let hours = (now - since) / 3600;
+    let text = format!(
+        "evals gate: no grade has landed for {hours}h while a gate run was launched. Read evals-gate/state.json last_note and the run log under the history dir."
+    );
+    if let Err(e) = crate::fleet_task::file_once(
+        &store,
+        DROUGHT_LANE,
+        DROUGHT_KEY,
+        &repo.to_string_lossy(),
+        &text,
+        None,
+        None,
+    ) {
+        eprintln!("evals-gate: drought page refused: {e}");
+    }
+}
+
+fn close_drought(repo: &Path) {
+    let Some(store) = drought_store() else {
+        return;
+    };
+    let _ = crate::fleet_task::close(
+        &store,
+        DROUGHT_LANE,
+        DROUGHT_KEY,
+        &repo.to_string_lossy(),
+        "a gate grade landed",
+        "evals-gate",
+    );
+}
+
 fn tick_with(p: &Paths, d: &Deps, can_launch: bool) -> String {
     let daily_usd = config_daily_usd(p.repo);
     if daily_usd <= 0.0 {
@@ -1925,6 +2007,12 @@ fn tick_with(p: &Paths, d: &Deps, can_launch: bool) -> String {
     if !disarm_notes.is_empty() {
         note.push_str("; ");
         note.push_str(&disarm_notes.join("; "));
+    }
+    let (overdue, cleared) = drought(&mut state, &history_rows(p.history), d.now.timestamp());
+    if let Some(since) = overdue {
+        page_drought(p.repo, since, d.now.timestamp());
+    } else if cleared {
+        close_drought(p.repo);
     }
     state.last_note = note.clone();
     save_state(&p.state_dir, &state);
@@ -3854,5 +3942,82 @@ mod tests {
         );
         assert!(failure.unwrap().contains("Clear on "), "{posts:?}");
         assert!(failure.unwrap().contains("g5"), "{posts:?}");
+    }
+
+    #[test]
+    fn a_stub_gate_launch_names_lanes_and_a_build_root_that_resolve() {
+        // The canary for the launch path no unit test crosses: the launched
+        // argv, the lane pick, and the root the build script reads, so a
+        // rename or a path slip fails here instead of as a gate with no
+        // grade. An account-less world reads no room on the configured lane,
+        // so the launch rides the fallback there; the world still carries
+        // the routing row the operator config ships, and the reader must
+        // resolve the configured default. The picked lane's own resolution
+        // is the filed defect: no roster declares it.
+        let w = World::new("skills/x/SKILL.md\n");
+        World::config(
+            w.dir.path(),
+            "[[routing.models]]\nname = \"zai-flash\"\nroute = \"zai/glm-5.3-flash\"\n",
+        );
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        let argv = spawns.first().expect("the launch spawned once");
+        for (i, word) in ["doctor", "evals", "run"].iter().enumerate() {
+            assert_eq!(argv.get(i + 1).map(String::as_str), Some(*word), "{argv:?}");
+        }
+        let lane_pos = argv
+            .iter()
+            .position(|a| a == "--lane")
+            .expect("the launch names a lane");
+        let lane = argv
+            .get(lane_pos + 1)
+            .expect("the lane value follows --lane");
+        assert_eq!(
+            lane.as_str(),
+            FALLBACK_LANE,
+            "an account-less world reads no room and rides the fallback lane"
+        );
+        let inventory = crate::route_gather::inventory(w.dir.path());
+        crate::evals::runner::lane_from_inventory(&inventory, DEFAULT_LANE)
+            .unwrap_or_else(|e| panic!("gate lane {DEFAULT_LANE}: {e}"));
+        // checkout_of climbs bank -> evals -> root, and the build script
+        // reads the fno-agents manifest from that root.
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let bank = repo.join("evals/bank");
+        let root = checkout_of(&bank).unwrap();
+        assert!(
+            root.join("crates/fno-agents/Cargo.toml").is_file(),
+            "{root:?}"
+        );
+        assert!(BUILD_SCRIPT.contains("$root/crates/fno-agents/Cargo.toml"));
+    }
+
+    #[test]
+    fn a_launched_gate_with_no_grade_pages_after_two_hours_and_a_grade_clears_it() {
+        let mut state = State::default();
+        let launched = MainRun {
+            cohort: "gate-main".into(),
+            pid: 1,
+            started: 1_000,
+            seat: String::new(),
+        };
+        state.main_run = Some(launched);
+        let t0 = 1_000_000;
+        assert_eq!(drought(&mut state, &[], t0), (None, false));
+        assert_eq!(drought(&mut state, &[], t0 + DROUGHT_S - 1), (None, false));
+        assert_eq!(
+            drought(&mut state, &[], t0 + DROUGHT_S),
+            (Some(t0), false),
+            "two hours without a grade pages"
+        );
+        let ts = chrono::DateTime::from_timestamp(t0 + DROUGHT_S + 5, 0)
+            .unwrap()
+            .to_rfc3339();
+        let graded = json!({"experiment_id": "gate-main-x", "status": "graded", "ts": ts});
+        assert_eq!(
+            drought(&mut state, &[graded], t0 + DROUGHT_S + 10),
+            (None, true)
+        );
     }
 }

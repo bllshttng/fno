@@ -199,16 +199,25 @@ pub fn fno_bin() -> std::ffi::OsString {
         return declared;
     }
     if !cfg!(test) {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let sibling = dir.join("fno");
-                if sibling.is_file() {
-                    return sibling.into_os_string();
-                }
-            }
+        if let Some(sibling) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| binary_beside(&exe, "fno"))
+        {
+            return sibling.into_os_string();
         }
     }
     declared_fno(None)
+}
+
+/// The sibling `<name>` in `exe`'s directory, if any. `exe` is a parameter so
+/// the leg is testable (bootstrap.rs's `resolve_via_sibling` does the same);
+/// production passes `current_exe`. The executable check is the rule both
+/// porcelain resolvers apply: an `fno` and an `fno-py` ship in one bin dir
+/// of every complete install, and a file that cannot run must yield to the
+/// next leg, never answer a spawn that fails later.
+fn binary_beside(exe: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let sibling = exe.parent()?.join(name);
+    is_executable_file(&sibling).then_some(sibling)
 }
 
 /// The undeclared-`fno-py` twin of [`UNDECLARED_FNO`]: the same refusal for
@@ -237,7 +246,7 @@ pub fn fno_py() -> std::ffi::OsString {
     }
     if let Some(p) = std::env::current_exe()
         .ok()
-        .and_then(|exe| fno_py_beside(&exe))
+        .and_then(|exe| binary_beside(&exe, "fno-py"))
     {
         return p.into_os_string();
     }
@@ -245,14 +254,6 @@ pub fn fno_py() -> std::ffi::OsString {
         return p.into_os_string();
     }
     std::ffi::OsString::from("fno-py")
-}
-
-/// The executable `fno-py` in `exe`'s directory, if any. `exe` is a parameter
-/// so the leg is testable (bootstrap.rs's `resolve_via_sibling` does the
-/// same); production passes `current_exe`.
-fn fno_py_beside(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    let sibling = exe.parent()?.join("fno-py");
-    is_executable_file(&sibling).then_some(sibling)
 }
 
 /// The wheel venv's `fno-py` under a uv tools base dir (`<base>/fno/bin`).
@@ -1134,9 +1135,31 @@ mod tests {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
         }
-        assert_ne!(resolved, std::ffi::OsString::from("fno"));
+        assert_ne!(resolved, "fno");
         assert!(!std::path::Path::new(&resolved).exists());
         assert!(resolved.to_string_lossy().contains("FNO_BIN"));
         assert_eq!(declared_resolved, declared);
+    }
+
+    #[test]
+    fn the_sibling_fno_beats_the_bare_path_name() {
+        // A task PATH once put the uv venv first, so bare `fno` answered as
+        // fno-py and refused doctor commands, and the gate wrote no grade.
+        // The sibling leg rides the complete install (fno and fno-agents in
+        // one bin dir). A dropped or deordered leg fails here instead of as
+        // a gate with no grade.
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("fno-agents");
+        std::fs::write(&exe, b"").unwrap();
+        // No sibling: the leg yields, and the chain falls to the bare name.
+        assert_eq!(binary_beside(&exe, "fno"), None);
+        // The complete install ships fno beside fno-agents in one bin dir,
+        // and a file that cannot run is no front door: the leg yields on it
+        // too, and only an executable sibling answers.
+        let sibling = dir.path().join("fno");
+        std::fs::write(&sibling, b"").unwrap();
+        assert_eq!(binary_beside(&exe, "fno"), None);
+        let sibling = crate::write_exec_stub(dir.path(), "fno", "#!/bin/sh\n");
+        assert_eq!(binary_beside(&exe, "fno"), Some(sibling));
     }
 }
