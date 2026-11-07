@@ -3064,7 +3064,7 @@ fn install_agy(stage: &Path, force: bool) -> Result<String, String> {
     let hooks = home.join(".gemini").join("config").join("hooks.json");
     let adapter = stage.join("hooks").join("footnote-agy-target-stop-hook.sh");
     let team_inject = stage.join("hooks").join("agy-team-inject.sh");
-    let guard = stage.join("hooks").join("agy-lead-guard.sh");
+    let guard = stage.join("hooks").join("agy-pretool.sh");
     let s = crate::agy_hooks::status(
         &hooks,
         adapter.is_file().then_some(adapter.as_path()),
