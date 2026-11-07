@@ -231,6 +231,10 @@ pub fn owner_lease_for_pid(pid: u32) -> OwnerRead {
 
 #[cfg(test)]
 mod tests {
+    // Every test and helper here reads the macOS procargs layout, so the
+    // whole module is cfg'd; the import rides the same gate or Linux builds
+    // it as an unused import under deny-warnings.
+    #[cfg(target_os = "macos")]
     use super::*;
 
     /// The macOS env read is a sysctl away, so the parser is the unit: a
