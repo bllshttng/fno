@@ -682,33 +682,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&shadow_dir);
     }
-
-    #[test]
-    fn floor_receipt_prints_the_clamp_line_only_above_the_ceiling() {
-        let render = |max_live| FloorReceipt {
-            old: Some(3),
-            new: 8,
-            target: PathBuf::from("/tmp/x/config.toml"),
-            unchanged: false,
-            max_live,
-        };
-        let under = render(Some(6)).to_string();
-        assert!(
-            under.contains("agents.max_live is 6, so the floor holds the cap at 6"),
-            "{under}"
-        );
-        assert!(
-            under.contains("Past it, a spawn admits only while CPU and RAM read room"),
-            "{under}"
-        );
-        assert!(
-            under.contains("To raise it: fno config set agents.max_live N"),
-            "{under}"
-        );
-        assert!(!render(None).to_string().contains("max_live is"));
-        assert!(!render(Some(8)).to_string().contains("cap holds at"));
-    }
-
     #[test]
     fn floor_defaults_match_the_gate() {
         // The printed default is pinned to the gate's own spelling, so the

@@ -71,6 +71,13 @@ pub struct GuardRequest<'a> {
 /// The verdict object and its exit code. Exit 0 for every answered verdict,
 /// 3 for a fail-closed guard error.
 pub fn decide(req: &GuardRequest) -> (Value, i32) {
+    decide_with_occupancy(req, None)
+}
+
+fn decide_with_occupancy(
+    req: &GuardRequest,
+    node_occupancy: Option<&crate::spawn_gate::NodeOccupancy>,
+) -> (Value, i32) {
     let node_key = format!("node:{}", req.node_id);
     // One read feeds the whole verdict. With `store.remote_url` set every
     // read is a round trip to the primary, and a slow primary times the
@@ -95,7 +102,12 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
         );
         return (json!({"verdict": "corrupted", "detail": detail}), 0);
     }
-    let mut seen = observe(req, !req.no_reserve, Some((state, record.clone())));
+    let mut seen = observe(
+        req,
+        !req.no_reserve,
+        Some((state, record.clone())),
+        node_occupancy,
+    );
     let mut common = common_fields(req, &seen);
     if is_deferral(&seen.action) {
         return (refused(&seen.action, common), 0);
@@ -108,7 +120,7 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
         if recover {
             if let (Some(prior), _) = reclaim_if_provably_dead(&node_key, None) {
                 emit_reaped_abandoned(req.node_id, &prior, &seen.truth_status);
-                seen = observe(req, false, None);
+                seen = observe(req, false, None, node_occupancy);
                 common = common_fields(req, &seen);
                 if is_deferral(&seen.action) {
                     return (refused(&seen.action, common), 0);
@@ -156,15 +168,21 @@ fn observe(
     req: &GuardRequest,
     emit_events: bool,
     claim_read: Option<(ClaimState, Option<crate::claims::ClaimRecord>)>,
+    node_occupancy: Option<&crate::spawn_gate::NodeOccupancy>,
 ) -> DispatchClaimObservation {
+    let (worked_nodes, worked_error) = match node_occupancy {
+        Some(Ok(map)) => (Some(map.clone()), None),
+        Some(Err(error)) => (None, Some(error.clone())),
+        None => (None, None),
+    };
     observe_node_claim(
         req.node_id,
         req.cwd,
         !req.no_reserve,
         emit_events,
         claim_read,
-        None,
-        None,
+        worked_nodes,
+        worked_error,
         None,
     )
 }
@@ -206,7 +224,7 @@ fn blocked(
     record: Option<&crate::claims::ClaimRecord>,
 ) -> Value {
     // A launch-window holder reads SUSPECT for its whole TTL by construction
-    // (its pid is the spawner that already exited), so it is never a wedge.
+    // (it carries no pid; the TTL bounds it), so it is never a wedge.
     let in_launch_window = seen.holder.starts_with(HANDOVER_HOLDER_PREFIX);
     let wedged = state == ClaimState::Suspect && !in_launch_window;
     let block = seen.block_reason.clone().unwrap_or_default();
@@ -406,8 +424,16 @@ pub fn reserve_and_hand_over(req: &GuardRequest) -> (Value, i32) {
     };
     // THE node claim, so the node reads worked from the moment it is
     // dispatched rather than from whenever the worker reaches its own init.
+    // The spawn client exits within seconds of the launch, so its pid here
+    // read `pid-absent`, a death basis, long before init re-acquired. The
+    // claim carries no pid: the TTL bounds it and the pane probe proves death.
     let reason = format!("spawn handover window for {}", req.node_id);
-    match crate::claims::acquire(&node_key, handover, opts(req, HANDOVER_TTL_MS, reason)) {
+    let handover_opts = AcquireOpts {
+        pid: None,
+        pid_unavailable: true,
+        ..opts(req, HANDOVER_TTL_MS, reason)
+    };
+    match crate::claims::acquire(&node_key, handover, handover_opts) {
         AcquireOutcome::Acquired(_) => {
             out.insert("node_claim_key".into(), json!(node_key));
             out.insert("node_claim_holder".into(), json!(handover));
@@ -990,7 +1016,12 @@ fn spawn_phase(params: &Value, node: &str) -> Result<String, i32> {
 /// The pane door: the same guard around the pane launch, judged from the
 /// launch dir the pane spine will resolve (an explicit `--cwd`, else the
 /// node's project).
-pub fn run_guarded_pane(params: &Value, name: &str, launch: impl FnOnce() -> i32) -> i32 {
+pub fn run_guarded_pane(
+    params: &Value,
+    name: &str,
+    caller_session: Option<&str>,
+    launch: impl FnOnce() -> i32,
+) -> i32 {
     let caller = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let cwd = match params.get("cwd").and_then(Value::as_str) {
         Some(explicit) => PathBuf::from(explicit),
@@ -999,7 +1030,7 @@ pub fn run_guarded_pane(params: &Value, name: &str, launch: impl FnOnce() -> i32
             _ => caller,
         },
     };
-    let mut hold = match guard_client_spawn(params, name, &cwd) {
+    let mut hold = match guard_client_spawn(params, name, &cwd, caller_session) {
         Ok(hold) => hold,
         Err(code) => return code,
     };
@@ -1104,6 +1135,7 @@ pub fn guard_client_spawn(
     params: &Value,
     name: &str,
     cwd: &Path,
+    caller_session: Option<&str>,
 ) -> Result<Option<SpawnHold>, i32> {
     // Set or cleared together, never merged with what this process inherited:
     // a worker spawning a child must not pass down its own node.
@@ -1172,17 +1204,22 @@ pub fn guard_client_spawn(
         format!("{HANDOVER_HOLDER_PREFIX}{name}")
     };
     let cwd = cwd.to_string_lossy().into_owned();
-    let (verdict, exit) = decide(&GuardRequest {
-        node_id: &guarded,
-        holder: &holder,
-        ttl_ms: RESERVATION_TTL_MS,
-        no_reserve: false,
-        cwd: Some(cwd.as_str()),
-        handover_holder: Some(handover.as_str()),
-        root: None,
-        pid: None,
-        phase: Some(phase.as_str()),
-    });
+    let node_occupancy =
+        crate::backlog::worked::reachable_workers_by_node_excluding(caller_session);
+    let (verdict, exit) = decide_with_occupancy(
+        &GuardRequest {
+            node_id: &guarded,
+            holder: &holder,
+            ttl_ms: RESERVATION_TTL_MS,
+            no_reserve: false,
+            cwd: Some(cwd.as_str()),
+            handover_holder: Some(handover.as_str()),
+            root: None,
+            pid: None,
+            phase: Some(phase.as_str()),
+        },
+        Some(&node_occupancy),
+    );
     if verdict.get("verdict").and_then(Value::as_str) != Some("dispatchable") {
         eprintln!("{}", refusal_line(&guarded, &verdict));
         if let Some(remedy) = verdict.get("remedy").and_then(Value::as_str) {
@@ -1351,6 +1388,17 @@ mod tests {
         assert_eq!(
             holder_of(tmp.path(), "node:x-1").as_deref(),
             Some("spawn-handover:w")
+        );
+        // The handover outlives the spawn client: it carries no pid, so a dead
+        // client never reads as pid-absent; the TTL alone bounds it.
+        let record = crate::claims::status("node:x-1", Some(tmp.path()))
+            .1
+            .unwrap();
+        assert!(record.pid_unavailable && record.pid.is_none(), "{record:?}");
+        let gone = |_| crate::claims::PidProbe::Absent;
+        assert_eq!(
+            crate::claims::classify_with_basis(&record, None, &gone),
+            (crate::claims::ClaimState::Suspect, "pid-unavailable")
         );
     }
 

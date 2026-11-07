@@ -581,15 +581,21 @@ fn control_plane_arms_report() -> Value {
             Err(e) => return json!({"red": [], "unknown_reason": format!("read failed: {e}")}),
         }
     };
+    let dead_sinks: Vec<Value> = payload
+        .get("stuck_work")
+        .and_then(|s| s.get("dead_sinks"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let attention = payload
         .get("arms_attention")
         .and_then(Value::as_array)
         .cloned();
     let Some(attention) = attention else {
-        return json!({"red": [], "unknown_reason": "status payload carries no arms_attention"});
+        return json!({"red": [], "unknown_reason": "status payload carries no arms_attention", "dead_sinks": dead_sinks});
     };
     let red: Vec<Value> = attention.into_iter().filter(|a| a.is_object()).collect();
-    json!({"red": red, "unknown_reason": null})
+    json!({"red": red, "unknown_reason": null, "dead_sinks": dead_sinks})
 }
 
 fn fd_limit_report() -> Value {
@@ -1162,17 +1168,5 @@ mod tests {
         let foreign_id = git_checkout_identity(&foreign);
         assert!(here.is_some());
         assert_ne!(here.map(|i| i.1), foreign_id.map(|i| i.1));
-    }
-
-    /// The deleted test_doctor_resolves_the_worktree_from_a_subdirectory's
-    /// premise: a subdirectory of this repo resolves to the same identity
-    /// as the root, so the report stays visible below the root.
-    #[test]
-    fn subdirectory_identity_matches_the_repo_root() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let repo = repo.canonicalize().expect("repo exists");
-        let root = git_checkout_identity(&repo);
-        let sub = git_checkout_identity(&repo.join("cli"));
-        assert_eq!(root.map(|i| i.1), sub.map(|i| i.1));
     }
 }

@@ -186,6 +186,10 @@ pub(super) async fn mouse_pre_pass(
             }
             continue;
         }
+        if view.report.is_some() {
+            view.link_hover.clear();
+            continue;
+        }
         // A pointer action - click/press/wheel/drag, anything but passive hover
         // (Move) - is "other input": it disarms the resize repeat window exactly
         // as a non-resize keystroke does. Without this, a click that may have

@@ -166,4 +166,3 @@ resolver	crates/fno/src/doctor_update.rs	fn read_source_wire(source: &Path) -> O
 resolver	crates/fno/src/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
 resolver	crates/fno/src/repo_lint.rs	pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
 resolver	crates/fno/src/server.rs	pub(crate) fn fno_bin() -> PathBuf {
-resolver	crates/fno/src/squad_store_tests.rs	fn build_tree_marker_detection_is_pure_over_path() {

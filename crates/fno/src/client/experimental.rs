@@ -18,6 +18,8 @@ pub(crate) struct Flags {
     pub(crate) org_board: bool,
     pub(crate) pane_share: bool,
     pub(crate) other_machines: bool,
+    /// The card layout nests workers under their lead (prefix+t).
+    pub(crate) group_by_lead: bool,
     /// Knocks waiting on the running share; `None` while no share runs.
     pub(crate) share: Option<usize>,
 }
@@ -63,6 +65,7 @@ pub(crate) fn flags(view: &View) -> Flags {
         org_board: view.experimental_org_board,
         pane_share: view.experimental_pane_share,
         other_machines: view.machine_tree.on,
+        group_by_lead: view.group_by_lead,
         share: view.share.as_ref().map(|s| s.waiting()),
     }
 }

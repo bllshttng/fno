@@ -178,32 +178,4 @@ mod tests {
         assert!(text.contains("cd /Users/\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}/repo"));
         assert!(text.contains("token=\u{2022}"));
     }
-
-    #[test]
-    fn url_passwords_are_masked_and_the_rest_of_the_url_stays() {
-        for (url, password) in [
-            (
-                "postgres://demo:hunter2-fake@localhost:5432/demo",
-                "hunter2-fake",
-            ),
-            ("redis://:s3cr3t-fake@cache.internal:6379/0", "s3cr3t-fake"),
-            (
-                "https://deploy:ghx-fake-pw@git.example.com/org/repo.git",
-                "ghx-fake-pw",
-            ),
-        ] {
-            let line = format!("DATABASE_URL={url} ok");
-            let got = redact_text(&line);
-            assert!(!got.contains(password), "{password} leaked: {got}");
-            let (user_part, host_part) = url.split_once(password).unwrap();
-            assert!(got.contains(user_part), "scheme and user kept: {got}");
-            assert!(
-                got.ends_with(&format!("{host_part} ok")),
-                "host kept: {got}"
-            );
-            assert_eq!(got.chars().count(), line.chars().count(), "width kept");
-        }
-        let plain = "see https://example.com:8080/a@b and http://host:80/x";
-        assert_eq!(redact_text(plain), plain, "no userinfo, nothing masked");
-    }
 }

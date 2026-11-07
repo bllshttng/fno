@@ -95,7 +95,7 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 | 5 | Shell resolver heredoc | `scripts/lib/graph-resolve.sh:66,77` | CLOSED; reads via `read_graph_strict`, keeps `resolve_id` | this PR |
 | 5b | Shell resolver legacy grep fallback | `scripts/lib/graph-resolve.sh` `_resolve_arg_legacy` | KEEP; the no-`fno` escape hatch, reachable only when the package will not import | — |
 | 6a | `init-target-state.sh` grep presence checks | `init-target-state.sh:672,1118` | CLOSED; `fno backlog get --strict`, and the second check deleted as redundant | this PR |
-| 6b | `autocorrect-pack.sh` blocked-state read | `autocorrect-pack.sh:183` | CLOSED; read `.entries`, not `.nodes` | this PR |
+| 6b | `autocorrect-pack.sh` blocked-state read | deleted 2026-11-06 with the autocorrect loop | CLOSED; the script is gone | CLOSED |
 | 6c | plan_path -> node lookup heredocs | `init-target-state.sh:921` (the `autolaunch-on-ready.sh:108` half was deleted with the script) | OPEN, deliberately parked | OPEN |
 
 Row 4 deviates from the original disposition.

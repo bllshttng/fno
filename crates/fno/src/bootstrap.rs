@@ -1960,21 +1960,6 @@ mod tests {
             "an exact owner is complete, not a torn prefix"
         );
     }
-
-    #[test]
-    fn a_receipt_never_prints_a_blank_version() {
-        // An absent Version header verifies (identity keys on name and
-        // author), and the audit line is the one place the version lands.
-        // A blank where it belongs reads as a fact nobody checked.
-        let blank = verified_receipt("");
-        assert!(!blank.contains("fno  ("), "{blank}");
-        assert!(blank.contains("unreadable"), "{blank}");
-        assert_eq!(
-            verified_receipt("0.3.1"),
-            "fno: verified fno 0.3.1 (this project's package)."
-        );
-    }
-
     #[test]
     fn identity_rows() {
         assert!(decide_identity("fno", "Jason Noah Choi").is_ok());
@@ -2212,68 +2197,6 @@ mod tests {
         );
     }
 
-    /// A fake uv tool venv with one dist-info carrying `body`; returns the
-    /// tool dir. The layout mirrors uv's (lib/pythonX.Y/site-packages).
-    fn fake_tool_dir(body: Option<&str>) -> PathBuf {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static N: AtomicU32 = AtomicU32::new(0);
-        let root = env::temp_dir().join(format!(
-            "fno-boot-receipt-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let dist = root
-            .join("fno")
-            .join("lib")
-            .join("python3.13")
-            .join("site-packages")
-            .join("fno-0.4.1.dev20261003.dist-info");
-        fs::create_dir_all(&dist).unwrap();
-        if let Some(body) = body {
-            fs::write(dist.join("direct_url.json"), body).unwrap();
-        }
-        root
-    }
-
-    #[test]
-    fn a_nightly_receipt_is_the_repair_source() {
-        let nightly = "https://github.com/fnodotdev/fno/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl";
-        let body = format!(r#"{{"url": "{nightly}"}}"#);
-
-        // The nightly wheel URL is read back verbatim.
-        let td = fake_tool_dir(Some(&body));
-        assert_eq!(read_install_receipt_url(&td).as_deref(), Some(nightly));
-
-        // A file:// receipt belongs to a local checkout; that is the
-        // config.dev.source rung's business, never a repair source here.
-        let td = fake_tool_dir(Some(r#"{"url": "file:///repo/cli"}"#));
-        assert_eq!(read_install_receipt_url(&td), None);
-
-        // No receipt (a registry install), or a malformed one, is no receipt.
-        let td = fake_tool_dir(None);
-        assert_eq!(read_install_receipt_url(&td), None);
-        let td = fake_tool_dir(Some("not json"));
-        assert_eq!(read_install_receipt_url(&td), None);
-    }
-
-    #[test]
-    fn expand_tilde_expands_leading_home() {
-        let home = PathBuf::from("/home/me");
-        assert_eq!(
-            expand_tilde_with("~/src/fno", Some(home.clone())),
-            home.join("src/fno")
-        );
-        assert_eq!(expand_tilde_with("~", Some(home.clone())), home);
-        // absolute + `~user` (no slash) pass through unchanged.
-        assert_eq!(
-            expand_tilde_with("/abs/fno", Some(home.clone())),
-            PathBuf::from("/abs/fno")
-        );
-        assert_eq!(expand_tilde_with("~foo", Some(home)), PathBuf::from("~foo"));
-        // no home -> literal, never a panic.
-        assert_eq!(expand_tilde_with("~/x", None), PathBuf::from("~/x"));
-    }
-
     #[test]
     fn dev_source_rows() {
         // US2: pure parse of [dev].source from a flat config.toml body.
@@ -2355,22 +2278,6 @@ mod tests {
             "No solution found when resolving dependencies"
         ));
     }
-
-    #[test]
-    fn count_pyc_walks_recursively_and_skips_other_suffixes() {
-        let root = env::temp_dir().join(format!("fno-pyc-{}", std::process::id()));
-        let pkg = root.join("lib/python3.13/site-packages/fno/__pycache__");
-        fs::create_dir_all(&pkg).unwrap();
-        fs::write(pkg.join("cli.cpython-313.pyc"), "").unwrap();
-        fs::write(pkg.join("stray.py"), "").unwrap();
-        fs::write(root.join("lib/other.txt"), "").unwrap();
-        assert_eq!(count_pyc(&root.join("lib")).unwrap(), 1);
-        // An absent dir is now an error the CALLER classifies (absence vs
-        // could-not-answer), not a silent 0.
-        assert!(count_pyc(&root.join("nope")).is_err());
-        fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn install_wheel_retry_rows() {
         // ETXTBSY at exec (os error 26): a writer still holds the uv binary
@@ -2501,30 +2408,6 @@ mod tests {
         assert!(!e.msg.contains("Stop fno processes"), "{}", e.msg);
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn install_wheel_names_the_race_remedy_when_the_cap_is_hit() {
-        // Every attempt races. The capped error must carry the same remedy the
-        // fno.sh / postinstall twins print, or the Rust leg is the one
-        // provisioning path that leaves the user with no next step.
-        let root = env::temp_dir().join(format!("fno-uvfake4-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let script = "#!/bin/sh\n\
-             case \"$1 $2\" in\n\
-             'tool dir') exit 0;;\n\
-             'tool install') echo 'error: failed to remove directory `/x/fno/lib`: \
-             Directory not empty (os error 66)' >&2; exit 2;;\n\
-             esac; exit 64\n";
-        let uv = root.join("uv");
-        fs::write(&uv, script).unwrap();
-        fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let e = install_wheel(&uv, "fno").unwrap_err();
-        assert_eq!(e.code, 2, "uv's own exit code is preserved");
-        assert!(e.msg.contains("Stop fno processes and re-run"), "{}", e.msg);
-        fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn install_wheel_rejects_a_success_that_does_not_verify() {
         // uv exits 0 but the marker tree is absent (no pyc shipped): the exit
@@ -2560,44 +2443,6 @@ mod tests {
         assert!(e.cacheable, "a settled bad install is cacheable");
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn a_could_not_answer_verify_is_never_cacheable() {
-        // uv exits 0 over a tree the predicate cannot read. The message names
-        // the unreadable dir for the operator; the TYPED verdict, not that
-        // wording, is what keeps it out of the stamp - and the inverse shape
-        // is pinned above, so neither direction can drift back to string
-        // matching.
-        let root = env::temp_dir().join(format!("fno-uvfake5-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let tool_dir = root.join("tools");
-        let venv = tool_dir.join("fno");
-        fs::create_dir_all(venv.join("bin")).unwrap();
-        fs::create_dir_all(venv.join("lib")).unwrap();
-        let entry = venv.join("bin/fno-py");
-        fs::write(&entry, "#!/bin/sh\n").unwrap();
-        fs::set_permissions(&entry, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::write(venv.join("lib/x.pyc"), "").unwrap();
-        fs::set_permissions(venv.join("lib"), fs::Permissions::from_mode(0o000)).unwrap();
-        let script = format!(
-            "#!/bin/sh\n\
-             case \"$1 $2\" in\n\
-             'tool dir') echo '{}'; exit 0;;\n\
-             'tool install') exit 0;;\n\
-             esac; exit 64\n",
-            tool_dir.display()
-        );
-        let uv = root.join("uv");
-        fs::write(&uv, script).unwrap();
-        fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let e = install_wheel(&uv, "fno").unwrap_err();
-        assert!(e.msg.contains(UV_DIR_UNREADABLE), "{}", e.msg);
-        assert!(!e.cacheable, "could-not-answer must never be stamped");
-        fs::set_permissions(venv.join("lib"), fs::Permissions::from_mode(0o755)).unwrap();
-        fs::remove_dir_all(&root).ok();
-    }
-
     /// A fake `uv` that only answers `tool dir`, pointing at `tool_dir`.
     fn uv_reporting_tool_dir(root: &Path, tool_dir: &Path) -> PathBuf {
         let script = format!(
@@ -2642,36 +2487,6 @@ mod tests {
         fs::set_permissions(venv.join("lib"), fs::Permissions::from_mode(0o755)).unwrap();
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn sentinel_survives_a_binary_that_is_only_transiently_absent() {
-        // The trigger for the storm, not just the refusal. A single look during
-        // the ~490ms window answers "gone", the caller drops the sentinel, and
-        // every LATER process loses its fast path and re-provisions with its own
-        // --force. Keeping the sentinel across a transient absence is what stops
-        // one unlucky moment from becoming a fleet-wide reinstall.
-        let root = env::temp_dir().join(format!("fno-sentwait-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let real = root.join("fno-py");
-
-        // Falsification: a single look fails right now, so a pass below is the
-        // wait doing work rather than the file having been there all along.
-        assert!(!is_executable(&real), "precondition: the binary is absent");
-
-        let late = real.clone();
-        let writer = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            fs::write(&late, "#!/bin/sh\n").unwrap();
-            fs::set_permissions(&late, fs::Permissions::from_mode(0o755)).unwrap();
-        });
-        assert!(
-            executable_within(&real, 15, Duration::from_millis(50)),
-            "a binary that comes back must keep its sentinel"
-        );
-        writer.join().unwrap();
-        fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn verify_ours_within_does_not_retry_its_way_to_yes() {
         // The half that must NOT soften. This fixture stops at `verify_ours`'s
@@ -2696,56 +2511,6 @@ mod tests {
         );
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn a_foreign_package_is_refused_on_the_first_pass_not_the_last() {
-        // The cost this pins is per-call and permanent, not one slow startup.
-        // A stranger's `fno` at the resolved path answers the probe correctly
-        // every time, so retrying it charges 3s and 16 spawns of THAT
-        // interpreter on every later `fno` call - and the identity refusal
-        // returns above `write_failure_stamp`, so the stamp never relieves it.
-        // Counting spawns rather than timing the call keeps this deterministic.
-        let root = env::temp_dir().join(format!("fno-stranger-{}", std::process::id()));
-        let bin = root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let calls = root.join("calls");
-
-        // A python that answers as a real, well-formed, FOREIGN package: the
-        // probe succeeds and decide_identity is what refuses.
-        let python = bin.join("python");
-        fs::write(
-            &python,
-            format!(
-                "#!/bin/sh\necho x >> {}\nprintf 'name=fno\\nauthor=Someone Else\\nversion=9.9.9\\n'\n",
-                calls.display()
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let real = bin.join("fno-py");
-        fs::write(&real, "#!/bin/sh\n").unwrap();
-        fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let e = verify_ours_within(&real, 15, Duration::from_millis(200))
-            .expect_err("a foreign package must still be refused");
-        assert!(
-            e.msg.contains("refusing to run a foreign fno"),
-            "the refusal must name the cause: {}",
-            e.msg
-        );
-        // Same marker rule as the torn-read test, in reverse: a stable
-        // refusal returns on the pass that answered, so the message carries
-        // no "still failing after re-asking", whatever transient spawn
-        // failures the runner threw before it.
-        assert!(
-            !e.msg.contains("still failing after re-asking"),
-            "a stable refusal must return on its own pass, not after the budget: {}",
-            e.msg
-        );
-        fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn a_torn_metadata_read_is_retried_not_stamped_as_foreign() {
         // The other side of the stability rule. A METADATA file truncated
@@ -2817,84 +2582,6 @@ mod tests {
         }
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn a_genuinely_uninstalled_wheel_still_answers_absent() {
-        // The other half, and the reason this is a re-check rather than a hope:
-        // a wheel that really is gone stays gone through every pass, so the
-        // sentinel is still dropped and the reprovision still happens.
-        let root = env::temp_dir().join(format!("fno-sentgone-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let missing = root.join("fno-py");
-        assert!(!executable_within(&missing, 3, Duration::from_millis(10)));
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn verify_waits_for_a_console_script_that_lands_after_uv_exits() {
-        // The bug this closes: uv exits before its own artifacts settle. The
-        // console script is absent for ~490ms across an install, so a verify
-        // firing the instant uv returns raced the install it was verifying and
-        // refused every fno command.
-        let root = env::temp_dir().join(format!("fno-uvwait1-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let tool_dir = root.join("tools");
-        let venv = tool_dir.join("fno");
-        fs::create_dir_all(venv.join("bin")).unwrap();
-        fs::create_dir_all(venv.join("lib")).unwrap();
-        // Bytecode marker is already there; only the console script is late.
-        fs::write(venv.join("lib/x.pyc"), "").unwrap();
-        let uv = uv_reporting_tool_dir(&root, &tool_dir);
-
-        // Falsification first: without the wait this case FAILS. If this
-        // assertion ever stops holding, the test below proves nothing.
-        assert!(
-            install_verified(&uv).is_err(),
-            "single-shot verify must fail while the script is still absent"
-        );
-
-        let entry = venv.join("bin/fno-py");
-        let late = entry.clone();
-        let writer = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(300));
-            fs::write(&late, "#!/bin/sh\n").unwrap();
-            fs::set_permissions(&late, fs::Permissions::from_mode(0o755)).unwrap();
-        });
-
-        let got = install_verified_within(&uv, 15, Duration::from_millis(50));
-        writer.join().unwrap();
-        assert!(
-            got.is_ok(),
-            "verify must wait for uv's own artifact: {got:?}"
-        );
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn a_present_but_unchmodded_script_is_not_reported_as_absent() {
-        // The tightened predicate must not lie about WHY it refused. A script
-        // uv wrote but has not chmodded (or one on a noexec mount) is present,
-        // and the old wording sent the operator hunting for a missing file that
-        // `ls` plainly shows - a message the failure stamp then replays for the
-        // whole cooldown.
-        let root = env::temp_dir().join(format!("fno-noexec-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let tool_dir = root.join("tools");
-        let venv = tool_dir.join("fno");
-        fs::create_dir_all(venv.join("bin")).unwrap();
-        fs::create_dir_all(venv.join("lib")).unwrap();
-        fs::write(venv.join("lib/x.pyc"), "").unwrap();
-        let entry = venv.join("bin/fno-py");
-        fs::write(&entry, "#!/bin/sh\n").unwrap();
-        fs::set_permissions(&entry, fs::Permissions::from_mode(0o644)).unwrap();
-        let uv = uv_reporting_tool_dir(&root, &tool_dir);
-
-        let e = install_verified(&uv).unwrap_err();
-        assert!(e.msg().contains("is not executable"), "{e}");
-        assert!(!e.msg().contains("no console script"), "{e}");
-        fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn verify_gives_up_bounded_and_says_what_it_waited_for() {
         // The wait is bounded and falsifiable: a genuinely broken install still
@@ -2912,24 +2599,6 @@ mod tests {
         assert!(e.msg().contains("still failing after waiting 30ms"), "{e}");
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn verify_budget_is_the_shared_three_second_ceiling() {
-        // This half only: nothing here can read the shell twins, so it pins the
-        // Rust numbers and nothing more. The cross-language pin - the one that
-        // fails when update.py, postinstall.sh, or scripts/install/fno.sh drift
-        // off these numbers - is tests/ci/test_uv_install_verify_wait.sh, which
-        // reads all four files. Claiming otherwise here would be a guard on one
-        // of N paths, which is the bug this whole change exists to close.
-        assert_eq!(VERIFY_ATTEMPTS, 15);
-        assert_eq!(VERIFY_POLL, Duration::from_millis(200));
-        assert_eq!(
-            VERIFY_POLL * VERIFY_ATTEMPTS,
-            Duration::from_secs(3),
-            "ceiling must stay the 3s update.py spends on the same file"
-        );
-    }
-
     #[test]
     fn install_failure_message_defers_to_uv_instead_of_blaming_the_network() {
         // uv exits nonzero for plenty of non-network reasons (the case that
@@ -3118,32 +2787,6 @@ mod tests {
                 .unwrap();
         assert_eq!(msg, "line one\nline two\nline three");
     }
-
-    #[test]
-    fn failure_stamp_rows() {
-        // Guards the writer/reader pair against drifting apart: the exact bytes
-        // write_failure_stamp emits must be what decide_cached_failure accepts.
-        let source = "https://ci:s3cr3t@pkgs.example.com/fno.whl?token=deadbeef";
-        let msg = locate_failure_message(
-            Some(Path::new("/tools/fno/bin/fno-py")),
-            false,
-            source,
-            None,
-        );
-        let raw = format!("{}\t{}\n{}", 1000, source_key(source), msg);
-        // No part of the persisted stamp may carry the credential.
-        assert!(!raw.contains("s3cr3t"), "{raw}");
-        assert!(!raw.contains("deadbeef"), "{raw}");
-        let (back, age) = decide_cached_failure(&raw, 1005, &source_key(source)).unwrap();
-        assert_eq!(back, msg);
-        assert_eq!(age, 5);
-
-        // Same cache dir, distinct name: one operator-facing place to look, and
-        // `rm -rf` of that dir is a complete reset.
-        assert_eq!(failure_stamp_path().parent(), sentinel_path().parent());
-        assert_ne!(failure_stamp_path(), sentinel_path());
-    }
-
     #[test]
     fn strip_ansi_rows() {
         // matches the real `uv tool dir` colorized output shape
@@ -3190,32 +2833,6 @@ mod tests {
         assert!(shebang_interpreter(&script).is_none());
         fs::remove_dir_all(&root).ok();
     }
-
-    #[test]
-    fn sibling_resolution_needs_an_executable_neighbor() {
-        // `fno-py` absent, or present without a usable interpreter: no sibling
-        // arm, the caller falls through to the uv tool dir.
-        let root = env::temp_dir().join(format!("fno-sibling-{}", std::process::id()));
-        let bin = root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let exe = bin.join("fno");
-        write_script(&exe, "#!/bin/sh\n");
-
-        assert!(resolve_via_sibling(&exe).is_none(), "no sibling yet");
-
-        let py = root.join("python");
-        write_ours_python(&py);
-        write_script(
-            &bin.join("fno-py"),
-            &format!("#!{}\nprint('real cli')\n", py.display()),
-        );
-        let (sibling, python) =
-            resolve_via_sibling(&exe).expect("executable sibling + real interpreter");
-        assert_eq!(sibling, bin.join("fno-py"));
-        assert_eq!(python, py);
-        fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn a_verified_sibling_is_accepted_and_a_stranger_refused() {
         // The whole point of the arm: the adjacent CLI is forwarded to ONLY

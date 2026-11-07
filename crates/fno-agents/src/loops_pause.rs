@@ -1161,7 +1161,7 @@ fn markdown_doc() -> String {
                 .unwrap_or_else(|| "`fno agents loops table`".to_string()),
         ));
     }
-    out.push_str("\nThe launchd labels the pr-watch installer and the autocorrect installer own, as the table reports them: `");
+    out.push_str("\nThe launchd labels the pr-watch installer owns, as the table reports them: `");
     out.push_str(&crate::tick_ledger::LAUNCHD_LABELS.join("`, `"));
     out.push_str(
         "`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.\n",

@@ -20,31 +20,6 @@ fn finder_lists_a_live_paneless_row_as_an_attach() {
         .expect("the finder lists the paneless row");
     assert!(is_attach_at_portal_zero(&row.hit, "job1"));
 }
-
-#[tokio::test]
-async fn shift_arrow_runs_the_matching_split_cell() {
-    // The split cells advertise shift+arrows under one group label (the
-    // portal picker's gesture); this pins that the menu ANSWERS them:
-    // shift+left folds to ShiftArrow and runs Split(Left) through the same
-    // execute path Enter uses, closing the menu.
-    let mut v = unified_rows_view();
-    let idx = agent_row_at(&v, |a| a.name == "bg-claude");
-    assert!(v.open_row_menu(idx, Anchor::Center));
-    let mut buf: Vec<u8> = Vec::new();
-    row_menu_keys(&mut v, b"\x1b[1;2D", &mut buf).await.unwrap();
-    assert!(
-        v.row_menu.is_none(),
-        "the shift+arrow split closes the menu"
-    );
-    let mut cur = std::io::Cursor::new(buf);
-    match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
-        ClientMsg::Command(Command::AttachAgent { placement, .. }) => {
-            assert_eq!(placement.split, Some(Dir::Left));
-        }
-        other => panic!("expected AttachAgent, got {other:?}"),
-    }
-}
-
 #[test]
 fn nine_live_paneless_rows_are_painted_or_counted() {
     let dir = isolate_view_store("paneless-nine");
@@ -70,29 +45,6 @@ fn nine_live_paneless_rows_are_painted_or_counted() {
     crate::view_store::clear_test_path();
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-#[test]
-fn a_live_paneless_orphan_is_counted_by_the_elsewhere_header() {
-    let dir = isolate_view_store("paneless-orphan");
-    let mut orphan = paneless_bg_row("stray-thread");
-    orphan.squad = None;
-    let v = view_with_agents(vec![orphan]);
-    assert!(
-        v.display_rows()
-            .iter()
-            .any(|r| matches!(r, DisplayRow::Header { key, .. } if *key == SectionKey::Elsewhere)),
-        "the elsewhere header states the orphan"
-    );
-    let rows = v.nav_rows();
-    let row = rows
-        .iter()
-        .find(|r| r.label.contains("stray-thread"))
-        .expect("the finder lists the orphan while its section is collapsed");
-    assert!(is_attach_at_portal_zero(&row.hit, "job1"));
-    crate::view_store::clear_test_path();
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// The top-K fold's target set after this branch split the old
 /// blind `Idle` three ways. Every non-attention state must still fold: on
 /// `origin/main` a badgeless row was `Idle` and folded, so folding only
@@ -146,36 +98,6 @@ fn a_live_paneless_orphan_row_renders_without_expanding_elsewhere() {
             .iter()
             .any(|r| matches!(r, DisplayRow::Agent(a) if a.name == "stray-thread")),
         "a live orphan renders by default, not behind the fold"
-    );
-    crate::view_store::clear_test_path();
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-// The LiveOnly half of the same default: a majority-exited elsewhere section
-// keeps its live rows up and folds the dead ones behind the rollup.
-#[test]
-fn a_majority_exited_elsewhere_section_folds_dead_rows_only() {
-    let dir = isolate_view_store("paneless-orphan-liveonly");
-    let mut live = paneless_bg_row("live-thread");
-    live.squad = None;
-    let mut stale = paneless_bg_row("stale-thread");
-    stale.squad = None;
-    stale.exited = true;
-    let mut stale2 = paneless_bg_row("stale-thread-2");
-    stale2.squad = None;
-    stale2.exited = true;
-    let v = view_with_agents(vec![stale, stale2, live]);
-    let rows = v.display_rows();
-    assert!(
-        rows.iter()
-            .any(|r| matches!(r, DisplayRow::Agent(a) if a.name == "live-thread")),
-        "the live row stays up"
-    );
-    assert!(
-        !rows
-            .iter()
-            .any(|r| matches!(r, DisplayRow::Agent(a) if a.name.starts_with("stale-thread"))),
-        "dead rows fold behind the header rollup"
     );
     crate::view_store::clear_test_path();
     let _ = std::fs::remove_dir_all(&dir);

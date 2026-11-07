@@ -16,7 +16,6 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | agent | spawn | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | audit | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
-| autocorrect | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | blueprint | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | cache-keepalive | claude | native | absent | `absent` | absent | absent | absent | `unmeasured` | `unmeasured` | absent | absent | absent | absent | absent |
 | design-critic | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |

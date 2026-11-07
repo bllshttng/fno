@@ -2,7 +2,7 @@
 
 # Postmortem format
 
-Every BLOCKED target transition writes a single postmortem file. The format is fixed so the autocorrect monthly review can parse it mechanically without per-file logic.
+Every BLOCKED target transition writes a single postmortem file. The format is fixed so the eval traces pass and the observer can parse it mechanically without per-file logic.
 
 ## File location
 
@@ -156,7 +156,7 @@ The script never crashes on missing data. Every field has a documented "when unk
 - Missing phase output -> "Last output of failed phase" section contains the literal `(no captured output)` inside an empty code fence.
 - Missing `blocked_reason` -> `kind: other`, `details:` omitted, hypothesis paragraph 1 from the `other` row of the lookup table.
 
-A partial postmortem is more useful than no postmortem; the autocorrect loop's reviewer can interpret `unknown` fields and act anyway. Crashing the script would mean BLOCKED target runs exit with no record at all.
+A partial postmortem is more useful than no postmortem. The eval loop's consumers interpret `unknown` fields and act anyway. Crashing the script means BLOCKED target runs exit with no record at all.
 
 ## Scannability requirements
 

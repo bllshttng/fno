@@ -112,6 +112,63 @@ fn card_mode_expands_each_agent_into_three_lines_without_padding_rows() {
 }
 
 #[test]
+fn card_pinned_rows_lead_the_workspace_with_workers_flat() {
+    let mut lead = agent_row("zed-lead", 4, Some(AgentBadge::Working), false);
+    lead.harness_session_id = Some("sess-lead".into());
+    let mut worker = agent_row("amy-worker", 5, Some(AgentBadge::Working), false);
+    worker.lineage_kind = Some("child".into());
+    worker.spawned_by_session = Some("sess-lead".into());
+    let mut pinned = agent_row("zoe", 6, Some(AgentBadge::Working), false);
+    pinned.pinned = true;
+    let mut v = card_view(vec![lead, worker, pinned]);
+    v.agent_sort = AgentSort::Squad;
+    let (rows, depths) = v.display_rows_with_depths();
+    let names: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            DisplayRow::Agent(a) => Some(a.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["zoe", "amy-worker", "zed-lead"]);
+    assert!(depths.iter().all(|d| *d == 0), "{depths:?}");
+}
+
+#[test]
+fn a_pinned_idle_row_never_folds_behind_the_idle_cap() {
+    let idle = agent_row("quiet", 4, None, false);
+    let mut pinned = agent_row("quiet-pinned", 5, None, false);
+    pinned.pinned = true;
+    assert!(is_idle_row(&idle));
+    assert!(!is_idle_row(&pinned));
+}
+
+#[test]
+fn card_group_by_lead_nests_workers_under_their_lead() {
+    let mut lead = agent_row("zed-lead", 4, Some(AgentBadge::Working), false);
+    lead.harness_session_id = Some("sess-lead".into());
+    let mut worker = agent_row("amy-worker", 5, Some(AgentBadge::Working), false);
+    worker.lineage_kind = Some("child".into());
+    worker.spawned_by_session = Some("sess-lead".into());
+    let mut v = card_view(vec![lead, worker]);
+    v.agent_sort = AgentSort::Squad;
+    v.group_by_lead = true;
+    let (rows, depths) = v.display_rows_with_depths();
+    let names: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            DisplayRow::Agent(a) => Some(a.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["zed-lead", "amy-worker"]);
+    assert!(
+        depths.iter().all(|d| *d == 0),
+        "cards never indent: {depths:?}"
+    );
+}
+
+#[test]
 fn card_age_sort_orders_workers_inside_a_lead_group() {
     // The user report: sorted by age, a lead's workers read
     // 12m, 12m, 10m, 41m, 23s in the card view. The card path now runs the
@@ -429,8 +486,8 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     assert!(!card_line::has_loading(&remote_row, graph, 0));
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
-    assert_eq!(card_line::node_span(&a, 30), Some(24..30));
-    assert_eq!(card_line::node_span(&a, 21), Some(15..21));
+    assert_eq!(card_line::node_span(&a, 30), Some(23..29));
+    assert_eq!(card_line::node_span(&a, 21), Some(14..20));
     assert_eq!(card_line::node_span(&a, 5), None);
     // The node is a tap target where it is painted.
     let mut agents = lead_and_worker();
@@ -910,14 +967,18 @@ fn card_pr_and_created_activity_ages_keep_right_side_fields() {
         .position(|run| [run[0].c, run[1].c, run[2].c] == ['4', '2', 's'])
         .expect("age is visible");
 
-    assert_eq!(pr_end, width - 1, "PR is flush with the panel edge");
+    assert_eq!(
+        pr_end,
+        width - 2,
+        "PR keeps one spare cell off the panel edge"
+    );
     let pr_tail = agent_cells[width - 6..]
         .iter()
         .map(|cell| cell.c)
         .collect::<String>();
     let detail = detail_cells.iter().map(|cell| cell.c).collect::<String>();
-    assert_eq!(pr_tail, "   #42");
-    assert!(detail.ends_with("– · 42s"), "{detail:?}");
+    assert_eq!(pr_tail, "  #42 ");
+    assert!(detail.ends_with("– · 42s "), "{detail:?}");
 }
 
 #[test]
@@ -933,10 +994,10 @@ fn regular_card_snapshot_shows_a_pr_when_it_fits() {
     let width = v.sideline_paint_w() - 1;
     let line = row_text(&frame, row, width);
 
-    assert!(line.ends_with("#42"), "Regular card snapshot: {line:?}");
+    assert!(line.ends_with("#42 "), "Regular card snapshot: {line:?}");
     assert_eq!(
         line.chars().skip(width - 6).collect::<String>(),
-        "   #42",
+        "  #42 ",
         "PR occupies the same six-column right-edge slot as age"
     );
 }

@@ -155,11 +155,11 @@ count_daemons() {
 daemon_baseline="$(count_daemons)"
 
 # The two marker greps below are vacuity guards: a binary can exit 0 because
-# the probe that carries the proof never ran. They also mean this harness
-# CANNOT be pointed at an older revision to produce a baseline, because both
-# markers come from probe tests that do not exist there - every trial reads
-# `fail` for a binary whose own output says `test result: ok`. Read the trial
-# tails, not the verdicts, when comparing across revisions.
+# the test that carries the proof never ran. The daemon marker is the restart
+# keeper's completion line; the workspace marker is its probe's sentinel. A
+# revision whose sources never print the marker line reads `fail` for a
+# binary whose own output says `test result: ok`, so read the trial tails,
+# not the verdicts, when comparing across revisions.
 echo "stress_setup=ready sha=$head_sha parallel_binaries=3 per_binary_threads=1 trials=$trials skip_slow=$skip_slow daemon_baseline=$daemon_baseline logs=$log_root"
 failures=0
 for ((trial = 1; trial <= trials; trial++)); do
@@ -189,7 +189,7 @@ for ((trial = 1; trial <= trials; trial++)); do
         # trial while the remaining race-sensitive cases stay repeated.
         if [[ "$key" == daemon_e2e && "$skip_slow" == 1 ]]; then
             runner_args+=(
-                --skip daemon_on_sandbox_home_starts_no_active_backlog_supervisor
+                --skip daemon_on_sandbox_home_runs_no_fleet_arm
                 --skip daemon_stays_resident_while_a_worker_socket_is_live
             )
         fi
@@ -213,7 +213,7 @@ for ((trial = 1; trial <= trials; trial++)); do
     if [[ "$daemon_rc" != 0 ]]; then
         echo "stress_daemon_fail trial=$trial reason=nonzero_rc rc=$daemon_rc" >&2
         daemon_verdict=fail
-    elif ! grep -Eq '^daemon_child_env_isolated ' "$trial_dir/daemon_e2e.log"; then
+    elif ! grep -Eq '^daemon_restart_served_during_sweep ' "$trial_dir/daemon_e2e.log"; then
         # rc is green but the proof line is absent: the test that prints it
         # did not run on this tree. Name it, or a merge ref frozen on the
         # wrong side of a marker rewrite reads as a load flake and burns

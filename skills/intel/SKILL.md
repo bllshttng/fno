@@ -78,17 +78,9 @@ The fold names its populations, and the report keeps them apart. Every number sa
 
 6. Corrections section: quote user corrections verbatim, dedupe across sessions, rank by repeat count. Each correction sits on its own line ending with ` #agent-correction` and carrying `signal=<friction category>`. When the correction is about how one fno command behaves, the line also carries `skill=<name>`, that command's skills/ directory. Each one is a candidate AGENTS.md line, a law, or a SKILL.md diff. Say which in the report.
 
-7. Feed the S2 writer so the rows land in `~/.fno/logs/corrections.log`:
+7. Relay section: computed from the raw sidecar's `relay` facets and the summary's `nodes` rows. The judgment summary drops session rows, so per-session relay facets read from the sidecar. No model judgment: delivery, answers, contract breaches, and silences are facts.
 
-   ```bash
-   bash scripts/corrections-insights-tag.sh --insights-file <report>
-   ```
-
-   The script is watermark-idempotent: a second run adds no rows.
-
-8. Relay section: computed from the raw sidecar's `relay` facets and the summary's `nodes` rows. The judgment summary drops session rows, so per-session relay facets read from the sidecar. No model judgment: delivery, answers, contract breaches, and silences are facts.
-
-9. Render the shareable HTML copy. Run:
+8. Render the shareable HTML copy. Run:
 
    ```bash
    fno-agents intel --render <report.md>
@@ -96,7 +88,7 @@ The fold names its populations, and the report keeps them apart. Every number sa
 
    Its stdout line is the HTML path. The renderer reads the report and the fold JSON named in the frontmatter `fold:` field. It scrubs secrets, home paths, quoted blocks, and quotes outside `Operator corrections`, and draws the fold counters as inline SVG. End the run by telling the user both paths, one line each: `Report: <md path>` and `Shareable copy: <html path> (open in a browser; print to PDF; latest.html beside it is always the newest)`. A nonzero exit is relayed with its stderr line. The markdown report stands either way: it stays the file every later step reads.
 
-Judgment runs on this session's own model. No profile, no spawned reviewer, no Python shim. The fold is Rust (`fno-agents intel`), the narrative is you, and the S2 writer is the script that already existed.
+Judgment runs on this session's own model. No profile, no spawned reviewer, no Python shim. The fold is Rust (`fno-agents intel`), the narrative is you.
 
 ## Known Limitations and Deferred Work
 

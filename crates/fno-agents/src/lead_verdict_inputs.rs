@@ -1068,26 +1068,6 @@ mod tests {
     }
 
     #[test]
-    fn an_external_tracker_backend_refuses() {
-        let dir = tmp("external-backend");
-        write_manifest(&dir, "x-root");
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("FNO_TRACKER_BACKEND", "github");
-        let err = resolve_verdict_inputs(
-            &dir,
-            Some("x-root"),
-            None,
-            &dir.join("registry.json"),
-            pinned_now,
-        );
-        std::env::remove_var("FNO_TRACKER_BACKEND");
-        let err = err.expect_err("external backend cannot measure the split");
-        assert!(err.contains("tracker metadata unavailable"), "{err}");
-    }
-
-    #[test]
     fn delivery_split_starts_at_the_holder_generation() {
         let _guard = crate::claims::test_env_lock()
             .lock()

@@ -12,11 +12,6 @@ ship-phase PR->node link verify guard	.	bash tests/target/test_ship_phase_link_v
 docs-before-ship phase-ordering guard	.	bash tests/test-docs-before-ship.sh
 .fno/ dir-hygiene harness	.	python3 tests/metrics/test_completion_summary_path.pybash tests/lib/test_rotate_append_log.sh
 state-dir path gate self-test	.	bash scripts/tests/check-no-hardcoded-paths-selftest.sh
-corrections.log placement migration	.	bash scripts/tests/test_corrections_migrate.sh
-corrections fixture-row filter in the packet	.	bash scripts/tests/test_autocorrect_pack_fixture_rows.sh
-autocorrect packet skill-file leg	.	bash scripts/tests/test_autocorrect_pack_skill_files.sh
-autocorrect prompt contract	.	bash scripts/tests/test_autocorrect_prompt_contract.sh
-corrections skill-commit SOURCE resolution	.	bash tests/hooks/test_corrections_skill_commit.sh
 placement-rule lint self-test	.	bash scripts/tests/test_check_placement_rule.sh
 Build fno-agents debug binary (for journey tests)	crates/fno-agents	CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build
 Build the fno front door (for the hash gate)	crates/fno	CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build --quiet --bin fno

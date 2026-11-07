@@ -105,7 +105,6 @@ fno-agents commands
 fno-agents compaction
 fno-agents component-verdict
 fno-agents context-run
-fno-agents corrections-verify
 fno-agents day
 fno-agents delivery-evaluate
 fno-agents detect

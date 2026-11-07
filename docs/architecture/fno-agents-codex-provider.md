@@ -120,7 +120,7 @@ Whether the model attends to the prefix as instructional framing is empirical. S
 
 ## Audit trail
 
-Every codex dispatch emits matched `agent_ask_started` / `agent_ask_done` (or `agent_followup_*`) events to `~/.fno/events.jsonl`. Each carries `yolo: bool` so a forensic review can answer "which asks ran under the dangerous bypass?" without re-running the dispatch. Failure modes emit `agent_ask_failed` with a `stage` discriminator (`codex-no-session`, `codex-timeout`, `codex-subprocess`, `registry-write`) for downstream autocorrect consumption.
+Every codex dispatch emits matched `agent_ask_started` / `agent_ask_done` (or `agent_followup_*`) events to `~/.fno/events.jsonl`. Each carries `yolo: bool` so a forensic review can answer "which asks ran under the dangerous bypass?" without re-running the dispatch. Failure modes emit `agent_ask_failed` with a `stage` discriminator (`codex-no-session`, `codex-timeout`, `codex-subprocess`, `registry-write`) for downstream eval-trace consumption.
 
 ## Open questions
 

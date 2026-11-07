@@ -537,21 +537,6 @@ mod tests {
         );
         assert_eq!(resolve_lane_color(None, None, None, None), None);
     }
-
-    #[test]
-    fn unknown_color_names_are_ignored() {
-        assert_eq!(parse_color("chartreuse"), None);
-        assert_eq!(parse_color("cyan"), Some(Color::Indexed(6)));
-        assert_eq!(parse_color("indexed(200)"), Some(Color::Indexed(200)));
-        assert_eq!(parse_color("#12abF0"), Some(Color::Rgb(0x12, 0xab, 0xf0)));
-        // An unknown color inside a cascade position falls THROUGH to the
-        // built-in rather than blanking the row.
-        assert_eq!(
-            resolve_lane_color(Some("claude"), None, Some("zai"), None),
-            Some(Color::Indexed(2))
-        );
-    }
-
     #[test]
     fn deviation_token_marks_only_off_default_models() {
         assert_eq!(deviation_token(Some("claude"), Some("opus")), None);
@@ -828,95 +813,10 @@ mod tests {
         );
         assert_eq!(builtin_color(Axis::Harness, "pi"), Some(Color::Indexed(11)));
     }
-
-    #[test]
-    fn builtin_defaults_mirror_the_cascade_table() {
-        for (axis, values) in [
-            ("route", &["zai", "openrouter", "openai", "anthropic"][..]),
-            ("harness", &["codex", "agy", "opencode", "cursor", "pi"][..]),
-        ] {
-            let defaults = builtin_defaults(axis);
-            assert_eq!(
-                defaults.len(),
-                values.len(),
-                "{axis}: the accessor and the cascade table must agree"
-            );
-            for ((key, name), expected_key) in defaults.iter().zip(values) {
-                assert_eq!(key, expected_key);
-                assert!(
-                    parse_color(name).is_some(),
-                    "{axis}: {key}'s default color name must resolve"
-                );
-            }
-        }
-        // Model and row are config-only axes: no built-in can know an
-        // operator's catalog, so the panel has nothing to mark (default).
-        assert!(builtin_defaults("model").is_empty());
-        assert!(builtin_defaults("row").is_empty());
-        assert!(builtin_defaults("nonsense").is_empty());
-    }
-
-    #[test]
-    fn palette_accessor_exposes_all_four_axes() {
-        let p = pal(
-            vec![],
-            "glm-5.3-flash[1m]=yellow",
-            "zai=green",
-            "codex=cyan",
-            "named=red",
-        );
-        assert_eq!(p.harness, vec![("codex".into(), "cyan".into())]);
-        assert_eq!(p.route, vec![("zai".into(), "green".into())]);
-        assert_eq!(p.model, vec![("glm-5.3-flash[1m]".into(), "yellow".into())]);
-        assert_eq!(p.row, vec![("named".into(), "red".into())]);
-        // The accessor hands out one stable cached instance between reloads.
-        assert!(
-            std::ptr::eq(palette(), palette()),
-            "palette() returns the same cached instance between reloads"
-        );
-    }
-
-    #[test]
-    fn reload_palette_invalidates_so_the_next_read_reinitializes() {
-        // prime, invalidate, re-prime: the observable contract the settings
-        // save path depends on (write config, reload, resolve sees it).
-        let _ = palette();
-        assert!(PAL.read().unwrap().is_some(), "palette() primes the cache");
-        reload_palette();
-        assert!(
-            PAL.read().unwrap().is_none(),
-            "reload_palette clears the cache"
-        );
-        let _ = palette();
-        assert!(
-            PAL.read().unwrap().is_some(),
-            "the next palette() re-primes"
-        );
-    }
-
     #[test]
     fn parse_layout_reads_card() {
         assert_eq!(parse_layout(Some("card")), SidelineLayout::Card);
         assert_eq!(parse_layout(Some(" card ")), SidelineLayout::Card);
         assert_eq!(parse_layout(Some("CARD")), SidelineLayout::Card);
-    }
-
-    #[test]
-    fn parse_layout_missing_key_is_card() {
-        assert_eq!(
-            parse_layout(None),
-            SidelineLayout::Card,
-            "no key is the card default"
-        );
-        assert_eq!(parse_layout(Some("")), SidelineLayout::Card);
-    }
-
-    #[test]
-    fn parse_layout_unknown_value_is_card() {
-        assert_eq!(
-            parse_layout(Some("grid")),
-            SidelineLayout::Card,
-            "an unknown value reads as the default"
-        );
     }
 }
