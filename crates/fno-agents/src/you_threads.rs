@@ -41,6 +41,16 @@ pub(crate) struct YouItem {
     /// The assistant's visible text until the next typed source or the
     /// first machine row, whichever came first.
     pub reply_text: String,
+    /// The ack-join id: the row's uuid/id, else the derived digest the
+    /// queue's cursor folds (`operator_turns::turn_id`, same text, same
+    /// absolute line index). Empty when the opener predates the field.
+    #[serde(default)]
+    pub turn_id: String,
+    /// The end-of-turn reply: the claude row with `stop_reason: end_turn`,
+    /// or the codex row with `phase: final_answer`. Empty when the reply
+    /// never reached one before the span closed.
+    #[serde(default)]
+    pub end_reply: String,
 }
 
 /// Where a walk stopped: the trailing item's resume state. `item_start` is
@@ -49,12 +59,18 @@ pub(crate) struct YouItem {
 /// time). Serialized into the cache entry, so field names are contract. The
 /// reply is deliberately not carried: a resume re-reads from `item_start`
 /// and rebuilds the reply from the same rows, so carrying it would double.
+/// `item_line` is the opener row's absolute line index, the fold input a
+/// derived turn id needs to survive a resumed walk.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct WalkTail {
     pub item_start: u64,
     pub consumed: u64,
     pub ts: String,
     pub typed_text: String,
+    #[serde(default)]
+    pub item_line: u64,
+    #[serde(default)]
+    pub turn_id: String,
 }
 
 /// The person's own words in a turn. Mail delivered into the pane lands as
@@ -82,48 +98,77 @@ fn typed_part(text: &str) -> Option<String> {
     (!typed.is_empty()).then(|| typed.to_string())
 }
 
+/// The item a walk holds open: the opener row's facts until a typed row
+/// replaces it or a machine row closes it into `items`.
+#[derive(Debug, Clone)]
+struct OpenItem {
+    ts: String,
+    typed_text: String,
+    turn_id: String,
+    end_reply: Option<String>,
+}
+
 /// One walk's output: complete items plus the trailing item's resume state.
 pub(crate) struct WalkOut {
     pub items: Vec<YouItem>,
     pub tail: Option<WalkTail>,
     /// Bytes consumed through the last complete row, absolute.
     pub consumed: u64,
+    /// Absolute line index the consumed offset sits at, the base the next
+    /// suffix walk needs so derived turn ids fold a stable row number.
+    pub lines: u64,
 }
 
 /// Walk one transcript's text into You items. `base` is the absolute offset
-/// `raw` starts at; `resume`, when set, re-opens the trailing item the tail
-/// describes - the text then begins at that item's typed row, which the walk
-/// re-reads as the same opener while the reply rebuilds from the same rows.
+/// `raw` starts at and `line_base` the absolute line index it starts at (the
+/// count of newlines before `base`, carried by the cache across resumes so a
+/// derived turn id folds one stable row number); `resume`, when set, re-opens
+/// the trailing item the tail describes - the text then begins at that item's
+/// typed row, which the walk re-reads as the same opener while the reply
+/// rebuilds from the same rows.
 pub(crate) fn walk(
     raw: &str,
     base: u64,
+    line_base: u64,
     bus: &BusIndex,
     session: &str,
     resume: Option<WalkTail>,
 ) -> WalkOut {
     let mut items: Vec<YouItem> = Vec::new();
-    let mut open: Option<(String, String)> = None;
+    let mut open: Option<OpenItem> = None;
     let mut reply: Vec<String> = Vec::new();
     let mut item_start: Option<u64> = None;
+    // The currently open item's opener row's absolute line index: the fold
+    // input a derived turn id reports through the resume tail.
+    let mut open_line: Option<u64> = None;
     let mut headless = false;
     let mut first_user_seen = false;
     let mut resuming = resume.is_some();
     if let Some(tail) = resume {
         // The reply is NOT seeded: the re-read from item_start rebuilds it
-        // from the same rows, and seeding would double every block.
-        open = Some((tail.ts, tail.typed_text));
+        // from the same rows, and seeding would offset every row number the
+        // suffix fold computes.
+        open = Some(OpenItem {
+            ts: tail.ts,
+            typed_text: tail.typed_text,
+            turn_id: tail.turn_id,
+            end_reply: None,
+        });
         item_start = Some(tail.item_start);
+        open_line = Some(tail.item_line);
     }
 
-    let close = |open: &mut Option<(String, String)>,
+    let close = |open: &mut Option<OpenItem>,
                  reply: &mut Vec<String>,
                  item_start: &mut Option<u64>,
                  items: &mut Vec<YouItem>| {
-        if let Some((ts, typed_text)) = open.take() {
+        if let Some(o) = open.take() {
             items.push(YouItem {
-                ts,
-                typed_text,
+                ts: o.ts,
+                typed_text: o.typed_text,
                 reply_text: reply.join("\n\n"),
+                turn_id: o.turn_id,
+                end_reply: o.end_reply.unwrap_or_default(),
             });
         }
         reply.clear();
@@ -132,30 +177,43 @@ pub(crate) fn walk(
     // A typed source arrives: push the previous item (or, on a resume, the
     // opener re-reads its own row and the reply rebuilds from scratch), then
     // open the new one.
-    let open_new = |open: &mut Option<(String, String)>,
+    #[allow(clippy::too_many_arguments)]
+    let open_new = |open: &mut Option<OpenItem>,
                     reply: &mut Vec<String>,
                     item_start: &mut Option<u64>,
+                    open_line: &mut Option<u64>,
                     items: &mut Vec<YouItem>,
                     resuming: &mut bool,
                     ts: String,
                     text: String,
-                    line_start: u64| {
+                    turn_id: String,
+                    line_start: u64,
+                    line_index: u64| {
         if *resuming {
             *resuming = false;
-        } else if let Some((ts, typed_text)) = open.take() {
+        } else if let Some(o) = open.take() {
             items.push(YouItem {
-                ts,
-                typed_text,
+                ts: o.ts,
+                typed_text: o.typed_text,
                 reply_text: reply.join("\n\n"),
+                turn_id: o.turn_id,
+                end_reply: o.end_reply.unwrap_or_default(),
             });
         }
         reply.clear();
-        *open = Some((ts, text));
+        *open = Some(OpenItem {
+            ts,
+            typed_text: text,
+            turn_id,
+            end_reply: None,
+        });
         *item_start = Some(line_start);
+        *open_line = Some(line_index);
     };
 
     let bytes = raw.as_bytes();
     let mut pos: usize = 0;
+    let mut line_no = line_base;
     while pos < bytes.len() {
         let line_start = base + pos as u64;
         let line = match bytes[pos..].iter().position(|&b| b == b'\n') {
@@ -176,6 +234,8 @@ pub(crate) fn walk(
                 line
             }
         };
+        let opener_line = line_no;
+        line_no += 1;
         let Ok(obj) = serde_json::from_str::<Value>(line) else {
             continue; // a row that does not parse is skipped, never fatal
         };
@@ -196,20 +256,23 @@ pub(crate) fn walk(
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 };
-                match classify_text(prompt, Some((bus, session))) {
+                let cleaned = match classify_text(prompt, Some((bus, session))) {
                     // The typed shape intel's corpus trusts. A bus-joined
                     // prompt is relay the person pasted into the pane; it
-                    // closes the span like any machine row.
-                    crate::provenance::Verdict::Operator(_) => {}
+                    // closes the span like any machine row. The cleaned text
+                    // is the id fold: the queue derives its digest from the
+                    // same classify output.
+                    crate::provenance::Verdict::Operator(cleaned) => cleaned,
                     _ => {
                         close(&mut open, &mut reply, &mut item_start, &mut items);
                         continue;
                     }
-                }
+                };
                 open_new(
                     &mut open,
                     &mut reply,
                     &mut item_start,
+                    &mut open_line,
                     &mut items,
                     &mut resuming,
                     turn_stamp(&obj).unwrap_or("").to_string(),
@@ -218,9 +281,11 @@ pub(crate) fn walk(
                     // parser touches this path. The .to_string() on the
                     // String is the element shape the fence-gate scanner
                     // reads; the marker keeps the site visible in its
-                    // census, and the exempt count floats.
+                    // census, and the marker keeps the site visible in its census, and the exempt count floats.
                     typed_prompt.to_string(),
+                    crate::operator_turns::turn_id(&obj, &cleaned, opener_line as usize),
                     line_start,
+                    opener_line,
                 );
             }
             Some("user") => {
@@ -253,24 +318,113 @@ pub(crate) fn walk(
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 };
+                let cleaned = crate::provenance::classify(&turn_text(&obj)).unwrap_or_default();
                 open_new(
                     &mut open,
                     &mut reply,
                     &mut item_start,
+                    &mut open_line,
                     &mut items,
                     &mut resuming,
                     turn_stamp(&obj).unwrap_or("").to_string(),
                     text,
+                    crate::operator_turns::turn_id(&obj, &cleaned, opener_line as usize),
                     line_start,
+                    opener_line,
                 );
             }
             Some("assistant") => {
-                if open.is_none() {
+                let Some(o) = open.as_mut() else {
                     continue;
-                }
+                };
                 let text = turn_text(&obj);
                 if !text.trim().is_empty() {
-                    reply.push(text);
+                    reply.push(text.clone());
+                }
+                // The end-of-turn reply: the row the harness closed the turn
+                // with (repeated_asks.rs reads the same two fields). A
+                // sidechain's end_turn is another agent's work, never this
+                // reply.
+                let sidechain = obj.get("isSidechain").and_then(Value::as_bool) == Some(true);
+                if o.end_reply.is_none()
+                    && !sidechain
+                    && obj
+                        .get("message")
+                        .and_then(|m| m.get("stop_reason"))
+                        .and_then(Value::as_str)
+                        == Some("end_turn")
+                    && !text.trim().is_empty()
+                {
+                    o.end_reply = Some(text);
+                }
+            }
+            Some("response_item") => {
+                // The codex rollout leg: a payload user message opens an
+                // item, an assistant message extends the reply, and the
+                // `final_answer` phase is the turn's end reply. Every other
+                // payload kind is the agent's plumbing.
+                let payload = obj.get("payload").cloned().unwrap_or(Value::Null);
+                if payload.get("type").and_then(Value::as_str) != Some("message") {
+                    continue;
+                }
+                match payload.get("role").and_then(Value::as_str) {
+                    Some("user") => {
+                        let text = turn_text(&obj);
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        if matches!(
+                            classify_turn(&obj, bus, session),
+                            Provenance::Harness(_) | Provenance::Relay(_)
+                        ) {
+                            close(&mut open, &mut reply, &mut item_start, &mut items);
+                            continue;
+                        }
+                        if crate::provenance::classify(&text).is_err() {
+                            // Harness machinery (bare commands, skip rules):
+                            // the queue refuses it, so no ack join exists.
+                            close(&mut open, &mut reply, &mut item_start, &mut items);
+                            continue;
+                        }
+                        let Some(text) = typed_part(&text).or_else(|| {
+                            let t = text.trim();
+                            (!t.is_empty()).then(|| t.to_string())
+                        }) else {
+                            close(&mut open, &mut reply, &mut item_start, &mut items);
+                            continue;
+                        };
+                        let cleaned =
+                            crate::provenance::classify(&turn_text(&obj)).unwrap_or_default();
+                        open_new(
+                            &mut open,
+                            &mut reply,
+                            &mut item_start,
+                            &mut open_line,
+                            &mut items,
+                            &mut resuming,
+                            turn_stamp(&obj).unwrap_or("").to_string(),
+                            text,
+                            crate::operator_turns::turn_id(&obj, &cleaned, opener_line as usize),
+                            line_start,
+                            opener_line,
+                        );
+                    }
+                    Some("assistant") => {
+                        let Some(o) = open.as_mut() else {
+                            continue;
+                        };
+                        let text = turn_text(&obj);
+                        if !text.trim().is_empty() {
+                            reply.push(text.clone());
+                        }
+                        if o.end_reply.is_none()
+                            && payload.get("phase").and_then(Value::as_str) == Some("final_answer")
+                            && !text.trim().is_empty()
+                        {
+                            o.end_reply = Some(text);
+                        }
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -278,27 +432,37 @@ pub(crate) fn walk(
     }
 
     let consumed = base + pos as u64;
+    let lines = line_no;
     let mut tail = None;
-    if let Some((ts, typed_text)) = open {
+    if let Some(o) = open {
         items.push(YouItem {
             reply_text: reply.join("\n\n"),
-            ts: ts.clone(),
-            typed_text: typed_text.clone(),
+            ts: o.ts.clone(),
+            typed_text: o.typed_text.clone(),
+            turn_id: o.turn_id.clone(),
+            end_reply: o.end_reply.unwrap_or_default(),
         });
         tail = Some(WalkTail {
             item_start: item_start.unwrap_or(base),
             consumed,
-            ts,
-            typed_text,
+            ts: o.ts,
+            typed_text: o.typed_text,
+            item_line: open_line.unwrap_or(0),
+            turn_id: o.turn_id,
         });
     }
     WalkOut {
         items,
         tail,
         consumed,
+        lines,
     }
 }
 
+/// The trailing item's opener row's absolute line index. A resume re-reads
+/// from `item_start`, so the opener is the suffix's first row and its index
+/// is the newline count before `base`; on a non-resume walk the opener is
+/// found by the same count from zero.
 /// Classify one non-meta user row. `None` for shapes that never touch the
 /// walk: tool results (a turn's own plumbing) and rows with no text.
 fn classify_user_row(obj: &Value, bus: &BusIndex, session: &str) -> Option<Provenance> {
@@ -334,6 +498,10 @@ struct YouCache {
 struct YouEntry {
     /// Bytes consumed through the last complete row at cache time.
     offset: u64,
+    /// Absolute line index `offset` sits at, the fold base for derived turn
+    /// ids on the next suffix walk.
+    #[serde(default)]
+    lines: u64,
     head_sha: String,
     head_len: u64,
     items: Vec<YouItem>,
@@ -342,7 +510,7 @@ struct YouEntry {
     open: Option<WalkTail>,
 }
 
-const YOU_CACHE_VERSION: u32 = 3;
+const YOU_CACHE_VERSION: u32 = 4;
 
 /// The loaded cache plus its lock discipline. `save` is best effort: an
 /// unwritable cache degrades the next projection to a full re-walk.
@@ -389,13 +557,16 @@ impl YouStore {
         });
         let out = if alive {
             let e = entry.expect("checked");
-            let start = e.open.as_ref().map(|t| t.item_start).unwrap_or(e.offset);
+            let (start, line_base) = match e.open.as_ref() {
+                Some(t) => (t.item_start, t.item_line),
+                None => (e.offset, e.lines),
+            };
             match read_range(path, start, size) {
                 // A resumed walk sees only the suffix, so the cached items
                 // stay the prefix: drop exactly the open one it rebuilds,
                 // or none when the previous entry closed cleanly.
                 Ok(text) => {
-                    let out = walk(&text, start, bus, session, e.open.clone());
+                    let out = walk(&text, start, line_base, bus, session, e.open.clone());
                     let keep = e.items.len().saturating_sub(usize::from(e.open.is_some()));
                     let mut items = e.items[..keep].to_vec();
                     items.extend(out.items);
@@ -403,6 +574,7 @@ impl YouStore {
                         items,
                         tail: out.tail,
                         consumed: out.consumed,
+                        lines: out.lines,
                     }
                 }
                 Err(_) => full_walk(path, bus, session),
@@ -421,6 +593,7 @@ impl YouStore {
             session.to_string(),
             YouEntry {
                 offset: out.consumed,
+                lines: out.lines,
                 head_sha,
                 head_len,
                 items: out.items.clone(),
@@ -464,11 +637,12 @@ impl YouStore {
 
 fn full_walk(path: &Path, bus: &BusIndex, session: &str) -> WalkOut {
     match std::fs::read_to_string(path) {
-        Ok(text) => walk(&text, 0, bus, session, None),
+        Ok(text) => walk(&text, 0, 0, bus, session, None),
         Err(_) => WalkOut {
             items: Vec::new(),
             tail: None,
             consumed: 0,
+            lines: 0,
         },
     }
 }
@@ -500,13 +674,21 @@ pub(crate) struct YouInputs<'a> {
     /// through it exactly as `journal_bus_path` builds them.
     pub home_root: PathBuf,
     pub cache_path: PathBuf,
+    /// The operator-capture dir: the session enumerator (each
+    /// `<session>.scan.json` names its transcript) and the ack-ledger home.
+    pub capture_dir: PathBuf,
 }
 
-/// One You row per registry-named claude session whose transcript carries
-/// typed turns inside the window, newest first. The caller embeds the rows
-/// as the projection's `you` section. Fail-open end to end: a missing bus,
-/// a contended cache lock, a missing transcript or a registry with no claude
-/// rows all read as fewer or empty rows, never an error.
+/// One You row per session whose transcript carries typed turns inside the
+/// window, newest first: every registry-named claude session, plus every
+/// capture-dir session (`*.scan.json` names the transcript) the registry
+/// misses - codex rollouts and sessions no mail ever named. Each item embeds
+/// its `state` (`answered` / `pending` / `acked`) read from the end reply
+/// and the session's ack ledger. The caller embeds the rows as the
+/// projection's `you` section. Fail-open end to end: a missing bus, a
+/// contended cache lock, a missing transcript, an unreadable capture dir or
+/// a registry with no claude rows all read as fewer or empty rows, never an
+/// error.
 pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
     let dot_fno = inputs.home_root.parent().unwrap_or(&inputs.home_root);
     let bus = BusIndex::load(&crate::mail_paths::bus_log_path(dot_fno));
@@ -518,7 +700,23 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let mut rows: Vec<Value> = Vec::new();
+    // Display names from the registry across every harness, keyed by session
+    // id; the capture-dir leg falls back to the id's first eight chars.
+    let names: BTreeMap<&str, &str> = inputs
+        .registry
+        .iter()
+        .filter_map(|reg| {
+            let sid = reg.get("harness_session_id")?.as_str()?;
+            let name = reg.get("name")?.as_str()?;
+            (!sid.is_empty() && !name.is_empty())
+                .then(|| (sid, name))
+                .or(None)
+        })
+        .collect();
+    // The walk list: registry claude rows first (the shape the Me rows have
+    // always read), then capture-dir sessions the registry missed.
+    let mut sessions: Vec<(String, PathBuf)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = Default::default();
     for reg in inputs.registry {
         let harness = reg.get("harness").and_then(Value::as_str).unwrap_or("");
         let Some(sid) = reg
@@ -534,6 +732,17 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
         let cwd = reg.get("cwd").and_then(Value::as_str).unwrap_or("");
         let slug = crate::claude_ask::claude_cwd_slug(Path::new(cwd));
         let transcript = inputs.projects_dir.join(slug).join(format!("{sid}.jsonl"));
+        if seen.insert(sid.to_string()) {
+            sessions.push((sid.to_string(), transcript));
+        }
+    }
+    for (sid, transcript) in capture_sessions(&inputs.capture_dir, now) {
+        if seen.insert(sid.clone()) {
+            sessions.push((sid, transcript));
+        }
+    }
+    let mut rows: Vec<Value> = Vec::new();
+    for (sid, transcript) in sessions {
         let Ok(meta) = std::fs::metadata(&transcript) else {
             continue;
         };
@@ -546,19 +755,26 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
         if now.saturating_sub(mtime) > WINDOW_SECS {
             continue;
         }
-        let items = store.advance(&transcript, sid, &bus);
+        let acked = crate::operator_turns::read_acked_turn_ids(
+            &crate::operator_turns::ledger_path(&inputs.capture_dir, &sid),
+        )
+        .unwrap_or_default();
+        let items = store.advance(&transcript, &sid, &bus);
         if items.is_empty() {
             continue;
         }
-        let name = reg
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| sid.get(..8).unwrap_or(sid));
+        let items: Vec<Value> = items.iter().map(|i| item_json(i, &acked)).collect();
         rows.push(json!({
             "session_id": sid,
-            "name": name,
-            "last_ts": items.last().map(|i| i.ts.clone()).unwrap_or_default(),
+            "name": names
+                .get(sid.as_str())
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| sid.get(..8).unwrap_or(&sid).to_string()),
+            "last_ts": items
+                .last()
+                .and_then(|i| i.get("ts").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_string(),
             "items": items,
         }));
     }
@@ -571,6 +787,163 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
             .cmp(&a.get("last_ts").and_then(Value::as_str))
     });
     rows
+}
+
+/// Capture-dir sessions: each window-fresh `<session>.scan.json` names its
+/// transcript, which is how codex rollouts and unregistered sessions enter.
+/// A scan file that fails to parse or names a missing transcript is skipped.
+fn capture_sessions(capture_dir: &Path, now: u64) -> Vec<(String, PathBuf)> {
+    let Ok(rd) = std::fs::read_dir(capture_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(sid) = name.strip_suffix(".scan.json") else {
+            continue;
+        };
+        if sid.is_empty() {
+            continue;
+        }
+        let fresh = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .is_some_and(|mtime| now.saturating_sub(mtime) <= WINDOW_SECS);
+        if !fresh {
+            continue;
+        }
+        let transcript = std::fs::read_to_string(entry.path())
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .and_then(|v| {
+                v.get("transcript")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+            });
+        if let Some(transcript) = transcript {
+            out.push((sid.to_string(), transcript));
+        }
+    }
+    out
+}
+
+/// One item's projection shape: the YouItem fields plus the state the ack
+/// ledger and the reply text decide.
+fn item_json(item: &YouItem, acked: &std::collections::HashSet<String>) -> Value {
+    let mut v = serde_json::to_value(item).unwrap_or(Value::Null);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "state".into(),
+            Value::String(item_state(item, acked).into()),
+        );
+    }
+    v
+}
+
+/// An item's state: `acked` when its turn id sits in the session ledger;
+/// else `pending` when the answer is empty or a deferral-only stub
+/// ("Queued; I will report when it lands."); else `answered`. The deferral
+/// flip rule the plan once sketched is deleted: measured on 133a419b (646
+/// items), only two replies were deferral-shaped, neither a pure stub, and
+/// the rule would read work text as a non-answer.
+fn item_state(item: &YouItem, acked: &std::collections::HashSet<String>) -> &'static str {
+    if acked.contains(&item.turn_id) {
+        return "acked";
+    }
+    let text = if item.end_reply.trim().is_empty() {
+        &item.reply_text
+    } else {
+        &item.end_reply
+    };
+    let t = text.trim();
+    if t.is_empty() || is_deferral_only(t) {
+        "pending"
+    } else {
+        "answered"
+    }
+}
+
+/// A reply that is one short line opening with a deferral phrase and
+/// carrying nothing else (AC3's "Queued; I will report when it lands.").
+fn is_deferral_only(t: &str) -> bool {
+    if t.contains('\n') || t.chars().count() > 120 {
+        return false;
+    }
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)^(queued|will report|report back|will update|looking into|on it|noted|in progress|will circle back)\b")
+            .expect("valid pattern")
+    })
+    .is_match(t)
+}
+
+/// The flat cross-session asks list behind `fno inbox user list --all`:
+/// one row per item over every enumerated session, pending first, the rest
+/// newest first. Row fields: `session_id`, `name`, `turn_id`, `ts`,
+/// `typed_text`, `reply_excerpt`, `state`.
+pub(crate) fn asks_rows(inputs: &YouInputs) -> Vec<Value> {
+    let mut flat: Vec<Value> = project_you(inputs)
+        .iter()
+        .flat_map(|row| {
+            let sid = row.get("session_id").and_then(Value::as_str).unwrap_or("");
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            row.get("items")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            json!({
+                                "session_id": sid,
+                                "name": name,
+                                "turn_id": item.get("turn_id").and_then(Value::as_str).unwrap_or(""),
+                                "ts": item.get("ts").and_then(Value::as_str).unwrap_or(""),
+                                "typed_text": item.get("typed_text").and_then(Value::as_str).unwrap_or(""),
+                                "reply_excerpt": reply_excerpt(item),
+                                "state": item.get("state").and_then(Value::as_str).unwrap_or(""),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    let state_rank = |v: &Value| match v.get("state").and_then(Value::as_str) {
+        Some("pending") => 0,
+        _ => 1,
+    };
+    fn row_ts(v: &Value) -> &str {
+        v.get("ts").and_then(Value::as_str).unwrap_or("")
+    }
+    flat.sort_by(|a, b| {
+        state_rank(a)
+            .cmp(&state_rank(b))
+            .then(row_ts(b).cmp(row_ts(a)))
+    });
+    flat
+}
+
+/// One line of the reply an ask got: the end reply when the turn reached
+/// one, else the visible reply; newline runs collapse so a row stays one
+/// row; cut at 200 chars.
+fn reply_excerpt(item: &Value) -> String {
+    let text = item
+        .get("end_reply")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| item.get("reply_text").and_then(Value::as_str).unwrap_or(""));
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = flat.chars().take(200).collect();
+    if flat.chars().count() > 200 {
+        out.push('\u{2026}');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -668,7 +1041,7 @@ mod tests {
             assistant_row("Opening the PR.", "2026-10-27T00:00:10Z"),
         ]
         .join("\n");
-        let items = walk(&raw, 0, &BusIndex::empty(), "sess", None).items;
+        let items = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None).items;
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].typed_text, "why did the gate refuse?");
         assert_eq!(
@@ -732,7 +1105,7 @@ mod tests {
             assistant_row("Answered.", "2026-10-27T00:00:03Z"),
         ]
         .join("\n");
-        let items = walk(&raw, 0, &BusIndex::empty(), "sess", None).items;
+        let items = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None).items;
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].typed_text, "still counts");
         assert_eq!(items[0].reply_text, "Answered.");
@@ -806,5 +1179,226 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].typed_text, "fresh start");
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// AC1: a claude typed turn with tool noise between its end_turn blocks
+    /// carries the row uuid as turn_id and the end_turn text as end_reply.
+    #[test]
+    fn ac1_claude_item_carries_turn_id_and_end_reply() {
+        let uuid = "u-ac1-typed";
+        let raw = [
+            format!(
+                "{}",
+                json!({"type": "user", "uuid": uuid, "timestamp": "2026-10-27T00:00:00Z",
+                       "message": {"role": "user", "content": "what landed in the gate fix?"}})
+            ),
+            json!({"type": "assistant", "timestamp": "2026-10-27T00:00:01Z",
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": "Reading the log."}]}})
+                .to_string(),
+            tool_result_row(),
+            json!({"type": "assistant", "timestamp": "2026-10-27T00:00:02Z",
+                   "message": {"role": "assistant", "stop_reason": "end_turn",
+                               "content": [{"type": "text", "text": "Two commits: the pin and the gate."}]}})
+                .to_string(),
+            // A sidechain end_turn is another agent's work, never the reply.
+            json!({"type": "assistant", "isSidechain": true, "timestamp": "2026-10-27T00:00:03Z",
+                   "message": {"role": "assistant", "stop_reason": "end_turn",
+                               "content": [{"type": "text", "text": "sidechain text"}]}})
+                .to_string(),
+        ]
+        .join("\n");
+        let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
+        assert_eq!(out.items.len(), 1);
+        assert_eq!(out.items[0].turn_id, uuid);
+        assert_eq!(out.items[0].end_reply, "Two commits: the pin and the gate.");
+        // The reply_text keeps every visible block, unchanged for the paint.
+        assert!(out.items[0].reply_text.contains("Reading the log."));
+        assert!(out.items[0]
+            .reply_text
+            .contains("Two commits: the pin and the gate."));
+    }
+
+    /// AC2: a codex rollout with a user message, commentary and a
+    /// final_answer opens one item whose end_reply is the final_answer text;
+    /// the commentary never reads as the end.
+    #[test]
+    fn ac2_codex_item_pairs_user_message_with_final_answer() {
+        let payload_row = |role: &str, phase: Option<&str>, text: &str| {
+            let mut p = json!({
+                "type": "message",
+                "role": role,
+                "content": [{"type": "text", "text": text}],
+            });
+            if let Some(phase) = phase {
+                p["phase"] = json!(phase);
+            }
+            json!({"timestamp": "2026-11-05T01:55:00Z", "type": "response_item",
+                   "payload": p})
+            .to_string()
+        };
+        let raw = [
+            payload_row("user", None, "why did the codex leg refuse?"),
+            payload_row(
+                "assistant",
+                Some("commentary"),
+                "Checking the rollout shape.",
+            ),
+            payload_row(
+                "assistant",
+                Some("final_answer"),
+                "The id sat at payload.id.",
+            ),
+        ]
+        .join("\n");
+        let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
+        assert_eq!(out.items.len(), 1);
+        // No uuid on codex rows: the derived digest folds the line index.
+        assert!(out.items[0].turn_id.starts_with("derived-"));
+        assert_eq!(out.items[0].end_reply, "The id sat at payload.id.");
+        assert_eq!(
+            out.items[0].reply_text,
+            "Checking the rollout shape.\n\nThe id sat at payload.id."
+        );
+    }
+
+    /// A derived turn id survives a resume: the cached suffix walk folds the
+    /// opener's absolute line index from the tail, so the id matches the
+    /// full walk's for the same row.
+    #[test]
+    fn codex_derived_turn_id_survives_resume() {
+        let payload_row = |role: &str, text: &str| {
+            json!({"timestamp": "2026-11-05T02:00:00Z", "type": "response_item",
+                   "payload": {"type": "message", "role": role,
+                               "content": [{"type": "text", "text": text}]}})
+            .to_string()
+        };
+        let noise_row = || {
+            json!({"timestamp": "2026-11-05T02:00:01Z", "type": "response_item",
+                   "payload": {"type": "function_call", "name": "shell",
+                               "arguments": "{}"}})
+            .to_string()
+        };
+        let file = temp_transcript("codex-resume.jsonl");
+        let part1 = (0..5)
+            .map(|_| noise_row())
+            .chain([payload_row("user", "first ask")])
+            .collect::<Vec<_>>();
+        std::fs::write(&file, part1.join("\n") + "\n").expect("write part 1");
+        let mut store = YouStore::open(PathBuf::from("/dev/null"), false);
+        let first = store.advance(&file, "cx", &BusIndex::empty());
+        assert_eq!(first.len(), 1);
+        let first_id = first[0].turn_id.clone();
+        assert!(first_id.starts_with("derived-"));
+
+        // The turn's reply lands; the resume re-walks from the opener and
+        // must fold the same absolute row index.
+        let part2 = [
+            payload_row("assistant", "the answer"),
+            payload_row("user", "second ask"),
+        ]
+        .join("\n");
+        let mut text = std::fs::read_to_string(&file).expect("read");
+        text.push_str(&part2);
+        text.push('\n');
+        std::fs::write(&file, &text).expect("write part 2");
+        let second = store.advance(&file, "cx", &BusIndex::empty());
+        assert_eq!(second.len(), 2);
+        assert_eq!(second[0].turn_id, first_id);
+        assert_eq!(second[0].end_reply, "the answer");
+
+        // A full walk over the same rows derives the same id: the queue's
+        // ack join reads exactly this value.
+        let full = walk(
+            &std::fs::read_to_string(&file).expect("read"),
+            0,
+            0,
+            &BusIndex::empty(),
+            "cx",
+            None,
+        );
+        assert_eq!(full.items[0].turn_id, first_id);
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// AC3/AC4: the state rules - a deferral-only reply stays pending; the
+    /// same turn acked through the ledger reads acked.
+    #[test]
+    fn ac3_ac4_state_rules() {
+        let mk = |reply: &str, end: &str| YouItem {
+            ts: "2026-11-06T10:00:00Z".into(),
+            typed_text: "status on the gate?".into(),
+            reply_text: reply.into(),
+            turn_id: "t-3".into(),
+            end_reply: end.into(),
+        };
+        // AC3: a pure "queued" stub is a non-answer.
+        let queued = mk("Queued; I will report when it lands.", "");
+        assert_eq!(item_state(&queued, &Default::default()), "pending");
+        // A deferral that carries findings is an answer.
+        let substantive = mk("Looking into the 127s first; the pin needs a rebase.", "");
+        assert_eq!(item_state(&substantive, &Default::default()), "answered");
+        // An empty reply is pending.
+        assert_eq!(item_state(&mk("", ""), &Default::default()), "pending");
+        // AC4: the same turn in the session's ledger reads acked.
+        let mut acked = std::collections::HashSet::new();
+        acked.insert("t-3".to_string());
+        assert_eq!(item_state(&queued, &acked), "acked");
+    }
+
+    /// AC5: asks_rows flattens two fixture sessions, pending rows first
+    /// even when the answered row is newer, newest first within each half.
+    #[test]
+    fn ac5_asks_rows_flatten_two_sessions_pending_first() {
+        let dir = std::env::temp_dir().join(format!("you-threads-asks-{}-ac5", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let capture = dir.join("capture");
+        std::fs::create_dir_all(&capture).unwrap();
+        // Session A: an answered ask with the newer stamp.
+        let ta = dir.join("a.jsonl");
+        std::fs::write(
+            &ta,
+            [
+                row("user", "ship the asks view", "2026-11-06T10:00:00Z"),
+                assistant_row("Shipped; the PR is open.", "2026-10-27T00:00:01Z"),
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+        // Session B: a pending ask with the older stamp; it still heads the
+        // list.
+        let tb = dir.join("b.jsonl");
+        std::fs::write(
+            &tb,
+            row("user", "status on the gate?", "2026-11-06T09:00:00Z") + "\n",
+        )
+        .unwrap();
+        for (sid, path) in [
+            ("sess-a", ta.display().to_string()),
+            ("sess-b", tb.display().to_string()),
+        ] {
+            std::fs::write(
+                capture.join(format!("{sid}.scan.json")),
+                json!({"transcript": path, "offset": 0}).to_string(),
+            )
+            .unwrap();
+        }
+        // The window reads mtimes; fresh temp files qualify.
+        let registry: Vec<Value> = Vec::new();
+        let inputs = YouInputs {
+            registry: &registry,
+            projects_dir: dir.join("projects"),
+            home_root: dir.join("home"),
+            cache_path: dir.join("you-cache.json"),
+            capture_dir: capture.clone(),
+        };
+        let rows = asks_rows(&inputs);
+        assert_eq!(rows.len(), 2, "one ask per session: {rows:?}");
+        assert_eq!(rows[0]["state"], "pending");
+        assert_eq!(rows[0]["session_id"], "sess-b");
+        assert_eq!(rows[1]["state"], "answered");
+        assert_eq!(rows[1]["session_id"], "sess-a");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
