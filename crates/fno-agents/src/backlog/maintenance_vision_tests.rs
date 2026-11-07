@@ -1,3 +1,4 @@
+use super::maintenance_vision::run_vision_sweep;
 use super::*;
 
 fn vrow(id: &str, extra: Value) -> Value {
@@ -27,23 +28,28 @@ fn fx_rows(_dir: &tempfile::TempDir, graph: &std::path::Path) -> Vec<Value> {
     crate::graph_store::read_rows(graph).unwrap()
 }
 
-fn vseams<'a>(
+/// Build the seams inside one scope (the closures borrow locals) and run
+/// one sweep invocation with the given flags.
+fn sweep_run(
     graph: std::path::PathBuf,
-    dir: &'a tempfile::TempDir,
-    grade: &'a dyn Fn(&str, &Path) -> Option<(String, String)>,
-) -> Seams<'a> {
-    let events = || Vec::new();
+    dir: &tempfile::TempDir,
+    grade: &dyn Fn(&str, &Path) -> Option<(String, String)>,
+    args: &[&str],
+    entries: &[Value],
+) -> (i32, Out) {
+    let events = || -> Vec<Value> { Vec::new() };
     let slug = |_: Option<&str>| -> Option<String> { None };
     let roster = || -> Result<BTreeMap<String, Vec<String>>, String> { Ok(BTreeMap::new()) };
     let no_exists = |_: &Value| -> Option<validity::PathProbe> { None };
     let no_search = |_: &str| -> Option<usize> { None };
     let no_retro = |_: &Value| -> Vec<(String, String)> { Vec::new() };
-    Seams {
+    let claims = || -> Result<BTreeSet<String>, String> { Ok(BTreeSet::new()) };
+    let seams = Seams {
         graph,
         settings: Settings::default(),
         workspaces: HashMap::new(),
         worktrees_base: None,
-        claims: &|| Ok(BTreeSet::new()),
+        claims: &claims,
         events: &events,
         slug: &slug,
         roster: &roster,
@@ -62,7 +68,12 @@ fn vseams<'a>(
                     .collect())
             },
         },
-    }
+    };
+    let tail: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let flags = parse_flags(&tail).unwrap();
+    let mut out = Out::captured();
+    let code = run_vision_sweep(flags, &seams, &mut out, entries);
+    (code, out)
 }
 
 #[test]
@@ -83,10 +94,13 @@ fn vision_sweep_reports_ranks_and_defers_only_under_apply() {
             json!({"status": "ready", "details": "live work"}),
         ),
     ]);
-    let seams = vseams(graph, &dir, &grade_fail);
-    let mut out = Out::captured();
-    let flags = parse_flags(&["--vision-sweep".to_string()]).unwrap();
-    let code = run_vision_sweep(flags, &seams, &mut out, &fx_rows(&dir, &graph));
+    let (code, out) = sweep_run(
+        graph.clone(),
+        &dir,
+        &grade_fail,
+        &["--vision-sweep"],
+        &fx_rows(&dir, &graph),
+    );
     assert_eq!(code, 0);
     let stdout = &out.stdout;
     assert!(stdout.contains("2 deferred rows scored"), "{stdout}");
@@ -119,11 +133,26 @@ fn vision_sweep_reports_ranks_and_defers_only_under_apply() {
 fn vision_sweep_apply_defers_exactly_the_judged_list() {
     let grade_fail = |_: &str, _: &Path| Some(("fail".to_string(), "off-mission".to_string()));
     let (dir, graph) = vfx(&[vrow("ab-swp01", json!({})), vrow("ab-swp03", json!({}))]);
-    let seams = vseams(graph, &dir, &grade_fail);
-    let mut out = Out::captured();
-    let flags = parse_flags(&["--vision-sweep".to_string(), "--apply".to_string()]).unwrap();
-    let code = run_vision_sweep(flags, &seams, &mut out, &fx_rows(&dir, &graph));
+    // The report run lands the approval surface.
+    let (code, _out) = sweep_run(
+        graph.clone(),
+        &dir,
+        &grade_fail,
+        &["--vision-sweep"],
+        &fx_rows(&dir, &graph),
+    );
     assert_eq!(code, 0);
+    // Apply reads the newest artifact and never re-grades.
+    let (code2, out2) = sweep_run(
+        graph.clone(),
+        &dir,
+        &grade_fail,
+        &["--vision-sweep", "--apply"],
+        &fx_rows(&dir, &graph),
+    );
+    assert_eq!(code2, 0);
+    let applied = &out2.stdout;
+    assert!(applied.contains("apply: applying"), "{applied}");
     let rows = fx_rows(&dir, &graph);
     for id in ["ab-swp01", "ab-swp03"] {
         let row = rows
@@ -131,40 +160,48 @@ fn vision_sweep_apply_defers_exactly_the_judged_list() {
             .find(|r| r["id"] == id)
             .unwrap_or_else(|| panic!("row {id} missing"));
         assert_eq!(row["deferred_kind"], "wont_do");
-        assert_eq!(row["deferred_reason"], "vision kill list , batch approved");
+        let reason = row["deferred_reason"].as_str().unwrap_or("");
+        assert!(
+            reason.starts_with("vision kill list ") && reason.ends_with(", batch approved"),
+            "{reason}"
+        );
     }
 }
 
 #[test]
 fn vision_sweep_skip_and_unjudged_never_defer() {
-    // No vision source: the skip line, no grading, no artifact. The
-    // grader answering None reads as a skipped grade, never a fail, so
-    // apply defers nothing.
+    // No vision source: the skip line, no grading, no artifact. Apply with
+    // no artifact on disk defers nothing.
     let (dir, graph) = vfx(&[vrow("ab-swp05", json!({}))]);
     let grade_none = |_: &str, _: &Path| -> Option<(String, String)> { None };
-    let seams = vseams(graph, &dir, &grade_none);
     let cwd_probe = std::env::current_dir().unwrap();
     if crate::blueprint_judge::vision_source_text(&[], &cwd_probe).is_some() {
         // The dev machine carries no project vision; skip this leg when
         // that changes so the fixture stays hermetic.
         return;
     }
-    let mut out = Out::captured();
-    let flags = parse_flags(&["--vision-sweep".to_string()]).unwrap();
-    let code = run_vision_sweep(flags, &seams, &mut out, &fx_rows(&dir, &graph));
-    assert_eq!(code, 0);
-    assert!(
-        out.stdout.contains("skipped (no vision source"),
-        "{out.stdout}"
+    let (code, out) = sweep_run(
+        graph.clone(),
+        &dir,
+        &grade_none,
+        &["--vision-sweep"],
+        &fx_rows(&dir, &graph),
     );
+    assert_eq!(code, 0);
+    let skipped = &out.stdout;
+    assert!(skipped.contains("skipped (no vision source"), "{skipped}");
 
     let (dir2, graph2) = vfx(&[vrow("ab-swp06", json!({}))]);
-    let seams2 = vseams(graph2, &dir2, &grade_none);
-    let mut out2 = Out::captured();
-    let flags2 = parse_flags(&["--vision-sweep".to_string(), "--apply".to_string()]).unwrap();
-    let code2 = run_vision_sweep(flags2, &seams2, &mut out2, &fx_rows(&dir2, &graph2));
+    let (code2, out2) = sweep_run(
+        graph2.clone(),
+        &dir2,
+        &grade_none,
+        &["--vision-sweep", "--apply"],
+        &fx_rows(&dir2, &graph2),
+    );
     assert_eq!(code2, 0);
-    assert!(out2.stdout.contains("0 on the kill list"), "{out2.stdout}");
+    let refused = &out2.stdout;
+    assert!(refused.contains("no kill list artifact"), "{refused}");
     let rows = fx_rows(&dir2, &graph2);
     let swp06 = rows.iter().find(|r| r["id"] == "ab-swp06").unwrap();
     assert!(

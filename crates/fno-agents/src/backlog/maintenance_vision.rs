@@ -5,9 +5,8 @@
 //! defers without it.
 
 use serde_json::{json, Value};
-use std::path::Path;
 
-use super::maintenance::{Flags, Out, Seams};
+use super::{Flags, Out, Seams};
 
 /// How many worst-fitting rows the judged band takes.
 const VISION_SWEEP_BAND: usize = 100;
@@ -27,6 +26,13 @@ pub(crate) fn run_vision_sweep(
     out: &mut Out,
     entries: &[Value],
 ) -> i32 {
+    // Apply never re-grades: the artifact the report landed is the approval
+    // surface, so apply reads the newest one and defers exactly its fail
+    // rows. Re-judging here could flip a verdict and defer a row the user
+    // never approved.
+    if flags.apply {
+        return apply_from_artifact(seams, out);
+    }
     let cwd = std::env::current_dir().unwrap_or_default();
     let Some(vision) = crate::blueprint_judge::vision_source_text(&[], &cwd) else {
         out.line("vision-sweep: skipped (no vision source configured)");
@@ -65,7 +71,7 @@ pub(crate) fn run_vision_sweep(
     let kill: Vec<&Value> = rows.iter().filter(|r| r["verdict"] == "fail").collect();
     out.line(format!(
         "vision-sweep: {} deferred rows scored, {} judged, {} on the kill list",
-        candidates.len(),
+        scored.len(),
         rows.len(),
         kill.len()
     ));
@@ -90,9 +96,6 @@ pub(crate) fn run_vision_sweep(
         ));
     }
     write_artifact(seams, out, &rows);
-    if flags.apply {
-        return apply_kill_list(seams, out, &kill);
-    }
     0
 }
 
@@ -188,10 +191,69 @@ fn write_artifact(seams: &Seams, out: &mut Out, rows: &[Value]) {
     }
 }
 
-/// `--apply`: defer exactly the judged kill list `wont_do` with the batch
-/// reason, through the same mutate door the defer command uses. A claimed
-/// node is skipped, not fought: the sweep never releases another
-/// session's claim.
+/// `--apply`: read the newest kill-list artifact and defer its fail rows
+/// `wont_do` with the batch reason, through the same mutate door the defer
+/// command uses. No artifact means nothing defers: the report run is the
+/// only producer of the approval surface. A claimed node is skipped, not
+/// fought: the sweep never releases another session's claim.
+fn apply_from_artifact(seams: &Seams, out: &mut Out) -> i32 {
+    let Some(dir) = &seams.history_dir else {
+        out.line("vision-sweep apply: no artifact dir; nothing deferred");
+        return 0;
+    };
+    let newest = std::fs::read_dir(dir).ok().and_then(|entries| {
+        entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("vision-kill-list-") && n.ends_with(".json"))
+                    .unwrap_or(false)
+            })
+            .max_by_key(|p| {
+                p.metadata()
+                    .and_then(|m| m.modified())
+                    .map(|m| m)
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            })
+    });
+    let Some(path) = newest else {
+        out.line(
+            "vision-sweep apply: no kill list artifact to apply; run the report first; \
+             nothing deferred",
+        );
+        return 0;
+    };
+    let body = match std::fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            out.err(format!("vision-sweep apply refused (artifact read: {e})"));
+            return 1;
+        }
+    };
+    let parsed: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            out.err(format!("vision-sweep apply refused (artifact parse: {e})"));
+            return 1;
+        }
+    };
+    let empty: Vec<Value> = Vec::new();
+    let rows = parsed
+        .get("rows")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    let kill: Vec<&Value> = rows.iter().filter(|r| r["verdict"] == "fail").collect();
+    out.line(format!(
+        "vision-sweep apply: applying {} ({} fail rows)",
+        path.display(),
+        kill.len()
+    ));
+    apply_kill_list(seams, out, &kill)
+}
+
+/// Defer exactly the handed kill list, skipping claimed rows.
 fn apply_kill_list(seams: &Seams, out: &mut Out, kill: &[&Value]) -> i32 {
     if kill.is_empty() {
         out.line("vision-sweep apply: the kill list is empty; nothing to defer");

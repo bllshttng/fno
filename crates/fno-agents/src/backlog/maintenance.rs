@@ -2239,6 +2239,7 @@ fn vision_grade_prod(text: &str, cwd: &Path) -> Option<(String, String)> {
     crate::blueprint_judge::vision_grade_row_text(text, cwd)
 }
 
+#[path = "maintenance_vision.rs"]
 mod maintenance_vision;
 
 /// `fno backlog maintain`: parse the command's flags, wire the production
