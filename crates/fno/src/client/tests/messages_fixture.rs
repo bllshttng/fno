@@ -741,3 +741,109 @@ fn messages_paint_reads_rows_built_once_per_projection() {
         "a landed projection rebuilds the rows"
     );
 }
+
+/// AC7: the asks row flattens two sessions' `you` rows, pending first even
+/// when the answered ask is newer, and column 3 paints the state mark, the
+/// session name and both texts.
+#[tokio::test]
+async fn ac7_asks_paint_pending_first_across_two_sessions() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        super::super::LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "you": [
+            {"session_id": "sess-a", "name": "atlas", "last_ts": "2026-11-06T10:00:00Z",
+             "items": [
+                {"ts": "2026-11-06T10:00:00Z", "typed_text": "ship the asks view",
+                 "reply_text": "Shipped; the PR is open.", "turn_id": "t-a1",
+                 "end_reply": "", "state": "answered"}]},
+            {"session_id": "sess-b", "name": "brisk", "last_ts": "2026-11-06T11:00:00Z",
+             "items": [
+                {"ts": "2026-11-06T11:00:00Z", "typed_text": "status on the gate?",
+                 "reply_text": "", "turn_id": "t-b1", "end_reply": "", "state": "pending"}]}
+        ],
+    }));
+    b.sel_thread = Some("asks".into());
+    b.cursors[2] = 0;
+    // The pinned column-1 row exists with the pending count.
+    let tree = b.tree_rows();
+    match tree.first() {
+        Some(TreeRow::Asks { pending }) => assert_eq!(*pending, 1, "one pending ask"),
+        other => panic!("the asks row pins first, got {other:?}"),
+    }
+    let (lines, _) = b.thread_lines(80);
+    let text = lines
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let brisk_at = text.find("brisk").expect("pending session painted");
+    let atlas_at = text.find("atlas").expect("answered session painted");
+    assert!(
+        brisk_at < atlas_at,
+        "pending session paints before the answered one"
+    );
+    assert!(text.contains("status on the gate?"), "typed text paints");
+    assert!(
+        text.contains("Shipped; the PR is open."),
+        "reply paints under its ask"
+    );
+}
+
+/// AC8: with no `you` rows the asks column paints one empty-state line and
+/// no error.
+#[tokio::test]
+async fn ac8_asks_empty_projection_paints_one_line() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        super::super::LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "you": [],
+    }));
+    b.sel_thread = Some("asks".into());
+    let (lines, _) = b.thread_lines(80);
+    let body: Vec<String> = lines
+        .iter()
+        .map(|l| l.text.clone())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    assert_eq!(
+        body,
+        vec!["Your asks".to_string(), "(no asks yet)".to_string()],
+        "title plus one empty-state line: {body:?}"
+    );
+}
