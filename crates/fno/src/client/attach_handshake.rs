@@ -90,9 +90,8 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                 // though the sidebar no longer renders it.
                 view.backlog = backlog;
                 view.observers = observers;
-                // A restart leaves one receipt per session: read it here, at
-                // the first Layout (the first point this client holds its
-                // pane list), and delete it so the report posts once.
+                // A restart leaves one receipt per session: read it at the
+                // first Layout (the first point panes are known) and delete it.
                 super::server_skew::report_restart_receipt(view);
                 return Ok(stashed_modesync);
             }

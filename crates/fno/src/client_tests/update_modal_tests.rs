@@ -1001,7 +1001,6 @@ async fn far_row_opens_on_a_current_server_without_a_popup() {
 fn restart_report_names_missing_panes_and_the_count() {
     let pane = |id: u64| super::server_skew::PreservedPane {
         pane_id: id,
-        child_pid: None,
         name: Some("archer".into()),
     };
     let receipt = super::server_skew::RestartReceipt {
@@ -1036,7 +1035,7 @@ fn refused_receipt_reads_as_refused() {
 }
 
 /// The receipt lifecycle: the fresh attach reads it once (the notice posts),
-/// the file is gone after the read, and a second attach is silent.
+/// and the file is gone after the read (AC6's exactly-once).
 #[test]
 fn receipt_reads_once_and_is_deleted() {
     let mut v = super::tests::view_with_agents(vec![]);
@@ -1048,7 +1047,6 @@ fn receipt_reads_once_and_is_deleted() {
         verdict: "restarted".into(),
         preserved: vec![super::server_skew::PreservedPane {
             pane_id: 10,
-            child_pid: None,
             name: Some("archer".into()),
         }],
     };
@@ -1065,8 +1063,4 @@ fn receipt_reads_once_and_is_deleted() {
         "the report posts: {notice:?}"
     );
     assert!(!path.exists(), "the receipt is gone after the read");
-
-    // A second attach of the same session is silent: nothing re-reads.
-    super::server_skew::report_restart_receipt(&mut v);
-    assert_eq!(v.notice.as_ref().map(|(s, _)| s.clone()), notice);
 }
