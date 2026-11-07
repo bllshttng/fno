@@ -123,6 +123,20 @@ def test_front_door_handoff_answers_none_when_no_door_exists(monkeypatch):
     assert rust_binary.front_door_handoff(["evals"], "doctor") is None
 
 
+def test_front_door_handoff_refuses_the_reentry_when_the_door_forwarded_us(
+    tmp_path, monkeypatch
+):
+    # The door exec'd this fno-py (the FNO_PY_FROM_DOOR marker): the argv is
+    # one the door already declined, so a handoff here ping-pongs
+    # door -> python -> door and chains until killed. The marker reads as no
+    # door, even when a runnable one exists.
+    stub = _stub_door(tmp_path)
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: stub)
+    monkeypatch.setenv("FNO_PY_FROM_DOOR", "1")
+    assert rust_binary.front_door_handoff(["-h"], "doctor") is None
+    assert not (tmp_path / "door-argv.txt").exists(), "the door must not be spawned"
+
+
 def test_doctor_signpost_hands_off_instead_of_refusing(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
