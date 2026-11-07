@@ -40,6 +40,7 @@ const DELIVERED_REASONS: &[&str] = &["DonePRGreen", "DoneAdvisory", "DoneDeliver
 pub(crate) struct TerminalRouteFacts<'a> {
     pub cwd: &'a Path,
     pub session_id: &'a str,
+    pub harness_session_id: Option<&'a str>,
     pub node: Option<&'a str>,
     /// The TerminationReason wire name ("Budget", "DoneUnreviewed", ...).
     pub reason: &'a str,
@@ -154,11 +155,19 @@ fn terminal_evidence(f: &TerminalRouteFacts<'_>) -> String {
             }
             parts.push(fact);
         }
-        let spend = crate::loopcheck::session_cost_from_ledger(
+        let meter = crate::team_spend::session_meter(
+            &crate::paths::AgentsHome::from_env()
+                .otel_dir()
+                .join("otel.db"),
             &crate::paths_cli::ledger_json(f.cwd),
-            f.session_id,
+            Some(f.session_id),
+            f.harness_session_id,
         );
-        parts.push(format!("spend=${:.2}", spend));
+        parts.push(match meter {
+            crate::team_spend::SessionMeter::Exact(usd)
+            | crate::team_spend::SessionMeter::Estimated(usd) => format!("spend=${usd:.2}"),
+            crate::team_spend::SessionMeter::Unmetered => "spend=unmetered".into(),
+        });
     }
     if let Some(mins) = f.elapsed_min {
         parts.push(format!("elapsed={mins}min"));
@@ -453,6 +462,7 @@ mod tests {
         TerminalRouteFacts {
             cwd: Path::new("/nonexistent-cwd-for-decide-only"),
             session_id: session,
+            harness_session_id: None,
             node,
             reason,
             postmortem: None,
@@ -507,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_row_and_evidence_contracts_hold() {
+    fn terminal_evidence_reports_unmetered_cost() {
         // The row data carries the run's postmortem path: the pair rule
         // reads it from a prior run's row. Absent reads as null, never an
         // omitted key.
@@ -535,6 +545,8 @@ mod tests {
             "ev",
         );
         assert_eq!(data.get("postmortem").map(Value::is_null), Some(true));
+        let unmetered = facts("session-without-meter", Some("x-n"), "Budget");
+        assert!(terminal_evidence(&unmetered).contains("spend=unmetered"));
 
         // The pair evidence names both postmortems; a legacy row without
         // the key reads as unrecorded.

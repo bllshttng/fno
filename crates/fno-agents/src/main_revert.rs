@@ -180,7 +180,10 @@ fn revert_for(
             short(&fetched)
         ));
     }
-    let body = format!("{why} This reverts that merge so main turns green in one CI run. The author of #{pr} re-lands it with the fix.\n\nFixes {node}");
+    let body = format!(
+        "{why} This reverts that merge so main turns green in one CI run. The author of #{pr} re-lands it with the fix.\n\n{}",
+        crate::org_board::pr_closure::render([node])
+    );
     let url = crate::bank_pr::open_with(root, &branch, title, &body, |tree| {
         // The helper fetches again; a main that moved since the check above
         // is not the head read red.

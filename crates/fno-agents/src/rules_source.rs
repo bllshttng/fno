@@ -508,58 +508,57 @@ fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
         return;
     }
     let is_door = ev.kind.starts_with("door:") || ev.kind == "plan-start";
-    let mut seen: Option<std::collections::HashSet<String>> = if is_door {
-        let root = crate::decision_index::default_state_path("rules-seen")
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        Some(crate::announce::load_cursor(&root, "rules-seen", "doors"))
-    } else {
-        None
-    };
-    let mut dirty = false;
     let trace_id = crate::decision_trace::new_span_id();
-    for fire in &decision.fires {
-        if let Some(seen_set) = seen.as_mut() {
+    if !is_door {
+        for fire in &decision.fires {
+            emit_fire_span(ev, fire, &trace_id);
+        }
+        return;
+    }
+    let root = crate::decision_index::default_state_path("rules-seen")
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    crate::announce::update_cursor(&root, "rules-seen", "doors", |seen| {
+        let mut dirty = false;
+        for fire in &decision.fires {
             let key = format!("span:{}:{}:{}", fire.rule, ev.kind, ev.subjects.join(","));
-            if !seen_set.insert(key) {
+            if !seen.insert(key) {
                 continue;
             }
             dirty = true;
+            emit_fire_span(ev, fire, &trace_id);
         }
-        let trace = crate::decision_trace::Trace {
-            trace_id: trace_id.clone(),
-            span_id: crate::decision_trace::new_span_id(),
-            parent_span_id: None,
-            actor_session: ev.session.clone(),
-            actor_kind: "worker",
-            comms: "chat",
-            recipient_session: None,
-            recipient_kind: None,
-        };
-        let mut attrs = serde_json::Map::new();
-        attrs.insert("rule".into(), Value::from(fire.rule.clone()));
-        attrs.insert(
-            "law".into(),
-            fire.law.clone().map(Value::from).unwrap_or(Value::Null),
-        );
-        attrs.insert("event".into(), Value::from(ev.kind.clone()));
-        attrs.insert("verdict".into(), Value::from(fire.action.clone()));
-        attrs.insert(
-            "tool".into(),
-            ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
-        );
-        let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
-    }
-    if dirty {
-        if let Some(seen_set) = seen {
-            let root = crate::decision_index::default_state_path("rules-seen")
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            crate::announce::save_cursor(&root, "rules-seen", "doors", &seen_set);
-        }
-    }
+        dirty
+    });
+}
+
+/// One `decision_span` per fire, `span_kind = "rule"`: the rows the rules
+/// report reads. Best-effort; a lost row never changes the answer.
+fn emit_fire_span(ev: &crate::rules::Event, fire: &crate::rules::Fire, trace_id: &str) {
+    let trace = crate::decision_trace::Trace {
+        trace_id: trace_id.to_string(),
+        span_id: crate::decision_trace::new_span_id(),
+        parent_span_id: None,
+        actor_session: ev.session.clone(),
+        actor_kind: "worker",
+        comms: "chat",
+        recipient_session: None,
+        recipient_kind: None,
+    };
+    let mut attrs = serde_json::Map::new();
+    attrs.insert("rule".into(), Value::from(fire.rule.clone()));
+    attrs.insert(
+        "law".into(),
+        fire.law.clone().map(Value::from).unwrap_or(Value::Null),
+    );
+    attrs.insert("event".into(), Value::from(ev.kind.clone()));
+    attrs.insert("verdict".into(), Value::from(fire.action.clone()));
+    attrs.insert(
+        "tool".into(),
+        ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
+    );
+    let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
 }
 
 /// One config read per assembly: the whole `event_rules` table, the same

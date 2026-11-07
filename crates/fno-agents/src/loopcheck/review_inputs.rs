@@ -133,6 +133,9 @@ pub(crate) fn resolve_review_inputs(
             if local.unattended_cost_cap_usd.is_some() {
                 merged.unattended_cost_cap_usd = local.unattended_cost_cap_usd;
             }
+            if local.team_cost_cap_usd.is_some() {
+                merged.team_cost_cap_usd = local.team_cost_cap_usd;
+            }
             if local.flat_budget_cap.is_some() {
                 merged.flat_budget_cap = local.flat_budget_cap;
             }
@@ -276,5 +279,27 @@ pub(crate) fn resolve_review_inputs(
         code_review_configured,
         self_review_floor_on,
         approval_satisfies,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_local_team_cost_cap_overrides_the_global_cap() {
+        let temp = tempfile::tempdir().unwrap();
+        let local_dir = temp.path().join(".fno");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(
+            temp.path().join(".fno/config.toml"),
+            "[budget.team]\ncost_cap_usd = 10.0\n",
+        )
+        .unwrap();
+        let global = temp.path().join("global.toml");
+        std::fs::write(&global, "[budget.team]\ncost_cap_usd = 3.0\n").unwrap();
+
+        let inputs = resolve_review_inputs(temp.path(), None, None, None, Some(&global), None);
+        assert_eq!(inputs.settings.team_cost_cap_usd, Some(Ok(10.0)));
     }
 }

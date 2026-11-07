@@ -87,7 +87,7 @@ t02_sccache_absent_ordinary_compile_silent() {
   # A real sccache may be installed on this machine's normal PATH (it is,
   # as of 2026-08-19), so "absent" needs a PATH that genuinely excludes it
   # rather than a stub merely prepended ahead of the real one.
-  PATH="/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" /bin/echo compiling >"$out_file" 2>"$err_file"
+  CARGO_BUILD_BUILD_DIR="$stub_dir/build" PATH="/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" /bin/echo compiling >"$out_file" 2>"$err_file"
   rc=$?
 
   [[ "$rc" -eq 0 ]] || { fail "T02: expected rc=0, got $rc (stderr: $(cat "$err_file"))"; rm -rf "$stub_dir"; return; }
@@ -477,12 +477,13 @@ STUB
 # T20: the compile door under the opt-in gate. With sccache installed and
 # nothing opting in, the compile reaches the real compiler and sccache never
 # runs. A project `.fno/config.toml` carrying `build.sccache = true` opts
-# the same argv in through sccache.
+# the same argv in through sccache, whose default cache follows the state layout.
 t20_config_key_opts_the_compile_in() {
   local stub_dir out_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   cat > "$stub_dir/sccache" <<STUB
 #!/usr/bin/env bash
+echo "\$SCCACHE_DIR" > "$stub_dir/sccache-dir.txt"
 echo "sccache \$*" >> "$stub_dir/sccache.log"
 exec "\$@"
 STUB
@@ -515,6 +516,8 @@ STUB
   [[ "$rc" -eq 0 ]] || { fail "T20: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
   grep -q -- "--crate-name warm" "$stub_dir/sccache.log" \
     || { fail "T20: build.sccache = true did not route the compile through sccache: $(cat "$stub_dir/sccache.log" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
+  [[ "$(cat "$stub_dir/sccache-dir.txt")" == "$stub_dir/home/.fno/cache/cargo-build/sccache" ]] \
+    || { fail "T20: default SCCACHE_DIR did not follow cache/cargo-build: $(cat "$stub_dir/sccache-dir.txt" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
   pass "T20 the default compile is bare rustc; a project build.sccache = true opts it in"
   rm -rf "$stub_dir"
 }
@@ -667,7 +670,7 @@ t19_compile_whose_cargo_is_gone_is_reaped() {
   rm -rf "$stub_dir"
 }
 
-t01_sccache_present_announces_on_probe
+t01_probe_announces_per_opt_in
 t02_sccache_absent_ordinary_compile_silent
 t03_compile_asks_admission_and_probe_does_not
 t04_admission_failure_builds_anyway

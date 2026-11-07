@@ -551,6 +551,39 @@ pub(crate) fn report_working(session_id: &str) {
     }
 }
 
+/// The blocked report a Stop sends when its last message names an open user
+/// question: the turn ends waiting on the user, so the row pins in Needs
+/// input on every harness, whoever owns the question now. Runs after the
+/// producer's `done`, so its later seq wins; a later `working` fire (the
+/// user's answer arriving as a prompt) clears it through the same lattice.
+pub(crate) fn report_waiting_on_user(session_id: &str, qids: &[String]) {
+    if session_id.is_empty()
+        || qids.is_empty()
+        || std::env::var("FNO_HARNESS_NAME").as_deref() == Ok("footnote")
+    {
+        return;
+    }
+    let ev = HookEvent {
+        harness: "stop-gate".to_string(),
+        event: "Stop".to_string(),
+        session_id: session_id.to_string(),
+        tool: String::new(),
+        message: String::new(),
+        model: String::new(),
+        effort: String::new(),
+        posture: None,
+    };
+    let decision = Decision {
+        state: "blocked",
+        reason: format!("waiting on the user: {}", qids.join(", ")),
+        posture: None,
+    };
+    let seq = crate::MonotonicTimestamp::now().as_nanos();
+    if send_report(&ev, &decision, seq) {
+        mark_reported(session_id, &decision);
+    }
+}
+
 /// The whole fire: normalize, decide, mark, report. Every failure inside is
 /// silent and fire-and-forget; `run` still exits 0.
 pub(crate) fn process(harness: &str, event: &str, payload: &serde_json::Value) {

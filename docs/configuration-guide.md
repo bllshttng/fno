@@ -9,7 +9,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
-| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = "fnodotdev/fno"`. |
+| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-ins already carry this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = "fnodotdev/fno"`. |
 | `branch.prefix` | str | `fno` | advanced | Prefix for dispatched worktree branches: <prefix>/<slug>-<node>. |
 | `build.agent_freeze` | bool | `false` | never | Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile. |
 | `paths.ledger_json` | str (optional) | _(none)_ | never | Override path to ledger.json. |
@@ -18,7 +18,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.fleet_dir` | str (optional) | _(none)_ | never | Override path to the megatron fleet dir. |
 | `paths.postmortems_dir` | str (optional) | _(none)_ | never | Override path to the postmortems dir. |
 | `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
-| `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
+| `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |

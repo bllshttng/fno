@@ -769,6 +769,12 @@ impl StreamSession {
         // this session (mirrors the PTY worker's stamp).
         cmd.env("FNO_AGENTS_SELF_SHORT_ID", &cfg.short_id);
         cmd.env("FNO_AGENTS_HOME", cfg.home.as_os_str());
+        // The owner lease names the daemon, so a headless worker whose daemon
+        // died is named, and reaped, by the orphan sweep.
+        crate::process_owner::stamp_command_owner_lease(&mut cmd, &cfg.short_id);
+        // Own process group: the sweep's group kill takes descendants.
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
 
         let mut child = cmd.spawn().map_err(StreamWorkerError::Spawn)?;
         let child_pid = child.id().into();

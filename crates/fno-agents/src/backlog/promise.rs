@@ -14,7 +14,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::merge_evidence::{node_pr_refs, query_pr_state, repo_slug_from_url, PrReadError};
+use super::merge_evidence::{
+    fill_ref_urls, node_pr_refs, query_pr_state, repo_slug_from_url, PrReadError,
+};
 use crate::acceptance_evidence::decide_probe_run;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,13 +152,15 @@ fn promise_refusal_d(node_id: &str, deferred: &[Value]) -> String {
 
 /// The resolve_promise_evidence twin: decide whether a node's plan promised
 /// work that has not all shipped, and whether a recorded split still waits
-/// on an unmerged PR.
+/// on an unmerged PR. `repo` is the caller's named repo (the done door's
+/// --repo): it fills a url-less ref so the state reads land there.
 pub(crate) fn resolve_promise_evidence(
     node: &Value,
     cwd: Option<&str>,
     extra_refs: &[(i64, Option<String>)],
+    repo: Option<&str>,
 ) -> PromiseVerdict {
-    resolve_promise_evidence_with(node, cwd, extra_refs, &query_pr_state)
+    resolve_promise_evidence_with(node, cwd, extra_refs, repo, &query_pr_state)
 }
 
 /// The seam variant: the same decision with the PR-state read injectable.
@@ -166,6 +170,7 @@ pub(crate) fn resolve_promise_evidence_with<Q>(
     node: &Value,
     cwd: Option<&str>,
     extra_refs: &[(i64, Option<String>)],
+    repo: Option<&str>,
     query: &Q,
 ) -> PromiseVerdict
 where
@@ -200,6 +205,9 @@ where
             seen.push(*num);
         }
     }
+    // --repo (the done door's named repo) fills a url-less ref, so the
+    // split hold and the ship count read the named repo, not the checkout's.
+    let refs = fill_ref_urls(refs, repo);
 
     // Condition S (checked before the plan read; independent of the plan):
     // numbered additional_prs entries record a split - the node ships
@@ -762,7 +770,7 @@ mod tests {
     fn plan_promise_gate_reads_or_fails_closed() {
         // No plan_path: nothing promised, the gate passes without gh io.
         let node = serde_json::json!({"id": "ab-1234abcd", "status": "in_progress"});
-        let v = resolve_promise_evidence(&node, None, &[]);
+        let v = resolve_promise_evidence(&node, None, &[], None);
         assert!(v.satisfied());
         assert!(v.warning.is_none());
 
@@ -772,7 +780,7 @@ mod tests {
             "status": "in_progress",
             "plan_path": "/nonexistent/plan-promise-test/plan.md",
         });
-        let v = resolve_promise_evidence(&node, None, &[]);
+        let v = resolve_promise_evidence(&node, None, &[], None);
         assert!(!v.satisfied());
         assert_eq!(v.exit_code(), 6);
         let reason = v.reason.as_deref().unwrap_or_default();
@@ -797,7 +805,7 @@ mod tests {
             "status": "in_progress",
             "plan_path": plan.to_string_lossy().into_owned(),
         });
-        let v = resolve_promise_evidence(&node, None, &[]);
+        let v = resolve_promise_evidence(&node, None, &[], None);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!v.satisfied());
         assert_eq!(v.exit_code(), 6);
@@ -844,7 +852,7 @@ mod tests {
             "pr_url": "https://github.com/owner/repo/pull/3658",
             "additional_prs": [{"number": 3708}],
         });
-        let v = resolve_promise_evidence_with(&node, None, &[], &|pr, _, _| {
+        let v = resolve_promise_evidence_with(&node, None, &[], None, &|pr, _, _| {
             if pr == 3658 {
                 Ok(("MERGED".into(), None))
             } else {
@@ -859,7 +867,7 @@ mod tests {
         assert!(reason.contains("--force --reason"), "{reason}");
 
         // CLOSED unmerged waits too: the split is not delivered.
-        let v = resolve_promise_evidence_with(&node, None, &[], &|pr, _, _| {
+        let v = resolve_promise_evidence_with(&node, None, &[], None, &|pr, _, _| {
             if pr == 3658 {
                 Ok(("MERGED".into(), None))
             } else {
@@ -871,8 +879,33 @@ mod tests {
 
         // Every listed PR merged: the hold lifts, and the plan-less node
         // closes with no other condition firing.
-        let v =
-            resolve_promise_evidence_with(&node, None, &[], &|_, _, _| Ok(("MERGED".into(), None)));
+        let v = resolve_promise_evidence_with(&node, None, &[], None, &|_, _, _| {
+            Ok(("MERGED".into(), None))
+        });
+        assert!(v.satisfied(), "{:?}", v.reason);
+    }
+
+    #[test]
+    fn named_repo_fills_a_urlless_split_before_the_hold_reads() {
+        // A split recorded by number alone (no urls) plus a named repo: the
+        // hold reads both refs in that repo. Without the fill the reads
+        // fall back to the checkout's repo and the split can never verify.
+        let node = serde_json::json!({
+            "id": "ab-1234abcd",
+            "status": "in_progress",
+            "pr_number": 3658,
+            "additional_prs": [{"number": 3708}],
+        });
+        let v = resolve_promise_evidence_with(
+            &node,
+            None,
+            &[],
+            Some("fork/widget"),
+            &|_pr, repo, _cwd| match repo {
+                Some("fork/widget") => Ok(("MERGED".into(), None)),
+                _ => Err(PrReadError::new("PR not found in that repo", "not_found")),
+            },
+        );
         assert!(v.satisfied(), "{:?}", v.reason);
     }
 }

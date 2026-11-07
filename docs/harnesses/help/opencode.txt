@@ -1,6 +1,5 @@
 $ opencode --help
-version: opencode v2.0.20
-
+version: opencode v2.0.19
 DESCRIPTION
   OpenCode command line interface
 

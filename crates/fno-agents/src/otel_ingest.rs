@@ -691,7 +691,7 @@ mod tests {
     /// refusals (AC2), the otel_env decision (AC5, AC6), and the exact-cost
     /// reads with the ledger fallback (AC7, AC8) all live here.
     #[tokio::test]
-    async fn otel_ingest_end_to_end() {
+    async fn session_meter_unmetered_cost_stays_unknown() {
         // AC5: a port file and a clean ambient env produce the six pairs.
         let (sup_home, _sup_td) = home();
         let port_file = sup_home.otel_dir().join("port");
@@ -897,6 +897,15 @@ mod tests {
             ),
             Some(0.004)
         );
+        assert_eq!(
+            crate::team_spend::session_meter(
+                &home.otel_dir().join("otel.db"),
+                &ledger,
+                None,
+                Some("sess-1")
+            ),
+            crate::team_spend::SessionMeter::Exact(0.004)
+        );
         // sess-2 holds an OTel row, so the ledger never answers for it; a
         // session with no rows reads the ledger estimate.
         assert_eq!(
@@ -908,12 +917,39 @@ mod tests {
             Some(3.5)
         );
         assert_eq!(
+            crate::team_spend::session_meter(
+                &home.otel_dir().join("otel.db"),
+                &ledger,
+                None,
+                Some("sess-4")
+            ),
+            crate::team_spend::SessionMeter::Estimated(3.5)
+        );
+        assert_eq!(
             crate::burn_watch::session_cost_exact(
                 &home.otel_dir().join("absent.db"),
                 &ledger,
                 "sess-4"
             ),
             Some(3.5)
+        );
+        assert_eq!(
+            crate::burn_watch::session_cost_exact(
+                &home.otel_dir().join("absent.db"),
+                &ledger,
+                "sess-unmetered"
+            ),
+            None,
+            "a session with no OTel or numeric ledger cost stays unknown"
+        );
+        assert_eq!(
+            crate::team_spend::session_meter(
+                &home.otel_dir().join("absent.db"),
+                &ledger,
+                None,
+                Some("sess-unmetered")
+            ),
+            crate::team_spend::SessionMeter::Unmetered
         );
     }
 

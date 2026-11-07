@@ -303,20 +303,7 @@ fn numeric_rotations(parent: &Path, prefix: &str) -> Vec<(i64, PathBuf)> {
 }
 
 fn or_absolute(path: &Path) -> PathBuf {
-    match path.canonicalize() {
-        Ok(resolved) => resolved,
-        Err(_) => absolutize(path),
-    }
-}
-
-fn absolutize(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    match std::env::current_dir() {
-        Ok(cwd) => cwd.join(path),
-        Err(_) => path.to_path_buf(),
-    }
+    super::resolve_path(path)
 }
 
 /// `global_events_json`: the `FNO_STATE_DIR` pin, else the configured

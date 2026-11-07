@@ -8,10 +8,10 @@
 use std::path::{Path, PathBuf};
 
 /// Where the inventory doc lives for THIS machine: an explicit override
-/// (tests, custom installs), then the plugin stage beside the state root.
-/// The stage copy is a filtered checkout (docs/ is git-tracked), so both a
-/// repo cwd and the daemon's anchor resolve the same contract through it;
-/// no cwd walk, so the reading never depends on the caller's directory.
+/// (tests, custom installs), then the new plugin stage and its legacy path.
+/// Each stage is a filtered checkout (docs/ is git-tracked), so both a repo
+/// cwd and the daemon's anchor resolve the same contract through it; no cwd
+/// walk makes the reading independent of the caller's directory.
 pub fn doc_path(state_root: &Path) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("FNO_STATE_ROOT_INVENTORY_DOC") {
         let p = PathBuf::from(p);
@@ -19,13 +19,15 @@ pub fn doc_path(state_root: &Path) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    // One join per line: a bare `join("fno")` would read as a porcelain
-    // resolver to the seam-crossings shape rule, which cannot see that this
-    // "fno" is the plugin-stage directory's name.
-    let staged = state_root
-        .join("plugin-stage/fno")
-        .join("docs/state-root-inventory.md");
-    staged.is_file().then_some(staged)
+    let mut new_stage = crate::state_layout::place_dir(state_root, "plugin-stage")
+        .unwrap_or_else(|| state_root.join("plugin-stage"));
+    new_stage.push("fno");
+    let mut legacy_stage = state_root.join("plugin-stage");
+    legacy_stage.push("fno");
+    [new_stage, legacy_stage]
+        .into_iter()
+        .map(|stage| stage.join("docs/state-root-inventory.md"))
+        .find(|path| path.is_file())
 }
 
 /// One pattern that can name a top-level entry, extracted from a row's Entry
@@ -153,9 +155,9 @@ pub fn drift_report(state_root: &Path) -> Result<DriftReport, String> {
     let doc = doc_path(state_root).ok_or_else(|| {
         format!(
             "inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor {} is a file; run `fno doctor update` to restage the plugin",
-            state_root
-                .join("plugin-stage/fno")
-                .join("docs/state-root-inventory.md")
+            crate::state_layout::place_dir(state_root, "plugin-stage")
+                .unwrap_or_else(|| state_root.join("plugin-stage"))
+                .join("fno/docs/state-root-inventory.md")
                 .display()
         )
     })?;
@@ -233,5 +235,31 @@ mod tests {
         let report = drift_report(&root);
         let _ = std::fs::remove_file(&file);
         assert!(report.is_err());
+    }
+
+    #[test]
+    fn inventory_doc_reads_new_stage_before_legacy_stage() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("FNO_STATE_ROOT_INVENTORY_DOC");
+        std::env::remove_var("FNO_STATE_ROOT_INVENTORY_DOC");
+        let root = std::env::temp_dir().join(format!("fno-drift-stage-{}", std::process::id()));
+        let new = crate::state_layout::place_dir(&root, "plugin-stage").unwrap();
+        let new_doc = new.join("fno/docs/state-root-inventory.md");
+        let old_doc = root.join("plugin-stage/fno/docs/state-root-inventory.md");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(new_doc.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(old_doc.parent().unwrap()).unwrap();
+        std::fs::write(&new_doc, "new").unwrap();
+        std::fs::write(&old_doc, "old").unwrap();
+        assert_eq!(doc_path(&root).as_deref(), Some(new_doc.as_path()));
+        std::fs::remove_dir_all(&new).unwrap();
+        assert_eq!(doc_path(&root).as_deref(), Some(old_doc.as_path()));
+        match previous {
+            Some(value) => std::env::set_var("FNO_STATE_ROOT_INVENTORY_DOC", value),
+            None => std::env::remove_var("FNO_STATE_ROOT_INVENTORY_DOC"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

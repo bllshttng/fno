@@ -124,7 +124,7 @@ async fn trust_writes_only_untrusted_enabled_fno_hooks_then_rereads() {
         assert_eq!(write["method"], "config/batchWrite");
         let edit = &write["params"]["edits"][0];
         assert_eq!(edit["keyPath"], "hooks.state");
-        assert_eq!(edit["mergeStrategy"], "Upsert");
+        assert_eq!(edit["mergeStrategy"], "upsert");
         // Only the enabled, not-yet-trusted fno rows: never the disabled row,
         // the already-trusted one, or another plugin's row.
         assert_eq!(

@@ -610,6 +610,7 @@ fn rule_names(rule: &u32) -> &'static str {
         7 => "wordcap",
         8 => "filler",
         9 => "glue",
+        10 => "number",
         _ => "?",
     }
 }
@@ -665,6 +666,9 @@ pub fn format_violations(violations: &[Violation], surface: &str) -> String {
         lines.push(
             "When the cap is the pressure, put the detail in a node note and link the node.".into(),
         );
+    }
+    if by_rule.contains_key(&10) {
+        lines.push("The short number is the readable form. Write `x-5555 (x-aaaa)` when the hash must stay copyable.".into());
     }
     if by_rule.contains_key(&3) || by_rule.contains_key(&4) {
         let first = by_rule
@@ -932,6 +936,63 @@ pub fn check(text: &str, surface: &str, word_cap: Option<usize>) -> Vec<Violatio
         violations.extend(check_glue(&masked));
     }
     violations
+}
+
+/// `check` with the store's number map armed. On the pr-body surface the map
+/// turns a bare, standalone hash that holds a number into a rule-10
+/// violation, so prose prefers the readable short form. The base `check`
+/// stays pure: it never reads the store, so unit tests and every other
+/// surface stay deterministic.
+pub fn check_with_numbers(
+    text: &str,
+    surface: &str,
+    word_cap: Option<usize>,
+    held: &std::collections::HashMap<String, String>,
+) -> Vec<Violation> {
+    let mut violations = check(text, surface, word_cap);
+    if surface == "pr-body" && !held.is_empty() {
+        let masked = mask(text);
+        for (i, line) in masked.split('\n').enumerate() {
+            violations.extend(check_node_numbers(line, i, held));
+        }
+    }
+    violations
+}
+
+/// Rule 10: a standalone hash whose number exists reads best with the number
+/// beside it. Skips paths, branches, backticked and quoted spans (the mask
+/// hides those), and the pair form `<number> (<hash>)` render already wrote.
+fn check_node_numbers(
+    line: &str,
+    line_index: usize,
+    held: &std::collections::HashMap<String, String>,
+) -> Vec<Violation> {
+    static HASH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let hash_re = HASH
+        .get_or_init(|| regex::Regex::new(r"\b[a-z]{1,8}-[0-9a-f]{4,8}\b").expect("static regex"));
+    let mut out = Vec::new();
+    for found in hash_re.find_iter(line) {
+        let hash = found.as_str();
+        let Some(number) = held.get(hash) else {
+            continue;
+        };
+        if !crate::numbers::standalone(line, found.range()) {
+            continue;
+        }
+        let before = line[..found.start()].trim_end();
+        if before.ends_with(&format!("{number} (")) {
+            continue;
+        }
+        out.push(Violation {
+            rule: 10,
+            sentence_index: line_index,
+            sentence: line.trim().to_string(),
+            detail: format!(
+                "node {hash} reads as {number}. Write the number beside it, `{number} ({hash})`, or alone.",
+            ),
+        });
+    }
+    out
 }
 
 /// Check only `line_numbers` (1-based), and report only on those lines. The
@@ -1471,7 +1532,12 @@ pub(crate) fn configured_word_cap() -> usize {
 fn run_json(text: &str, surface: &str, word_cap: Option<usize>) -> i32 {
     let exception = has_exception(text);
     let count = word_count(text);
-    let violations = check(text, surface, word_cap);
+    let held = if surface == "pr-body" {
+        crate::numbers::labels()
+    } else {
+        Default::default()
+    };
+    let violations = check_with_numbers(text, surface, word_cap, &held);
     let report = format_violations(&violations, surface);
     // The configured encounter cap (or the model's 80 default) rides the
     // receipt, so the long-note advisory learns cap and count in this one
@@ -1504,7 +1570,7 @@ fn parse_word_cap(raw: &str) -> Result<Option<usize>, i32> {
 /// Python leg printed, carried over as the command's own documentation).
 fn print_usage() {
     print!(
-        "Check text against the nine style rules in docs/style-rules.md.
+        "Check text against the ten style rules in docs/style-rules.md.
 
 Usage: fno doctor lint style [OPTIONS]
 
@@ -1516,7 +1582,8 @@ sentence. A paragraph is one physical line. No filler: \"please\", \"thanks\",
 free\". Code, paths, flags, and quoted output do not count. Mail and encounter
 prose also carry an 80 masked-word cap, and refuse a glued token: one that is
 not a word but joins two or more wordlist words, or a word and a long run of
-digits with no separator.
+digits with no separator. A pr-body also refuses a standalone node hash whose
+short number exists: write the number, or the `number (hash)` pair.
 
 Options:
   --surface <s>    Where the text is read: mail, encounter, pr-body, markdown,
@@ -1618,6 +1685,13 @@ pub fn run_cli(args: &[String]) -> i32 {
         return run_json(&text, &surface, word_cap);
     }
 
+    // The numbers map arms rule 10 on the pr-body surface. One read per run,
+    // fail-open: an unread store leaves every hash as it is written.
+    let held = if surface == "pr-body" {
+        crate::numbers::labels()
+    } else {
+        Default::default()
+    };
     let mut violations: Vec<Violation> = Vec::new();
     if let Some(base) = &diff_base {
         match style_added_lines(base, &files) {
@@ -1670,11 +1744,11 @@ gate rather than something to annotate in the file:\n  {}",
             text.lines().count()
         );
         if fix_mode {
-            let (fixed, residue) = fix(&text, &surface);
+            let (fixed, _) = fix(&text, &surface);
             print!("{fixed}");
-            violations = residue;
+            violations = check_with_numbers(&fixed, &surface, word_cap, &held);
         } else {
-            violations = check(&text, &surface, word_cap);
+            violations = check_with_numbers(&text, &surface, word_cap, &held);
         }
     } else if !files.is_empty() {
         let mut skipped: Vec<String> = Vec::new();
@@ -1693,16 +1767,16 @@ gate rather than something to annotate in the file:\n  {}",
             }
             read_lines += text.lines().count();
             if fix_mode {
-                let (fixed, residue) = fix(&text, &surface);
+                let (fixed, _) = fix(&text, &surface);
                 if fixed != text {
-                    if let Err(e) = std::fs::write(path, fixed) {
+                    if let Err(e) = std::fs::write(path, &fixed) {
                         eprintln!("style: could not write {path}: {e}");
                         return 1;
                     }
                 }
-                violations.extend(residue);
+                violations.extend(check_with_numbers(&fixed, &surface, word_cap, &held));
             } else {
-                violations.extend(check(&text, &surface, word_cap));
+                violations.extend(check_with_numbers(&text, &surface, word_cap, &held));
             }
         }
         style_skip_receipt(&skipped, false);
@@ -1801,5 +1875,20 @@ mod tests {
         assert!(check("Staticprogress proves it here.\n", "encounter", None)
             .iter()
             .any(|v| v.rule == 9));
+    }
+
+    #[test]
+    fn rule_10_flags_a_numbered_hash_written_bare_and_passes_the_pair_form() {
+        let held: std::collections::HashMap<String, String> =
+            [("x-aaaa".to_string(), "x-5555".to_string())]
+                .into_iter()
+                .collect();
+        let v = check_with_numbers("It ships in Fixes x-aaaa.\n", "pr-body", None, &held);
+        assert!(v.iter().any(|x| x.rule == 10), "bare numbered hash: {v:?}");
+        let v = check_with_numbers("It ships as x-5555 (x-aaaa).\n", "pr-body", None, &held);
+        assert!(
+            v.is_empty(),
+            "pair form and unnumbered tokens stay clean: {v:?}"
+        );
     }
 }

@@ -173,6 +173,14 @@ pub fn run(args: &[String]) -> i32 {
         return emit_block_for_harness(&session_id, &reason);
     }
 
+    // A turn that ends naming an open user question is waiting on the user,
+    // whoever filed the question. Any block below flips the row back to
+    // working with a later seq, so only a terminal allow leaves the flag up.
+    if let Some(msg) = fire.last_assistant_message.as_deref() {
+        let qids = crate::event_rules::stop_open_questions(&cwd, msg);
+        super::session_state::report_waiting_on_user(&session_id, &qids);
+    }
+
     // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
     match evaluate(&cwd, &fire) {
         Verdict::NoOwner => {

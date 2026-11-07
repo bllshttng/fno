@@ -137,7 +137,7 @@ for name in ("smoke-pytest", "smoke-rest"):
     check("needs.pr-affected.outputs.python_full" in job_if
           and "!cancelled()" in job_if,
           f"cli-ci {name} is eligible when the non-PR selector says full")
-for name in ("test-agents", "test-agents-integration", "test-mux"):
+for name in ("test-agents", "test-agents-integration", "test-mux", "test-mux-integration"):
     job_if = str(cli_jobs.get(name, {}).get("if", ""))
     check("needs.pr-affected.outputs.cargo" in job_if
           and "!cancelled()" in job_if,

@@ -9,7 +9,7 @@ Setup is `fno do wizard`, an interactive terminal program. It detects the machin
 
 ## Launch inside the mux
 
-When `FNO_PANE` is set, open a split beside this pane and run the wizard there:
+When the session sets `FNO_PANE`, open a split beside this pane and run the wizard there:
 
 ```bash
 fno mux pane run --at current --split right --json -- fno do wizard
@@ -31,7 +31,7 @@ A session with no pane cannot host a terminal program. Print the command for the
 fno do wizard
 ```
 
-Do steps "Read the report" and "Say the result" below when they say the run is done.
+After the wizard finishes, follow the `Read the report` and `Say the result` steps below.
 
 ## No person at all
 
@@ -43,9 +43,11 @@ fno config setup run --dry-run --json
 
 Apply nothing of kind `approve`. An approve needs a person.
 
+The `claude-auto-mode` approve step adds Footnote's narrow state and role rules to the active Claude Code user settings file. If the user sets `CLAUDE_CONFIG_DIR`, setup uses its `settings.json` file. Otherwise, setup uses `~/.claude/settings.json`. A person must approve the step. An unattended run can show the proposal. It does not change Claude Code settings, credentials, or sandbox options.
+
 ## Read the report
 
-The run writes `<state_dir>/sidecar/wizard-report.json` and prints `wizard-report: <path>` as its last line. Check two things before you speak for the run: `run_id` is newer than your launch, and `status` is not `running` (a run writes a running stub first and the final report over it). Then say three things: the red rows with their fix, the files written, and `next_action`.
+The run writes `<state_dir>/sidecar/wizard-report.json`. It prints the path as `wizard-report: <path>`. Check that `run_id` is newer than your launch. Also check that `status` is not `running`. The run writes a `running` stub before the final report. Then report the red rows and their fixes, the files it wrote, and `next_action`.
 
 ## Modes
 

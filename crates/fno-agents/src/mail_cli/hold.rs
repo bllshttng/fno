@@ -460,6 +460,9 @@ pub(crate) fn register_existing_session(
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let policy = stamp.then(|| "bus-only".to_string());
     let path = AgentsHome::shared_registry_json();
+    // Resolved before the registry lock: the census walk reads the whole
+    // process table.
+    let ambient_pid = crate::spawn_context::session_identity_ambient(std::process::id()).0;
     crate::state::update_registry(&path, |registry| {
         let existing = registry.entries.iter_mut().find(|e| {
             e.harness.as_deref() == Some(harness)
@@ -472,6 +475,7 @@ pub(crate) fn register_existing_session(
             if row.cwd.is_empty() {
                 row.cwd = cwd.clone();
             }
+            crate::register::bind_own_pid(row, ambient_pid);
             return;
         }
         let base = crate::identity::canonical_handle(session_id);
@@ -578,4 +582,80 @@ fn dedupe_keep_order_by_id(messages: Vec<Value>) -> Vec<Value> {
 
 fn truncate_160(detail: String) -> String {
     detail.chars().take(160).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AC3-HP: the join door's refresh binds the live ambient pid onto a row
+    /// carrying a dead pre-restart pid, through the same helper the register
+    /// command uses. A synthetic census makes the test process itself the
+    /// live harness ancestor, so the ambient walk answers a real, live pid.
+    #[test]
+    fn a_join_refresh_binds_the_live_ambient_pid() {
+        let _env = crate::claims::test_env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let agents = tmp.path().join("agents-home");
+        std::fs::create_dir_all(&agents).unwrap();
+        let saved_agents = std::env::var_os(crate::paths::HOME_ENV);
+        let saved_stamp = std::env::var_os("FNO_SESSION_PID");
+        std::env::set_var(crate::paths::HOME_ENV, &agents);
+        std::env::remove_var("FNO_SESSION_PID");
+
+        let dead = crate::row_verdict::reaped_pid();
+        crate::state::update_registry(&AgentsHome::shared_registry_json(), |registry| {
+            let mut row = crate::state::RegistryEntry::new(
+                Some("sid-join".to_string()),
+                crate::state::Lineage::unproven("hold register test"),
+            );
+            row.name = "joiner".to_string();
+            row.harness = Some("codex".to_string());
+            row.host_mode = Some("interactive".to_string());
+            row.pid = Some(dead);
+            registry.entries.push(row);
+        })
+        .unwrap();
+
+        let me = std::process::id();
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(
+            me,
+            crate::census::ProcRow {
+                pid: me,
+                ppid: 1,
+                state: 'S',
+                elapsed_s: 1,
+                cpu_pct: 0.0,
+                rss_kb: 0,
+                command: "codex exec --json".to_string(),
+            },
+        );
+        crate::spawn_context::set_test_ancestry_table(Some(table));
+
+        let outcome = register_existing_session("codex", "sid-join", false);
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let registry = crate::state::load_registry(&AgentsHome::shared_registry_json()).unwrap();
+        let row = registry
+            .entries
+            .iter()
+            .find(|e| e.harness_session_id.as_deref() == Some("sid-join"))
+            .expect("row still present");
+        assert_eq!(row.pid, Some(me));
+        assert_eq!(
+            row.pid_start_time,
+            crate::process_probe::process_start_time(me)
+        );
+
+        crate::spawn_context::set_test_ancestry_table(None);
+        match saved_stamp {
+            Some(v) => std::env::set_var("FNO_SESSION_PID", v),
+            None => std::env::remove_var("FNO_SESSION_PID"),
+        }
+        match saved_agents {
+            Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
+            None => std::env::remove_var(crate::paths::HOME_ENV),
+        }
+    }
 }

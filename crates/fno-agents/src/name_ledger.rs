@@ -12,8 +12,10 @@
 //! Each machine still writes its local file first. Every append also lands
 //! here, and every read pushes the local rows the primary lacks, so a
 //! machine's older names migrate on its first naming read or daemon sweep.
-//! A configured primary that cannot be read refuses the naming decision: a
-//! name judged fresh on half the fleet's history is the bug this closes.
+//! The sweep also lands the primary's rows in the local file, so a peer's
+//! bound name resolves here without a dial-out. A configured primary that
+//! cannot be read refuses the naming decision: a name judged fresh on half
+//! the fleet's history is the bug this closes.
 
 use crate::store_remote::{Remote, SqlValue};
 use crate::team_names::NameHistoryEntry;
@@ -187,16 +189,45 @@ pub(crate) fn read_merged(
     if let Err(e) = push_missing(&remote, &shared, local) {
         eprintln!("name ledger: backfill to {} failed ({e})", remote.url());
     }
+    if let Err(e) = pull_missing(store_path, &shared, local) {
+        eprintln!("name ledger: pull from {} failed ({e})", remote.url());
+    }
     Ok(shared)
 }
 
-/// Push every local row the primary lacks. The daemon sweep runs this, so a
-/// machine that names nobody for a while still lands its history.
+/// Push every local row the primary lacks, and land the primary's rows this
+/// machine's file lacks. The daemon sweep runs this, so a machine that names
+/// nobody for a while still lands its history, and a peer's bound name
+/// resolves here: a remote sender's rendered header names itself, and the
+/// store that verifies that header has to hold the row the name came from.
 pub fn sync(store_path: &Path, local: &[NameHistoryEntry]) -> Result<usize, String> {
     let Some(remote) = primary(store_path)? else {
         return Ok(0);
     };
-    push_missing(&remote, &select_all(&remote)?, local)
+    let shared = select_all(&remote)?;
+    let pushed = push_missing(&remote, &shared, local)?;
+    Ok(pushed + pull_missing(store_path, &shared, local)?)
+}
+
+/// The reverse of [`push_missing`]: append the shared rows the local file
+/// lacks, host stamps included. Best-effort - the next sweep or naming read
+/// retries what a failed write drops.
+fn pull_missing(
+    store_path: &Path,
+    shared: &[NameHistoryEntry],
+    local: &[NameHistoryEntry],
+) -> Result<usize, String> {
+    let have: BTreeSet<[String; 5]> = local.iter().map(row_id).collect();
+    let missing: Vec<NameHistoryEntry> = shared
+        .iter()
+        .filter(|e| !have.contains(&row_id(e)))
+        .cloned()
+        .collect();
+    let count = missing.len();
+    for entry in missing {
+        crate::team_names::history_append(store_path, entry)?;
+    }
+    Ok(count)
 }
 
 fn push_missing(
@@ -300,6 +331,36 @@ mod tests {
         route_to_primary(Some(crate::store_remote::test_primary::dead()));
         let err = team_names::history_names(&mac_store).unwrap_err();
         assert!(err.contains("cannot be read"), "{err}");
+        route_to_primary(None);
+    }
+
+    /// A name one machine bound resolves on a peer after its sweep lands the
+    /// primary's rows in the peer's file: the ledger read behind the remote
+    /// sender's header render and the receipt-side trust lookup is the local
+    /// mirror, and the mirror has to hold what the header names.
+    #[test]
+    fn a_sweep_lands_a_peers_bound_name_in_the_local_mirror() {
+        let macbook = tempfile::tempdir().unwrap();
+        let imac = tempfile::tempdir().unwrap();
+        let mac_store = macbook.path().join("team_names.json");
+        let imac_store = imac.path().join("team_names.json");
+        let bound = |name: &str, scope: &str, session: &str| {
+            NameHistoryEntry::here(name, scope, Some(session.into()), "bound")
+        };
+        let primary = crate::store_remote::test_primary::start();
+        route_to_primary(Some(primary.remote.clone()));
+        // The iMac bound briar; the MacBook's mirror starts empty.
+        team_names::history_append(&imac_store, bound("briar", "fno", "sess-briar")).unwrap();
+        assert_eq!(team_names::history_sync(&mac_store).unwrap(), 1);
+        assert!(
+            team_names::history_all(&mac_store)
+                .unwrap()
+                .iter()
+                .any(|e| e.name == "briar" && e.kind == "bound"),
+            "the sweep pulled the peer's bound row into the local mirror"
+        );
+        // Converged: a second sweep moves nothing.
+        assert_eq!(team_names::history_sync(&mac_store).unwrap(), 0);
         route_to_primary(None);
     }
 }

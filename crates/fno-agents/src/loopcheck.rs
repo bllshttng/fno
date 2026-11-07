@@ -765,6 +765,11 @@ pub(crate) fn decide_with_payload(
                 cap_usd.map(|c| serde_json::json!(c)),
                 serde_json::json!(spent_usd),
             ),
+            BudgetTrip::TeamCost { cap_usd, spent_usd } => (
+                "team_cost",
+                cap_usd.map(|c| serde_json::json!(c)),
+                serde_json::json!(spent_usd),
+            ),
         };
         let mut data = serde_json::json!({
             "session_id": session_id,

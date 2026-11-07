@@ -268,19 +268,39 @@ def load_oracle_modules() -> None:
     import types
 
     def oracle_ref(repo_path: str) -> str:
-        for depth in range(0, 10):
-            rev = "HEAD" if depth == 0 else f"HEAD~{depth}"
-            probe = sp.run(
-                ["git", "cat-file", "-e", f"{rev}:{repo_path}"],
-                capture_output=True,
-                cwd=REPO,
-            )
-            if probe.returncode == 0:
-                return rev
-        raise SystemExit(
-            f"no ancestor of HEAD within 10 commits holds {repo_path}; "
-            "the base-commit leg is out of reach for capture"
+        present = sp.run(
+            ["git", "cat-file", "-e", f"HEAD:{repo_path}"],
+            cwd=REPO,
+            stdout=sp.DEVNULL,
+            stderr=sp.DEVNULL,
         )
+        if present.returncode == 0:
+            return "HEAD"
+        touched = sp.run(
+            ["git", "log", "--format=%H", "HEAD", "--", repo_path],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for commit in touched.stdout.splitlines():
+            parents = sp.run(
+                ["git", "show", "-s", "--format=%P", commit],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.split()
+            for candidate in (commit, *parents):
+                probe = sp.run(
+                    ["git", "cat-file", "-e", f"{candidate}:{repo_path}"],
+                    cwd=REPO,
+                    stdout=sp.DEVNULL,
+                    stderr=sp.DEVNULL,
+                )
+                if probe.returncode == 0:
+                    return candidate
+        raise SystemExit(f"no reachable ancestor of HEAD holds {repo_path}")
 
     for module_name, repo_path in (
         ("fno.config_cli", "cli/src/fno/config_cli.py"),
