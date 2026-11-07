@@ -2339,8 +2339,8 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
             ))
         }
     };
-    let keys = match contract.permission_response_keys("claude", answer, "permission_prompt") {
-        Ok(k) if !k.is_empty() => k,
+    let key = match contract.permission_response_keys("claude", answer, "permission_prompt") {
+        Ok(mut k) if !k.is_empty() => k.remove(0),
         _ => {
             return Some(AskOutcome::err(
                 format!("ask --answer: claude refuses action {answer:?}"),
@@ -2389,11 +2389,10 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
             2,
         ));
     }
-    let key = &keys[0];
     match crate::mail_inject::answer_permission_via_control_sock_in(
         &crate::claude_roster::daemon_dir(),
         &short,
-        key,
+        &key,
         crate::mail_inject::default_enter_delay_ms(crate::mail_inject::MailInjectHarness::Claude),
     ) {
         Ok(()) => {
