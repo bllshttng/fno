@@ -384,6 +384,9 @@ impl MessagesBoard {
 /// chat list, no tree.
 #[derive(Debug)]
 pub(crate) enum TreeRow {
+    /// The pinned `Your asks` row: every session's typed asks flattened,
+    /// pending first. Column 3 paints the list; Enter opens it.
+    Asks { pending: usize },
     /// A broadcast group row (Broadcasts filter), by its scope.
     Channel(String),
     /// One mail participant, live or ended, by name (never a raw session
@@ -593,6 +596,24 @@ impl MessagesBoard {
                 }
             }
             return rows;
+        }
+        // The pinned `Your asks` row heads the All filter's agent list:
+        // every session's typed asks flattened, pending first. It shows on
+        // the Agents tab where the user reads their own threads.
+        if self.list_tab == ListTab::Agents {
+            let pending = self
+                .projection()
+                .and_then(|p| p.get("you"))
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .flat_map(|r| r.get("items").and_then(Value::as_array).into_iter())
+                        .flatten()
+                        .filter(|i| text_of(i, "state") == "pending")
+                        .count()
+                })
+                .unwrap_or(0);
+            rows.push(TreeRow::Asks { pending });
         }
         let mut seen: HashSet<&str> = HashSet::new();
         for p in self.agent_rows() {
@@ -934,6 +955,18 @@ impl MessagesBoard {
         lines.push(TLine::meta(""));
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {
+                TreeRow::Asks { pending } => TLine::of(&[
+                    seg(
+                        if *pending > 0 {
+                            format!("{pending}")
+                        } else {
+                            String::new()
+                        },
+                        TextStyle::ERROR,
+                    ),
+                    seg(" ", TextStyle::Meta),
+                    seg("Your asks", TextStyle::Item),
+                ]),
                 TreeRow::Channel(scope) => TLine::of(&[seg(
                     format!("fleet:{}", channel_label(scope)),
                     TextStyle::Badge,
@@ -1049,6 +1082,12 @@ impl MessagesBoard {
         let Some(sel) = self.sel_thread.as_deref() else {
             return TLine::meta("Thread");
         };
+        if sel == "asks" {
+            return TLine::of(&[
+                seg("Your asks", TextStyle::Title),
+                seg("  [i]  ...".to_string(), TextStyle::Meta),
+            ]);
+        }
         if let Some(sid) = sel.strip_prefix("you:") {
             let name = self
                 .you_row(sid)
@@ -1109,6 +1148,9 @@ impl MessagesBoard {
     /// padding).
     pub(crate) fn thread_lines(&self, w: usize) -> (Vec<TLine>, Vec<Option<usize>>) {
         let title = self.thread_title();
+        if self.sel_thread.as_deref() == Some("asks") {
+            return self.asks_lines(w);
+        }
         if let Some(sid) = self
             .sel_thread
             .as_deref()
@@ -1278,6 +1320,102 @@ impl MessagesBoard {
             .and_then(|p| p.get("you"))
             .and_then(Value::as_array)
             .and_then(|rows| rows.iter().find(|t| text_of(t, "session_id") == sid))
+    }
+
+    /// Every session's asks flattened from the `you` rows, pending first,
+    /// then newest first (the same order `fno inbox user list --all`
+    /// prints). One row per item with the session's name joined.
+    pub(crate) fn asks_items(&self) -> Vec<Value> {
+        let mut flat: Vec<Value> = self
+            .you_threads()
+            .iter()
+            .flat_map(|row| {
+                let name = text_of(row, "name");
+                row.get("items")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(move |item| {
+                        let mut merged = item.clone();
+                        if let Some(obj) = merged.as_object_mut() {
+                            obj.insert("session_name".into(), Value::String(name.to_string()));
+                        }
+                        merged
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let pending_rank = |v: &Value| usize::from(text_of(v, "state") != "pending");
+        fn row_ts(v: &Value) -> &str {
+            text_of(v, "ts")
+        }
+        flat.sort_by(|a, b| {
+            pending_rank(a)
+                .cmp(&pending_rank(b))
+                .then(row_ts(b).cmp(row_ts(a)))
+        });
+        flat
+    }
+
+    /// Column 3 for the asks row: the flattened list, one block per ask -
+    /// a header line (state mark, session name, age) over the typed text
+    /// and the reply's excerpt, the bubble idiom `you_thread_lines` uses.
+    /// The cursor indexes header lines (the selection affordance), so a
+    /// list that moves under it stays navigable.
+    fn asks_lines(&self, w: usize) -> (Vec<TLine>, Vec<Option<usize>>) {
+        let title = self.thread_title();
+        let mut lines = vec![title];
+        let mut owners: Vec<Option<usize>> = vec![None];
+        let wrap_w = w.saturating_sub(2).max(1);
+        let items = self.asks_items();
+        if items.is_empty() {
+            let wrapped = TLine::meta("(no asks yet)").wrap(wrap_w);
+            owners.extend(std::iter::repeat(None).take(wrapped.len()));
+            lines.extend(wrapped);
+            return (lines, owners);
+        }
+        for (ask_index, item) in items.iter().enumerate() {
+            let selected = ask_index == self.cursors[2];
+            let state = text_of(item, "state");
+            let name = text_of(item, "session_name");
+            let ts = text_of(item, "ts");
+            let typed = text_of(item, "typed_text");
+            let reply = if text_of(item, "end_reply").trim().is_empty() {
+                text_of(item, "reply_text")
+            } else {
+                text_of(item, "end_reply")
+            };
+            let mut block = vec![TLine::of(&[
+                seg(
+                    match state {
+                        "pending" => "?",
+                        "acked" => "x",
+                        _ => "=",
+                    },
+                    if selected {
+                        TextStyle::Title
+                    } else {
+                        TextStyle::Meta
+                    },
+                ),
+                seg(" ", TextStyle::Meta),
+                seg(name.to_string(), TextStyle::Badge),
+                seg(format!(" \u{b7} {}", Self::ts_time(ts)), TextStyle::Meta),
+            ])];
+            if !typed.trim().is_empty() {
+                block.extend(body_lines(typed, wrap_w, TextStyle::Item));
+            }
+            if !reply.trim().is_empty() {
+                block.extend(body_lines(reply, wrap_w, TextStyle::Meta));
+            }
+            for mut line in block {
+                line.band = selected;
+                lines.push(line);
+                owners.push(Some(ask_index));
+            }
+            push_blank(&mut lines, &mut owners);
+        }
+        (lines, owners)
     }
 }
 
@@ -1776,11 +1914,15 @@ fn column_len(b: &MessagesBoard) -> usize {
     }
 }
 
-/// The Thread column's navigable length: a You thread's items, else the
-/// conversation rows.
+/// The Thread column's navigable length: the asks list on the asks row, a
+/// You thread's items, else the conversation rows.
 fn thread_len(b: &MessagesBoard) -> usize {
-    match b.sel_thread.as_deref().and_then(|s| s.strip_prefix("you:")) {
-        Some(sid) => b.you_items(sid).len(),
+    match b.sel_thread.as_deref() {
+        Some("asks") => b.asks_items().len(),
+        Some(sel) => match sel.strip_prefix("you:") {
+            Some(sid) => b.you_items(sid).len(),
+            None => b.conversation_rows().len(),
+        },
         None => b.conversation_rows().len(),
     }
 }
@@ -1800,6 +1942,11 @@ async fn act(
                 return Ok(());
             };
             match row {
+                TreeRow::Asks { .. } => {
+                    b.sel_thread = Some("asks".to_string());
+                    b.cursors[2] = 0;
+                    b.col = Col::Thread;
+                }
                 TreeRow::Channel(scope) => {
                     b.sel_thread = Some(format!("channel:{scope}"));
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
@@ -2160,7 +2307,7 @@ fn retry_notice(stdout: &str, to: &str) -> String {
 fn tree_row_agent_key(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::Agent { key, .. } => Some(key.clone()),
-        TreeRow::Channel(_) => None,
+        TreeRow::Asks { .. } | TreeRow::Channel(_) => None,
     }
 }
 
