@@ -294,14 +294,25 @@ fn codex_dropped_tree(rel: &str) -> bool {
         .any(|tree| rel == *tree || rel.starts_with(&format!("{tree}/")))
 }
 
+/// First `PLUGIN_ROOT/<dropped tree>` read in `text`. The regex crate has no
+/// look-around, so the "not followed by `-` or a word character" boundary is
+/// checked by hand after each match.
+fn dropped_tree_read(text: &str) -> Option<&str> {
+    let pattern = regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)"#)
+        .expect("valid tree-read pattern");
+    let hit = pattern.find_iter(text).find_map(|m| {
+        let next = text[m.end()..].chars().next();
+        let continues = next.is_some_and(|c| c == '-' || c == '_' || c.is_alphanumeric());
+        (!continues).then(|| &text[m.range()])
+    });
+    hit
+}
+
 /// Refuse a codex stage whose hooks, skills, agents or commands name a
 /// dropped tree at run time: the guard turns a future runtime read into a
 /// build refusal naming the file and the path (AC8), not a broken hook at
 /// runtime.
 fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
-    let pattern =
-        regex::Regex::new(r#"(CLAUDE_)?PLUGIN_ROOT[}"]*/(cli|crates|tests|evals)(?![-\w])"#)
-            .expect("valid tree-read pattern");
     for dir in ["hooks", "skills", "agents", "commands"] {
         let root = source_root.join(dir);
         if !root.is_dir() {
@@ -328,13 +339,13 @@ fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
-            if let Some(hit) = pattern.find(&text) {
+            if let Some(hit) = dropped_tree_read(&text) {
                 let rel = path.strip_prefix(source_root).unwrap_or(path);
                 return Err(format!(
                     "codex stage: {} names dropped tree path {:?} at run time; \
                      widen the keep set or fix the reference",
                     rel.display(),
-                    hit.as_str()
+                    hit
                 ));
             }
         }
@@ -3142,6 +3153,24 @@ fn swap_grok_symlink(plugins: &Path, link: &Path, stage: &Path) -> Result<(), St
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn dropped_tree_read_pattern_compiles_and_checks_boundary() {
+        assert_eq!(
+            dropped_tree_read("run ${CLAUDE_PLUGIN_ROOT}/cli/x"),
+            Some("CLAUDE_PLUGIN_ROOT}/cli")
+        );
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli"),
+            Some("PLUGIN_ROOT/cli")
+        );
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/cli-x"), None);
+        assert_eq!(dropped_tree_read("PLUGIN_ROOT/clix"), None);
+        assert_eq!(
+            dropped_tree_read("PLUGIN_ROOT/cli-x PLUGIN_ROOT/tests"),
+            Some("PLUGIN_ROOT/tests")
+        );
+    }
 
     // zcode install: a malformed config is refused byte-identical.
     #[test]

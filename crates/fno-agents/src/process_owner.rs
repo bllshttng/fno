@@ -144,6 +144,151 @@ fn process_environment(pid: u32) -> Option<Vec<u8>> {
     (bytes.len() <= MAX_PROCESS_ENVIRONMENT_BYTES).then_some(bytes)
 }
 
+/// The environment of `pid` on macOS: the tail of `KERN_PROCARGS2` past argv.
+/// Same-user processes read fine; a sysctl failure (SIP-shielded, gone) reads
+/// `None`, and the caller treats an unreadable env as no lease evidence.
+#[cfg(target_os = "macos")]
+fn process_environment(pid: u32) -> Option<Vec<u8>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut size: libc::size_t = 0;
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+        || size < 4
+    {
+        return None;
+    }
+    let mut buf = vec![0u8; size];
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast::<libc::c_void>(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+    procargs2_env_region(&buf[..size])
+}
+
+/// The environment strings of a `KERN_PROCARGS2` buffer: an `i32` argc, the
+/// exec path, NUL padding, argc argv strings, then the environment to the end
+/// of the buffer. Mirrors `census::parse_procargs2`, which stops at argv.
+#[cfg(target_os = "macos")]
+fn procargs2_env_region(buf: &[u8]) -> Option<Vec<u8>> {
+    if buf.len() < 4 {
+        return None;
+    }
+    let argc = i32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+    if argc == 0 {
+        return None;
+    }
+    let mut i = 4;
+    while i < buf.len() && buf[i] != 0 {
+        i += 1;
+    }
+    if i >= buf.len() {
+        return None;
+    }
+    while i < buf.len() && buf[i] == 0 {
+        i += 1;
+    }
+    let mut consumed = 0;
+    while consumed < argc && i < buf.len() {
+        while i < buf.len() && buf[i] != 0 {
+            i += 1;
+        }
+        i += 1;
+        consumed += 1;
+    }
+    (consumed == argc).then(|| buf[i..].to_vec())
+}
+
+/// The full owner lease carried in `pid`'s own environment, `None` when the
+/// env names no lease. The shape-agnostic orphan sweep's read leg: any tagged
+/// process, any argv shape, both platforms.
+pub fn owner_lease_for_pid(pid: u32) -> OwnerRead {
+    let Some(bytes) = process_environment(pid) else {
+        return OwnerRead::Ownerless;
+    };
+    match lease_from_environment(&bytes) {
+        Some(lease) => OwnerRead::Owner(lease),
+        None if bytes.windows(10).any(|window| window == b"FNO_OWNER_") => OwnerRead::Unknown,
+        None => OwnerRead::Ownerless,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Every test and helper here reads the macOS procargs layout, so the
+    // whole module is cfg'd; the import rides the same gate or Linux builds
+    // it as an unused import under deny-warnings.
+    #[cfg(target_os = "macos")]
+    use super::*;
+
+    /// The macOS env read is a sysctl away, so the parser is the unit: a
+    /// synthetic KERN_PROCARGS2 buffer must yield an env region the existing
+    /// lease parser accepts, argv and exec path excluded.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn procargs2_env_region_yields_the_lease_past_argv() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&2i32.to_ne_bytes());
+        buf.extend_from_slice(b"/usr/local/bin/fno\0");
+        buf.extend_from_slice(&[0, 0]); // alignment padding
+        buf.extend_from_slice(b"fno\0-do\0"); // argv, argc = 2
+        buf.extend_from_slice(
+            b"PATH=/bin\0FNO_OWNER_PID=42\0FNO_OWNER_BIRTH=9001\0FNO_OWNER_SESSION=session-a\0",
+        );
+        let region = procargs2_env_region(&buf).expect("env region parses");
+        let lease = lease_from_environment(&region).expect("lease parses");
+        assert_eq!(lease.pid, 42);
+        assert_eq!(lease.birth, 9001);
+        assert_eq!(lease.session, "session-a");
+        // A partial lease is visible, never kill authority.
+        let mut partial = Vec::new();
+        partial.extend_from_slice(&2i32.to_ne_bytes());
+        partial.extend_from_slice(b"/bin/x\0\0x\0-y\0FNO_OWNER_PID=7\0");
+        let region = procargs2_env_region(&partial).expect("env region parses");
+        assert_eq!(
+            owner_read_of_bytes(&region),
+            OwnerRead::Unknown,
+            "partial lease reads Unknown"
+        );
+        // No lease tokens at all reads Ownerless.
+        let mut plain = Vec::new();
+        plain.extend_from_slice(&1i32.to_ne_bytes());
+        plain.extend_from_slice(b"/bin/sh\0\0sh\0-c\0");
+        plain.extend_from_slice(b"PATH=/bin\0HOME=/tmp\0");
+        let region = procargs2_env_region(&plain).expect("env region parses");
+        assert_eq!(
+            owner_read_of_bytes(&region),
+            OwnerRead::Ownerless,
+            "untagged env reads Ownerless"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn owner_read_of_bytes(bytes: &[u8]) -> OwnerRead {
+        match lease_from_environment(bytes) {
+            Some(lease) => OwnerRead::Owner(lease),
+            None if bytes.windows(10).any(|w| w == b"FNO_OWNER_") => OwnerRead::Unknown,
+            None => OwnerRead::Ownerless,
+        }
+    }
+}
+
 pub fn lease_from_environment(bytes: &[u8]) -> Option<OwnerLease> {
     let mut pid = None;
     let mut birth = None;
@@ -188,6 +333,37 @@ pub fn owner_status(lease: &OwnerLease) -> OwnerStatus {
             } else {
                 OwnerStatus::Dead
             }
+        }
+    }
+}
+
+/// The owner-lease env entries for a live owner pid and session name, `None`
+/// when the owner's birth is unreadable or the session name is not a valid
+/// owner session. Writers stamp this on every fleet worker child, so the
+/// shape-agnostic orphan sweep can name and reap a process whose owner died.
+/// Clears any inherited lease first: the stamp names THIS owner, never an
+/// ancestor's.
+pub fn owner_lease_env(owner_pid: u32, session: &str) -> Option<Vec<(String, String)>> {
+    if !valid_owner_session(session) {
+        return None;
+    }
+    let birth = crate::daemon::process_start_time(owner_pid)?;
+    Some(vec![
+        ("FNO_OWNER_PID".to_string(), owner_pid.to_string()),
+        ("FNO_OWNER_BIRTH".to_string(), birth.to_string()),
+        ("FNO_OWNER_SESSION".to_string(), session.to_string()),
+    ])
+}
+
+/// Apply [`owner_lease_env`] to a std `Command`, removing any inherited
+/// FNO_OWNER_* keys first.
+pub fn stamp_command_owner_lease(cmd: &mut std::process::Command, session: &str) {
+    for key in ["FNO_OWNER_PID", "FNO_OWNER_BIRTH", "FNO_OWNER_SESSION"] {
+        cmd.env_remove(key);
+    }
+    if let Some(env) = owner_lease_env(std::process::id(), session) {
+        for (key, value) in env {
+            cmd.env(key, value);
         }
     }
 }
