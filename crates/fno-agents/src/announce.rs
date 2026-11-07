@@ -776,14 +776,12 @@ fn expired(m: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
 // Cursor: per-session seen-id set (decision 4)
 // ---------------------------------------------------------------------------
 
-// pub(crate): the law edit read (law_match edit_answer) keeps its own
-// per-session seen-id set beside this one, so the dir is the caller's word.
-pub(crate) fn cursor_path(state_root: &Path, dir: &str, session_id: &str) -> PathBuf {
+fn cursor_path(state_root: &Path, dir: &str, session_id: &str) -> PathBuf {
     let safe = format!("{}.json", session_id.replace('/', "_"));
     crate::state_layout::place_in(state_root, dir, &safe)
 }
 
-pub(crate) fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> HashSet<String> {
+fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> HashSet<String> {
     let text = match std::fs::read_to_string(cursor_path(state_root, dir, session_id)) {
         Ok(t) => t,
         Err(_) => return HashSet::new(),
@@ -802,7 +800,7 @@ pub(crate) fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> Has
     }
 }
 
-pub(crate) fn save_cursor(state_root: &Path, dir: &str, session_id: &str, seen: &HashSet<String>) {
+fn save_cursor(state_root: &Path, dir: &str, session_id: &str, seen: &HashSet<String>) {
     let path = cursor_path(state_root, dir, session_id);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -813,6 +811,61 @@ pub(crate) fn save_cursor(state_root: &Path, dir: &str, session_id: &str, seen: 
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, payload).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// How long a cursor writer waits for another writer on the same file before
+/// proceeding unlocked (the bound merge_hold's PlanLock uses).
+const CURSOR_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serialized read-modify-write of one cursor file. The flock on
+/// `<cursor>.lock` spans load through save: without it two overlapping
+/// reads of one session (async PostToolUse runs collide) both load the same
+/// set and one save drops the other's insert, so a deduped rule, door span
+/// or announcement fires again later. The closure mutates the loaded set
+/// and returns true when anything changed; true saves. A wait past the
+/// timeout proceeds unlocked: the file stays consistent and the worst case
+/// is the duplicate reminder this lock exists to prevent, never a hung hook.
+pub(crate) fn update_cursor(
+    state_root: &Path,
+    dir: &str,
+    session_id: &str,
+    f: impl FnOnce(&mut HashSet<String>) -> bool,
+) {
+    let path = cursor_path(state_root, dir, session_id);
+    let _lock = cursor_lock(&path);
+    let mut seen = load_cursor(state_root, dir, session_id);
+    if f(&mut seen) {
+        save_cursor(state_root, dir, session_id, &seen);
+    }
+}
+
+/// The held flock lives as long as the returned file; `None` proceeds
+/// unlocked (open failure, lock error, or the timeout above).
+fn cursor_lock(path: &Path) -> Option<std::fs::File> {
+    let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+    let deadline = std::time::Instant::now() + CURSOR_LOCK_TIMEOUT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => return None,
+        }
     }
 }
 
@@ -930,88 +983,88 @@ fn read_render_in(
     let registry = crate::client_commands::load_registry_entries(&paths.registry)?;
     let projects =
         crate::org_board::scope::project_map(&std::env::current_dir().unwrap_or_default()).ok();
-    let mut seen = load_cursor(&paths.state_root, "announce-cursors", session_id);
-
-    let mut fresh: Vec<&Value> = Vec::new();
-    let mut standing_seen: Vec<&Value> = Vec::new();
-    for m in &standing {
-        let Some(id) = row_str(m, "id") else { continue };
-        // The sender never reads its own announcement back.
-        if m.get("from_session")
-            .and_then(Value::as_str)
-            .is_some_and(|fs| {
-                crate::spawn_context::session_identity_key(fs)
-                    == crate::spawn_context::session_identity_key(session_id)
-            })
-        {
-            continue;
-        }
-        let audience: Vec<Value> = m
-            .get("meta")
-            .and_then(|meta| meta.get("audience"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let scope = m
-            .get("meta")
-            .and_then(|meta| row_str(meta, "scope"))
-            .unwrap_or("all");
-        let mine = in_audience(&audience, session_id)
-            || matches_scope_now(scope, session_id, &registry, projects.as_ref());
-        if !mine {
-            continue;
-        }
-        if seen.contains(id) {
-            standing_seen.push(*m);
-        } else {
-            fresh.push(*m);
-        }
-    }
-
-    if boundary == Boundary::Compact {
-        let mut out: Vec<String> = fresh.iter().map(|m| render_block(m)).collect();
-        out.extend(standing_seen.iter().map(|m| render_compact_line(m)));
-        for m in fresh.iter().chain(standing_seen.iter()) {
-            if let Some(id) = row_str(m, "id") {
-                seen.insert(id.to_string());
+    let mut result: Option<String> = None;
+    update_cursor(&paths.state_root, "announce-cursors", session_id, |seen| {
+        let mut fresh: Vec<&Value> = Vec::new();
+        let mut standing_seen: Vec<&Value> = Vec::new();
+        for m in &standing {
+            let Some(id) = row_str(m, "id") else { continue };
+            // The sender never reads its own announcement back.
+            if m.get("from_session")
+                .and_then(Value::as_str)
+                .is_some_and(|fs| {
+                    crate::spawn_context::session_identity_key(fs)
+                        == crate::spawn_context::session_identity_key(session_id)
+                })
+            {
+                continue;
+            }
+            let audience: Vec<Value> = m
+                .get("meta")
+                .and_then(|meta| meta.get("audience"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let scope = m
+                .get("meta")
+                .and_then(|meta| row_str(meta, "scope"))
+                .unwrap_or("all");
+            let mine = in_audience(&audience, session_id)
+                || matches_scope_now(scope, session_id, &registry, projects.as_ref());
+            if !mine {
+                continue;
+            }
+            if seen.contains(id) {
+                standing_seen.push(*m);
+            } else {
+                fresh.push(*m);
             }
         }
-        prune_and_save(paths, session_id, seen, &rows);
-        return Ok((!out.is_empty()).then(|| out.join("\n")));
-    }
 
-    if fresh.is_empty() {
-        return Ok(None);
-    }
-    let out = fresh
-        .iter()
-        .map(|m| render_block(m))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for m in &fresh {
-        if let Some(id) = row_str(m, "id") {
-            seen.insert(id.to_string());
+        if boundary == Boundary::Compact {
+            let mut out: Vec<String> = fresh.iter().map(|m| render_block(m)).collect();
+            out.extend(standing_seen.iter().map(|m| render_compact_line(m)));
+            for m in fresh.iter().chain(standing_seen.iter()) {
+                if let Some(id) = row_str(m, "id") {
+                    seen.insert(id.to_string());
+                }
+            }
+            prune_seen(seen, &rows);
+            result = (!out.is_empty()).then(|| out.join("\n"));
+            // The compact read always saves: the prune keeps the cursor
+            // bounded even when nothing new fired.
+            true
+        } else if fresh.is_empty() {
+            false
+        } else {
+            let out = fresh
+                .iter()
+                .map(|m| render_block(m))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for m in &fresh {
+                if let Some(id) = row_str(m, "id") {
+                    seen.insert(id.to_string());
+                }
+            }
+            prune_seen(seen, &rows);
+            result = Some(out);
+            true
         }
-    }
-    prune_and_save(paths, session_id, seen, &rows);
-    Ok(Some(out))
+    });
+    Ok(result)
 }
 
 /// Keep the cursor bounded: ids no longer on any retained segment leave the
-/// set (nudge.py's `nudged &= unread_ids` pruning).
-fn prune_and_save(
-    paths: &AnnouncePaths,
-    session_id: &str,
-    mut seen: HashSet<String>,
-    rows: &[Value],
-) {
+/// set (nudge.py's `nudged &= unread_ids` pruning). The save belongs to the
+/// `update_cursor` caller.
+fn prune_seen(seen: &mut HashSet<String>, rows: &[Value]) {
     let live_ids: HashSet<String> = rows
         .iter()
         .filter_map(|m| row_str(m, "id"))
         .map(str::to_string)
         .collect();
     seen.retain(|id| live_ids.contains(id));
-    save_cursor(&paths.state_root, "announce-cursors", session_id, &seen);
 }
 
 pub(crate) fn run_announce_read(args: &[String], paths: &AnnouncePaths) -> i32 {
@@ -1322,7 +1375,7 @@ pub fn run_announce(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Barrier, Mutex};
 
     /// One temp root per test; env-mutating tests share the process, so the
     /// mutex keeps FNO_* pins from racing.
@@ -1508,5 +1561,49 @@ mod tests {
         ];
         assert_eq!(keys, expected, "key order must match to_json_line");
         std::fs::remove_dir_all(&f.root).ok();
+    }
+
+    /// The lock spans load through save, so threads that race on one cursor
+    /// keep every insert. Without the lock, the barrier plus the in-closure
+    /// sleep put every thread's load before any thread's save and the last
+    /// save wins, which is the lost update this exists to prevent.
+    #[test]
+    fn concurrent_cursor_writers_keep_every_insert() {
+        let root = std::env::temp_dir().join(format!(
+            "fno-announce-cursor-race-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let ids: Vec<String> = (0..4)
+            .flat_map(|w| (0..3).map(move |i| format!("w{w}-id{i}")))
+            .collect();
+        let barrier = Arc::new(Barrier::new(ids.len()));
+        let handles: Vec<_> = ids
+            .iter()
+            .cloned()
+            .map(|id| {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    update_cursor(&root, "rules-seen", "sess", |seen| {
+                        std::thread::sleep(Duration::from_millis(2));
+                        seen.insert(id);
+                        true
+                    });
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let seen = load_cursor(&root, "rules-seen", "sess");
+        assert_eq!(
+            seen.len(),
+            ids.len(),
+            "a concurrent save dropped an id: {seen:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
