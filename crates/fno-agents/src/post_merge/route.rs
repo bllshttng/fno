@@ -914,6 +914,11 @@ fn candidate_dir_names(cwd: &str) -> Vec<String> {
 /// turns.
 const USER_TURN_BORROW_BLOCK_S: i64 = 10 * 60;
 
+/// How deep the recency scan reads. The window is time-bounded, but the
+/// tail reader is record-bounded, so the depth is the record count that
+/// still covers ten minutes of a tool-heavy session's turns.
+const USER_TURN_SCAN_RECORDS: usize = 200;
+
 /// The warm-borrow guard: the two sessions a ritual never types into. A lead
 /// role holder is never borrowed, because the injected command lands as a
 /// user turn in the operator's live conversation; neither is a session whose
@@ -922,13 +927,23 @@ const USER_TURN_BORROW_BLOCK_S: i64 = 10 * 60;
 /// no-live default.
 fn borrow_block_reason(sid: &str, harness: &str) -> Option<String> {
     let home = crate::paths::AgentsHome::from_env();
-    let rows = crate::whoami::registry_rows(&home);
+    let entries = crate::state::load_registry(&home.registry_json())
+        .ok()
+        .map(|r| r.entries)
+        .unwrap_or_default();
+    // One read feeds both legs: the role check reads raw rows, the recency
+    // check resolves through the typed entries.
+    let rows: Vec<Value> = entries
+        .iter()
+        .filter_map(|e| serde_json::to_value(e).ok())
+        .collect();
     if crate::session_role::session_role(&rows, sid, harness)
         .is_some_and(|r| r.kind == crate::session_role::RoleKind::Lead)
     {
         return Some("lead-role-holder".to_string());
     }
-    recent_user_turn(sid, USER_TURN_BORROW_BLOCK_S).then(|| "recent-user-turn".to_string())
+    recent_user_turn(sid, USER_TURN_BORROW_BLOCK_S, &entries)
+        .then(|| "recent-user-turn".to_string())
 }
 
 /// True when the newest real user turn in the session's transcript sits
@@ -936,23 +951,16 @@ fn borrow_block_reason(sid: &str, harness: &str) -> Option<String> {
 /// is the harness's; neither is the operator typing. A real user turn with
 /// no readable stamp fails closed: the cold path costs nothing the warm
 /// path saves.
-fn recent_user_turn(sid: &str, window_s: i64) -> bool {
-    let home = crate::paths::AgentsHome::from_env();
-    let rows = crate::state::load_registry(&home.registry_json())
-        .ok()
-        .map(|r| r.entries);
+fn recent_user_turn(sid: &str, window_s: i64, entries: &[crate::state::RegistryEntry]) -> bool {
     let stores = crate::session_truth::Stores::ambient();
-    let Some(session) = crate::session_truth::resolve_session(rows.as_deref(), sid, &stores) else {
+    let Some(session) = crate::session_truth::resolve_session(Some(entries), sid, &stores) else {
         return false;
     };
-    let records = match crate::session_truth::session_records(
-        &session,
-        &stores,
-        crate::session_truth::TAIL_N,
-    ) {
-        Ok(records) => records,
-        Err(_) => return false,
-    };
+    let records =
+        match crate::session_truth::session_records(&session, &stores, USER_TURN_SCAN_RECORDS) {
+            Ok(records) => records,
+            Err(_) => return false,
+        };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
