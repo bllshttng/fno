@@ -269,6 +269,19 @@ fn launch_agents() -> Vec<(String, PathBuf)> {
     found
 }
 
+/// The `<Label>` string value from one LaunchAgent plist, best-effort. The
+/// declared label carries the HOME-derived suffix (x-781d); the filename
+/// does not.
+fn plist_label(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let marker = "<key>Label</key>";
+    let idx = text.find(marker)?;
+    let rest = &text[idx + marker.len()..];
+    let start = rest.find("<string>")? + "<string>".len();
+    let end = rest[start..].find("</string>")? + start;
+    Some(rest[start..end].trim().to_string())
+}
+
 fn is_footnote_hook(hook: &Value) -> bool {
     if hook.get("name").and_then(Value::as_str) == Some("fno-session-start") {
         return true;
@@ -662,13 +675,26 @@ fn execute(action: &Action) -> Result<String, String> {
     match action {
         Action::Run(words) => run(words).map(|_| "removed".into()),
         Action::Launchd { label, plist } => {
-            // A job that is not loaded fails bootout; removing the plist is
-            // what keeps it from loading at the next login either way.
+            // Boot out the label the plist itself declares: the registered
+            // label carries the HOME-derived suffix (x-781d), which the
+            // filename does not. The filename stem is the fallback for an
+            // unreadable plist and covers pre-x-781d plists, whose declared
+            // label IS the stem. A job that is not loaded fails bootout;
+            // removing the plist is what keeps it from loading at the next
+            // login either way.
+            let declared = plist_label(plist).unwrap_or_else(|| label.clone());
             let _ = run(&argv(&[
                 "launchctl",
                 "bootout",
-                &format!("gui/{}/{label}", uid()),
+                &format!("gui/{}/{}", uid(), declared),
             ]));
+            if declared != *label {
+                let _ = run(&argv(&[
+                    "launchctl",
+                    "bootout",
+                    &format!("gui/{}/{label}", uid()),
+                ]));
+            }
             std::fs::remove_file(plist)
                 .map(|_| "removed".into())
                 .map_err(|e| format!("{}: {e}", plist.display()))
@@ -1019,5 +1045,32 @@ mod tests {
             None
         );
         assert_eq!(launch_agent_label("com.apple.x.plist", ""), None);
+    }
+
+    #[test]
+    fn plist_label_reads_the_declared_key() {
+        let dir = std::env::temp_dir().join("fno-uninstall-plist-label-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sh.fno.pr-watcher.plist");
+        std::fs::write(
+            &path,
+            "<plist><dict><key>Label</key><string>sh.fno.pr-watcher.ba7b41ec</string>\n<key>RunAtLoad</key><false/></dict></plist>",
+        )
+        .unwrap();
+        assert_eq!(
+            plist_label(&path).as_deref(),
+            Some("sh.fno.pr-watcher.ba7b41ec")
+        );
+        let legacy = dir.join("sh.fno.groom.plist");
+        std::fs::write(
+            &legacy,
+            "<plist><dict><key>Label</key><string>sh.fno.groom</string></dict></plist>",
+        )
+        .unwrap();
+        assert_eq!(plist_label(&legacy).as_deref(), Some("sh.fno.groom"));
+        let empty = dir.join("empty.plist");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(plist_label(&empty), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

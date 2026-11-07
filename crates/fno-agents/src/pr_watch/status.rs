@@ -27,9 +27,16 @@ const BROKEN_OUTCOMES: &[&str] = &["timeout", "error"];
 /// (oldest first). Caps the streak any config knob can see.
 const RECENT_ENDS_KEEP: usize = 16;
 
-/// The LaunchAgent label and its plist file name, as the installer writes it.
-pub(crate) const LABEL: &str = "sh.fno.pr-watcher";
+/// This HOME's LaunchAgent label (HOME-derived suffix, x-781d) and the plist
+/// file name. The filename keeps no suffix: the per-HOME LaunchAgents
+/// directory already separates files; only the label is a shared namespace.
+pub(crate) fn label() -> String {
+    crate::launchd_labels::pr_watcher_label()
+}
 pub(crate) const PLIST_FILENAME: &str = "sh.fno.pr-watcher.plist";
+/// The label fno used before x-781d; installs retire it when its plist
+/// points at this HOME.
+pub(crate) const LEGACY_LABEL: &str = crate::launchd_labels::LEGACY_PR_WATCHER_LABEL;
 
 /// The `pr_watch` config slice the verdict reads.
 #[derive(Debug, Clone)]
@@ -493,7 +500,7 @@ pub(crate) fn launchctl_is_loaded() -> bool {
         .arg("list")
         .output()
         .ok()
-        .map(|out| String::from_utf8_lossy(&out.stdout).contains(LABEL))
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains(&label()))
         .unwrap_or(false)
 }
 

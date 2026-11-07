@@ -37,7 +37,15 @@ const PARTIAL_EXIT: i32 = 4;
 /// Past this the daily cadence is presumed dead. Deliberately > 24h so a
 /// healthy agent that merely slipped a night is not treated as broken.
 const STALE_HOURS: f64 = 48.0;
-const LABEL: &str = "sh.fno.groom";
+/// This HOME's groom launchd label (HOME-derived suffix, x-781d). The plist
+/// filename keeps no suffix: the per-HOME LaunchAgents directory already
+/// separates files.
+fn label() -> String {
+    crate::launchd_labels::groom_label()
+}
+/// The groom label fno used before x-781d; installs retire it when its
+/// plist points at this HOME.
+const LEGACY_LABEL: &str = crate::launchd_labels::LEGACY_GROOM_LABEL;
 /// Local time; the UTC-keyed claim, not the clock, enforces once a day.
 const HOUR_DEFAULT: i64 = 2;
 
@@ -593,7 +601,7 @@ fn render_plist(fno_binary: &str, install_path: &str, hour: i64, workdir: Option
     let logs = home.join(".fno").join("logs");
     let esc = refresh::xml_escape;
     PLIST
-        .replace("{label}", &esc(LABEL))
+        .replace("{label}", &esc(&label()))
         .replace("{fno_binary}", &esc(fno_binary))
         .replace("{path}", &esc(&refresh::augment_path(install_path)))
         .replace("{home}", &esc(&home_s))
@@ -652,7 +660,7 @@ fn install_agent(
     // refresh passes the installed value so it is not re-resolved against
     // whatever directory the update ran from.
     let workdir = workdir.or_else(repo_root);
-    let plist_path = agents_dir.join(format!("{LABEL}.plist"));
+    let plist_path = agents_dir.join(format!("{}.plist", label()));
     let rendered = render_plist(&fno_binary, &install_path, hour, workdir.as_deref());
     match refresh::write_if_changed(&plist_path, &rendered) {
         Ok(false) => {
@@ -664,7 +672,12 @@ fn install_agent(
                           "detail": format!("write {}: {err}", plist_path.display())})
         }
     }
-    let (msg, rc) = refresh::bounce(&plist_path, LABEL, false, false, "unknown", &state);
+    for receipt in
+        crate::launchd_labels::retire_legacy_fixed_label(LEGACY_LABEL, &plist_path, "groom agent")
+    {
+        eprintln!("{receipt}");
+    }
+    let (msg, rc) = refresh::bounce(&plist_path, &label(), false, false, "unknown", &state);
     json!({
         "status": if rc == 0 { "installed" } else { "failed" },
         "plist": plist_path.display().to_string(),
@@ -721,7 +734,7 @@ fn installed_agent_settings(plist_path: &Path) -> (Option<i64>, Option<String>) 
 /// it: the tail of `fno doctor update`. A no-op when no groom agent is
 /// installed. Never fails: the update chain calls it best-effort.
 fn refresh_agent(agents_dir: &Path) -> Value {
-    let plist_path = agents_dir.join(format!("{LABEL}.plist"));
+    let plist_path = agents_dir.join(format!("{}.plist", label()));
     if !cfg!(target_os = "macos") || !plist_path.exists() {
         return json!({"status": "skipped", "detail": "no groom agent installed"});
     }

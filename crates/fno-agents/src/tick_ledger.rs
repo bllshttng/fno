@@ -1640,11 +1640,12 @@ pub fn read_tick_trace(journals: &[PathBuf], now_unix: u64) -> TickTrace {
     trace
 }
 
-/// The pr-watcher label behind [`SCHED_LAUNCHD`].
-fn launchd_label() -> &'static str {
-    SCHED_LAUNCHD
-        .strip_prefix("launchd:")
-        .unwrap_or(SCHED_LAUNCHD)
+/// This HOME's pr-watcher launchd label: the HOME-derived one (x-781d), not
+/// the journal scheduler identity [`SCHED_LAUNCHD`]'s tail. The journal
+/// identity stays fixed for attribution; only live launchctl probes use
+/// this.
+fn launchd_label() -> String {
+    crate::launchd_labels::pr_watcher_label()
 }
 
 /// The registered plist path from `launchctl print` output, when it is not the
@@ -1658,7 +1659,7 @@ pub fn foreign_plist_path(print_stdout: &str, home: &Path) -> Option<String> {
     let expected = home
         .join("Library")
         .join("LaunchAgents")
-        .join(format!("{}.plist", launchd_label()));
+        .join(crate::launchd_labels::PR_WATCHER_PLIST_FILENAME);
     print_stdout.lines().find_map(|line| {
         let line = line.trim();
         line.strip_prefix("path = ")
@@ -1681,14 +1682,19 @@ pub fn foreign_plist_path(print_stdout: &str, home: &Path) -> Option<String> {
 }
 
 /// The launchd labels the loops table lists, one row each with loaded yes/no
-/// and the last exit `launchctl list` reports.
-pub const LAUNCHD_LABELS: &[&str] = &[
-    "sh.fno.pr-watcher",
-    "sh.fno.groom",
-    "sh.fno.autocontinue",
-    "sh.fno.sync-backlog",
-    "sh.fno.board-server",
-];
+/// and the last exit `launchctl list` reports. The pr-watcher and groom rows
+/// carry this HOME's derived labels (x-781d); the three legacy names have no
+/// installer left and stay fixed so their rows survive on machines that ran
+/// an older fno.
+pub fn launchd_fold_labels() -> Vec<String> {
+    vec![
+        crate::launchd_labels::pr_watcher_label(),
+        crate::launchd_labels::groom_label(),
+        "sh.fno.autocontinue".to_string(),
+        "sh.fno.sync-backlog".to_string(),
+        "sh.fno.board-server".to_string(),
+    ]
+}
 
 /// One label's facts from the fold. Serialized with the `exit` key doctor's
 /// report reads; `None` means launchctl measured no exit.
@@ -1733,10 +1739,10 @@ pub fn launchd_fold_live() -> Option<LaunchdFold> {
 /// header row is skipped by name, not by position, so a header-less listing
 /// never loses its first label.
 pub(crate) fn parse_launchctl_list(text: &str) -> LaunchdFold {
-    let mut labels: Vec<LaunchdLabelFacts> = LAUNCHD_LABELS
+    let mut labels: Vec<LaunchdLabelFacts> = launchd_fold_labels()
         .iter()
         .map(|l| LaunchdLabelFacts {
-            label: (*l).to_string(),
+            label: l.clone(),
             loaded: false,
             last_exit: None,
         })
@@ -1842,8 +1848,9 @@ fn tick_overdue_cause(pm_last_ts: Option<&str>, trace: Option<&TickTrace>) -> (S
         return (
             "launchd_foreign_plist".to_string(),
             format!(
-                "sh.fno.pr-watcher is registered from {p}, not the installer's \
-                 LaunchAgents path; run fno do pr watch refresh"
+                "{} is registered from {p}, not the installer's \
+                 LaunchAgents path; run fno do pr watch refresh",
+                crate::launchd_labels::pr_watcher_label()
             ),
         );
     }

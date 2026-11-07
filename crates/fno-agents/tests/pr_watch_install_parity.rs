@@ -144,6 +144,12 @@ esac
 /// stub PATH, and the launchctl answers.
 fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
     let mut env = vec![
+        // Pin the launchd-label suffix so receipts and rendered plists stay
+        // byte-for-byte across machines (x-781d).
+        (
+            fno_agents::launchd_labels::FNO_TEST_LAUNCHD_SUFFIX.into(),
+            "testhome".into(),
+        ),
         ("HOME".into(), dir.join("home").display().to_string()),
         (
             "FNO_CONFIG".into(),

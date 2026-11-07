@@ -17,10 +17,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::status::{
-    as_bool, cfg_lookup, launch_agents_dir, launchctl_is_loaded, state_root, PLIST_FILENAME,
+    as_bool, cfg_lookup, label, launch_agents_dir, launchctl_is_loaded, state_root, LEGACY_LABEL,
+    PLIST_FILENAME,
 };
-
-const LABEL: &str = "sh.fno.pr-watcher";
 
 /// The plist template.
 const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -180,7 +179,7 @@ pub(crate) fn render_plist(
     let augmented_path = augment_path(&base);
 
     PLIST_TEMPLATE
-        .replace("{label}", &xml_escape(LABEL))
+        .replace("{label}", &xml_escape(&label()))
         .replace("{fno_binary}", &xml_escape(fno_binary))
         .replace("{path}", &xml_escape(&augmented_path))
         .replace("{home}", &xml_escape(&home.display().to_string()))
@@ -303,7 +302,7 @@ fn epoch_f64() -> String {
 pub(crate) fn bounce(plist_path: &Path, caller: &str, state: &Path) -> (String, i32) {
     let uid = current_uid();
     let domain = format!("gui/{uid}");
-    let target = format!("{domain}/{LABEL}");
+    let target = format!("{domain}/{}", label());
 
     // Receipt before bootout: only this sidecar joins the SIGTERM to its sender.
     record_bounce(caller, state);
@@ -513,7 +512,16 @@ pub fn run(args: &[String]) -> i32 {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if ensure {
-        let word = ensure_activated(&launch_agents_dir(), &fno_binary, interval, &cwd);
+        let agents = launch_agents_dir();
+        let plist_path = agents.join(PLIST_FILENAME);
+        for receipt in crate::launchd_labels::retire_legacy_fixed_label(
+            LEGACY_LABEL,
+            &plist_path,
+            "pr-watcher",
+        ) {
+            println!("{receipt}");
+        }
+        let word = ensure_activated(&agents, &fno_binary, interval, &cwd);
         println!("{word}");
         return 0;
     }
@@ -593,6 +601,12 @@ fn install_command(
     }
     println!("Written: {}", plist_path.display());
 
+    for receipt in
+        crate::launchd_labels::retire_legacy_fixed_label(LEGACY_LABEL, &plist_path, "pr-watcher")
+    {
+        println!("{receipt}");
+    }
+
     if activate {
         // bootout+bootstrap+kickstart, not load/unload: `launchctl load` cannot
         // cure the observed wedge, and this is the `dead`-verdict fix command.
@@ -641,6 +655,12 @@ pub(crate) fn ensure_activated(
     let interval = cfg_interval(cwd, interval);
     let plist_path = launch_agents_dir.join(PLIST_FILENAME);
     let _ = retire_legacy_postmerge_agents(launch_agents_dir);
+    // A legacy fixed-label job whose plist points at this HOME would keep
+    // double-ticking beside the derived-label job, so the migration runs
+    // here, before the loaded check; run() prints the receipts on the CLI
+    // path, and this silent call is what protects the ensure flow itself.
+    let _ =
+        crate::launchd_labels::retire_legacy_fixed_label(LEGACY_LABEL, &plist_path, "pr-watcher");
 
     if launchctl_is_loaded() {
         return "already-running".to_string();

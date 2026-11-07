@@ -32,7 +32,7 @@ fn entry(
             Some(AUTO),
         ),
         "launchd_foreign_plist" => (
-            "sh.fno.pr-watcher is registered from a foreign plist",
+            "the watcher is registered from a foreign plist",
             Some(REFRESH),
             Some(AUTO),
         ),
