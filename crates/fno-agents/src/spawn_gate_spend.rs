@@ -136,6 +136,7 @@ mod tests {
             registry.entries.extend([
                 RegistryEntry {
                     name: "lead".into(),
+                    harness: Some("codex".into()),
                     harness_session_id: Some("h-root".into()),
                     role_level: Some(0),
                     cwd: cwd.to_string_lossy().into_owned(),
@@ -143,6 +144,7 @@ mod tests {
                 },
                 RegistryEntry {
                     name: "t-unknown".into(),
+                    harness: Some("codex".into()),
                     harness_session_id: Some("h-unknown".into()),
                     spawned_by_session: Some("h-root".into()),
                     cwd: cwd.to_string_lossy().into_owned(),
