@@ -1,0 +1,7 @@
+# Bare `Command::output()` bypasses the spawn seams (no admission or
+# reservation) and drops stderr into a struct callers tend to ignore. New
+# call sites fail the clippy gate as clippy::disallowed_methods; existing
+# ones sit in tests/ci/clippy-baseline.txt until a PR converts them.
+disallowed-methods = [
+    "std::process::Command::output",
+]

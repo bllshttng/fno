@@ -712,6 +712,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
     crate::terminal_route::route_terminal(&crate::terminal_route::TerminalRouteFacts {
         cwd: &cwd,
         session_id: &session_id,
+        harness_session_id: m.harness_session_id.as_deref(),
         node: m.graph_node_id.as_deref(),
         reason: &reason,
         postmortem: postmortem_path.as_deref(),

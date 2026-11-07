@@ -197,7 +197,7 @@ fn skipped(state: &State) -> Vec<&'static str> {
 
 #[test]
 fn screen_order_and_skips_follow_the_presets() {
-    // Balanced with every default accepted: the thirteen screens run in
+    // Balanced with every default accepted: fourteen screens run in
     // order, three skip, and the proposal set is the balanced one.
     let mut state = State::new(None, fresh_detect(), false);
     let mut pr = Script::auto();
@@ -216,6 +216,7 @@ fn screen_order_and_skips_follow_the_presets() {
             "budget",
             "review-merge",
             "services",
+            "claude-auto-mode",
             "messaging",
             "projects",
             "review",
@@ -273,21 +274,56 @@ fn screen_order_and_skips_follow_the_presets() {
         .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
     assert!(rows.iter().any(|r| r.key == "review.posture"));
 
-    // Aggressive: the flow runs to done with zero asks and the full
-    // aggressive proposal set.
+    // Aggressive still asks before writing Claude Code settings; its other
+    // default choices use the full aggressive proposal set.
     let mut state = State::new(Some(Preset::Aggressive), fresh_detect(), false);
     let mut pr = Script::auto();
     let mut pb = FixedProbes {
         que: VecDeque::new(),
     };
     assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
-    assert_eq!(pr.asks(), 0, "aggressive stops nowhere");
+    assert_eq!(pr.asks(), 1, "only the settings consent is always asked");
+    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
     let rows = pending(&state);
+    assert!(rows.iter().all(|r| r.id != "claude-auto-mode"));
     assert!(rows.iter().any(|r| r.key == "auto_merge.enabled"));
     assert!(rows.iter().any(|r| r.key == "auto_merge.grant"));
     for id in ["pr-watcher", "auto-heal", "groom-agent"] {
         assert!(rows.iter().any(|r| r.id == id));
     }
+}
+
+#[test]
+fn auto_mode_settings_need_a_yes_answer_under_every_preset() {
+    let index = SCREENS
+        .iter()
+        .position(|screen| screen.id == "claude-auto-mode")
+        .expect("Claude Auto Mode consent screen");
+    assert_eq!(SCREENS[index].stops, [true, true, true]);
+
+    let mut declined = State::new(Some(Preset::Aggressive), fresh_detect(), false);
+    declined.index = index;
+    let mut pr = Script::auto();
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(step(&mut declined, &mut pr, &mut pb), Next::Forward);
+    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
+    assert!(pending(&declined)
+        .iter()
+        .all(|row| row.id != "claude-auto-mode"));
+
+    let mut accepted = State::new(Some(Preset::Aggressive), fresh_detect(), false);
+    accepted.index = index;
+    let mut pr = Script::queued(vec![Que::C(Conf::Yes)]);
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(step(&mut accepted, &mut pr, &mut pb), Next::Forward);
+    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
+    assert!(pending(&accepted)
+        .iter()
+        .any(|row| row.id == "claude-auto-mode"));
 }
 
 #[test]
@@ -307,6 +343,7 @@ fn back_navigation_and_the_write_latch() {
         Que::C(Conf::Yes),             // review-merge again: posture
         Que::C(Conf::No),              // review-merge again: merge (offered true now)
         Que::T(Ticks::Ok(vec![0, 2])), // services again
+        Que::C(Conf::No),              // Auto Mode: decline settings write
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // projects: register
         Que::C(Conf::No),              // projects: no scan
@@ -340,6 +377,7 @@ fn back_navigation_and_the_write_latch() {
         Que::C(Conf::Yes),             // posture
         Que::C(Conf::No),              // merge
         Que::T(Ticks::Ok(vec![0, 2])), // services
+        Que::C(Conf::No),              // Auto Mode: decline settings write
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // register
         Que::C(Conf::No),              // scan
@@ -375,6 +413,7 @@ fn back_navigation_and_the_write_latch() {
         Que::C(Conf::No),              // review-merge again: decline the posture
         Que::C(Conf::No),              // review-merge again: no merge
         Que::T(Ticks::Ok(vec![0, 2])), // services again
+        Que::C(Conf::No),              // Auto Mode: decline settings write
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // projects: register
         Que::C(Conf::No),              // projects: no scan

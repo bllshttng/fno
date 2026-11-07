@@ -1874,6 +1874,52 @@ pub fn sorted_json(value: &Value) -> String {
 
 /// `fno doctor footprint`: the reading, the payload, the human text and the
 /// exit code, in one command body (the deleted `footprint_command`).
+/// Live fleet processes at parent pid 1: the shape a dead driver leaves
+/// behind (the fn-47ea rig: a footnote binary at 91% CPU, parent pid 1, its
+/// driver killed only the parent). Listed so `fno doctor footprint` names
+/// them instead of folding them into the fleet share.
+pub fn ppid1_fleet_processes(table: &[ProcRow]) -> Vec<serde_json::Value> {
+    table
+        .iter()
+        .filter(|row| row.ppid == 1 && row.state != 'Z' && is_fleet_binary(&row.command))
+        .map(|row| {
+            serde_json::json!({
+                "pid": row.pid,
+                "command": row.command,
+                "elapsed_s": row.elapsed_s,
+                "cpu_pct": row.cpu_pct,
+            })
+        })
+        .collect()
+}
+
+/// True when the row's argv0 basename names a fleet binary: the fno runtime
+/// or a harness the fleet launches.
+fn is_fleet_binary(command: &str) -> bool {
+    let argv0 = command.split_whitespace().next().unwrap_or("");
+    let name = std::path::Path::new(argv0)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    matches!(
+        name,
+        "fno"
+            | "fno-agents"
+            | "fno-agents-daemon"
+            | "fno-agents-worker"
+            | "codex"
+            | "claude"
+            | "opencode"
+            | "pi"
+            | "agy"
+            | "cursor-agent"
+            | "grok"
+            | "kimi"
+            | "dsh"
+            | "codegraph"
+    )
+}
+
 pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
     let reading = match cause_reading(!cause_only, Duration::from_secs(5)) {
         Ok(reading) => reading,
@@ -1903,7 +1949,9 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let payload = cause_payload(&reading, cause_only, threshold, degraded, &cwd);
+    let mut payload = cause_payload(&reading, cause_only, threshold, degraded, &cwd);
+    payload["ppid1_fleet_processes"] =
+        serde_json::Value::Array(ppid1_fleet_processes(&crate::census::process_table().0));
     if json_output {
         println!("{}", sorted_json(&payload));
         return payload["exit_code"].as_i64().map(|c| c as i32).unwrap_or(0);
@@ -1973,6 +2021,24 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
         "transient calls: {}",
         payload["transient_call_count"].as_u64().unwrap_or(0)
     );
+    let ppid1 = payload["ppid1_fleet_processes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if ppid1.is_empty() {
+        println!("parent-pid-1 fleet processes: none");
+    } else {
+        println!("parent-pid-1 fleet processes: {}", ppid1.len());
+        for row in &ppid1 {
+            println!(
+                "  pid {} elapsed {}s cpu {:.1}%: {}",
+                row["pid"].as_u64().unwrap_or(0),
+                row["elapsed_s"].as_u64().unwrap_or(0),
+                row["cpu_pct"].as_f64().unwrap_or(0.0),
+                row["command"].as_str().unwrap_or("?"),
+            );
+        }
+    }
     match reading.sccache_server_pid {
         Some(pid) => println!(
             "sccache server: pid {pid}, restarts last hour: {}",
@@ -2081,6 +2147,35 @@ mod tests {
             rss_kb: 1024,
             command: command.to_string(),
         }
+    }
+
+    /// ppid-1 fleet rows are named; zombies and non-fleet argv0 are not.
+    #[test]
+    fn ppid1_fleet_listing_names_fleet_binaries_at_parent_pid_1() {
+        let table = vec![
+            row(300, 1, 7200, 91.0, "/tmp/fn-47ea-rig/bin/footnote"),
+            row(301, 1, 700, 91.0, "fno-agents-daemon --serve"),
+            row(302, 1, 700, 0.0, "claude --bg"),
+            row(303, 1, 700, 0.0, "/bin/sh -c yes"),
+        ];
+        let listed = ppid1_fleet_processes(&table);
+        let pids: Vec<u32> = listed
+            .iter()
+            .map(|r| r["pid"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(
+            pids,
+            vec![301, 302],
+            "fleet rows only; non-fleet argv0 excluded"
+        );
+        assert_eq!(
+            ppid1_fleet_processes(&[row(310, 1, 700, 0.0, "/bin/ls")]).len(),
+            0
+        );
+        assert_eq!(
+            ppid1_fleet_processes(&[row(311, 4321, 700, 0.0, "claude --bg")]).len(),
+            0
+        );
     }
 
     /// The naming rows the leak investigation asked for: MCP-server children

@@ -101,6 +101,7 @@ pub fn enforce_title_gate(
     pre: &[Value],
     entries: &[Value],
 ) -> Result<(), crate::graph_store::StoreError> {
+    let pre_by_id = crate::graph_store::index_by_id(pre);
     for cand in entries {
         let Some(id) = crate::graph_store::entry_id(cand) else {
             continue;
@@ -109,10 +110,7 @@ pub fn enforce_title_gate(
         if title.is_empty() {
             continue;
         }
-        let pre_title = pre
-            .iter()
-            .find(|r| crate::graph_store::entry_id(r) == Some(id))
-            .map(title_of);
+        let pre_title = pre_by_id.get(id).copied().map(title_of);
         if pre_title == Some(title) {
             continue;
         }
@@ -127,6 +125,23 @@ pub fn enforce_title_gate(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn gates_are_linear_in_row_count() {
+        let rows: Vec<Value> = (0..6600)
+            .map(|i| node(&format!("x-{i:04}"), &format!("title {i}")))
+            .collect();
+        let start = std::time::Instant::now();
+        enforce_title_gate(&rows, &rows).unwrap();
+        crate::graph_store::enforce_node_state_policy(&rows, &rows).unwrap();
+        let mut children = rows.clone();
+        crate::graph_store::compute_children(&mut children);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "gates took {:?} on 6600 rows",
+            start.elapsed()
+        );
+    }
 
     fn node(id: &str, title: &str) -> Value {
         json!({"id": id, "slug": id, "title": title, "type": "feature", "status": "idea"})

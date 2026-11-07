@@ -39,13 +39,14 @@ impl Drop for Scratch {
     }
 }
 
-/// A child process that is always killed on test exit.
+/// A child process that is always killed on test exit. The group kill is the
+/// fn-47ea driver fix: a pid kill leaves the server's children (pane shells,
+/// MCP servers) running at ppid 1.
 struct Server(Child);
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        kill_child_group(&mut self.0);
     }
 }
 
@@ -56,6 +57,7 @@ impl CpuLoad {
         let child = Command::new("yes")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .expect("start CPU load");
         Self(child)
@@ -64,9 +66,18 @@ impl CpuLoad {
 
 impl Drop for CpuLoad {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        kill_child_group(&mut self.0);
     }
+}
+
+/// Group-kill a test child: the child leads its own process group, so the
+/// kill takes its descendants. Pairs with `.process_group(0)` at spawn.
+fn kill_child_group(child: &mut Child) {
+    let pid = child.id();
+    let _ = child.kill();
+    // SAFETY: SIGKILL to the group of a child this test spawned.
+    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+    let _ = child.wait();
 }
 
 fn spawn_server(sock: &Path, shell: &str) -> Server {
@@ -75,7 +86,10 @@ fn spawn_server(sock: &Path, shell: &str) -> Server {
 
 fn spawn_server_with_env(sock: &Path, shell: &str, env: &[(&str, &str)]) -> Server {
     let mut cmd = server_command(sock, shell, env);
-    Server(cmd.spawn().unwrap())
+    // SAFETY: process_group puts the child in its own group for the drop kill.
+    use std::os::unix::process::CommandExt as _;
+    let child = cmd.process_group(0).spawn().unwrap();
+    Server(child)
 }
 
 fn server_command(sock: &Path, shell: &str, env: &[(&str, &str)]) -> Command {

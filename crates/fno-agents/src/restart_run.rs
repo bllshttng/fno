@@ -275,11 +275,8 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
             .as_deref()
             .and_then(|e| e.lines().rev().find(|l| !l.trim().is_empty()))
             .unwrap_or("no cause captured");
-        eprintln!(
-            "fno agents restart: FAILED: the daemon is not running build {}: {}",
-            build_rev(),
-            cause.trim()
-        );
+        eprintln!("{}", failed_summary_line(&build_rev(), cause.trim()));
+        eprintln!("{}", skipped_legs_line(mux));
         return code;
     }
     // The preserved/lost read: after the fresh daemon answers, re-read the
@@ -506,6 +503,35 @@ fn build_rev() -> String {
     env!("FNO_AGENTS_GIT_REV").chars().take(12).collect()
 }
 
+/// The failure receipt. The daemon swap can fail while a daemon serves
+/// THIS build fine (its status read answered an error), so the line reports
+/// the incompleteness and the cause; it never verdicts which build runs.
+fn failed_summary_line(build: &str, cause: &str) -> String {
+    format!("fno agents restart: FAILED: restart did not complete (build on disk {build}): {cause}")
+}
+
+/// The legs a failed daemon swap never reached, named so the operator does
+/// not read silence as health. Every heal leg rides a serving daemon whose
+/// state the swap did not reach.
+fn skipped_legs_line(mux: bool) -> String {
+    let legs = vec![
+        "the thread preserved/lost read",
+        "the store-keeper cycle",
+        "the codex app-server upgrade",
+        "the pr-watch refresh",
+        if mux {
+            "the mux kill"
+        } else {
+            "the stale-idle mux heal"
+        },
+        "the post-mux keeper refresh",
+    ];
+    format!(
+        "fno agents restart: the daemon leg failed first, so {} did not run.",
+        legs.join(", ")
+    )
+}
+
 /// The post-mux keeper-refresh gate: a second stale-keeper pass
 /// earns its run only on a PROVEN kill - the kill selector's summary naming a
 /// killed session. Report-only rows, a failed mux leg, and a lost summary all
@@ -615,6 +641,33 @@ mod tests {
             (false, "FAILED"),
             "a failed codex upgrade leg"
         );
+    }
+
+    /// The failure receipt reports incompleteness plus the daemon's own
+    /// cause. It never claims which build the daemon runs: a serving daemon
+    /// can fail the swap's status read (2026-11-06: "not running build
+    /// 80081dd" printed while the daemon served that exact build).
+    #[test]
+    fn failed_summary_names_incompleteness_and_cause_never_the_build_verdict() {
+        let line = super::failed_summary_line(
+            "80081dd4f79f",
+            "daemon answered agent.status with an error: handlers warming up",
+        );
+        assert!(line.contains("restart did not complete"), "{line}");
+        assert!(line.contains("build on disk 80081dd4f79f"), "{line}");
+        assert!(line.contains("handlers warming up"), "{line}");
+        assert!(
+            !line.contains("is not running build"),
+            "the old verdict lied about the running build: {line}"
+        );
+        let mux = super::skipped_legs_line(true);
+        let stale = super::skipped_legs_line(false);
+        assert!(mux.contains("the mux kill,"), "{mux}");
+        assert!(stale.contains("the stale-idle mux heal,"), "{stale}");
+        for line in [&mux, &stale] {
+            assert!(line.contains("the daemon leg failed first"), "{line}");
+            assert!(line.ends_with("did not run."), "{line}");
+        }
     }
 
     #[test]

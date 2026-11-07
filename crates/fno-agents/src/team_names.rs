@@ -425,11 +425,46 @@ pub(crate) fn history_append_locked(
 
 /// This machine's rows plus every peer's from the shared ledger. A
 /// configured ledger that cannot be read is an error, never "no names".
-fn history_all(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
+pub(crate) fn history_all(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
     let mut rows = local_rows(store_path)?;
     let shared = crate::name_ledger::read_merged(store_path, &rows)?;
     rows.extend(shared);
     Ok(rows)
+}
+
+/// The fleet name for a remote sender, as `name:host` (`briar:imac2d2`).
+/// `from` must hold the `user:host/handle` shape a remote send stamps. A
+/// local sender (a live row, or any address without that shape) returns
+/// `None` before any ledger read. The name is the newest bound history row
+/// whose session shares the handle; a sender no row names returns `None`,
+/// so the caller keeps the short id.
+pub fn remote_fleet_label(
+    store_path: &Path,
+    from: &str,
+    from_session: Option<&str>,
+) -> Option<String> {
+    let (host, handle) = crate::mail_header::remote_parts(from)?;
+    let identity = from_session.filter(|s| !s.is_empty()).unwrap_or(handle);
+    let wanted = crate::identity::canonical_handle(identity);
+    // A naming decision refuses on an unreadable ledger; a sender lookup
+    // degrades instead. The mirror rows stand on their own (the sweep pulls
+    // the fleet's rows in), so an outage at read time cannot erase what the
+    // mirror already holds - the sender keeps the short id, no worse.
+    let mut rows = local_rows(store_path).ok()?;
+    if let Ok(shared) = crate::name_ledger::read_merged(store_path, &rows) {
+        rows.extend(shared);
+    }
+    let name = rows
+        .into_iter()
+        .filter(|e| e.kind == "bound")
+        .filter(|e| {
+            e.session
+                .as_deref()
+                .is_some_and(|s| crate::identity::canonical_handle(s) == wanted)
+        })
+        .max_by(|a, b| a.ts.cmp(&b.ts))?
+        .name;
+    Some(format!("{name}:{host}"))
 }
 
 /// The history file plus the names the registry snapshots still hold. A

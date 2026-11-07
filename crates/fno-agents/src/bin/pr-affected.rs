@@ -5,17 +5,15 @@ struct Selection {
     cargo_agents: bool,
     cargo_mux: bool,
     python_full: bool,
-    python_seam: bool,
     skill_bundles: bool,
 }
 
 impl Selection {
-    fn lanes(cargo_agents: bool, cargo_mux: bool, python_full: bool, python_seam: bool) -> Self {
+    fn lanes(cargo_agents: bool, cargo_mux: bool, python_full: bool) -> Self {
         Selection {
             cargo_agents,
             cargo_mux,
             python_full,
-            python_seam,
             skill_bundles: false,
         }
     }
@@ -27,7 +25,7 @@ fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>
     // never ships. Only the bundle freshness job selects on main: it rides
     // the full lanes there.
     if event != "pull_request" {
-        return Selection::lanes(true, true, true, false);
+        return Selection::lanes(true, true, true);
     }
     // An unreadable diff or manifest fails closed: run the check rather than
     // trust a selection we could not compute.
@@ -35,51 +33,29 @@ fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>
         (Some(paths), Some(watched)) => paths.iter().any(|path| names_a_bundle_path(path, watched)),
         _ => true,
     };
+    // Every heavy path runs every lane. The narrow crates-only shapes were
+    // unsound twice over: the fno crate's tests read the fno-agents surface
+    // (menu caps cap its commands, baselines pin them), and the Python suite
+    // reaches Rust through the native doors, so enumerating the readers
+    // per-file kept skipping lanes that then failed on main. When the
+    // selector cannot prove a lane unaffected, it runs it. Only a light-only
+    // diff (prose, skills, hooks, images) proves its own reach.
     let selection = match paths.filter(|paths| !paths.is_empty()) {
-        None => Selection::lanes(true, true, true, false),
-        Some(paths) => select_lanes(paths.iter().map(String::as_str).filter(|p| !is_light(p))),
+        // An unreadable or empty diff also fails closed.
+        None => Selection::lanes(true, true, true),
+        Some(paths) => {
+            if paths.iter().all(|p| is_light(p)) {
+                Selection::lanes(false, false, false)
+            } else {
+                Selection::lanes(true, true, true)
+            }
+        }
     };
     Selection {
         skill_bundles,
         ..selection
     }
 }
-
-/// Lanes for the non-light paths of a readable pull_request diff. A PR that
-/// touches only prose, skills, hooks or images runs no full lane. A diff
-/// confined to crates/ runs its cargo lanes and the Python seam leg; any
-/// other code runs every lane.
-fn select_lanes<'a>(heavy: impl Iterator<Item = &'a str>) -> Selection {
-    let mut sel = Selection::lanes(false, false, false, false);
-    for path in heavy {
-        if !path.starts_with("crates/") || PYTHON_REACH.contains(&path) {
-            return Selection::lanes(true, true, true, false);
-        }
-        sel.cargo_agents = true;
-        sel.python_seam = true;
-        // fno-agents depends on fno, never the reverse, so only a change
-        // outside the fno-agents crate reaches the mux lanes. Its manifests
-        // still do: the mux tests spawn the worker that fno-agents builds.
-        let agents_only =
-            path.starts_with("crates/fno-agents/") && !AGENTS_MANIFESTS.contains(&path);
-        sel.cargo_mux |= !agents_only;
-    }
-    sel
-}
-
-/// Crate files whose change reaches the whole Python suite, not just the
-/// seam. A moved state root passed its narrowed lane and broke main on the
-/// tests that read the moved file, so path changes run the full lanes.
-const PYTHON_REACH: &[&str] = &[
-    "crates/fno-agents/src/paths.rs",
-    "crates/fno/src/state-root-layout.tsv",
-    "crates/fno/src/state_layout.rs",
-];
-
-const AGENTS_MANIFESTS: &[&str] = &[
-    "crates/fno-agents/Cargo.toml",
-    "crates/fno-agents/Cargo.lock",
-];
 
 /// Files a full lane reads at build or test time although they sit under a
 /// light tree. Keep in step with the include_str! sites under crates/ and
@@ -197,7 +173,6 @@ fn main() {
     println!("cargo_agents={}", selection.cargo_agents);
     println!("cargo_mux={}", selection.cargo_mux);
     println!("python_full={}", selection.python_full);
-    println!("python_seam={}", selection.python_seam);
     println!("skill_bundles={}", selection.skill_bundles);
 }
 
@@ -212,7 +187,7 @@ mod tests {
     fn full(skill_bundles: bool) -> Selection {
         Selection {
             skill_bundles,
-            ..Selection::lanes(true, true, true, false)
+            ..Selection::lanes(true, true, true)
         }
     }
 
@@ -224,34 +199,30 @@ mod tests {
             paths(&["hooks/context-nudge.sh"]),
         ] {
             let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
-            assert_eq!(
-                sel,
-                Selection::lanes(false, false, false, false),
-                "{changed:?}"
-            );
+            assert_eq!(sel, Selection::lanes(false, false, false), "{changed:?}");
         }
     }
 
     #[test]
-    fn a_crates_only_diff_runs_its_cargo_lanes_and_the_seam_leg() {
-        for (changed, mux) in [
-            (paths(&["crates/fno-agents/src/lib.rs"]), false),
-            (
-                paths(&[
-                    "crates/fno-agents/src/pr_steward_prompt.md",
-                    "docs/usage.md",
-                ]),
-                false,
-            ),
-            (paths(&["crates/fno/src/main.rs"]), true),
-            (
-                paths(&["crates/fno-agents/src/lib.rs", "crates/fno/src/main.rs"]),
-                true,
-            ),
-            (paths(&["crates/fno-agents/Cargo.lock"]), true),
+    fn a_crates_only_diff_runs_every_lane() {
+        // A menu surface (the command table) and a shared lib live under
+        // crates/ too: their change reaches the fno crate's cap tests and
+        // the Python suite through the native doors, so the narrow
+        // fno-agents-only selection that used to skip the mux lanes and the
+        // full Python shards is gone.
+        for changed in [
+            paths(&["crates/fno-agents/src/lib.rs"]),
+            paths(&[
+                "crates/fno-agents/src/pr_steward_prompt.md",
+                "docs/usage.md",
+            ]),
+            paths(&["crates/fno/src/main.rs"]),
+            paths(&["crates/fno-agents/src/lib.rs", "crates/fno/src/main.rs"]),
+            paths(&["crates/fno-agents/Cargo.lock"]),
+            paths(&["crates/fno/command-names.tsv"]),
         ] {
             let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
-            assert_eq!(sel, Selection::lanes(true, mux, false, true), "{changed:?}");
+            assert_eq!(sel, Selection::lanes(true, true, true), "{changed:?}");
         }
     }
 

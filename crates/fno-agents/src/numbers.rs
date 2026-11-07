@@ -378,6 +378,36 @@ pub fn resolve_node(text: &str) -> Option<String> {
     resolve_node_in(open_read().as_ref(), text, &current_store())
 }
 
+/// The node id a free-text token names, the tiers a closure-line reader
+/// resolves with: an exact node row wins first (a legacy all-digit hash is a
+/// real id and stays itself even when it reads as another node's number),
+/// then the number tier. `None` leaves the caller its raw token. Fail-open:
+/// an unread store resolves nothing, so every reader falls back to the hash.
+pub(crate) fn resolve_node_ref_in(
+    conn: Option<&Connection>,
+    text: &str,
+    current: &str,
+) -> Option<String> {
+    let conn = conn?;
+    let trimmed = text.trim();
+    if conn
+        .query_row(
+            "SELECT 1 FROM nodes WHERE id = ?1",
+            params![trimmed],
+            |_| Ok(()),
+        )
+        .is_ok()
+    {
+        return Some(trimmed.to_string());
+    }
+    resolve_node_in(Some(conn), trimmed, current)
+}
+
+/// `resolve_node_ref_in` over this machine's table.
+pub(crate) fn resolve_node_ref(text: &str) -> Option<String> {
+    resolve_node_ref_in(open_read().as_ref(), text, &current_store())
+}
+
 /// Every number a node holds, as text: `x-15`. A new hash must avoid these,
 /// or one typed token would name two nodes.
 pub fn node_number_texts() -> std::collections::BTreeSet<String> {
@@ -429,7 +459,7 @@ fn is_question_or_decision(hash: &str) -> bool {
 /// A node id sits inside paths (`worktrees/x-aaaa`), branch names
 /// (`feature/x-aaaa-slug`), backticked commands and URLs. Only a hash that
 /// stands alone between spaces and sentence punctuation gets a number beside it.
-fn standalone(text: &str, span: std::ops::Range<usize>) -> bool {
+pub(crate) fn standalone(text: &str, span: std::ops::Range<usize>) -> bool {
     let before = text[..span.start].chars().next_back();
     let after = text[span.end..].chars().next();
     let after_next = text[span.end..].chars().nth(1);
@@ -707,6 +737,41 @@ mod tests {
         assert_eq!(label_in(&conn, "q-0000abcd@imac", "local").unwrap(), "Q1");
         assert_eq!(label_in(&conn, "r-0000abcd", "local"), None);
         assert_eq!(canonical("provider-cap:zai@imac"), "provider-cap:zai@imac");
+    }
+
+    #[test]
+    fn a_node_ref_resolves_the_exact_hash_first_then_the_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::backlog::open(&dir.path().join("graph.json")).unwrap();
+        conn.execute(DDL, []).unwrap();
+        let node = crate::backlog::model::Node::from_json(&json!({
+            "id": "x-5555", "slug": "n-5555", "title": "N", "type": "feature",
+            "status": "ready", "priority": "p2", "domain": "code",
+            "created_at": "2026-09-11T00:00:00+00:00",
+        }))
+        .unwrap();
+        crate::backlog::nodes::save(&conn, &node).unwrap();
+        conn.execute(
+            "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) VALUES ('n:x', 5555, 'x-9999', 'local', 'h', 0)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) VALUES ('n:x', 6666, 'x-aaaa', 'local', 'h', 0)",
+            [],
+        ).unwrap();
+        // The exact tier wins: a legacy all-digit hash stays itself even
+        // when it reads as another node's number.
+        assert_eq!(
+            resolve_node_ref_in(Some(&conn), "x-5555", "local").as_deref(),
+            Some("x-5555")
+        );
+        // The number tier names the node the row carries.
+        assert_eq!(
+            resolve_node_ref_in(Some(&conn), "x-6666", "local").as_deref(),
+            Some("x-aaaa")
+        );
+        // Nothing holds x-7777: the caller keeps the raw token.
+        assert_eq!(resolve_node_ref_in(Some(&conn), "x-7777", "local"), None);
     }
 
     #[test]

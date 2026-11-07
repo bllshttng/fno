@@ -119,7 +119,7 @@ fn reconcile_locked(
         ));
     }
     // Prove the capture itself, never a second read of the slot.
-    let principal = match binding::principal_of_blobs(&blobs, probe, root, now) {
+    let principal = match binding::principal_of_blobs(&blobs, probe, root, now, records) {
         Ok(principal) => principal,
         Err("ambiguous-slot") => {
             return Ok(Outcome::refused(

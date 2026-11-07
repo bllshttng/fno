@@ -232,12 +232,16 @@ fn failure_reason(f: &ExternalFailure) -> &'static str {
 /// gets served that item: claude refreshes it on launch. Nothing refreshes
 /// it while every spawn is refused, so the stale item would block the proof
 /// for good. A token string belongs to one account forever, so a proof cached
-/// for exactly that token still holds after it expires.
+/// for exactly that token still holds after it expires. When no cache entry
+/// exists, a switch's own materialization still decides: a slot blob that is
+/// byte-equal to exactly one record's stored blob serves that record, and the
+/// record's bound principal is the identity.
 pub fn principal_of_blobs(
     blobs: &[String],
     probe: &dyn SlotProbe,
     root: &Path,
     now: f64,
+    records: &[Record],
 ) -> Result<Principal, &'static str> {
     if blobs.is_empty() {
         return Err("no-slot-credential");
@@ -248,7 +252,9 @@ pub fn principal_of_blobs(
         match probe.profile(&bearer) {
             Ok(p) => resolved.push(p),
             Err(ExternalFailure::Rejected) if access_expired(blob, now) => {
-                resolved.push(cached_expired_principal(root, blob).ok_or("credential-rejected")?)
+                let proven = cached_expired_principal(root, blob)
+                    .or_else(|| stored_blob_principal(records, root, blob));
+                resolved.push(proven.ok_or("credential-rejected")?)
             }
             Err(f) => return Err(failure_reason(&f)),
         }
@@ -277,6 +283,26 @@ fn cached_expired_principal(root: &Path, blob: &str) -> Option<Principal> {
         organization_uuid: org.to_string(),
         email: None,
     })
+}
+
+/// The bound principal of the one record whose stored blob holds `blob`'s
+/// credential. A switch materializes a record's stored blob into the slot
+/// byte for byte, and a token string belongs to one account forever, so the
+/// digest match names the slot's identity without an endpoint. A record with
+/// no bound principal, or two records sharing one credential, yield None.
+fn stored_blob_principal(records: &[Record], root: &Path, blob: &str) -> Option<Principal> {
+    let digest = credential_digest(blob)?;
+    let mut matches = records.iter().filter(|r| {
+        r.harness == "claude"
+            && crate::accounts::store::read_blob(root, &r.id)
+                .and_then(|b| credential_digest(&b))
+                .is_some_and(|d| d == digest)
+    });
+    let record = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    record_principal(&record.id, root)
 }
 
 /// `managed.identity_key`: account and organization, both required.
@@ -410,7 +436,8 @@ pub fn resolve(req: &BindingRequest<'_>, probe: &dyn SlotProbe) -> AccountBindin
             let Ok(blobs) = slot_blobs(None, probe) else {
                 return at(UNKNOWN, Some("credential-unreadable"), observed_at);
             };
-            if let Err(failure) = principal_of_blobs(&blobs, probe, req.root, req.now) {
+            if let Err(failure) = principal_of_blobs(&blobs, probe, req.root, req.now, req.records)
+            {
                 let status = if failure == "ambiguous-slot" {
                     AMBIGUOUS
                 } else {
@@ -463,7 +490,8 @@ pub fn resolve(req: &BindingRequest<'_>, probe: &dyn SlotProbe) -> AccountBindin
     let observed = match observed {
         Some(identity) => identity,
         None => {
-            let principal = match principal_of_blobs(&blobs, probe, req.root, req.now) {
+            let principal = match principal_of_blobs(&blobs, probe, req.root, req.now, req.records)
+            {
                 Ok(p) => p,
                 Err(failure) => {
                     let status = if failure == "ambiguous-slot" {

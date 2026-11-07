@@ -243,7 +243,7 @@ fn registry_axes(state: &Map<String, Value>) -> Map<String, Value> {
 /// `owner/repo` from a git remote URL, or None for a non-GitHub remote: strip
 /// scheme and credentials, anchor on the host, and require exactly two path
 /// segments (the ported `_slug_from_remote`).
-fn slug_from_remote(raw: &str) -> Option<String> {
+pub(crate) fn slug_from_remote(raw: &str) -> Option<String> {
     let scheme = regex::Regex::new(r"^[A-Za-z][A-Za-z0-9+.-]*://").expect("static regex");
     let creds = regex::Regex::new(r"^[^/@]*@").expect("static regex");
     let host = regex::Regex::new(r"(?i)^github\.com(?::\d+)?[:/](.+)$").expect("static regex");

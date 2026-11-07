@@ -7,10 +7,9 @@
 //! `fno agents mail send` the canonical handle. Client-side and daemon-free:
 //! the command starts nothing, matching the registry-json posture.
 //!
-//! Contract pinned by `tests/golden/register/` (captured from the Python leg)
-//! and `tests/register_parity.rs`. Not in scope here: the hook's pane-worker
-//! restamp (`register_session.py main`), which is the SessionStart transport,
-//! not this command.
+//! Contract pinned by `tests/golden/register/` (captured from the Python leg).
+//! Not in scope here: the hook's pane-worker restamp (`register_session.py
+//! main`), which is the SessionStart transport, not this command.
 
 use crate::identity::{canonical_handle, session_handle_tier};
 use crate::paths::AgentsHome;
@@ -124,6 +123,14 @@ session '{session_id}'; use the full session id directly"
         }
     }
 
+    // The census walk reads the whole process table, so it must not run under
+    // the registry lock: the refresh below binds a pid resolved here. The mint
+    // arm never binds, so a first registration skips the walk entirely.
+    let ambient_pid = if own_row_exists {
+        crate::spawn_context::session_identity_ambient(std::process::id()).0
+    } else {
+        None
+    };
     let outcome = update_registry(
         &crate::paths::AgentsHome::shared_registry_json(),
         |registry| {
@@ -151,6 +158,7 @@ session '{session_id}'; use the full session id directly"
                     };
                 }
                 apply_manifest_role(row, manifest_role.as_ref());
+                bind_own_pid(row, ambient_pid);
                 let policy_after = row.delivery_policy.clone();
                 return (
                     row.name.clone(),
@@ -271,6 +279,34 @@ written once. Mail escalation reads it, so this session is still treated as '{o}
         );
     }
     0
+}
+
+/// Bind the registering session's live harness pid onto its row, so the
+/// liveness sweep's pid rule reads an honest process. `ambient` is the census
+/// answer for THIS process (`session_identity_ambient(std::process::id()).0`),
+/// resolved by the caller OUTSIDE the registry lock. A proven pid overwrites
+/// whatever stale pid a pre-restart row carried - that stale pid is what made
+/// the sweep stamp a re-registered lead `exited` within one ServeOnly tick.
+/// An unproven walk clears a stored pid `pid_is_ours` rejects (dead or
+/// recycled) so the sweep stops deciding on it, and leaves a live stored pid
+/// alone: it is honest, and clearing it would blind the sweep to a real death.
+pub(crate) fn bind_own_pid(row: &mut RegistryEntry, ambient: Option<u32>) {
+    match ambient {
+        Some(pid) => {
+            row.pid = Some(pid);
+            // Recorded beside the pid so the next sweep's probe compares start
+            // times: a recycled pid number cannot pass as ours.
+            row.pid_start_time = crate::process_probe::process_start_time(pid);
+        }
+        None => {
+            if let Some(pid) = row.pid {
+                if !crate::daemon::pid_is_ours(pid, row.pid_start_time) {
+                    row.pid = None;
+                    row.pid_start_time = None;
+                }
+            }
+        }
+    }
 }
 
 fn run_mail_hold(argv: &[&str]) -> i32 {
@@ -492,4 +528,95 @@ fn ambient_identity_strip_flags(
         flags.push((*name).to_string());
     }
     flags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_row(session: &str) -> RegistryEntry {
+        let mut row = RegistryEntry::new(
+            Some(session.to_string()),
+            crate::state::Lineage::unproven("register bind test"),
+        );
+        row.status = crate::AgentStatus::Idle;
+        row
+    }
+
+    /// The daemon's own pid_live closure shape (daemon.rs): a row with no pid
+    /// stays live; a recorded pid must still be our live worker.
+    fn daemon_pid_live(e: &RegistryEntry) -> bool {
+        e.pid.map_or(true, |pid| {
+            crate::daemon::pid_is_ours(pid, e.pid_start_time)
+        })
+    }
+
+    /// AC1-HP: a re-register over a row carrying a dead pid binds the live
+    /// session pid, and the sweep's pid rule reads the bound row honest while
+    /// still reaping a control row that carries the dead pid.
+    #[test]
+    fn a_re_register_binds_the_live_session_pid() {
+        let mut row = base_row("sid-bind");
+        row.mux = Some(crate::state::MuxRef {
+            session: "mux-s".into(),
+            pane_id: 1,
+        });
+        row.pid = Some(crate::row_verdict::reaped_pid());
+
+        let mut dead = base_row("sid-dead-control");
+        dead.mux = Some(crate::state::MuxRef {
+            session: "mux-s".into(),
+            pane_id: 2,
+        });
+        dead.pid = Some(crate::row_verdict::reaped_pid());
+
+        bind_own_pid(&mut row, Some(std::process::id()));
+        assert_eq!(row.pid, Some(std::process::id()));
+        assert_eq!(
+            row.pid_start_time,
+            crate::process_probe::process_start_time(std::process::id())
+        );
+
+        let (changes, _out) = crate::liveness_sweep::plan_reconcile(
+            &[row.clone(), dead],
+            |_| Ok(true),
+            || false,
+            daemon_pid_live,
+            |_| false,
+            |_| false,
+            |_| false,
+            |_| false,
+            |_| crate::client_commands::RowLiveness::Unknown,
+            true,
+        );
+        assert_eq!(changes.len(), 2);
+        let bound = changes.first().expect("two rows planned");
+        assert!(!bound.pid_proven);
+        assert_eq!(bound.new_status, None);
+        let reaped_row = changes.last().expect("two rows planned");
+        assert!(reaped_row.pid_proven);
+        assert_eq!(reaped_row.new_status, Some(crate::AgentStatus::Exited));
+    }
+
+    /// AC2-EDGE: an unproven walk clears a dead stored pid (the sweep must
+    /// stop deciding on it) and leaves a live stored pid standing.
+    #[test]
+    fn an_unproven_ambient_clears_a_dead_stored_pid() {
+        let mut dead = base_row("sid-unproven-dead");
+        dead.pid = Some(crate::row_verdict::reaped_pid());
+        dead.pid_start_time = Some(12345);
+        bind_own_pid(&mut dead, None);
+        assert_eq!(dead.pid, None);
+        assert_eq!(dead.pid_start_time, None);
+
+        let mut live = base_row("sid-unproven-live");
+        live.pid = Some(std::process::id());
+        live.pid_start_time = crate::process_probe::process_start_time(std::process::id());
+        bind_own_pid(&mut live, None);
+        assert_eq!(live.pid, Some(std::process::id()));
+        assert_eq!(
+            live.pid_start_time,
+            crate::process_probe::process_start_time(std::process::id())
+        );
+    }
 }
