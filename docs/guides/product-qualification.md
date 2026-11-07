@@ -9,7 +9,7 @@ The release qualification matrix is declared once in `evals/fixtures/product-del
 Every command runs from the repository root with no paid model in the loop.
 
 ```bash
-uv run --with pytest --with pytest-timeout --with pyyaml pytest tests/py/unit/test_product_qualification_manifest.py -q
+uv run --with pytest --with pytest-timeout --with pyyaml --with psutil pytest tests/py/unit/test_product_qualification_manifest.py -q
 ```
 
 The pack journey and the report test were pytest files under the deleted Python tree. They have no native replacement yet, so the pack journey is not measured.

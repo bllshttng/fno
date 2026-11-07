@@ -2,7 +2,7 @@
 
 These tests check hooks, skill scripts and CI scripts that stay in the repo.
 They shell the shipped binaries and never import a runtime package. Run them
-with: uv run --with pytest --with pytest-timeout --with pyyaml pytest tests/py
+with: uv run --with pytest --with pytest-timeout --with pyyaml --with psutil pytest tests/py
 """
 from __future__ import annotations
 

@@ -717,17 +717,22 @@ pub fn changed_steps(root: &Path, selections: &[Selection], shard: &str) -> Vec<
         targets.sort();
         targets.dedup();
         // xdist costs more than it saves on a handful of files.
-        let par = if targets.len() > 3 {
-            " -n auto --maxprocesses=4 --dist=loadgroup"
+        let (xdist, par) = if targets.len() > 3 {
+            (
+                " --with pytest-xdist",
+                " -n auto --maxprocesses=4 --dist=loadgroup",
+            )
         } else {
-            ""
+            ("", "")
         };
         let quoted: Vec<String> = targets.iter().map(|t| shell_quote_arg(t)).collect();
+        // The same ephemeral env the tests-py CI job runs: no project
+        // manifest exists to sync.
         steps.push((
             format!("Pytest (changed subset, {} file(s))", targets.len()),
             ".".to_string(),
             format!(
-                "uv run --project cli pytest --tb=short -q{par} {}",
+                "uv run --with pytest --with pytest-timeout --with pyyaml --with psutil{xdist} pytest --tb=short -q{par} {}",
                 quoted.join(" ")
             ),
         ));

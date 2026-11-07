@@ -55,7 +55,7 @@ All test scripts follow the same convention:
 
 `fno doctor test smoke` is the one-command gate, but it has two layers and a gap that a command-surface change falls straight through.
 
-- A pytest step over `tests/py/`, the dev-only live-contract suite. Run it by hand with `uv run --with pytest --with pytest-timeout --with pyyaml pytest tests/py`.
+- A pytest step over `tests/py/`, the dev-only live-contract suite. Run it by hand with `uv run --with pytest --with pytest-timeout --with pyyaml --with psutil pytest tests/py`.
 - Auto-included shell steps from `HARNESS_GLOBS` in `crates/fno-agents/src/test_smoke_registry.rs`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
 - The pytest step is fail-fast: while it is red, the shell steps never run.
 

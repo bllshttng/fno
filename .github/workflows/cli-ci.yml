@@ -433,7 +433,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh tests-py "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          uv run --with pytest --with pytest-timeout --with pyyaml \
+          uv run --with pytest --with pytest-timeout --with pyyaml --with psutil \
             pytest tests/py -m 'not slow_e2e and not smoke and not e2e'
 
       # Positive probe over the checked-in graduation registry. Every decision
@@ -441,7 +441,7 @@ jobs:
       # this red instead of silently un-retiring the ruling.
       - name: Decision graduation probes
         if: ${{ !cancelled() }}
-        run: uv run --with pytest --with pytest-timeout --with pyyaml python scripts/ci/check-decision-graduation.py
+        run: uv run --with pytest --with pytest-timeout --with pyyaml --with psutil python scripts/ci/check-decision-graduation.py
 
   smoke-rest:
     needs: [pr-affected]
