@@ -121,6 +121,9 @@ pub enum ViewKind {
     MessagesYou,
     /// The board on the newest You thread's detail, pairs right and left.
     MessagesYouThread,
+    /// The board on the pinned `Your asks` row: every session's typed asks
+    /// flattened, pending first.
+    MessagesAsks,
     /// The PR review overlay over the fixture diff, with two staged comments.
     ReviewDiff,
     /// The PR review as a right split beside the chat panes.
@@ -312,6 +315,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-archive" => Some(ViewKind::MessagesArchive),
         "messages-you" => Some(ViewKind::MessagesYou),
         "messages-you-thread" => Some(ViewKind::MessagesYouThread),
+        "messages-asks" => Some(ViewKind::MessagesAsks),
         "review-diff" => Some(ViewKind::ReviewDiff),
         "review-panel" => Some(ViewKind::ReviewPanel),
         "review-panel-drag" => Some(ViewKind::ReviewPanelDrag),
@@ -433,7 +437,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, backlog-list, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -857,6 +861,7 @@ fn live_frame(
         Some(ViewKind::MessagesArchive) => Some((Col::Chats, ChatTab::Archive)),
         Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::Chats)),
         Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::Chats)),
+        Some(ViewKind::MessagesAsks) => Some((Col::Thread, ChatTab::Chats)),
         _ => None,
     };
     let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
@@ -881,7 +886,7 @@ fn live_frame(
         // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
         let you_empty = matches!(
             kind,
-            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread | ViewKind::MessagesAsks)
         ) && mail
             .as_ref()
             .ok()
@@ -933,6 +938,11 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 b.sel_thread = Some(format!("you:{sid}"));
                 b.cursors[2] = b.you_items(&sid).len().saturating_sub(1);
             }
+        }
+        if let (Some(ViewKind::MessagesAsks), Some(b)) = (kind, view.messages_board.as_mut()) {
+            b.sel_thread = Some("asks".to_string());
+            b.cursors[2] = 0;
+            b.col = crate::client::messages_view::Col::Thread;
         }
     }
     // The messages seam above is the shape: flip the client state the live
@@ -1522,6 +1532,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesArchive)
         | Some(ViewKind::MessagesYou)
         | Some(ViewKind::MessagesYouThread)
+        | Some(ViewKind::MessagesAsks)
         | None => {}
         Some(ViewKind::Decisions) => {
             let node = format!("x-{}", 7145);
@@ -1729,6 +1740,7 @@ mod tests {
             ("messages-archive", ViewKind::MessagesArchive),
             ("messages-you", ViewKind::MessagesYou),
             ("messages-you-thread", ViewKind::MessagesYouThread),
+            ("messages-asks", ViewKind::MessagesAsks),
             ("review-diff", ViewKind::ReviewDiff),
             ("review-panel", ViewKind::ReviewPanel),
             ("review-panel-drag", ViewKind::ReviewPanelDrag),
@@ -1768,10 +1780,10 @@ mod tests {
         assert!(e.contains("--peer wants <cols>x<rows>"), "{e}");
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
-            e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
-            ),
-            "{e}"
-        );
+                    e.contains(
+                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, backlog-list, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                    ),
+                    "{e}"
+                );
     }
 }

@@ -155,6 +155,50 @@ event_types:
         mutation: { type: string, description: "The api mutation name; present on the single-row path's per-write rows." }
     consumers: [operator]
 
+  - name: graph_lock_held
+    retention: durable
+    description: "The graph-lock holder's own measurement of a hold past 2 s, one row on release. A waiter sees only its timeout; this names who held and where the time went."
+    sources: [loop]
+    data:
+      required: [pid, command, lock, hold_ms, phases_ms]
+      properties:
+        pid: { type: integer }
+        command: { type: string, description: "The holder's command line, cut to 120 characters." }
+        lock: { type: string, description: "The lock file path." }
+        hold_ms: { type: integer }
+        phases_ms: { type: object, description: "Named under-lock sub-phase timings plus counters (publish_retries)." }
+    consumers: [operator]
+
+  - name: graph_write_busy
+    retention: durable
+    description: "A graph write refused after the busy budget spent itself: the SQLite store stayed locked across every attempt. One row per exhausted wait, so a load incident leaves a trace."
+    sources: [loop]
+    data:
+      required: [pid, attempts, elapsed_ms, error]
+      properties:
+        pid: { type: integer }
+        attempts: { type: integer }
+        elapsed_ms: { type: integer }
+        error: { type: string, description: "The last sqlite busy error, cut to 300 characters." }
+    consumers: [operator]
+
+  - name: chokepoint_wait_exceeded
+    retention: durable
+    description: "A chokepoint wait ran out its deadline: the lock stayed busy and the caller was refused. One row per expiry, naming the holder."
+    sources: [loop]
+    data:
+      required: [row, path, waited_ms, holder_alive, waiter_pid]
+      properties:
+        row: { type: string, description: "The chokepoint row name." }
+        path: { type: string }
+        waited_ms: { type: integer }
+        holder_pid: { type: integer, description: "Null when the lock carried no holder stamp." }
+        holder_alive: { type: boolean }
+        hold_age_secs: { type: integer, description: "Null when the stamp carried no parseable acquire time." }
+        holder_op: { type: string, description: "Null when the stamp carried no op." }
+        waiter_pid: { type: integer }
+    consumers: [operator]
+
   - name: graph_render_failed
     retention: durable
     description: "The canonical keeper's render trigger ran the view pass and it failed. The write already landed; the trigger retries on the next settled tick, so this names a rendering debt, never a lost write."

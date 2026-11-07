@@ -291,7 +291,7 @@ fn read_stamp_fields(path: &Path) -> (Option<String>, Option<String>) {
 /// The holder's command line, cut to 120 characters. The stamp's op names the
 /// lock row, which every holder of one lock shares; the command line is what
 /// tells an `authorized-merge` from a `registry-commit`.
-fn process_command(pid: u64) -> String {
+pub(crate) fn process_command(pid: u64) -> String {
     std::process::Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
         .output()

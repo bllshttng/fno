@@ -79,7 +79,7 @@ fn scan_path(capture_dir: &Path, session: &str) -> PathBuf {
     capture_dir.join(format!("{session}.scan.json"))
 }
 
-fn ledger_path(capture_dir: &Path, session: &str) -> PathBuf {
+pub(crate) fn ledger_path(capture_dir: &Path, session: &str) -> PathBuf {
     capture_dir.join(format!("{session}.jsonl"))
 }
 
@@ -112,7 +112,7 @@ fn head_digest(prefix: &[u8], offset: u64) -> String {
 /// distinct ids and one ack can never dispose two turns. sha1 (not sha256)
 /// keeps every derived id an existing ledger already acked, and the absent
 /// timestamp renders as the literal `None` exactly as the Python seed did.
-fn turn_id(obj: &Value, text: &str, line_no: usize) -> String {
+pub(crate) fn turn_id(obj: &Value, text: &str, line_no: usize) -> String {
     for key in ["uuid", "id"] {
         if let Some(Value::String(s)) = obj.get(key) {
             let t = s.trim();
@@ -256,7 +256,7 @@ fn save_state(path: &Path, state: &ScanState) -> Result<(), String> {
 
 /// Acked turn ids; an absent ledger means none have been acked, while malformed
 /// or unreadable ledgers are errors.
-fn read_acked_turn_ids(path: &Path) -> Result<HashSet<String>, String> {
+pub(crate) fn read_acked_turn_ids(path: &Path) -> Result<HashSet<String>, String> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
@@ -667,8 +667,9 @@ fn render_list(payload: &QueuePayload, json_out: bool, limit: Option<usize>, now
 /// queue payload; `--render` prints the `fno inbox user` answer the front
 /// door execs this for.
 pub fn run(args: &[String]) -> i32 {
-    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]]";
+    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>] [--all]]";
     let mut json_out = false;
+    let mut all = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -676,6 +677,7 @@ pub fn run(args: &[String]) -> i32 {
                 it.next();
             }
             "--json" | "-J" => json_out = true,
+            "--all" => all = true,
             _ => {
                 eprintln!("{USAGE}");
                 return 2;
@@ -701,6 +703,16 @@ pub fn run(args: &[String]) -> i32 {
             }
         },
     };
+    // `list --all`: the cross-session asks view. It needs no session
+    // identity - the capture dir enumerates every scanned session - so it
+    // returns before the resolver can refuse an ambient-less caller.
+    if all {
+        if render.as_deref().is_some_and(|m| m != "list") {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+        return run_all_asks(json_out, limit);
+    }
     let get = |key: &str| {
         let pinned = match key {
             "FNO_OPERATOR_SESSION_ID" => flag("--session"),
@@ -765,6 +777,65 @@ pub fn run(args: &[String]) -> i32 {
         render_list(&outcome.payload, json_out, limit, now_epoch);
     } else {
         render_status(&outcome.payload, json_out);
+    }
+    0
+}
+
+/// `fno inbox user list --all`: the cross-session asks view. The capture
+/// dir enumerates every scanned session (both harnesses), the You walk
+/// pairs each typed turn with its reply, and the ack ledger decides the
+/// state; pending rows pin first, the rest sort newest first.
+fn run_all_asks(json_out: bool, limit: Option<usize>) -> i32 {
+    let home = crate::paths::AgentsHome::from_env();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let Some(capture_dir) = std::env::var_os("FNO_OPERATOR_CAPTURE_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| capture_dir(&cwd))
+    else {
+        eprintln!("error: no operator capture directory could be resolved");
+        return 1;
+    };
+    let registry = crate::mail_threads::registry_rows();
+    let inputs = crate::you_threads::YouInputs {
+        registry: &registry,
+        projects_dir: crate::claude_drive::claude_projects_dir(),
+        home_root: home.root().to_path_buf(),
+        cache_path: home.root().join("intel").join("you-threads.json"),
+        capture_dir,
+    };
+    let mut rows = crate::you_threads::asks_rows(&inputs);
+    if let Some(n) = limit {
+        rows.truncate(n);
+    }
+    let now_epoch = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
+    if json_out {
+        println!("{}", python_json(&rows));
+        return 0;
+    }
+    if rows.is_empty() {
+        println!("no asks yet: type in a session and the replies pair up");
+        return 0;
+    }
+    for row in &rows {
+        let state = row.get("state").and_then(Value::as_str).unwrap_or("");
+        let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+        let typed = excerpt(row.get("typed_text").and_then(Value::as_str).unwrap_or(""));
+        let reply = excerpt(
+            row.get("reply_excerpt")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        );
+        let age = row
+            .get("ts")
+            .and_then(Value::as_str)
+            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+            .map(|dt| format!("{}s", (now_epoch - dt.timestamp() as f64) as i64))
+            .unwrap_or_else(|| "age-unknown".to_string());
+        println!(
+            "{}\t{age}\t[{state}] {name}: {typed} => {reply}",
+            row.get("turn_id").and_then(Value::as_str).unwrap_or("")
+        );
     }
     0
 }

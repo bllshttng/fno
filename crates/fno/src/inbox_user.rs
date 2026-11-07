@@ -14,7 +14,7 @@ use std::ffi::OsString;
 /// Python command's own refusal answers it.
 const NATIVE_USER_COMMANDS: &[(&str, &[&str], &[&str])] = &[
     ("status", &["--json", "-J"], &[]),
-    ("list", &["--json", "-J"], &["--limit", "-L"]),
+    ("list", &["--json", "-J", "--all"], &["--limit", "-L"]),
 ];
 
 /// Classify `fno inbox user|operator <command> ...`: `Some(argv)` is the argv
@@ -203,7 +203,7 @@ reads as a user turn; over-counting is the safe direction there.";
 const USER_COMMANDS: &[(&str, &str)] = &[
     (
         "list",
-        "Undispositioned user turns, oldest first: list [--limit N] [--json].",
+        "Undispositioned user turns, oldest first; --all lists every session's asks with their answer state: list [--all] [--limit N] [--json].",
     ),
     (
         "ack",
@@ -348,6 +348,22 @@ mod tests {
             assert!(
                 classify_inbox_user(&mk(&["inbox", group, "status", "--limit", "1"])).is_none()
             );
+            assert_eq!(
+                classify_inbox_user(&mk(&["inbox", group, "list", "--all"])),
+                Some(mk(&["operator-turns", "--render", "list", "--all"]))
+            );
+            assert_eq!(
+                classify_inbox_user(&mk(&["inbox", group, "list", "--all", "-L", "5"])),
+                Some(mk(&[
+                    "operator-turns",
+                    "--render",
+                    "list",
+                    "--all",
+                    "-L",
+                    "5"
+                ]))
+            );
+            assert!(classify_inbox_user(&mk(&["inbox", group, "status", "--all"])).is_none());
             assert_eq!(
                 classify_inbox_user(&mk(&["inbox", group, "ack", "u-1", "--outcome", "nothing"])),
                 Some(mk(&["ack", "u-1", "--outcome", "nothing"]))

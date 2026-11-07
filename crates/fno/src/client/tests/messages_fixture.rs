@@ -710,7 +710,11 @@ fn messages_paint_reads_rows_built_once_per_projection() {
     let _ = b.columns(200, (50, 50));
     let cold = cold.elapsed();
     let first = b.tree_rows();
-    assert_eq!(first.len(), 3012, "every agent plus each unheld You thread");
+    assert_eq!(
+        first.len(),
+        3013,
+        "the pinned asks row, every agent, each unheld You thread"
+    );
     let started = Instant::now();
     for _ in 0..30 {
         let _ = b.columns(200, (50, 50));
@@ -737,7 +741,98 @@ fn messages_paint_reads_rows_built_once_per_projection() {
         .apply(json!({"participants":[{"key":"s1","name":"a1","live":true}]}));
     assert_eq!(
         b.tree_rows().len(),
-        1,
-        "a landed projection rebuilds the rows"
+        2,
+        "the asks row plus the one agent; a landed projection rebuilds the rows"
+    );
+}
+
+/// AC7+AC8: the asks row flattens two sessions' `you` rows, pending first
+/// even when the answered ask is newer, column 3 paints the state mark, the
+/// session name and both texts, and an empty projection paints one
+/// empty-state line and no error.
+#[tokio::test]
+async fn ac7_ac8_asks_paint_pending_first_and_the_empty_state() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        super::super::LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "you": [
+            {"session_id": "sess-a", "name": "atlas", "last_ts": "2026-11-06T10:00:00Z",
+             "items": [
+                {"ts": "2026-11-06T10:00:00Z", "typed_text": "ship the asks view",
+                 "reply_text": "Shipped; the PR is open.", "turn_id": "t-a1",
+                 "end_reply": "", "state": "answered"}]},
+            {"session_id": "sess-b", "name": "brisk", "last_ts": "2026-11-06T11:00:00Z",
+             "items": [
+                {"ts": "2026-11-06T11:00:00Z", "typed_text": "status on the gate?",
+                 "reply_text": "", "turn_id": "t-b1", "end_reply": "", "state": "pending"}]}
+        ],
+    }));
+    b.sel_thread = Some("asks".into());
+    b.cursors[2] = 0;
+    // The pinned column-1 row exists with the pending count.
+    let tree = b.tree_rows();
+    match tree.first() {
+        Some(TreeRow::Asks { pending }) => assert_eq!(*pending, 1, "one pending ask"),
+        other => panic!("the asks row pins first, got {other:?}"),
+    }
+    let (lines, _) = b.thread_lines(80);
+    let text = lines
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let brisk_at = text.find("brisk").expect("pending session painted");
+    let atlas_at = text.find("atlas").expect("answered session painted");
+    assert!(
+        brisk_at < atlas_at,
+        "pending session paints before the answered one"
+    );
+    assert!(text.contains("status on the gate?"), "typed text paints");
+    assert!(
+        text.contains("Shipped; the PR is open."),
+        "reply paints under its ask"
+    );
+    // AC8: an empty projection paints the title and one empty-state line,
+    // no error.
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "you": [],
+    }));
+    b.sel_thread = Some("asks".into());
+    let (lines, _) = b.thread_lines(80);
+    let body: Vec<String> = lines
+        .iter()
+        .map(|l| l.text.clone())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    assert_eq!(body.len(), 2, "title plus one empty-state line: {body:?}");
+    let title = body.first().expect("title and empty-state line");
+    assert!(
+        title.starts_with("Your asks"),
+        "the title names the view: {body:?}"
+    );
+    assert_eq!(
+        body.get(1).map(String::as_str),
+        Some("(no asks yet)"),
+        "one empty-state line"
     );
 }
