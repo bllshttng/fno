@@ -2323,6 +2323,87 @@ fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
     home.root().join("logs").join(format!("{}.log", name))
 }
 
+/// Answer a pending permission prompt on a claude thread. The prompt picker
+/// is answered by typing the harness's response key over the attach
+/// transport, so the ask works by session id or row name and needs no TTY
+/// (`claude attach` needs one). The key comes from the packaged harness
+/// contract; a worker whose row still carries no transport key derives it
+/// from the session id (the claude jobId is its prefix).
+fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<AskOutcome> {
+    let contract = match crate::harness_capabilities::HarnessContract::packaged() {
+        Ok(c) => c,
+        Err(e) => {
+            return Some(AskOutcome::err(
+                format!("ask --answer: the packaged harness contract is unreadable: {e}"),
+                2,
+            ))
+        }
+    };
+    let keys = match contract.permission_response_keys("claude", answer, "permission_prompt") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            return Some(AskOutcome::err(
+                format!("ask --answer: claude refuses action {answer:?}"),
+                2,
+            ))
+        }
+    };
+    let registry = load_registry(&home.registry_json()).ok()?;
+    let entry = registry.find_name_or_full_session_id(name)?;
+    if entry.harness_name() != "claude" {
+        return Some(AskOutcome::err("ask --answer reaches only a claude row", 2));
+    }
+    let short = entry
+        .transport_short()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            entry
+                .harness_session_id
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(8)
+                .collect()
+        });
+    if short.is_empty() {
+        return Some(AskOutcome::err(
+            format!(
+                "ask --answer: registry entry {} has no transport key and no session id to derive one from",
+                py_repr(name)
+            ),
+            12,
+        ));
+    }
+    let key = &keys[0];
+    match crate::mail_inject::answer_permission_via_control_sock_in(
+        &crate::claude_roster::daemon_dir(),
+        &short,
+        key,
+        crate::mail_inject::default_enter_delay_ms(crate::mail_inject::MailInjectHarness::Claude),
+    ) {
+        Ok(()) => {
+            emit_event(
+                &home.events_jsonl(),
+                "agent_prompt_answered",
+                &[
+                    ("name", name.into()),
+                    ("answer", answer.into()),
+                    ("short_id", short.clone().into()),
+                ],
+            );
+            Some(AskOutcome {
+                stdout: format!("answered: {answer} (key {key}) typed to claude thread {short}\n"),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+        Err(reason) => Some(AskOutcome::err(
+            format!("ask --answer: the claude control socket refused the answer: {reason}"),
+            12,
+        )),
+    }
+}
+
 /// Orchestrate one claude `ask`: validate, lock, decide create-vs-followup,
 /// stamp the registry, emit events, and return what to print plus the exit
 /// code. `extra_env` is forwarded to `bg_create` (production passes `&[]` to
@@ -2334,14 +2415,18 @@ pub fn dispatch_claude_ask(
     name: &str,
     message: &str,
     from_name: &str,
-    // Create-only inputs, retained for API stability after Task 1.3a removed
+    // Create-only inputs, retained for API stability after Task 1.1a removed
     // the create branch from `ask` (callers still pass them; `spawn` owns
     // creation now via `dispatch_claude_spawn`).
     _cwd: &Path,
     _yolo: bool,
     timeout: Option<Duration>,
     _extra_env: &[(&str, &str)],
+    answer: Option<&str>,
 ) -> AskOutcome {
+    if let Some(outcome) = answer.and_then(|a| answer_thread_prompt(home, name, a)) {
+        return outcome;
+    }
     if let Err(msg) = validate_inputs(name, message, from_name) {
         return AskOutcome::err(msg, 2);
     }

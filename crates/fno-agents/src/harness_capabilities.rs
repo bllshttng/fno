@@ -1962,6 +1962,20 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    #[test]
+    fn the_answer_maps_to_the_harness_response_key() {
+        let contract = crate::harness_capabilities::HarnessContract::packaged().unwrap();
+        let key = |action: &str| -> String {
+            contract
+                .permission_response_keys("claude", action, "permission_prompt")
+                .expect("supported action")
+                .remove(0)
+        };
+        assert_eq!(key("allow_once"), "1");
+        assert_eq!(key("allow_always"), "2");
+        assert_eq!(key("deny"), "3");
+    }
+
     /// Roster and teaching metadata cannot drift apart: every native command
     /// carries a meta row (the render command promises one line per command) and
     /// every meta key names a roster command (a stale meta row would render a
