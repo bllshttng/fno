@@ -2360,10 +2360,8 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
             entry
                 .harness_session_id
                 .as_deref()
-                .unwrap_or("")
-                .chars()
-                .take(8)
-                .collect()
+                .map(crate::client_commands::derived_short_id)
+                .unwrap_or_default()
         });
     if short.is_empty() {
         return Some(AskOutcome::err(
@@ -2372,6 +2370,23 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
                 py_repr(name)
             ),
             12,
+        ));
+    }
+    // A key typed at a worker with no prompt showing becomes a stray turn,
+    // so the agents listing must name the wait (the same predicate the
+    // prompt-wait watch reads).
+    let showing = crate::claude_roster::read_all_agents_union()
+        .find(&short)
+        .and_then(|row| row.waiting_for.clone())
+        .map(|w| w.to_ascii_lowercase().contains("permission"))
+        .unwrap_or(false);
+    if !showing {
+        return Some(AskOutcome::err(
+            format!(
+                "ask --answer: no permission prompt is showing for {} (the agents listing names no wait)",
+                py_repr(name)
+            ),
+            2,
         ));
     }
     let key = &keys[0];
