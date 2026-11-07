@@ -255,6 +255,15 @@ case " $* " in
     ;;
 esac
 unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
+# A harness identity in the caller's env would join the demo's fresh store as
+# that real session: every seed call stamps it onto the demo nodes and the
+# shot leaks the id (x-d742 look flag). Strip the identity keys, so the demo
+# store carries only what the seed writes.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID CLAUDECODE CLAUDECODE_SESSION_ID \
+  CODEX_THREAD_ID CODEX_SESSION_ID CODEX_COMPANION_SESSION_ID \
+  CODEX_COMPANION_TRANSCRIPT_PATH GEMINI_SESSION_ID OPENCODE_SESSION_ID \
+  PI_SESSION_ID PI_SESSION_FILE HERMES_SESSION_ID TARGET_SESSION_ID \
+  FNO_HARNESS_NAME FNO_HARNESS_SESSION_ID REX_SERVER REX_SESSION REX_BLOCK
 # Under an owner session the server lives as long as its owner. Left alone,
 # the owner is the first short-lived `pane run`, and the server shuts down
 # before the shot. This script owns it instead, so it also dies with us.
