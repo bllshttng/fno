@@ -318,7 +318,7 @@ fn uninstall_removes_the_plist_from_disk() {
         agents_dir_is_file: false,
         plist: true,
         launchctl: LaunchCtl {
-            list: Some("sh.fno.pr-watcher"),
+            list: Some("sh.fno.pr-watcher.testhome"),
             ..LaunchCtl::default()
         },
     };
@@ -355,7 +355,7 @@ fn unload_only_unloads_but_keeps_the_plist() {
         agents_dir_is_file: false,
         plist: true,
         launchctl: LaunchCtl {
-            list: Some("sh.fno.pr-watcher"),
+            list: Some("sh.fno.pr-watcher.testhome"),
             ..LaunchCtl::default()
         },
     };
@@ -385,7 +385,7 @@ fn uninstall_reports_a_failed_removal() {
         agents_dir_is_file: false,
         plist: true,
         launchctl: LaunchCtl {
-            list: Some("sh.fno.pr-watcher"),
+            list: Some("sh.fno.pr-watcher.testhome"),
             ..LaunchCtl::default()
         },
     };
