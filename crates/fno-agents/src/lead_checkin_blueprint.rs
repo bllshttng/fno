@@ -137,6 +137,7 @@ pub(crate) fn r_blueprint(
         .flatten()
     {
         let Some(id) = row.get("id").and_then(Value::as_str) else {
+            skips.push(json!({"id": null, "reason": "row carries no id"}));
             continue;
         };
         match other_owned.get(id) {
