@@ -142,10 +142,10 @@ struct KillGuard(u32);
 
 impl Drop for KillGuard {
     fn drop(&mut self) {
-        // SAFETY: SIGKILL to a test child; leaked keepers would haunt the
-        // next run's socket paths.
+        // SAFETY: SIGKILL to the keeper's whole group, the fn-47ea driver
+        // pattern: a pid kill leaves the keeper's harness child running.
         unsafe {
-            libc::kill(self.0 as libc::pid_t, libc::SIGKILL);
+            libc::killpg(self.0 as libc::pid_t, libc::SIGKILL);
         }
     }
 }
@@ -426,7 +426,7 @@ fn keeper_ends_itself_on_sigterm_dir_gone_or_seat_idle_past_the_bound() {
                 }
             });
         }
-        cmd.spawn().expect("keeper spawns")
+        cmd.process_group(0).spawn().expect("keeper spawns")
     }
 
     fn wait_exit(child: &mut std::process::Child, secs: u64) -> bool {
