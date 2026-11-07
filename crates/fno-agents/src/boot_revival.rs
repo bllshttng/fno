@@ -943,6 +943,24 @@ fn revive_keeper(home: &AgentsHome, entry: &RegistryEntry) -> ReceiptRow {
             return ReceiptRow::new(name, "failed", "the resume form did not render");
         }
     };
+    // A keeper already answering this session is the session itself: skip
+    // with that named, the same short-circuit revive_with takes, so a
+    // reboot survivor never reads revived and a kick re-run never re-mails.
+    let sock = crate::convert::keeper_rebind::thread_socket_path(
+        home.root().parent().unwrap_or(home.root()),
+        name,
+    );
+    if let crate::daemon::KeeperProbe::Answered(reply) =
+        crate::daemon::probe_keeper_socket(&sock, std::time::Duration::from_secs(2))
+    {
+        if reply.get("session_id").and_then(Value::as_str) == Some(sid) {
+            return ReceiptRow::new(
+                name,
+                "skipped",
+                "already live on its keeper; nothing launched",
+            );
+        }
+    }
     // The manual door reserves before anything launches; the reservation is
     // what revive_with's failure releases read against.
     if let Some(code) = crate::resume_gate::gate_and_reserve(home, name, sid) {
