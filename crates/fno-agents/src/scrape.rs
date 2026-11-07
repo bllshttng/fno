@@ -199,16 +199,22 @@ pub fn fno_bin() -> std::ffi::OsString {
         return declared;
     }
     if !cfg!(test) {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let sibling = dir.join("fno");
-                if sibling.is_file() {
-                    return sibling.into_os_string();
-                }
-            }
+        if let Some(sibling) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| fno_bin_beside(&exe))
+        {
+            return sibling.into_os_string();
         }
     }
     declared_fno(None)
+}
+
+/// The `fno` front door in `exe`'s directory, if any. `exe` is a parameter so
+/// the leg is testable (`fno_py_beside` and bootstrap.rs's
+/// `resolve_via_sibling` do the same); production passes `current_exe`.
+fn fno_bin_beside(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let sibling = exe.parent()?.join("fno");
+    sibling.is_file().then_some(sibling)
 }
 
 /// The undeclared-`fno-py` twin of [`UNDECLARED_FNO`]: the same refusal for
@@ -1134,9 +1140,27 @@ mod tests {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
         }
-        assert_ne!(resolved, std::ffi::OsString::from("fno"));
+        assert_ne!(resolved, "fno");
         assert!(!std::path::Path::new(&resolved).exists());
         assert!(resolved.to_string_lossy().contains("FNO_BIN"));
         assert_eq!(declared_resolved, declared);
+    }
+
+    #[test]
+    fn the_sibling_fno_beats_the_bare_path_name() {
+        // A task PATH once put the uv venv first, so bare `fno` answered as
+        // fno-py and refused doctor verbs, and the gate wrote no grade. The
+        // sibling leg rides the complete install (fno and fno-agents in one
+        // bin dir). A dropped or deordered leg fails here instead of as a
+        // gate with no grade.
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("fno-agents");
+        std::fs::write(&exe, b"").unwrap();
+        // No sibling: the leg yields, and the chain falls to the bare name.
+        assert_eq!(fno_bin_beside(&exe), None);
+        // The complete install ships fno beside fno-agents in one bin dir.
+        let sibling = dir.path().join("fno");
+        std::fs::write(&sibling, b"").unwrap();
+        assert_eq!(fno_bin_beside(&exe), Some(sibling));
     }
 }
