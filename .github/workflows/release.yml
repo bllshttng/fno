@@ -482,7 +482,7 @@ jobs:
             --target "$stamped" \
             --title "nightly ${version}" \
             --notes "$notes" \
-            dist/*.tar.gz dist/*.whl scripts/install/fno.sh dist/fno-release.json
+            dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.whl scripts/install/fno.sh dist/fno-release.json
 
           echo "nightly ${version} published at ${stamped}"
 
