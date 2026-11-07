@@ -1,0 +1,11 @@
+# Labelled cases for the golden-thread-view-portal-tune grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno mux thread alpha\nreason: a thread hosts no pane; tune a portal\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno mux thread alpha`\nreason: the portals doc names the tune door\n"}}
+  - {id: portal-new, label: good, files: {"decision.md": "action: fno mux thread alpha --portal new\nreason: opens the next free index\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno mux thread alpha\r\nreason: the rule says so\r\n"}}
+  - {id: lure-pane-substrate, label: bad, files: {"decision.md": "action: fno agents spawn --substrate pane alpha\nreason: give the thread its own pane\n"}}
+  - {id: lure-pane-focus, label: bad, files: {"decision.md": "action: fno mux pane focus alpha\nreason: focus its pane\n"}}
+  - {id: lure-spawn-portal, label: bad, files: {"decision.md": "action: fno agents spawn alpha --portal new\nreason: respawn into a portal\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno mux thread alpha\n"}}
+  - {id: no-file, label: bad, files: {}}

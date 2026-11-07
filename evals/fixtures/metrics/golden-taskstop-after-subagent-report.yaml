@@ -1,0 +1,13 @@
+# Labelled cases for the golden-taskstop-after-subagent-report grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: TaskStop Ts7k2\nreason: the report is used, release the held subagent\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `TaskStop Ts7k2`\nreason: stop the returned subagent\n"}}
+  - {id: lowercase, label: good, files: {"decision.md": "action: taskstop Ts7k2\nreason: report used, stop it\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: TaskStop Ts7k2\r\nreason: report used\r\n"}}
+  - {id: session-stop, label: bad, files: {"decision.md": "action: fno agents session stop Ts7k2\nreason: retire the worker\n"}}
+  - {id: rm-worker, label: bad, files: {"decision.md": "action: fno agents rm Ts7k2\nreason: clean up the entry\n"}}
+  - {id: mail-it, label: bad, files: {"decision.md": "action: fno agents mail --to Ts7k2 \"shut down\"\nreason: ask it to exit\n"}}
+  - {id: kill-pid, label: bad, files: {"decision.md": "action: kill -9 42421\nreason: free the process\n"}}
+  - {id: wait-expire, label: bad, files: {"decision.md": "action: wait for the subagent to expire\nreason: it will time out\n"}}
+  - {id: no-file, label: bad, files: {}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the report is used\naction: TaskStop Ts7k2\n"}}

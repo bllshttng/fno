@@ -1,0 +1,33 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-review-count-never-resets
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  On PR 88, a review round found one bug, and the author has now pushed a fix commit. A teammate claims: "the found bug resets the review round count, so the PR gets two fresh rounds again."
+
+  Read the repo's review rules, then write answer.md in the repository root (the directory you were started in), with exactly three lines:
+  - Line 1 is exactly `resets: yes` or `resets: no` - does a found bug reset the review round budget?
+  - Line 2 is `budget: <the exact config key that sets the budget> (default <the default number>)`.
+  - Line 3 is `read: <the exact command that shows a PR's round budget>`.
+
+  Do not change any other file.
+grade:
+  - kind: file-exists
+    path: "answer.md"
+  - kind: exit
+    command: "sed -n 1p answer.md | tr -d '\\r' | grep -Eiq '^resets: *no *$'"
+  - kind: exit
+    command: "grep -Eiq 'max_rounds' answer.md && grep -Eiq 'default *2' answer.md"
+  - kind: exit
+    command: "sed -n 3p answer.md | tr -d '`\\r' | grep -Eiq '^read: *.*fno do pr status' && ! grep -Eiq '(^|[^a-z])gh($|[^a-z])' answer.md"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:626cdc01e5339fab"}
+  quote: "wait, are you saying. If a bug is found, it resets the review count? /caveman"
+  expected: "No reset. The budget is review.max_rounds, default 2, counted across the PR's whole life; read it with fno do pr status; the fix commit owes one more round inside that same budget."
+  rule: "skills/review/SKILL.md review-cap gate plus docs/architecture/review-coverage-termination.md round budget: review.max_rounds (default 2) counts across the whole life of the PR, one reviewed head is one round pass or fail, findings never reset it, a fix commit that defeats the interdiff carry owes a round inside the same budget, and the budget reads via fno do pr status."
+  failure_type: wrong-assumption
+  cost: rework
+  outcome: failed

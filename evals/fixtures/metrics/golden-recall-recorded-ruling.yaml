@@ -1,0 +1,11 @@
+# Labelled cases for the golden-recall-recorded-ruling grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno inbox decisions fold-into-epic\nreason: the ruling is recorded, recall it\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno inbox decisions groom-fold`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno inbox decisions\r\nreason: bare read prints every subject\r\n"}}
+  - {id: backlog-spelling, label: good, files: {"decision.md": "action: fno backlog decisions \"which nodes fold\"\nreason: newest first\n"}}
+  - {id: ask-lure, label: bad, files: {"decision.md": "action: fno inbox outstanding ask --question-file fold.md\nreason: just ask again\n"}}
+  - {id: re-decide-lure, label: bad, files: {"decision.md": "action: fno inbox decide \"fold 17 nodes\"\nreason: record a fresh ruling\n"}}
+  - {id: contain-lure, label: bad, files: {"decision.md": "action: fno backlog contain epic <17 ids>\nreason: redo the fold\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno inbox decisions fold\n"}}
+  - {id: no-file, label: bad, files: {}}
