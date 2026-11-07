@@ -20,7 +20,8 @@ pub struct Group {
     pub actions: &'static [(&'static str, &'static str)],
 }
 
-/// The canonical table, in plan order.
+/// The canonical table, in plan order. Each row is static data the help
+/// renderer walks in place.
 pub const GROUPS: &[Group] = &[
     Group {
         name: "add",
@@ -45,11 +46,7 @@ pub const GROUPS: &[Group] = &[
             ("calibration", "calibration"),
         ],
     },
-    Group {
-        name: "find",
-        purpose: "Search node text",
-        actions: &[("text", "find")],
-    },
+    // the find group stood here; the proof break head removes it. Never merge.
     Group {
         name: "list",
         purpose: "Read saved node sets; bare `list <query>` is the native grammar door",
