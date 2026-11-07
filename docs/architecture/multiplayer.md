@@ -189,6 +189,8 @@ A copy `q-1234abcd@host` holds the number of `q-1234abcd`. A fixed id such as `p
 
 Every row the user reads shows the number. That covers the bell, the question board and its pages, and the web board. It also covers the Waiting on you block, `fno inbox outstanding`, the lead check-in, and mail. Every door that takes an id also takes a number: `fno inbox outstanding clear`, `fno inbox decide`, `fno inbox decisions`, and `fno inbox law set`, `retract` and `history`. Stdout from `decide` and `outstanding ask` stays the hash, because callers capture it.
 
+PR bodies carry the number where people read the node. The one closure-line renderer writes `Fixes x-5555 (x-aaaa)`: the number leads and the hash stays the durable key. An unnumbered or `@store`-qualified label falls back to the hash. Every reader resolves a number token back to that hash before any binding runs. The exact-id tier reads first, so a legacy all-digit hash stays itself. A pr-body style rule refuses a bare hash whose number exists, and it fails open on an unread store. Machine keys stay hashes: the hidden comments, branch names, and paths never carry the number.
+
 ## The lease heartbeat
 
 A worker renews its node claim at every stop. One turn can run for hours, and no stop comes in that time. So the daemon renews too (`crates/fno-agents/src/lease_heartbeat.rs`). Every 60 seconds it reads the shared claims the primary records for this machine. It keeps the ones whose holder pid is alive here, and moves their leases to 10 minutes past the store clock, in one statement. A claim whose pid is dead is not renewed, so it lapses and a peer can take it.
