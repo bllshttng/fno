@@ -64,7 +64,7 @@ extract_keys() {
         select(.reason == "compiler-message")
         | select(.message.code.code as $c |
             ["clippy::correctness", "clippy::invalid_regex", "clippy::indexing_slicing", "clippy::disallowed_methods"] | index($c))
-        | (.message.spans | map(select(.is_primary == true)) | .[0] // .message.spans[0]) as $s
+        | (.message.spans // [] | map(select(.is_primary == true)) | .[0] // .message.spans[0]) as $s
         | select($s != null)
         | select(($s.file_name | startswith("/") or startswith("..")) | not)
         | [$crate + "/" + $s.file_name, .message.code.code,
@@ -84,10 +84,13 @@ if [[ ${#CRATES[@]} -eq 0 ]]; then
 fi
 
 CURRENT="$(mktemp)"
-trap 'rm -f "$CURRENT"' EXIT
+baseline="$(mktemp)"
+trap 'rm -f "$CURRENT" "$baseline"' EXIT
 
 if [[ -n "$HITS_FILE" ]]; then
-    cp "$HITS_FILE" "$CURRENT"
+    # comm below requires sorted input: an unsorted hits file can hide a new
+    # hit from the merge and pass a gate that should fail.
+    sort -u -o "$CURRENT" "$HITS_FILE"
 else
     for crate in "${CRATES[@]}"; do
         if [[ ! -d "$REPO_ROOT/$crate" ]]; then
@@ -130,7 +133,6 @@ fi
 # Baseline rows for the crates this invocation owns; other rows (none today)
 # belong to another invocation and must not mask its misses.
 crate_prefixes="$(printf '%s/\n' "${CRATES[@]}")"
-baseline="$(mktemp)"
 awk -F'\t' -v prefixes="$crate_prefixes" '
     BEGIN { n = split(prefixes, p, "\n") }
     /^#/ || /^[[:space:]]*$/ { next }

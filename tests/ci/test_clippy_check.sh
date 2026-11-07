@@ -63,6 +63,13 @@ printf '%s\n' "$out" | grep -Fx "  $key_slice_edited" >/dev/null || fail "refusa
 "$GATE" --hits-file "$TMP/hits_new.tsv" --baseline "$TMP/baseline.tsv" "$CRATE" >/dev/null \
     || fail "write-baseline round-trip should pass"
 
+# 4b. A stale baseline entry (a hit that no longer fires) never fails the
+# gate; it is reported as a ratchet-down, not a violation.
+printf '# header\n%s\n%s\n' "$key_slice" "$key_output" >"$TMP/baseline_stale.tsv"
+out="$("$GATE" --hits-file "$TMP/hits.tsv" --baseline "$TMP/baseline_stale.tsv" "$CRATE" 2>&1)" \
+    || fail "stale baseline entry must not fail the gate"
+printf '%s\n' "$out" | grep -F "stale baseline entries" >/dev/null || fail "stale entry not reported as ratchet-down"
+
 # 5. A missing baseline refuses with the remedy instead of passing.
 rm -f "$TMP/baseline.tsv"
 "$GATE" --hits-file "$TMP/hits_new.tsv" --baseline "$TMP/baseline.tsv" "$CRATE" >/dev/null 2>&1 \
