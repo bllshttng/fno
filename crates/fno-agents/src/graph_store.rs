@@ -2797,11 +2797,15 @@ pub fn base_version(path: &Path) -> Result<String, StoreError> {
 /// because unchanged prose fields are skipped.
 pub fn enforce_node_state_policy(pre: &[Value], entries: &[Value]) -> Result<(), StoreError> {
     use crate::backlog::node_state;
+    // One borrowed index over the pre-image, built once: a linear find per
+    // entry is quadratic over the whole graph, and one publish held the
+    // store lock for 28 minutes spinning here.
+    let pre_by_id = index_by_id(pre);
     for cand in entries {
         let Some(id) = entry_id(cand) else {
             continue;
         };
-        let pre_row = pre.iter().find(|r| entry_id(r) == Some(id));
+        let pre_row = pre_by_id.get(id).copied();
         let cand_details = cand.get("details");
         let pre_details = pre_row.and_then(|r| r.get("details"));
         let cand_state = cand.get(node_state::STATE_KEY);
@@ -2887,28 +2891,58 @@ fn locked_mutate_flavored(
     before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
     stored_statuses: bool,
 ) -> Result<MutateOutcome, StoreError> {
+    let prepared = prepare_mutate(path, input, stored_statuses)?;
+    commit_prepared(path, prepared, timeout, before_publish)
+}
+
+/// The pure half of the mutate cycle, computed from `raw` and the caller's
+/// input BEFORE the lock is taken: defaults, recompute, touched_at, closure
+/// collection, canonicalize, the row-snapshot gates, the baseline
+/// canonicalize, the changed-id diff and the content version. Under the
+/// lock, `commit_prepared` keeps only the version re-check, the two
+/// config-cap gates (their cap reads config.toml, which an edit can move
+/// without moving the graph version), the hook and the write of the changed
+/// rows - so a whole-graph publish holds the store for its write, not for
+/// its thinking.
+struct PreparedMutate {
+    raw: Vec<Value>,
+    entries: Vec<Value>,
+    baseline: Vec<Value>,
+    begin_version: String,
+    base_version: String,
+    dropped: usize,
+    closure_releases: Vec<(String, String)>,
+    is_canonical: bool,
+    changed_ids: Vec<String>,
+    version: String,
+}
+
+fn prepare_mutate(
+    path: &Path,
+    input: MutateInput,
+    stored_statuses: bool,
+) -> Result<PreparedMutate, StoreError> {
+    let MutateInput {
+        entries: mut working_entries,
+        canonical_path,
+        base_version,
+        plan_rungs,
+    } = input;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     // The expensive pre-image read runs OUTSIDE the lock. Every content
     // writer stamps a fresh content version (authoritative_sync,
-    // mutate_single_row_once), so the under-lock version re-check below
-    // proves `raw` current; a write landing between the two reads surfaces
-    // as Conflict and the caller retries, the same surface a stale
-    // base_version already produced.
+    // mutate_single_row_once), so the under-lock version re-check in
+    // `commit_prepared` proves `raw` current; a write landing between the
+    // two reads surfaces as Conflict and the caller retries, the same
+    // surface a stale base_version already produced.
     let begin_version = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
     let raw = if stored_statuses {
         crate::backlog::read_entries_stored(path).map_err(StoreError::Sqlite)?
     } else {
         crate::backlog::read_entries(path).map_err(StoreError::Sqlite)?
     };
-    let _lock = BoundedLock::acquire(path, timeout)?;
-    let recheck_started = Instant::now();
-    let current = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
-    if current != begin_version || current != input.base_version {
-        return Err(StoreError::Conflict);
-    }
-    _lock.note_phase("version_recheck", recheck_started);
 
     // Pre-image defaults for the curation snapshot, re-derived through the
     // same pipeline (store.py's _status_normalized + _pre_curation). The
@@ -2918,7 +2952,7 @@ fn locked_mutate_flavored(
     let mut pre = raw.clone();
     apply_defaults_without_readiness_overlay(&mut pre, false);
     let mut pre_normalized = pre.clone();
-    recompute_statuses_with_plan_rungs(&mut pre_normalized, input.plan_rungs.as_ref());
+    recompute_statuses_with_plan_rungs(&mut pre_normalized, plan_rungs.as_ref());
     // The baseline is the rows as read: the db holds the last publish, so
     // `raw` is that publish. A change normalization alone makes
     // (defaults, settles, ownership stamps, children) must compare unequal
@@ -2961,7 +2995,7 @@ fn locked_mutate_flavored(
     let dropped = raw
         .len()
         .saturating_sub(raw.iter().filter(|e| is_dict(e)).count());
-    let mut entries = input.entries;
+    let mut entries = working_entries;
 
     // The presence invariant holds at the STORE boundary, not only at the
     // typed update path: the Python mutator runs client-side against plain
@@ -2977,7 +3011,7 @@ fn locked_mutate_flavored(
     // late join, not the child's older created_at.
     let now_iso = now_isoformat();
     stamp_parent_edges(&raw, &mut entries, &now_iso);
-    recompute_statuses_with_plan_rungs(&mut entries, input.plan_rungs.as_ref());
+    recompute_statuses_with_plan_rungs(&mut entries, plan_rungs.as_ref());
 
     // touched_at stamp: a curation-field change vs the pre-image. The
     // pre-image is defaulted, so the compare reads the defaulted view too:
@@ -3011,7 +3045,7 @@ fn locked_mutate_flavored(
     // terminal rung during THIS mutation is the one moment every closure path
     // shares. Ids are COLLECTED here; the release runs in the caller after
     // the lock drops. Only the CONFIGURED graph owns the global node-id space.
-    let is_canonical = match &input.canonical_path {
+    let is_canonical = match &canonical_path {
         Some(cfg) => same_file(path, cfg),
         None => false,
     };
@@ -3051,31 +3085,10 @@ fn locked_mutate_flavored(
     // render gate would refuse never publishes; a stored leaky title passes
     // an unrelated update.
     crate::backlog::title_gate::enforce_title_gate(&raw, &entries)?;
-    // The epic child cap holds at this seam too: every whole-graph writer
-    // (update parent=, idea --parent, contain, decompose, the rollup
-    // auto-link) meets the same refusal. The single-row seam answers for
-    // api node_create under sqlite.
-    crate::backlog::epic_cap::enforce(
-        &raw,
-        &entries,
-        crate::backlog::epic_cap::configured_cap(path),
-    )
-    .map_err(StoreError::Invalid)?;
-    crate::backlog::idea_cap::enforce(
-        &raw,
-        &entries,
-        crate::backlog::idea_cap::configured_cap(path).0,
-    )
-    .map_err(StoreError::Invalid)?;
     // The close-evidence rule holds at this seam too: a write that sets
     // completed_at on an existing open row must leave the row a record of
     // why, or the whole publish refuses and nothing lands.
     crate::backlog::done_evidence::enforce(&raw, &entries).map_err(StoreError::Invalid)?;
-    if let Some(hook) = before_publish {
-        let hook_started = Instant::now();
-        hook(&raw)?;
-        _lock.note_phase("before_publish", hook_started);
-    }
 
     // The store diff runs against the baseline in the same canonical shape
     // the publish itself carries: canonicalize injects default keys
@@ -3084,27 +3097,91 @@ fn locked_mutate_flavored(
     // row-level conflict detection for untouched rows.
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
+    let changed_ids = crate::backlog::diff_rows(&baseline, &entries);
+    let version = crate::backlog::content_version(&entries);
+    Ok(PreparedMutate {
+        raw,
+        entries,
+        baseline,
+        begin_version,
+        base_version,
+        dropped,
+        closure_releases,
+        is_canonical,
+        changed_ids,
+        version,
+    })
+}
+
+/// The locked half of the mutate cycle: re-check the version, re-run the two
+/// config-cap gates (the only gate inputs an edit can move without moving
+/// the graph version), run the hook, publish the changed rows, then release
+/// and snapshot. Every pure step already ran in `prepare_mutate`.
+fn commit_prepared(
+    path: &Path,
+    prepared: PreparedMutate,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+) -> Result<MutateOutcome, StoreError> {
+    let _lock = BoundedLock::acquire(path, timeout)?;
+    let recheck_started = Instant::now();
+    let current = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
+    if current != prepared.begin_version || current != prepared.base_version {
+        return Err(StoreError::Conflict);
+    }
+    _lock.note_phase("version_recheck", recheck_started);
+    // The epic child cap holds at this seam too: every whole-graph writer
+    // (update parent=, idea --parent, contain, decompose, the rollup
+    // auto-link) meets the same refusal. The single-row seam answers for
+    // api node_create under sqlite.
+    let caps_started = Instant::now();
+    crate::backlog::epic_cap::enforce(
+        &prepared.raw,
+        &prepared.entries,
+        crate::backlog::epic_cap::configured_cap(path),
+    )
+    .map_err(StoreError::Invalid)?;
+    crate::backlog::idea_cap::enforce(
+        &prepared.raw,
+        &prepared.entries,
+        crate::backlog::idea_cap::configured_cap(path).0,
+    )
+    .map_err(StoreError::Invalid)?;
+    _lock.note_phase("cap_gates", caps_started);
+    if let Some(hook) = before_publish {
+        let hook_started = Instant::now();
+        hook(&prepared.raw)?;
+        _lock.note_phase("before_publish", hook_started);
+    }
+
     let publish_started = Instant::now();
     let (version, publish_retries) = crate::backlog::retry_on_busy(|| {
-        crate::backlog::authoritative_sync(path, &baseline, &entries)
+        crate::backlog::authoritative_sync_prepared(
+            path,
+            &prepared.baseline,
+            &prepared.entries,
+            &prepared.changed_ids,
+            &prepared.version,
+        )
     })
     .map_err(StoreError::Sqlite)?;
     _lock.note_phase("authoritative_sync", publish_started);
     _lock.note_count("publish_retries", publish_retries as u64);
-    let snapshot_started = Instant::now();
-    crate::backlog::snapshot_db(path, crate::backlog::now_ms()).map_err(StoreError::Sqlite)?;
-    _lock.note_phase("snapshot_db", snapshot_started);
     let lock_held = _lock.held_for();
+    drop(_lock);
+    // The hourly snapshot copy runs with the lock gone, so a slow VACUUM
+    // INTO never widens the hold.
+    crate::backlog::snapshot_db(path, crate::backlog::now_ms()).map_err(StoreError::Sqlite)?;
     let backup: Option<PathBuf> = None;
     let shadow_warning = None;
 
     Ok(MutateOutcome {
-        entries,
-        dropped,
+        entries: prepared.entries,
+        dropped: prepared.dropped,
         backup: backup.map(|p| p.display().to_string()),
         shadow_warning,
-        closure_releases,
-        is_canonical,
+        closure_releases: prepared.closure_releases,
+        is_canonical: prepared.is_canonical,
         version,
         lock_held,
     })

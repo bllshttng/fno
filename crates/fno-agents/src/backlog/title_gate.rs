@@ -101,6 +101,10 @@ pub fn enforce_title_gate(
     pre: &[Value],
     entries: &[Value],
 ) -> Result<(), crate::graph_store::StoreError> {
+    // One borrowed index over the pre-image, built once: a linear find per
+    // entry is quadratic over the whole graph, and every publish-seam write
+    // runs this gate.
+    let pre_by_id = crate::graph_store::index_by_id(pre);
     for cand in entries {
         let Some(id) = crate::graph_store::entry_id(cand) else {
             continue;
@@ -109,10 +113,7 @@ pub fn enforce_title_gate(
         if title.is_empty() {
             continue;
         }
-        let pre_title = pre
-            .iter()
-            .find(|r| crate::graph_store::entry_id(r) == Some(id))
-            .map(title_of);
+        let pre_title = pre_by_id.get(id).copied().map(title_of);
         if pre_title == Some(title) {
             continue;
         }
