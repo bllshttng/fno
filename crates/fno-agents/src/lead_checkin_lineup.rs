@@ -109,6 +109,7 @@ pub(crate) fn lineup_rows(
         let graph = graph_row(graph_rows, id);
         rows.push(json!({
             "node": row.get("id"),
+            "number": row.get("number"),
             "title": graph.and_then(|g| g.get("title")),
             "difficulty": graph.and_then(|g| g.get("difficulty")),
             "pr": graph
@@ -159,9 +160,27 @@ pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
         "|---|---|---|---|---|---|".to_string(),
     ];
     for row in rows.iter().take(MAX_ORG_ROWS) {
+        // The number leads when the store minted one (`x-5555 (x-aaaa)`,
+        // the shape `fno backlog get` prints as `_number`); the hash stays.
+        let node = match (
+            row.get("node").and_then(Value::as_str),
+            row.get("number").and_then(Value::as_str),
+        ) {
+            // `cell` pipe-escapes every other column; the id path keeps that
+            // guard, since a legacy id is not proven pipe-free.
+            (Some(id), Some(number)) => {
+                format!(
+                    "{} ({})",
+                    number.replace('|', "\\|"),
+                    id.replace('|', "\\|")
+                )
+            }
+            (Some(id), None) => id.replace('|', "\\|"),
+            _ => "-".to_string(),
+        };
         out.push(format!(
             "| {} | {} | {} | {} | {} | {} |",
-            cell(row.get("node")),
+            node,
             cell(row.get("title")),
             cell(row.get("difficulty")),
             cell(row.get("pr")),
@@ -180,6 +199,22 @@ pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::state::RegistryEntry;
+
+    #[test]
+    fn a_numbered_row_leads_the_node_cell_with_the_number() {
+        let rows = json!([
+            {"node": "x-aaaa", "number": "x-5555", "status": "in_progress"},
+            {"node": "x-bbbb", "status": "in_progress"},
+            {"node": null}
+        ]);
+        let lines = render_lineup(rows.as_array().unwrap());
+        assert!(
+            lines.iter().any(|l| l.contains("| x-5555 (x-aaaa) |")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.contains("| x-bbbb |")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("| - |")), "{lines:?}");
+    }
 
     fn registry_entry(name: &str, node: &str, harness: &str, model: &str) -> RegistryEntry {
         RegistryEntry {

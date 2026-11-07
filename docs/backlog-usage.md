@@ -33,6 +33,8 @@ You never drag a card. Every board renders from node fields: the `graph.md` Obsi
 
 Use `fno backlog get <id> --grouped` for a human scan. It renders populated fields under concept headings and places fields without a group under `Residual`, so new or legacy data stays visible. When combined with `--grouped`, `--field <name>` remains the precise machine-friendly read and takes precedence.
 
+Nodes hold short numbers beside the hash. `fno backlog get x-15` resolves the number to its node, and the record's `_number` field prints the node's own number (`x-5555` for `x-aaaa`). `fno backlog list` carries it as the `number` field and column, and the mux board and the lead check-in print it beside the hash. A node filed in the last minute prints the hash alone until the numbering beat reaches it.
+
 ## Creating nodes
 
 There are three plan-less creation commands. They overlap; pick by how much

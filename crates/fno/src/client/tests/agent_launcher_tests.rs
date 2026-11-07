@@ -1396,6 +1396,7 @@ fn at_opens_the_node_picker_and_picking_inserts_the_id() {
         project: None,
         lane: None,
         plan_path: None,
+        number: None,
         head: false,
         link: None,
     }];

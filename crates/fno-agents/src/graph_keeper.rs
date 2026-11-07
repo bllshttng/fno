@@ -3165,12 +3165,30 @@ fn api_read_op(
 ) -> Result<Value, StoreError> {
     use crate::backlog::api;
     let fields = row_query(params)?.fields;
+    // The rows op serves full rows (fields unset), so every full-row reader -
+    // the board model's gather, `fno backlog list` - reads the number stamped
+    // the same way as the `_reading` attach: one map per request, stamped
+    // before the projection. The node/nodes ops attach only when the
+    // projection asks (`_number` in `fields`), so an unlisted field never
+    // widens a caller's reply.
+    let wants_number = op == "rows"
+        || fields
+            .as_ref()
+            .is_some_and(|fs| fs.iter().any(|f| f == "_number"));
+    let numbers = if wants_number {
+        crate::numbers::labels_at(&store.graph)
+    } else {
+        Default::default()
+    };
     let project = |mut rows: Vec<Value>| {
         if fields
             .as_ref()
             .is_some_and(|fields| fields.iter().any(|field| field == "_reading"))
         {
             crate::node_reading::attach_reading(&mut rows);
+        }
+        if wants_number {
+            crate::numbers::attach_numbers(&mut rows, &numbers);
         }
         project_fields(&mut rows, fields.as_deref());
         rows

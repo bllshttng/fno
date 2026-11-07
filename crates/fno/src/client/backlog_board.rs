@@ -985,13 +985,14 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
         " "
     };
     let sel_mark = if sel { "\u{25b8}" } else { " " };
+    let id_text = crate::backlog_view::id_label(card.number.as_deref(), &card.id);
     let mut line = TLine::of(&[
         TSeg {
             text: format!("{sel_mark}{glyph} "),
             role: TextStyle::Item,
         },
         TSeg {
-            text: card.id.clone(),
+            text: id_text,
             role: TextStyle::Badge,
         },
         TSeg {

@@ -1506,6 +1506,11 @@ pub struct BacklogCard {
     /// plan (the item renders greyed, never a broken link).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_path: Option<String>,
+    /// The store-minted short number (`x-5555`), served as the row's
+    /// `_number`. `None` while the primary has not numbered the node, so
+    /// `card_label` prints the hash alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
     /// (v36) The head of the queue: the first Ready card in BOARD order. Marked
     /// explicitly so it reads as a fact rather than being inferred from row
     /// position, which lies once the section is scrolled or the top card is
@@ -3966,6 +3971,7 @@ mod tests {
                         project: Some("fno".into()),
                         lane: Some("in-progress".into()),
                         plan_path: None,
+                        number: None,
                         head: false,
                         link: None,
                     },
@@ -3980,6 +3986,7 @@ mod tests {
                         project: None,
                         lane: None,
                         plan_path: None,
+                        number: None,
                         head: true,
                         link: None,
                     },

@@ -14,6 +14,7 @@ pub(crate) const BOARD_FIELDS: &[&str] = &[
     "id",
     "status",
     "_status",
+    "_number",
     "slug",
     "priority",
     "project",
