@@ -61,7 +61,7 @@ fn is_mach_o(path: &Path) -> bool {
     }
     matches!(
         u32::from_be_bytes(magic),
-        0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe | 0xcafe_babe | 0xbebb_afca
+        0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe | 0xcafe_babe | 0xbeba_feca
     )
 }
 
