@@ -1567,13 +1567,12 @@ fn decide_gate(
     let provider_cap =
         route_provider.and_then(|p| spawn_gate_lanes::provider_lanes_cap(config_cwd, p));
 
-    // A team spend cap is hard even when the caller uses --force. An absent
-    // key is a no-op, so ordinary projects pay no registry or meter read.
-    if let Err(refusal) = crate::spawn_gate_spend::check_team_cost_cap(config_cwd, &input) {
-        return Err(refusal);
-    }
-
     if flags.force && provider_cap.is_none() {
+        // A team spend cap is hard even when the caller uses --force. The
+        // ordinary admission path checks it at dispatch after any queue wait.
+        if let Err(refusal) = crate::spawn_gate_spend::check_team_cost_cap(config_cwd, &input) {
+            return Err(refusal);
+        }
         // Force speaks for the machine being busy, never for one territory
         // overrunning its team, so the per-territory cap stays enforced
         // here - the one axis --force does not excuse.
