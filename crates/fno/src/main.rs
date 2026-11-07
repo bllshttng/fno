@@ -452,6 +452,8 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
+    /// `fno do hello`: the native greeting; prints one line and exits 0.
+    DoHello,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
     DoRev,
@@ -1603,6 +1605,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoFeedback;
     }
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("hello")
+    {
+        return Role::DoHello;
+    }
     // `do show` and `do diff` claim as single words: the dispatcher owns the
     // spellings and the argv passes through byte-verbatim.
     if args.first().and_then(|a| a.to_str()) == Some("do")
@@ -1966,6 +1973,10 @@ fn main() {
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
         Role::DoFeedback => bootstrap::forward_agents(&args, "fno do feedback"),
+        Role::DoHello => {
+            println!("hello from fno");
+            std::process::exit(0);
+        }
         Role::DoRev => bootstrap::forward_agents(&args, "fno do show"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
@@ -2575,6 +2586,14 @@ mod tests {
 
         assert_eq!(status.status.code(), Some(19), "native owner exit status");
         assert_eq!(owner_pid, child_pid, "native owner replaced the front pid");
+    }
+
+    #[test]
+    fn do_hello_claims_native_and_the_menu_lists_it() {
+        assert_eq!(decide_role(&os(&["do", "hello"]), false), Role::DoHello);
+        assert!(fno::group_help::classify(&os(&["do", "--help"]))
+            .unwrap()
+            .contains("  hello "));
     }
 
     #[test]
