@@ -451,4 +451,4 @@ Loaded by state — the "read X when Y" load conditions are inline above; this i
 
 ## Known Limitations and Deferred Work
 
-- Sandbox enforcement can fail open on some hosts. See [LIMITATIONS.md](LIMITATIONS.md).
+- Sandbox enforcement can fail open on some hosts. The known cases live in [LIMITATIONS.md](LIMITATIONS.md).
