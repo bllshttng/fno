@@ -182,13 +182,9 @@ fn run_pass_with(
         liveness,
     } = pass;
     let evidence = crate::watch_expiry::read_evidence(home, now)?;
-    let receipts = crate::event_store::journal_text_checked(
+    let journal = crate::event_store::journal_text_checked(
         &home.events_jsonl(),
-        &crate::event_store::EventQuery::of_types(&[EVENT]),
-    )?;
-    let terminations = crate::event_store::journal_text_checked(
-        &home.events_jsonl(),
-        &crate::event_store::EventQuery::of_types(&["termination"]),
+        &crate::event_store::EventQuery::of_types(&[EVENT, "termination"]),
     )?;
     let mut acted = 0;
     let mut seen = HashSet::new();
@@ -282,7 +278,7 @@ fn run_pass_with(
             }
         };
         if let (Some(fno_id), Some(last)) = (row.fno_id.as_deref(), tail.last) {
-            if team_budget_terminal_after(&terminations, fno_id, last) {
+            if team_budget_terminal_after(&journal, fno_id, last) {
                 report_skip(dry_run, row, "team_cost_budget_terminal");
                 continue;
             }
@@ -365,7 +361,7 @@ fn run_pass_with(
             report_skip(dry_run, row, "duplicate_episode");
             continue;
         }
-        if receipts
+        if journal
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
             .any(|r| {
